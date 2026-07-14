@@ -41,6 +41,22 @@ _MEDIA_TYPES = {
 }
 
 
+def _initialize_wht_lifecycle(
+    db: Session,
+    record_id,
+    *,
+    actor_id: str | None,
+) -> None:
+    """Append initial evidence in the same transaction as source creation."""
+    from app.services import tax_accounting
+
+    tax_accounting.initialize_withholding_tax_lifecycle(
+        db,
+        record_id,
+        actor_id=actor_id,
+    )
+
+
 async def save_proof_file(file: UploadFile) -> str:
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in _ALLOWED_SUFFIXES:
@@ -161,7 +177,14 @@ def submit_proof(
         raise HTTPException(status_code=400, detail="Amount must be greater than 0")
 
     gross_value = round_money(to_decimal(gross_amount)) if gross_amount else None
-    rate_value = to_decimal(wht_rate) if wht_rate not in (None, "") else None
+    rate_value = (
+        round_money(to_decimal(wht_rate)) if wht_rate not in (None, "") else None
+    )
+    if rate_value is not None and not (Decimal("0") <= rate_value < Decimal("100")):
+        raise HTTPException(
+            status_code=400,
+            detail="WHT rate must be at least 0 and less than 100 percent",
+        )
     # Derive gross from rate when only a rate was supplied (net = gross·(1−rate)).
     if gross_value is None and rate_value and rate_value > 0:
         gross_value = round_money(value / (Decimal("1") - rate_value / Decimal("100")))
@@ -175,6 +198,16 @@ def submit_proof(
         wht_value = round_money(gross_value - value)
         if rate_value is None and gross_value > 0:
             rate_value = round_money(wht_value / gross_value * Decimal("100"))
+        elif rate_value is not None:
+            expected_wht = round_money(gross_value * rate_value / Decimal("100"))
+            if expected_wht != wht_value:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Gross amount, transferred amount, and WHT rate "
+                        "do not reconcile"
+                    ),
+                )
 
     proof = PaymentProof(
         account_id=coerce_uuid(account_id) if account_id else None,
@@ -448,12 +481,33 @@ def _verify_consolidated_proof(
             status_code=400, detail="Verified amount must be greater than 0"
         )
 
-    wht_value = (
-        round_money(to_decimal(proof.wht_amount))
-        if proof.wht_amount
-        else Decimal("0.00")
+    source_gross = (
+        round_money(to_decimal(proof.gross_amount))
+        if proof.gross_amount is not None
+        else None
     )
-    gross_value = round_money(net_value + wht_value)
+    if source_gross is not None:
+        if source_gross < net_value:
+            raise HTTPException(
+                status_code=400,
+                detail="Verified net amount exceeds the submitted gross amount",
+            )
+        gross_value = source_gross
+        wht_value = round_money(gross_value - net_value)
+    else:
+        # Legacy proofs may predate explicit gross capture. Their stored WHT is
+        # retained as evidence and gross is reconstructed once at verification.
+        wht_value = (
+            round_money(to_decimal(proof.wht_amount))
+            if proof.wht_amount
+            else Decimal("0.00")
+        )
+        gross_value = round_money(net_value + wht_value)
+    effective_wht_rate = (
+        round_money(wht_value / gross_value * Decimal("100"))
+        if wht_value > Decimal("0.00") and gross_value > Decimal("0.00")
+        else None
+    )
 
     verified_dup = next(
         (
@@ -505,12 +559,13 @@ def _verify_consolidated_proof(
             gross_amount=gross_value,
             net_amount=net_value,
             wht_amount=wht_value,
-            wht_rate=proof.wht_rate,
+            wht_rate=effective_wht_rate,
             currency=proof.currency,
             status=WithholdingTaxStatus.pending,
         )
         db.add(record)
         db.flush()
+        _initialize_wht_lifecycle(db, record.id, actor_id=verified_by)
         wht_record_id = str(record.id)
 
     db.commit()

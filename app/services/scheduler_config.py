@@ -1268,6 +1268,33 @@ def build_beat_schedule() -> dict:
             enabled=scheduled_plan_change_enabled,
             interval_seconds=scheduled_plan_change_interval_seconds,
         )
+        # Deferred status commands have their own durable queue. Keep this
+        # runner independent from plan changes so billing can disable its plan
+        # applier without stranding reviewed access/lifecycle actions.
+        scheduled_status_change_enabled = _effective_bool(
+            session,
+            SettingDomain.catalog,
+            "scheduled_status_change_enabled",
+            "SCHEDULED_STATUS_CHANGE_ENABLED",
+            True,
+        )
+        scheduled_status_change_interval_seconds = _effective_int(
+            session,
+            SettingDomain.catalog,
+            "scheduled_status_change_interval_seconds",
+            "SCHEDULED_STATUS_CHANGE_INTERVAL_SECONDS",
+            300,
+        )
+        scheduled_status_change_interval_seconds = max(
+            scheduled_status_change_interval_seconds, 60
+        )
+        _sync_scheduled_task(
+            session,
+            name="scheduled_subscription_status_applier",
+            task_name=("app.tasks.catalog.apply_due_subscription_status_commands"),
+            enabled=scheduled_status_change_enabled,
+            interval_seconds=scheduled_status_change_interval_seconds,
+        )
         # Infrastructure availability snapshot - daily rollup powering the
         # performance/SLA trend charts (see INFRASTRUCTURE_SLA_PERFORMANCE.md).
         # Safe to run regardless of SLA_AVAILABILITY_LOG_ENABLED: it records the
@@ -1800,6 +1827,13 @@ def build_beat_schedule() -> dict:
             task_name="router_sync.reconcile_config_push_readback",
             enabled=True,
             interval_seconds=300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_sot_drift",
+            task_name="router_sync.audit_sot_drift",
+            enabled=True,
+            interval_seconds=900,
         )
         _sync_scheduled_task(
             session,

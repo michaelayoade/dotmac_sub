@@ -105,7 +105,7 @@ REPORT_HUB_SECTIONS: list[dict] = [
             {
                 "name": "Tax Report",
                 "url": "/admin/reports/tax",
-                "description": "Tax totals and per-invoice tax values",
+                "description": "Net output tax and WHT receivables by currency",
             },
             {
                 "name": "MRR Net Change",
@@ -1086,10 +1086,23 @@ def reports_statements(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/tax", response_class=HTMLResponse)
-def reports_tax(request: Request, db: Session = Depends(get_db)):
-    data = web_reports_ext_service.get_tax_report_data(db)
+def reports_tax(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    data = web_reports_ext_service.get_tax_report_data(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+    )
     ctx = _base_context(
-        request, db, "reports-tax", "Tax Report", "Per-invoice tax details and totals"
+        request,
+        db,
+        "reports-tax",
+        "Tax Accounting Report",
+        "Net output-tax liability and withholding-tax receivables",
     )
     ctx.update(data)
     return templates.TemplateResponse("admin/reports/tax.html", ctx)

@@ -113,11 +113,13 @@ def template_form_context(request: Request, db: Session) -> dict[str, object]:
 
 
 def push_wizard_context(request: Request, db: Session) -> dict[str, object]:
+    from app.services.router_management.sot_policy import managed_resource_options
+
     context = _base_context(request, db)
     context.update(
         {
             "routers": RouterInventory.list(db, limit=200),
-            "templates": RouterTemplateService.list(db),
+            "managed_resource_options": managed_resource_options(),
         }
     )
     return context

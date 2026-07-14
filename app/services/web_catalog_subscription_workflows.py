@@ -3,20 +3,146 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from urllib.parse import quote_plus
 
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
+from app.models.audit import AuditActorType
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import SubscriberCategory
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services import web_catalog_subscriptions as core
 from app.services.audit_helpers import build_audit_activities
+from app.services.subscription_lifecycle import (
+    SubscriptionCommandKind,
+    SubscriptionEffectiveTiming,
+    SubscriptionLifecycleCommand,
+    SubscriptionLifecycleError,
+)
+from app.services.subscription_lifecycle_commands import execute_subscription_command
+from app.services.subscription_lifecycle_schedules import (
+    SubscriptionLifecycleScheduleError,
+    cancel_scheduled_subscription_status_command,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def execute_lifecycle_command_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    kind: SubscriptionCommandKind,
+    actor_id: str | None,
+    expected_head: str | None = None,
+    idempotency_key: str | None = None,
+    reason: str | None = None,
+    target_offer_id: str | None = None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+) -> tuple[dict[str, object], int]:
+    """Execute one reviewed admin lifecycle command and serialize its outcome."""
+    try:
+        command = SubscriptionLifecycleCommand(
+            subscription_id=subscription_id,
+            kind=kind,
+            source=f"admin:catalog:{actor_id or 'system'}",
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            target_offer_id=target_offer_id,
+            reason=reason,
+            expected_head=expected_head,
+            idempotency_key=idempotency_key,
+        )
+        outcome = execute_subscription_command(
+            db,
+            command,
+            actor_id=actor_id,
+            actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        )
+    except (SubscriptionLifecycleError, ValueError) as exc:
+        missing = "not found" in str(exc).lower()
+        return (
+            {
+                "status": "rejected",
+                "message": str(exc),
+                "previous_head": None,
+                "current_head": None,
+                "artifact_ids": [],
+                "error_code": (
+                    "subscription_not_found" if missing else "invalid_lifecycle_command"
+                ),
+                "replayed": False,
+            },
+            404 if missing else 422,
+        )
+    status_code = {
+        "applied": 200,
+        "scheduled": 202,
+        "skipped": 200,
+        "rejected": 409,
+        "superseded": 409,
+        "failed": 500,
+    }[outcome.status.value]
+    return (
+        {
+            "status": outcome.status.value,
+            "message": outcome.message,
+            "previous_head": outcome.previous_head,
+            "current_head": outcome.current_head,
+            "artifact_ids": list(outcome.artifact_ids),
+            "error_code": outcome.error_code,
+            "replayed": outcome.replayed,
+        },
+        status_code,
+    )
+
+
+def cancel_lifecycle_schedule_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    schedule_id: str,
+    actor_id: str | None,
+) -> tuple[dict[str, object], int]:
+    """Cancel one pending lifecycle status schedule."""
+    try:
+        schedule = cancel_scheduled_subscription_status_command(
+            db,
+            schedule_id,
+            subscription_id=subscription_id,
+            actor_id=actor_id,
+        )
+    except SubscriptionLifecycleScheduleError as exc:
+        missing = "not found" in str(exc).lower()
+        return (
+            {
+                "status": "rejected",
+                "schedule_id": schedule_id,
+                "message": str(exc),
+                "error_code": (
+                    "lifecycle_schedule_not_found"
+                    if missing
+                    else "lifecycle_schedule_not_cancelable"
+                ),
+            },
+            404 if missing else 409,
+        )
+    return (
+        {
+            "status": schedule.status.value,
+            "schedule_id": str(schedule.id),
+            "message": "Lifecycle schedule canceled",
+            "error_code": None,
+        },
+        200,
+    )
 
 
 def get_subscription_or_none(
@@ -358,8 +484,10 @@ def _bulk_result_payload(verb: str, result: dict) -> dict[str, object]:
         "message": "; ".join(parts),
         "count": changed,
         "changed": changed,
+        "changed_ids": result.get("changed_ids", []),
         "skipped_ids": skipped,
         "failed_ids": failed,
+        "outcomes": result.get("outcomes", []),
     }
 
 

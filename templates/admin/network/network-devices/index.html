@@ -183,9 +183,9 @@
                                         {% set device_pop_name = device.pop_site.name if device.pop_site is defined and device.pop_site else 'Unassigned' %}
                                         <a href="{{ device.detail_url if device.detail_url is defined and device.detail_url else '/admin/network/core-devices/' ~ device.id }}"
                                            title="{{ device.name }} · POP: {{ device_pop_name }}"
-                                           class="block max-w-full truncate text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
+                                           class="block max-w-full overflow-hidden break-words text-sm font-medium leading-5 text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
                                         {% if device.hostname %}
-                                        <p class="truncate text-xs text-slate-500 dark:text-slate-400">{{ device.hostname }}</p>
+                                        <p class="overflow-hidden break-words text-xs leading-4 text-slate-500 dark:text-slate-400">{{ device.hostname }}</p>
                                         {% endif %}
                                     </div>
                                 </div>

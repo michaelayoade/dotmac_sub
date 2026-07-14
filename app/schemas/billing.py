@@ -148,6 +148,7 @@ class InvoiceSyncLineRead(BaseModel):
     unit_price: Decimal
     amount: Decimal | None = None
     tax_rate_id: UUID | None = None
+    tax_application: TaxApplication = TaxApplication.exclusive
 
 
 class InvoiceSyncRead(BaseModel):
@@ -455,6 +456,17 @@ class PaymentSyncRead(BaseModel):
     amount: Decimal
     refunded_amount: Decimal = Decimal("0")
     provider_fee: Decimal = Decimal("0")
+    # Accounting facts from the one proof-backed WHT receivable, when present.
+    # ``amount`` remains the gross customer credit for backward compatibility;
+    # ERP posts ``net_amount`` to bank and ``wht_amount`` to WHT receivable.
+    gross_amount: Decimal | None = None
+    net_amount: Decimal | None = None
+    wht_amount: Decimal = Decimal("0")
+    wht_rate: Decimal | None = None
+    wht_status: str | None = None
+    wht_record_id: UUID | None = None
+    wht_certificate_reference: str | None = None
+    wht_resolved_at: datetime | None = None
     currency: str
     status: PaymentStatus
     paid_at: datetime | None = None
@@ -462,6 +474,44 @@ class PaymentSyncRead(BaseModel):
     memo: str | None = None
     updated_at: datetime
     allocations: list[PaymentAllocationRead] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _project_wht_accounting_facts(cls, value: Any) -> Any:
+        """Flatten the WHT source record into the bounded ERP payment feed."""
+        if isinstance(value, dict):
+            return value
+        record = getattr(value, "withholding_tax_record", None)
+        gross = getattr(record, "gross_amount", None)
+        net = getattr(record, "net_amount", None)
+        status = getattr(record, "status", None)
+        return {
+            "id": value.id,
+            "account_id": value.account_id,
+            "billing_account_id": value.billing_account_id,
+            "payment_method_id": value.payment_method_id,
+            "payment_channel_id": value.payment_channel_id,
+            "collection_account_id": value.collection_account_id,
+            "provider_id": value.provider_id,
+            "amount": value.amount,
+            "refunded_amount": value.refunded_amount,
+            "provider_fee": value.provider_fee,
+            "gross_amount": gross if gross is not None else value.amount,
+            "net_amount": net if net is not None else value.amount,
+            "wht_amount": getattr(record, "wht_amount", Decimal("0")),
+            "wht_rate": getattr(record, "wht_rate", None),
+            "wht_status": getattr(status, "value", status),
+            "wht_record_id": getattr(record, "id", None),
+            "wht_certificate_reference": getattr(record, "certificate_reference", None),
+            "wht_resolved_at": getattr(record, "resolved_at", None),
+            "currency": value.currency,
+            "status": value.status,
+            "paid_at": value.paid_at,
+            "external_id": value.external_id,
+            "memo": value.memo,
+            "updated_at": value.updated_at,
+            "allocations": value.allocations,
+        }
 
 
 # --- Customer-initiated online payment (hosted checkout) ------------------
@@ -825,6 +875,7 @@ class CreditNoteRead(CreditNoteBase):
     total: Decimal = Decimal("0.00")
     id: UUID
     applied_total: Decimal
+    issued_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     lines: list[CreditNoteLineRead] = Field(default_factory=list)
@@ -842,6 +893,7 @@ class CreditNoteSyncLineRead(BaseModel):
     unit_price: Decimal
     amount: Decimal | None = None
     tax_rate_id: UUID | None = None
+    tax_application: TaxApplication = TaxApplication.exclusive
 
 
 class CreditNoteSyncRead(BaseModel):

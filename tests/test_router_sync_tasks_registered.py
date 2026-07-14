@@ -19,6 +19,7 @@ _EXPECTED = {
     "router_sync.sync_all_interfaces",
     "router_sync.cleanup_idle_tunnels",
     "router_sync.execute_config_push",
+    "router_sync.audit_sot_drift",
 }
 
 

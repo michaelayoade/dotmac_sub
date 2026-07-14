@@ -19,7 +19,9 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.auth import ApiKey, MFAMethod, UserCredential
 from app.models.auth import Session as AuthSession
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
+from app.models.collections import DunningCase, DunningCaseStatus
+from app.models.enforcement_lock import EnforcementLock
 from app.models.notification import (
     NotificationChannel,
     NotificationStatus,
@@ -46,8 +48,10 @@ from app.services import audit as audit_service
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services import notification as notification_service
+from app.services import radius as radius_service
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_lists as web_customer_lists_service
+from app.services.account_lifecycle import compute_account_status, derive_account_status
 from app.services.branding_config import get_brand
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
@@ -69,6 +73,10 @@ from app.services.notification_template_conditions import (
     normalize_conditions,
 )
 from app.services.notification_template_renderer import render_template_text
+from app.services.radius_access_state import (
+    derive_access_state,
+    set_subscription_access_state,
+)
 from app.services.whatsapp_notification_templates import (
     build_provider_template_body,
     provider_template_from_template,
@@ -164,6 +172,142 @@ def list_suspended_subscription_ids(db: Session, customer_id: str) -> list[str]:
         .where(Subscription.status == SubscriptionStatus.suspended)
     ).all()
     return [str(row[0]) for row in rows]
+
+
+def repair_customer_access_state(db: Session, customer_id: str) -> dict[str, Any]:
+    """Recompute one customer's active access projection and refresh RADIUS.
+
+    This intentionally does not perform any batch repair. It is only safe when
+    the account has active service and no current suspension/dunning signals.
+    """
+    account_uuid = coerce_uuid(customer_id)
+    subscriber = db.get(Subscriber, account_uuid)
+    if subscriber is None:
+        raise ValueError("Customer not found.")
+
+    active_subscriptions = list(
+        db.scalars(
+            select(Subscription)
+            .where(Subscription.subscriber_id == account_uuid)
+            .where(Subscription.status == SubscriptionStatus.active)
+        ).all()
+    )
+    if not active_subscriptions:
+        raise ValueError("This customer has no active subscriptions to repair.")
+
+    active_credentials_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(AccessCredential)
+            .where(AccessCredential.subscriber_id == account_uuid)
+            .where(AccessCredential.is_active.is_(True))
+        )
+        or 0
+    )
+    if active_credentials_count <= 0:
+        raise ValueError("This customer has no active access credentials to refresh.")
+
+    active_lock_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(EnforcementLock)
+            .where(EnforcementLock.subscriber_id == account_uuid)
+            .where(EnforcementLock.is_active.is_(True))
+        )
+        or 0
+    )
+    if active_lock_count > 0:
+        raise ValueError("This customer has an active suspension lock.")
+
+    active_dunning_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(DunningCase)
+            .where(DunningCase.account_id == account_uuid)
+            .where(
+                DunningCase.status.in_(
+                    [DunningCaseStatus.open, DunningCaseStatus.paused]
+                )
+            )
+        )
+        or 0
+    )
+    if active_dunning_count > 0:
+        raise ValueError("This customer has an active dunning case.")
+
+    if subscriber.lifecycle_override_status is not None:
+        raise ValueError("This customer has a manual lifecycle override.")
+
+    before_status = subscriber.status
+    derived_status = derive_account_status(db, str(account_uuid))
+    if derived_status != SubscriberStatus.active:
+        raise ValueError(
+            f"This customer derives to {derived_status.value}, not active."
+        )
+
+    computed_status = compute_account_status(db, str(account_uuid))
+    radius_group_rows_written = 0
+    radius_group_rows_deleted = 0
+    aggregate_state: str | None = None
+    for subscription in active_subscriptions:
+        state = derive_access_state(
+            subscription.status,
+            captive_redirect_enabled=bool(subscriber.captive_redirect_enabled),
+        )
+        access_result = set_subscription_access_state(
+            db,
+            str(subscription.id),
+            state,
+        )
+        radius_group_rows_written += int(
+            access_result.get("external_rows_written") or 0
+        )
+        radius_group_rows_deleted += int(
+            access_result.get("external_rows_deleted") or 0
+        )
+        aggregate_state = cast(str | None, access_result.get("aggregate_state"))
+
+    reject_rows_removed = radius_service.unblock_external_radius_credentials(
+        db, account_uuid
+    )
+
+    radius_users_changed = 0
+    radius_clients_changed = 0
+    external_credentials_synced = 0
+    external_nas_synced = 0
+    for subscription in active_subscriptions:
+        reconcile_result = radius_service.reconcile_subscription_connectivity(
+            db, str(subscription.id)
+        )
+        radius_users_changed += int(reconcile_result.get("radius_users_changed") or 0)
+        radius_clients_changed += int(
+            reconcile_result.get("radius_clients_changed") or 0
+        )
+        external_credentials_synced += int(
+            reconcile_result.get("external_credentials_synced") or 0
+        )
+        external_nas_synced += int(reconcile_result.get("external_nas_synced") or 0)
+
+    db.commit()
+    db.refresh(subscriber)
+
+    return {
+        "subscriber_id": str(account_uuid),
+        "status_before": before_status.value,
+        "status_after": subscriber.status.value,
+        "derived_status": derived_status.value,
+        "computed_status": computed_status.value,
+        "active_subscriptions": len(active_subscriptions),
+        "active_credentials": active_credentials_count,
+        "reject_rows_removed": reject_rows_removed,
+        "radius_group_rows_written": radius_group_rows_written,
+        "radius_group_rows_deleted": radius_group_rows_deleted,
+        "radius_users_changed": radius_users_changed,
+        "radius_clients_changed": radius_clients_changed,
+        "external_credentials_synced": external_credentials_synced,
+        "external_nas_synced": external_nas_synced,
+        "aggregate_state": aggregate_state,
+    }
 
 
 def save_primary_address_coordinates(

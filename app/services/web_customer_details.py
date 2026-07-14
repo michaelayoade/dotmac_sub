@@ -35,6 +35,7 @@ from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.communication_log import CommunicationLog
 from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.enforcement_lock import EnforcementLock
 from app.models.gis import (
     CustomerLocationChangeRequest,
     CustomerLocationChangeRequestStatus,
@@ -54,6 +55,7 @@ from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
     SubscriberChannel,
+    SubscriberStatus,
     UserType,
 )
 from app.models.support import Ticket
@@ -1521,6 +1523,101 @@ def _build_identity_profile(customer: Subscriber) -> dict[str, Any]:
     }
 
 
+def _build_access_repair_state(
+    db: Session,
+    customer: Subscriber,
+    subscriptions: list[Subscription],
+) -> dict[str, Any]:
+    active_subscriptions = [
+        subscription
+        for subscription in subscriptions
+        if subscription.status == SubscriptionStatus.active
+    ]
+    if not active_subscriptions:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "No active subscriptions to repair.",
+        }
+
+    active_credentials_count = int(
+        db.query(func.count(AccessCredential.id))
+        .filter(AccessCredential.subscriber_id == customer.id)
+        .filter(AccessCredential.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+    if active_credentials_count <= 0:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "No active access credentials to refresh.",
+        }
+
+    active_lock_count = int(
+        db.query(func.count(EnforcementLock.id))
+        .filter(EnforcementLock.subscriber_id == customer.id)
+        .filter(EnforcementLock.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+    if active_lock_count > 0:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "Blocked by an active suspension lock.",
+        }
+
+    active_dunning_count = int(
+        db.query(func.count(DunningCase.id))
+        .filter(DunningCase.account_id == customer.id)
+        .filter(
+            DunningCase.status.in_([DunningCaseStatus.open, DunningCaseStatus.paused])
+        )
+        .scalar()
+        or 0
+    )
+    if active_dunning_count > 0:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "Blocked by an active dunning case.",
+        }
+
+    if customer.lifecycle_override_status is not None:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "Blocked by a manual lifecycle override.",
+        }
+
+    stale_reasons: list[str] = []
+    if customer.status != SubscriberStatus.active:
+        stale_reasons.append(f"account status is {customer.status.value}")
+    stale_access_count = sum(
+        1
+        for subscription in active_subscriptions
+        if (subscription.access_state or "") != "active"
+    )
+    if stale_access_count:
+        stale_reasons.append(
+            f"{stale_access_count} active subscription access state(s) are stale"
+        )
+
+    if not stale_reasons:
+        return {
+            "enabled": False,
+            "needed": False,
+            "reason": "No repair needed; account and access state already look active.",
+        }
+
+    return {
+        "enabled": True,
+        "needed": True,
+        "reason": "Repair needed: " + "; ".join(stale_reasons) + ".",
+    }
+
+
 def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
     """Build unified customer detail snapshot.
 
@@ -1765,6 +1862,11 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "network_connection_status": network_connection_status,
         "connection_by_subscription": connection_by_subscription,
         "network_access_cards": network_access_cards,
+        "access_repair_state": _build_access_repair_state(
+            db,
+            customer,
+            subscriptions,
+        ),
         "pending_location_request": pending_location_request,
         **relationship_data,
     }

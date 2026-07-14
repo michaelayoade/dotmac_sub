@@ -57,17 +57,36 @@ that obscure business behavior.
 1. `financial.ledger` owns the append-only record lifecycle and reversal
    invariant. Domain owners decide why money moves.
 2. `financial.payments`, `financial.invoices`, and `financial.credit_notes` own
-   their document lifecycles and the ledger postings those transitions require.
-3. `financial.vas_wallet` owns its separate append-only wallet, spendable
+   their document lifecycles and the ledger postings currently implemented for
+   those transitions. Native invoice issuance is an authoritative billing fact
+   but does not yet write a customer `ledger_entries` debit; invoice write-off,
+   void, and credit-note paths own their adjustment/reversal postings.
+3. `financial.tax_configuration` owns configurable tax-rate records and their
+   active lifecycle. Inclusive, exclusive, or exempt treatment belongs to the
+   invoice/credit-note line, not to a second tax-rate vocabulary.
+4. `financial.payment_proofs` owns proof review and creation of the source WHT
+   receivable when a reseller pays net cash against a gross obligation.
+5. `financial.tax_accounting` owns tax-report meaning, periods, currency
+   separation, issued-output-tax and credit-note adjustment projection, net
+   output-tax liability, WHT-receivable projection and lifecycle, its immutable
+   official transition timeline, and the bounded tax-fact feeds consumed by
+   Dotmac ERP. Issued output tax less issued credit-note tax adjustments is the
+   source-document liability; it is not labelled as collected cash. Pending and
+   certified WHT remain outstanding receivables; reclaimed and written-off
+   records remain visible without inflating the outstanding amount. Dotmac ERP
+   exclusively owns TaxCode account mappings, balanced journals, tax
+   transactions, and financial statements. Sub has no tax posting or account-
+   mapping table.
+6. `financial.vas_wallet` owns its separate append-only wallet, spendable
    balance, and atomic bridge into `financial.payments` for bill settlement.
-4. Customer financial position owns read-side financial summaries, including
+7. Customer financial position owns read-side financial summaries, including
    the bounded bulk projection used by cohort monitoring. Bulk callers do not
    loop the single-customer ledger reader.
-5. `financial.access_resolution` owns financial suspension/restoration
+8. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold`; the
    existence or size of one payment is never itself permission to restore.
-6. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
+9. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
    warn/suspend/restore plan consumed by both dry-run and execution. It consumes
    the funding decision from `financial.access_resolution`; it does not create
    another balance or threshold rule. Audit reconstruction may supply a named,
@@ -77,23 +96,23 @@ that obscure business behavior.
    policy, including selection of the candidate cohort. Supplied snapshots are
    complete-or-error for that cohort and never fall back to a different local
    balance for missing accounts.
-7. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
+10. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
    affordability decision, and idempotent financial adjustment. It locks the
    account and recomputes at write time; portal, admin, API, and change-request
    application paths do not post their own plan-change debit.
-8. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+11. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
    Both converge on the account lifecycle writer, which re-checks billing
    profile validity, payment-arrangement/proof/extension shields, and billing
    enforcement health immediately before a financial suspension.
-9. Scheduled billing, collections, and payment-reconciliation services own DB
+12. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-10. `financial.payment_webhooks` owns signature-verified provider-payload
+13. `financial.payment_webhooks` owns signature-verified provider-payload
    projection and inbound dead-letter lifecycle. Replay rebuilds the same
    settlement command as live delivery; `financial.payment_provider_events`
    owns idempotent event processing, delegates the monetary write to the
    payment owner, and must resume an incomplete event rather than treating
    receipt identity as proof that money was posted.
-11. `financial.vas_operations` owns admin VAS mutation transactions and manual
+14. `financial.vas_operations` owns admin VAS mutation transactions and manual
    purchase resolution. `financial.vas_refunds` exclusively owns
    refund-to-source eligibility, the durable request lifecycle, and wallet
    reservation/reversal projection. It commits the request and wallet debit
@@ -108,6 +127,49 @@ apply scheduling, routing, idempotency, and feature-gate concerns before calling
 the owning financial service. Admin VAS routes do not mutate catalog or
 transaction rows, control wallet transactions, or decide whether funds may
 leave through a gateway.
+
+Tax-accounting migration record:
+
+- Old owner: `app.services.web_reports_extended` queried invoice models and the
+  Jinja report interpreted them as `tax_amount`/`total_amount`, ignored its date
+  controls, mixed currencies, and labelled issued tax as collected.
+- New source-fact owner: `app.services.tax_accounting` projects bounded invoice,
+  credit-note, and WHT rows plus full filtered aggregates per currency. It owns
+  legal WHT transitions and the WHT official timeline. Web services and routes
+  remain thin adapters.
+- Accounting owner: Dotmac ERP owns TaxCode configuration and account mappings,
+  balanced invoice/credit-note/payment/WHT journals, tax transactions, tax
+  returns, and financial statements. Its existing pull integration consumes
+  Sub's bounded sync feeds; no parallel push or local Sub subledger is added.
+- Read boundary: the tax report is the canonical tax-register projection from
+  authoritative invoice, credit-note, and WHT source documents. ERP journals do
+  not replace source-document ownership, and Sub report rows do not replace ERP
+  accounting.
+- Credit-note tax point: `financial.credit_notes` persists the first `issued_at`
+  when a credit enters an adjusting state; `financial.tax_accounting` uses that
+  timestamp for report periods and the ERP sync contract. Migration 291
+  backfills existing issued/applied rows from `created_at`. All direct automated
+  writers use the shared lifecycle adapter, and cancellation credits preserve the
+  source invoice, rate, and inclusive/exclusive/exempt line treatment.
+- Fallback retirement: the false `total_tax`/`invoices` model contract and
+  `tax_amount`/`total_amount` template fields are removed in this slice.
+- Feed contract: invoice and credit-note sync lines expose `tax_rate_id` and
+  `tax_application`; the tax-rate feed exposes code/rate; payment sync exposes
+  gross cash settlement, net bank cash, WHT amount/rate/status/record/certificate,
+  and the source resolution timestamp for terminal decisions. WHT transitions
+  advance the owning payment watermark so ERP re-pulls changes.
+- ERP resolution: ERP resolves each source rate/treatment to exactly one active,
+  effective, ERP-owned TaxCode and fails closed on missing or ambiguous account
+  configuration. Corrections reverse and re-post in one transaction rather than
+  mutating posted lines.
+- Operator control: `/admin/billing/tax-accounting` is the permission-protected
+  source-fact and WHT evidence console with server-side search, status filters,
+  counts, and pagination. It does not offer account mapping or journal controls.
+- WHT lifecycle: payment-proof verification creates the pending source record.
+  The tax owner alone permits pending -> certified -> reclaimed, pending/certified
+  -> written_off, requires certificate evidence or a write-off reason, and appends
+  `withholding_tax_transitions`. Each transition advances the payment sync
+  watermark; ERP applies the accounting consequence from its own mapped accounts.
 
 ## Customer Context
 
@@ -373,6 +435,14 @@ Dependency order:
    last-mile, impact, and active-incident inputs into the customer-safe
    `connected/trouble/outage` verdict plus headline/message/advice. It does not
    own device operational state or raw online-session observations.
+10. `network.control_plane_intent`: owns the shared desired-state delivery
+   lifecycle, control-plane target/revision identity, and vendor status
+   projections. Vendor adapters project through this one
+   desired-to-readback lifecycle.
+11. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+   resource/field registry, Dotmac ownership markers, verified reconciliation,
+   and periodic drift evidence. Router routes and tasks only orchestrate it,
+   and it projects through `network.control_plane_intent`.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
@@ -523,12 +593,21 @@ Service intent:
 3. `service_intent.catalog_billing_governance`: owns billing-critical catalog
    mutation safety, audit, and operator alerts. Live pricing/cadence is versioned
    rather than edited in place, and routes require `catalog:billing_write`.
-4. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
+4. `service_intent.subscription_lifecycle`: owns the current/proposed lifecycle
+   projection, command eligibility, reviewed-head contract, and billing/access
+   impact preview.
+5. `service_intent.subscription_lifecycle_execution`: owns serialized,
+   idempotent execution and structured single/batch outcomes. It delegates the
+   resulting mutations to account lifecycle, catalog, billing, scheduler, and
+   RADIUS owners. Admin routes and bulk adapters submit commands to this owner;
+   they do not update subscription status or offers directly.
+6. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
    assignment.
-5. `service_intent.ont`: projects provisioning intent to ONT operations.
+7. `service_intent.ont`: projects provisioning intent to ONT operations.
 
-Rule: catalog policy and subscription owners define commercial intent. Network
-owners project configured intent without a parallel catalog-to-network adapter.
+Rule: catalog policy and subscription owners define commercial intent. Every
+lifecycle execution carries a reviewed head and idempotency key. Network owners
+project configured intent without a parallel catalog-to-network adapter.
 
 Integrations:
 

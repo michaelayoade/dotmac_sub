@@ -1,10 +1,11 @@
 """Admin catalog management web routes."""
 
 import logging
+from datetime import datetime
 from typing import Any, cast
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -22,7 +23,15 @@ from app.services import (
 )
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_fup as web_fup_service
-from app.services.auth_dependencies import require_any_permission, require_permission
+from app.services.auth_dependencies import (
+    has_permission,
+    require_any_permission,
+    require_permission,
+)
+from app.services.subscription_lifecycle import (
+    SubscriptionCommandKind,
+    SubscriptionEffectiveTiming,
+)
 from app.services.topology.customer_path import resolve_customer_path
 from app.web.request_parsing import parse_form_data, parse_form_data_sync
 
@@ -47,6 +56,24 @@ def _base_context(
 
 def _get_actor_id(request: Request) -> str | None:
     return web_admin_service.get_actor_id(request)
+
+
+def _assert_lifecycle_command_permission(
+    request: Request,
+    db: Session,
+    kind: SubscriptionCommandKind,
+) -> None:
+    auth = getattr(request.state, "auth", None) or {}
+    if auth and has_permission(auth, db, "catalog:write"):
+        return
+    action_permission = {
+        SubscriptionCommandKind.activate: "subscription:activate",
+        SubscriptionCommandKind.restore: "subscription:activate",
+        SubscriptionCommandKind.suspend: "subscription:suspend",
+    }.get(kind)
+    if action_permission and auth and has_permission(auth, db, action_permission):
+        return
+    raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @router.get(
@@ -780,6 +807,73 @@ def catalog_subscription_update(
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(cast(dict[str, Any], result["form_context"]))
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/lifecycle/execute",
+    dependencies=[
+        Depends(
+            require_any_permission(
+                "catalog:write",
+                "subscription:activate",
+                "subscription:suspend",
+            )
+        )
+    ],
+)
+def catalog_subscription_execute_lifecycle_command(
+    request: Request,
+    subscription_id: str,
+    kind: SubscriptionCommandKind = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    target_offer_id: str | None = Form(None),
+    reason: str | None = Form(None),
+    expected_head: str = Form(...),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Execute one canonical, reviewed subscription lifecycle command."""
+    _assert_lifecycle_command_permission(request, db, kind)
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.execute_lifecycle_command_response(
+            db,
+            subscription_id=subscription_id,
+            kind=kind,
+            actor_id=_get_actor_id(request),
+            expected_head=expected_head,
+            idempotency_key=idempotency_key,
+            reason=reason,
+            target_offer_id=target_offer_id,
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/lifecycle/schedules/{schedule_id}/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_cancel_lifecycle_schedule(
+    request: Request,
+    subscription_id: str,
+    schedule_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Cancel one pending deferred lifecycle status command."""
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.cancel_lifecycle_schedule_response(
+            db,
+            subscription_id=subscription_id,
+            schedule_id=schedule_id,
+            actor_id=_get_actor_id(request),
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
 
 
 @router.post(

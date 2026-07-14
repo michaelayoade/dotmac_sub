@@ -154,6 +154,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         HEALTH,
         "Applying a scheduled plan change must be idempotent (apply() status guard).",
     ),
+    "app.tasks.catalog.apply_due_subscription_status_commands": _c(
+        "catalog",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "Durable schedule rows own leases, bounded retry, reviewed-head drift "
+        "detection, and deterministic executor idempotency keys.",
+    ),
     "app.tasks.campaigns.process_due_campaigns": _c(
         "campaigns",
         SWEEP,
@@ -626,6 +634,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.workflow.detect_sla_breaches": _c("workflow", SWEEP, IDEMP, STATUS),
     "router_sync.capture_scheduled_snapshots": _c("router", SWEEP, IDEMP, HEALTH),
     "router_sync.cleanup_idle_tunnels": _c("router", SWEEP, IDEMP, LOG),
+    "router_sync.audit_sot_drift": _c("router", SWEEP, IDEMP, HEALTH),
     "router_sync.execute_config_push": _c("router", STATE, STATEFUL, STATUS),
     "router_sync.reconcile_config_push_readback": _c("router", SWEEP, IDEMP, STATUS),
     "router_sync.reconcile_nas_vlan_readback": _c("router", SWEEP, IDEMP, STATUS),

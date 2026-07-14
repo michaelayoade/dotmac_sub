@@ -320,7 +320,9 @@ def create_push(
     try:
         push = RouterConfigService.create_push(
             db,
-            commands=payload.commands,
+            desired_state=[
+                intent.model_dump(mode="json") for intent in payload.desired_state
+            ],
             router_ids=payload.router_ids,
             initiated_by=user_id,
             template_id=payload.template_id,

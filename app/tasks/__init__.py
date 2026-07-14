@@ -27,7 +27,11 @@ from app.tasks.campaigns import (
     process_due_campaigns,
     send_campaign_batch,
 )
-from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
+from app.tasks.catalog import (
+    apply_due_subscription_changes,
+    apply_due_subscription_status_commands,
+    expire_subscriptions,
+)
 from app.tasks.collections import prepaid_balance_sweep, run_dunning
 from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
 from app.tasks.crm_ticket_pull import (
@@ -127,6 +131,7 @@ from app.tasks.radius_health import run_radius_health_check
 from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
 from app.tasks.referrals import reconcile_referral_mirror
 from app.tasks.router_sync import (
+    audit_sot_drift,
     capture_scheduled_snapshots,
     cleanup_idle_tunnels,
     execute_config_push,
@@ -236,6 +241,7 @@ __all__ = [
     "reconcile_topups",
     "expire_subscriptions",
     "apply_due_subscription_changes",
+    "apply_due_subscription_status_commands",
     "run_dunning",
     "prepaid_balance_sweep",
     "audit_cutover_balance_invariant_task",
@@ -343,6 +349,7 @@ __all__ = [
     # Router config sync/snapshot (keystone) — previously unregistered, so the
     # scheduled capture never ran. Importing here registers them with the worker.
     "capture_scheduled_snapshots",
+    "audit_sot_drift",
     "cleanup_idle_tunnels",
     "execute_config_push",
     "reconcile_config_push_readback",

@@ -159,9 +159,11 @@ def test_next_cycle_rejects_duplicate_outstanding_change(
         actor_id=None,
         effective_timing="next_cycle",
     )
-    # The duplicate is reported as a failure, not a swap.
+    # The lifecycle owner reports the duplicate as ineligible, not an execution
+    # failure, and leaves the original scheduled change untouched.
     assert second["changed"] == 0
-    assert second["failed_ids"] == [str(subscription.id)]
+    assert second["skipped_ids"] == [str(subscription.id)]
+    assert second["failed_ids"] == []
 
 
 def test_applier_swaps_offer_when_due(db_session, subscriber, monkeypatch):

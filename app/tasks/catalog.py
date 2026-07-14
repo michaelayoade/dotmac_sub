@@ -66,6 +66,20 @@ def apply_due_subscription_changes() -> dict:
         return result
 
 
+@celery_app.task(name="app.tasks.catalog.apply_due_subscription_status_commands")
+def apply_due_subscription_status_commands() -> dict:
+    """Apply due deferred status commands through the canonical executor."""
+    from app.services.subscription_lifecycle_schedules import (
+        apply_due_subscription_status_commands as apply_due,
+    )
+
+    logger.info("Starting apply_due_subscription_status_commands")
+    with db_session_adapter.session() as session:
+        result = apply_due(session)
+        logger.info("Completed apply_due_subscription_status_commands: %s", result)
+        return result
+
+
 @celery_app.task(name="app.tasks.catalog.send_expiry_reminders")
 def send_expiry_reminders(days_before: int | None = None) -> dict:
     """Send renewal reminders for subscriptions expiring within N days.

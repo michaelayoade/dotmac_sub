@@ -153,7 +153,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "invoice document lifecycle",
                     "invoice status transitions",
-                    "invoice-originated ledger postings",
+                    "invoice adjustment and reversal postings",
                 ),
                 depends_on=("financial.ledger", "financial.billing_accounts"),
             ),
@@ -162,6 +162,53 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.billing.credit_notes",
                 owns=("credit-note lifecycle", "credit-note ledger postings"),
                 depends_on=("financial.ledger", "financial.invoices"),
+            ),
+            SOTService(
+                name="financial.tax_configuration",
+                module="app.services.billing.tax",
+                owns=(
+                    "configurable tax-rate records",
+                    "tax-rate activation lifecycle",
+                ),
+            ),
+            SOTService(
+                name="financial.payment_proofs",
+                module="app.services.payment_proofs",
+                owns=(
+                    "payment-proof review lifecycle",
+                    "proof-backed payment request",
+                    "withholding-tax receivable source records",
+                ),
+                depends_on=("financial.payments",),
+            ),
+            SOTService(
+                name="financial.tax_accounting",
+                module="app.services.tax_accounting",
+                owns=(
+                    "tax report semantics",
+                    "output-tax invoice projection",
+                    "withholding-tax receivable projection",
+                    "tax report period and currency aggregation",
+                    "credit-note tax recognition point",
+                    "withholding-tax lifecycle",
+                    "withholding-tax official timeline",
+                    "net output-tax liability projection",
+                ),
+                depends_on=(
+                    "financial.invoices",
+                    "financial.tax_configuration",
+                    "financial.payment_proofs",
+                ),
+                notes=(
+                    "Issued output tax less issued credit-note tax adjustments is "
+                    "the source-document liability, not cash collected, and "
+                    "currencies remain separate. This owner also enforces legal "
+                    "pending/certified/reclaimed/written-off WHT transitions and an "
+                    "immutable evidence timeline. Dotmac ERP exclusively owns tax "
+                    "account mappings, balanced journals, tax transactions, and "
+                    "financial statements; Sub exports line tax treatment and WHT "
+                    "facts through bounded sync feeds and has no local posting path."
+                ),
             ),
             SOTService(
                 name="financial.vas_wallet",
@@ -332,8 +379,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.services.billing_automation",
             "app.services.collections.*",
             "app.web.admin.billing_*",
+            "app.web.admin.reports",
             "app.web.admin.vas",
             "app.api.billing",
+            "app.services.payment_proofs",
+            "app.services.web_reports_extended",
             "app.tasks.billing",
             "app.tasks.collections",
             "app.tasks.enforcement",
@@ -342,7 +392,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
         rule=(
             "No caller infers access or balances from draft invoices, imported "
-            "legacy fields, or ad hoc sums when ledger/access resolvers exist."
+            "legacy fields, or ad hoc sums when ledger/access resolvers exist. "
+            "Tax reports consume the tax-accounting projection, never label "
+            "issued tax as collected cash, and never add different currencies. "
+            "Tax account mappings and double-entry consequences are written only "
+            "by Dotmac ERP from Sub's bounded source-fact feeds."
         ),
     ),
     DomainSOT(
@@ -388,6 +442,39 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device retry-pending and alarm classification",
                 ),
                 depends_on=("runtime.infrastructure_polling",),
+            ),
+            SOTService(
+                name="network.control_plane_intent",
+                module="app.services.control_plane_intent",
+                owns=(
+                    "shared desired-state delivery lifecycle",
+                    "control-plane target and revision identity",
+                    "vendor status projections and transition guards",
+                ),
+                depends_on=("network.identity",),
+                notes=(
+                    "Vendor adapters retain native persistence models but project "
+                    "through one desired-to-readback lifecycle. Verified always "
+                    "requires device evidence for the current intent revision."
+                ),
+            ),
+            SOTService(
+                name="network.routeros_sot",
+                module="app.services.router_management.sot_policy",
+                owns=(
+                    "typed RouterOS desired-state contract",
+                    "managed RouterOS resource and field policy",
+                    "Dotmac RouterOS resource ownership identity",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "runtime.db_sessions",
+                    "observability.recording",
+                ),
+                notes=(
+                    "Vendor-specific RouterOS desired state projects through the "
+                    "shared network.control_plane_intent lifecycle."
+                ),
             ),
             SOTService(
                 name="network.nas_inventory",
@@ -479,7 +566,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=(
             "app.services.topology.*",
             "app.services.infrastructure_*",
+            "app.services.router_management.*",
             "app.tasks.network_*",
+            "app.tasks.router_sync",
             "app.web.admin.network_*",
             "app.web.customer.connection",
             "app.api.me",
@@ -1247,6 +1336,53 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Execution remains with the established billing, account "
                     "lifecycle, catalog, and RADIUS owners. UI, API, scheduled, "
                     "and bulk callers consume this preview before execution."
+                ),
+            ),
+            SOTService(
+                name="service_intent.subscription_lifecycle_execution",
+                module="app.services.subscription_lifecycle_commands",
+                owns=(
+                    "single-subscription command orchestration",
+                    "subscription command locking and reviewed-head enforcement",
+                    "subscription command idempotent replay",
+                    "structured subscription command outcomes",
+                    "independently committed subscription command batches",
+                ),
+                depends_on=(
+                    "service_intent.subscription_lifecycle",
+                    "service_intent.catalog_policy",
+                    "financial.prepaid_plan_change",
+                    "access.radius_state",
+                ),
+                notes=(
+                    "Delegates mutations and side effects to the established "
+                    "account lifecycle, catalog, billing, scheduler, and RADIUS "
+                    "owners. Renewal execution remains billing-owned and fails "
+                    "closed. Deferred status execution is owned by "
+                    "service_intent.subscription_lifecycle_scheduling. Admin "
+                    "single and bulk adapters delegate here instead of writing "
+                    "subscription lifecycle fields directly."
+                ),
+            ),
+            SOTService(
+                name="service_intent.subscription_lifecycle_scheduling",
+                module="app.services.subscription_lifecycle_schedules",
+                owns=(
+                    "durable deferred subscription status intent",
+                    "deferred command execution leases and bounded retry",
+                    "scheduled lifecycle cancellation",
+                    "deferred lifecycle execution evidence",
+                ),
+                depends_on=(
+                    "service_intent.subscription_lifecycle",
+                    "service_intent.subscription_lifecycle_execution",
+                    "scheduler.registry",
+                ),
+                notes=(
+                    "Revalidates the reviewed subscription head at execution "
+                    "time and delegates every mutation to the canonical command "
+                    "executor. Plan scheduling remains with the catalog change "
+                    "request owner."
                 ),
             ),
             SOTService(

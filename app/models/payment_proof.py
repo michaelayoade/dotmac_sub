@@ -11,7 +11,17 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Text,
+    event,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -106,6 +116,13 @@ class WithholdingTaxRecord(Base):
     """
 
     __tablename__ = "withholding_tax_records"
+    __table_args__ = (
+        Index(
+            "uq_withholding_tax_records_payment_id",
+            "payment_id",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -137,6 +154,9 @@ class WithholdingTaxRecord(Base):
         index=True,
     )
     certificate_path: Mapped[str | None] = mapped_column(String(500))
+    certificate_reference: Mapped[str | None] = mapped_column(String(160))
+    certified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -149,5 +169,73 @@ class WithholdingTaxRecord(Base):
     )
 
     billing_account = relationship("BillingAccount")
-    payment = relationship("Payment")
+    reseller = relationship("Reseller")
+    payment = relationship("Payment", back_populates="withholding_tax_record")
     payment_proof = relationship("PaymentProof")
+    transitions = relationship(
+        "WithholdingTaxTransition",
+        back_populates="record",
+        order_by="WithholdingTaxTransition.occurred_at",
+    )
+
+
+class WithholdingTaxTransition(Base):
+    """Append-only official timeline for a WHT receivable lifecycle."""
+
+    __tablename__ = "withholding_tax_transitions"
+    __table_args__ = (
+        CheckConstraint(
+            "from_status IS NULL OR from_status <> to_status",
+            name="ck_withholding_tax_transitions_status_change",
+        ),
+        Index(
+            "ix_withholding_tax_transitions_record_occurred",
+            "record_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    record_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("withholding_tax_records.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    from_status: Mapped[WithholdingTaxStatus | None] = mapped_column(
+        Enum(WithholdingTaxStatus, name="withholdingtaxstatus"),
+        nullable=True,
+    )
+    to_status: Mapped[WithholdingTaxStatus] = mapped_column(
+        Enum(WithholdingTaxStatus, name="withholdingtaxstatus"),
+        nullable=False,
+    )
+    actor_id: Mapped[str | None] = mapped_column(String(120))
+    certificate_reference: Mapped[str | None] = mapped_column(String(160))
+    notes: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(UTC),
+    )
+
+    record = relationship("WithholdingTaxRecord", back_populates="transitions")
+
+
+class WithholdingTaxTransitionImmutableError(RuntimeError):
+    pass
+
+
+@event.listens_for(WithholdingTaxTransition, "before_update")
+def _reject_wht_transition_update(*_args: object) -> None:
+    raise WithholdingTaxTransitionImmutableError(
+        "WHT transition history is append-only"
+    )
+
+
+@event.listens_for(WithholdingTaxTransition, "before_delete")
+def _reject_wht_transition_delete(*_args: object) -> None:
+    raise WithholdingTaxTransitionImmutableError(
+        "WHT transition history is append-only"
+    )

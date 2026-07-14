@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from app.models.catalog import AccessType, Subscription, SubscriptionStatus
-from app.models.network import CPEDevice, DeviceType
-from app.models.network_operation import NetworkOperationStatus
+from app.models.network import CPEDevice, DeviceType, VendorModelCapability
+from app.models.network_operation import NetworkOperation, NetworkOperationStatus
 from app.models.provisioning import ServiceOrder
 from app.models.uisp_control import (
     UispConfigSnapshot,
@@ -15,12 +17,15 @@ from app.models.uisp_control import (
 from app.services.uisp_control_plane import (
     UispIntentError,
     observe_intent,
+    prune_unsupported_desired,
     reconcile_inventory,
     request_apply,
     stage_from_service_order,
     stage_intent,
     update_intent_desired,
 )
+from app.services.uisp_write_adapter import UispCapabilityProfile, capability_profile
+from app.web.templates import templates
 
 
 def _subscription(db_session, subscriber, catalog_offer):
@@ -59,6 +64,25 @@ def _observation(device_id="uisp-radio-1", *, ip="172.21.10.2/24"):
         "ipAddress": ip,
         "overview": {"status": "active"},
     }
+
+
+def _capability(db_session, cpe, fields):
+    cpe.vendor = "Ubiquiti"
+    cpe.model = "LBE-5AC-Gen2"
+    capability = VendorModelCapability(
+        vendor="Ubiquiti",
+        model="LBE-5AC-Gen2",
+        supported_features={
+            "uisp": {
+                "configuration_write": True,
+                "transport": "airos",
+                "fields": fields,
+            }
+        },
+    )
+    db_session.add(capability)
+    db_session.flush()
+    return capability
 
 
 def test_matching_observation_is_only_path_to_verified(
@@ -119,6 +143,14 @@ def test_wifi_intent_queues_without_false_success_and_rejects_plaintext_secret(
 ):
     subscription = _subscription(db_session, subscriber, catalog_offer)
     cpe = _cpe(db_session, subscriber, subscription)
+    _capability(
+        db_session,
+        cpe,
+        {
+            "wifi.ssid": "/wireless/ssid",
+            "wifi.password_ref": "/wireless/key",
+        },
+    )
 
     try:
         stage_intent(
@@ -242,6 +274,7 @@ def test_admin_routes_expose_uisp_lifecycle():
     assert "/network/uisp-control/{intent_id}" in paths
     assert "/network/uisp-control/{intent_id}/apply" in paths
     assert "/network/uisp-control/{intent_id}/desired" in paths
+    assert "/network/uisp-control/{intent_id}/desired/prune" in paths
 
 
 def test_operator_edit_stages_new_revision_without_verification(
@@ -270,3 +303,178 @@ def test_operator_edit_stages_new_revision_without_verification(
     assert intent.desired_revision == 2
     assert intent.verified_revision == 1
     assert intent.desired_state["firmware_version"] == "8.7.20"
+
+
+def test_apply_rejects_stale_operator_revision(db_session, subscriber, catalog_offer):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    cpe = _cpe(db_session, subscriber, subscription)
+    _capability(db_session, cpe, {"management_ip": "/interface/mgmt-ip"})
+    intent = stage_intent(
+        db_session,
+        target_type=UispIntentTargetType.cpe,
+        target_id=cpe.id,
+        desired_state={"management_ip": "172.21.10.2"},
+    )
+    update_intent_desired(db_session, intent, management_ip="172.21.10.3")
+
+    try:
+        request_apply(
+            db_session,
+            intent,
+            expected_revision=1,
+            enqueue=False,
+        )
+    except UispIntentError as exc:
+        assert "current revision is 2" in str(exc)
+    else:  # pragma: no cover - explicit stale-write safety contract
+        raise AssertionError("stale UISP revision was queued")
+
+
+def test_apply_preflight_blocks_unmapped_fields_before_operation_creation(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    cpe = _cpe(db_session, subscriber, subscription)
+    _capability(db_session, cpe, {"name": "/system/hostname"})
+    intent = stage_intent(
+        db_session,
+        target_type=UispIntentTargetType.cpe,
+        target_id=cpe.id,
+        desired_state={"name": "customer-radio", "remote_access": {"enabled": True}},
+    )
+
+    try:
+        request_apply(db_session, intent, enqueue=False)
+    except UispIntentError as exc:
+        assert "remote_access.enabled" in str(exc)
+    else:  # pragma: no cover - explicit no-write contract
+        raise AssertionError("unsupported desired state was queued")
+
+    assert intent.status == UispIntentStatus.manual_required
+    assert db_session.query(NetworkOperation).count() == 0
+
+
+def test_stage_rejects_malformed_nested_control_fields(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    cpe = _cpe(db_session, subscriber, subscription)
+
+    for desired in (
+        {"remote_access": {"enabled": "yes"}},
+        {"remote_access": {"port": 22}},
+        {"lifecycle": {"state": "unknown"}},
+        {"wifi": {"ssid": ""}},
+    ):
+        try:
+            stage_intent(
+                db_session,
+                target_type=UispIntentTargetType.cpe,
+                target_id=cpe.id,
+                desired_state=desired,
+            )
+        except UispIntentError:
+            continue
+        raise AssertionError(f"malformed desired state was accepted: {desired}")
+
+
+def test_prune_unsupported_fields_stages_explicit_mapped_revision(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    cpe = _cpe(db_session, subscriber, subscription)
+    _capability(db_session, cpe, {"name": "/system/hostname"})
+    intent = stage_intent(
+        db_session,
+        target_type=UispIntentTargetType.cpe,
+        target_id=cpe.id,
+        desired_state={
+            "name": "customer-radio",
+            "remote_access": {"enabled": True},
+            "lifecycle": {"state": "active"},
+        },
+    )
+
+    pruned = prune_unsupported_desired(db_session, intent)
+    profile = capability_profile(db_session, pruned)
+
+    assert pruned.desired_revision == 2
+    assert pruned.desired_state == {"name": "customer-radio"}
+    assert pruned.status == UispIntentStatus.staged
+    assert profile.apply_ready is True
+
+
+def test_model_mapped_form_does_not_inject_unsupported_defaults(
+    db_session, subscriber, catalog_offer
+):
+    from app.web.admin.network_uisp_control import uisp_control_update_desired
+
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    cpe = _cpe(db_session, subscriber, subscription)
+    _capability(db_session, cpe, {"name": "/system/hostname"})
+    intent = stage_intent(
+        db_session,
+        target_type=UispIntentTargetType.cpe,
+        target_id=cpe.id,
+        desired_state={"name": "old-name"},
+    )
+
+    response = uisp_control_update_desired(
+        intent.id,
+        name="new-name",
+        management_ip=None,
+        firmware_version=None,
+        wifi_ssid=None,
+        wifi_password=None,
+        remote_access_enabled=None,
+        lifecycle_state=None,
+        db=db_session,
+    )
+
+    db_session.refresh(intent)
+    assert response.status_code == 303
+    assert intent.desired_state == {"name": "new-name"}
+
+
+def test_hostname_only_model_renders_only_verified_control() -> None:
+    profile = UispCapabilityProfile(
+        vendor="Ubiquiti",
+        model="LBE-5AC-Gen2",
+        transport="airos",
+        writable_fields=("name",),
+        requested_fields=("name",),
+        unsupported_fields=(),
+    )
+    intent = SimpleNamespace(
+        id="intent-1",
+        target_type=UispIntentTargetType.cpe,
+        target_id="target-1",
+        uisp_device_id="uisp-1",
+        desired_revision=1,
+        status=UispIntentStatus.staged,
+        desired_state={"name": "radio-1"},
+        observed_config={},
+        drift={},
+        snapshots=[],
+    )
+
+    html = templates.env.get_template("admin/network/uisp-control/detail.html").render(
+        request=SimpleNamespace(
+            state=SimpleNamespace(csrf_token="csrf"), query_params={}
+        ),
+        current_user={"name": "Admin", "email": "admin@example.test"},
+        sidebar_stats={},
+        active_page="uisp-control",
+        active_menu="network",
+        intent=intent,
+        desired_redacted=intent.desired_state,
+        capability_profile=profile,
+        capability_error=None,
+    )
+
+    assert 'name="name"' in html
+    assert 'name="wifi_ssid"' not in html
+    assert 'name="wifi_password"' not in html
+    assert 'name="remote_access_enabled"' not in html
+    assert 'name="lifecycle_state"' not in html
+    assert 'name="firmware_version"' not in html

@@ -1,6 +1,7 @@
 """Admin billing reporting/config routes."""
 
 from typing import Any, cast
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -13,6 +14,9 @@ from app.services import billing as billing_service
 from app.services import web_billing_health as web_billing_health_service
 from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import web_billing_overview as web_billing_overview_service
+from app.services import (
+    web_billing_tax_accounting as web_billing_tax_accounting_service,
+)
 from app.services import web_billing_tax_rates as web_billing_tax_rates_service
 from app.services.audit_helpers import (
     build_audit_activities_for_types,
@@ -52,6 +56,19 @@ def _tax_rate_audit_items(db: Session, limit: int = 5) -> list[dict]:
     except Exception:
         db.rollback()
         return []
+
+
+def _tax_accounting_redirect(
+    *,
+    error: str | None = None,
+    message: str | None = None,
+) -> RedirectResponse:
+    url = "/admin/billing/tax-accounting"
+    if error:
+        url += f"?error={quote(error)}"
+    elif message:
+        url += f"?message={quote(message)}"
+    return RedirectResponse(url=url, status_code=303)
 
 
 @router.get(
@@ -182,6 +199,88 @@ def billing_tax_rate_toggle(
             },
         )
     return RedirectResponse(url="/admin/billing/tax-rates", status_code=303)
+
+
+@router.get(
+    "/tax-accounting",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:tax:read"))],
+)
+def billing_tax_accounting(
+    request: Request,
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    wht_status: str | None = Query(None),
+    wht_search: str | None = Query(None),
+    wht_page: int = Query(1, ge=1),
+    error: str | None = Query(None),
+    message: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    state = web_billing_tax_accounting_service.build_page_data(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        wht_status=wht_status,
+        wht_search=wht_search,
+        wht_page=wht_page,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        request,
+        "admin/billing/tax_accounting.html",
+        {
+            **state,
+            "error": error,
+            "message": message,
+            "active_page": "tax-accounting",
+            "active_menu": "billing",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/tax-accounting/wht/{record_id}/transition",
+    dependencies=[Depends(require_permission("billing:tax:write"))],
+)
+def billing_wht_transition(
+    request: Request,
+    record_id: str,
+    target_status: str = Form(...),
+    certificate_reference: str | None = Form(None),
+    notes: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    try:
+        record = web_billing_tax_accounting_service.transition_wht(
+            db,
+            record_id=record_id,
+            target_status=target_status,
+            actor_id=_actor_id(request),
+            certificate_reference=certificate_reference,
+            notes=notes,
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action="transition",
+            entity_type="withholding_tax_record",
+            entity_id=str(record.id),
+            actor_id=_actor_id(request),
+            metadata={
+                "status": record.status.value,
+                "certificate_reference": record.certificate_reference,
+            },
+        )
+    except Exception as exc:
+        db.rollback()
+        return _tax_accounting_redirect(error=str(exc))
+    return _tax_accounting_redirect(
+        message=f"WHT record moved to {record.status.value.replace('_', ' ')}"
+    )
 
 
 @router.get(

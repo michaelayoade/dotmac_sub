@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from app.models.network_operation import (
     NetworkOperationTargetType,
 )
+from app.services.control_plane_intent import phase_for_network_operation
 from app.services.network_operations import network_operations
 
 if TYPE_CHECKING:
@@ -142,6 +143,7 @@ def build_operation_history(
             "title": _operation_title(op),
             "status": STATUS_DISPLAY.get(status_val, status_val),
             "status_value": status_val,
+            "control_plane_phase": phase_for_network_operation(op.status).value,
             "status_class": STATUS_CLASSES.get(status_val, STATUS_CLASSES["pending"]),
             "is_running": status_val in ("running", "pending"),
             "is_waiting": status_val == "waiting",

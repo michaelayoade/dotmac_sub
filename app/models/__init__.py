@@ -475,6 +475,8 @@ from app.models.payment_proof import (  # noqa: F401
     PaymentProofStatus,
     WithholdingTaxRecord,
     WithholdingTaxStatus,
+    WithholdingTaxTransition,
+    WithholdingTaxTransitionImmutableError,
 )
 from app.models.portal_message import (  # noqa: F401
     PortalMessage,
@@ -659,6 +661,10 @@ from app.models.subscription_engine import (  # noqa: F401
     SettingValueType,
     SubscriptionEngine,
     SubscriptionEngineSetting,
+)
+from app.models.subscription_lifecycle_schedule import (  # noqa: F401
+    SubscriptionLifecycleSchedule,
+    SubscriptionLifecycleScheduleStatus,
 )
 from app.models.support import (  # noqa: F401
     Ticket,

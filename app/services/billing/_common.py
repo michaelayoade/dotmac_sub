@@ -627,6 +627,8 @@ def _recalculate_credit_note_totals(db: Session, credit_note: CreditNote):
             status_code=400, detail="Applied total exceeds credit note total"
         )
     if credit_note.status not in {CreditNoteStatus.draft, CreditNoteStatus.void}:
+        if credit_note.issued_at is None:
+            credit_note.issued_at = datetime.now(UTC)
         if applied_total <= 0:
             credit_note.status = CreditNoteStatus.issued
         elif applied_total < credit_note.total:

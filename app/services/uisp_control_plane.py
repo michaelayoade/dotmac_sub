@@ -29,6 +29,13 @@ from app.models.uisp_control import (
     UispIntentTargetType,
     UispSnapshotSource,
 )
+from app.services.control_plane_intent import (
+    ControlPlaneHeadConflict,
+    ControlPlaneTarget,
+    assert_intent_head,
+    assert_phase_transition,
+    phase_for_uisp_intent,
+)
 
 UISP_CAPABILITIES: dict[str, bool | str] = {
     "inventory": True,
@@ -110,6 +117,40 @@ def _validate_desired(desired: dict) -> dict:
             raise UispIntentError(
                 f"Unsupported UISP Wi-Fi fields: {sorted(unknown_wifi)}"
             )
+        if "ssid" in wifi and (
+            not isinstance(wifi["ssid"], str)
+            or not 1 <= len(wifi["ssid"].strip()) <= 32
+        ):
+            raise UispIntentError("Wi-Fi SSID must be 1-32 characters")
+        if "password_ref" in wifi and (
+            not isinstance(wifi["password_ref"], str)
+            or not wifi["password_ref"].strip()
+        ):
+            raise UispIntentError("Wi-Fi password_ref must be a non-empty string")
+    remote_access = desired.get("remote_access")
+    if remote_access is not None:
+        if not isinstance(remote_access, dict):
+            raise UispIntentError("remote_access intent must be an object")
+        unknown_remote = set(remote_access) - {"enabled"}
+        if unknown_remote:
+            raise UispIntentError(
+                f"Unsupported UISP remote access fields: {sorted(unknown_remote)}"
+            )
+        if "enabled" in remote_access and not isinstance(
+            remote_access["enabled"], bool
+        ):
+            raise UispIntentError("remote_access.enabled must be boolean")
+    lifecycle = desired.get("lifecycle")
+    if lifecycle is not None:
+        if not isinstance(lifecycle, dict):
+            raise UispIntentError("lifecycle intent must be an object")
+        unknown_lifecycle = set(lifecycle) - {"state"}
+        if unknown_lifecycle:
+            raise UispIntentError(
+                f"Unsupported UISP lifecycle fields: {sorted(unknown_lifecycle)}"
+            )
+        if lifecycle.get("state") not in {"active", "suspended", "decommissioned"}:
+            raise UispIntentError("Invalid UISP lifecycle state")
     return copy.deepcopy(desired)
 
 
@@ -375,9 +416,54 @@ def request_apply(
     *,
     initiated_by: str | None = None,
     enqueue: bool = True,
+    expected_revision: int | None = None,
 ) -> NetworkOperation:
     from app.services.network_operations import network_operations
+    from app.services.uisp_write_adapter import (
+        UispWriteUnsupported,
+        require_apply_ready,
+    )
 
+    try:
+        require_apply_ready(db, intent)
+    except UispWriteUnsupported as exc:
+        intent.status = UispIntentStatus.manual_required
+        intent.last_error = str(exc)
+        db.commit()
+        raise UispIntentError(str(exc)) from exc
+
+    locked_intent = (
+        db.query(UispDeviceIntent)
+        .filter(UispDeviceIntent.id == intent.id)
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if locked_intent is None:
+        raise UispIntentError("UISP intent not found")
+    intent = locked_intent
+    revision = intent.desired_revision
+    try:
+        assert_intent_head(
+            expected_revision=(
+                expected_revision if expected_revision is not None else revision
+            ),
+            current_revision=revision,
+        )
+    except ControlPlaneHeadConflict as exc:
+        raise UispIntentError(str(exc)) from exc
+    target = ControlPlaneTarget(
+        provider="uisp",
+        target_type=intent.target_type.value,
+        target_id=str(intent.target_id),
+        desired_revision=revision,
+    )
+    assert_phase_transition(
+        phase_for_uisp_intent(intent.status),
+        phase_for_uisp_intent(UispIntentStatus.applying),
+    )
+    input_payload = redact_config(intent.desired_state)
+    input_payload["_control_plane"] = target.as_payload()
     operation = network_operations.start(
         db,
         (
@@ -391,8 +477,8 @@ def request_apply(
             else NetworkOperationTargetType.ont
         ),
         str(intent.target_id),
-        correlation_key=f"uisp:{intent.id}:revision:{intent.desired_revision}",
-        input_payload=redact_config(intent.desired_state),
+        correlation_key=target.correlation_key,
+        input_payload=input_payload,
         initiated_by=initiated_by,
     )
     intent.status = UispIntentStatus.applying
@@ -403,7 +489,7 @@ def request_apply(
         try:
             from app.tasks.uisp_control import apply_uisp_intent
 
-            apply_uisp_intent.delay(str(operation.id), str(intent.id))
+            apply_uisp_intent.delay(str(operation.id), str(intent.id), revision)
         except Exception as exc:
             network_operations.mark_failed(
                 db,
@@ -415,6 +501,44 @@ def request_apply(
             db.commit()
             db.refresh(operation)
     return operation
+
+
+def _remove_desired_field(desired: dict[str, Any], canonical_name: str) -> None:
+    parts = canonical_name.split(".")
+    if len(parts) == 1:
+        desired.pop(parts[0], None)
+        return
+    parent = desired.get(parts[0])
+    if not isinstance(parent, dict):
+        return
+    nested = dict(parent)
+    nested.pop(parts[1], None)
+    if nested:
+        desired[parts[0]] = nested
+    else:
+        desired.pop(parts[0], None)
+
+
+def prune_unsupported_desired(
+    db: Session, intent: UispDeviceIntent
+) -> UispDeviceIntent:
+    """Explicitly remove desired fields outside the target's verified mapping."""
+    from app.services.uisp_write_adapter import capability_profile
+
+    profile = capability_profile(db, intent)
+    if not profile.unsupported_fields:
+        return intent
+    desired = copy.deepcopy(intent.desired_state or {})
+    for canonical_name in profile.unsupported_fields:
+        _remove_desired_field(desired, canonical_name)
+    return stage_intent(
+        db,
+        target_type=intent.target_type,
+        target_id=intent.target_id,
+        desired_state=desired,
+        subscription_id=intent.subscription_id,
+        service_order_id=intent.service_order_id,
+    )
 
 
 def update_intent_desired(
