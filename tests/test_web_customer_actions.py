@@ -147,14 +147,14 @@ def test_repair_customer_access_state_restores_stale_active_projection(
     monkeypatch.setattr(
         actions,
         "set_subscription_access_state",
-        lambda db, subscription_id, state: access_state_calls.append(
-            (subscription_id, state.value if state else None)
-        )
-        or {
-            "external_rows_written": 1,
-            "external_rows_deleted": 1,
-            "aggregate_state": state.value if state else None,
-        },
+        lambda db, subscription_id, state: (
+            access_state_calls.append((subscription_id, state.value if state else None))
+            or {
+                "external_rows_written": 1,
+                "external_rows_deleted": 1,
+                "aggregate_state": state.value if state else None,
+            }
+        ),
     )
     monkeypatch.setattr(
         actions.radius_service,
@@ -164,14 +164,16 @@ def test_repair_customer_access_state_restores_stale_active_projection(
     monkeypatch.setattr(
         actions.radius_service,
         "reconcile_subscription_connectivity",
-        lambda db, subscription_id: reconcile_calls.append(subscription_id)
-        or {
-            "ok": True,
-            "radius_users_changed": 1,
-            "radius_clients_changed": 0,
-            "external_credentials_synced": 1,
-            "external_nas_synced": 0,
-        },
+        lambda db, subscription_id: (
+            reconcile_calls.append(subscription_id)
+            or {
+                "ok": True,
+                "radius_users_changed": 1,
+                "radius_clients_changed": 0,
+                "external_credentials_synced": 1,
+                "external_nas_synced": 0,
+            }
+        ),
     )
 
     result = actions.repair_customer_access_state(db_session, str(subscriber.id))
