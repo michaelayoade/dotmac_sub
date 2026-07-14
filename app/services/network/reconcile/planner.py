@@ -40,6 +40,7 @@ What the planner doesn't do
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .actions import (
@@ -479,6 +480,7 @@ def _plan_acs_side(
                     subnet_mask=desired.wan_static_subnet,
                     gateway=desired.wan_static_gateway,
                     dns_servers=desired.wan_static_dns,
+                    tr181_paths=desired.tr181_wan_paths,
                 )
             )
             drifts.append(
@@ -749,25 +751,46 @@ def _wan_ppp_differs(desired: OntDesiredState, observed: OntObservedState) -> bo
 def _wan_ip_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     acs = observed.acs
     expected_type = "DHCP" if desired.wan_mode == "dhcp" else "Static"
-    if acs.acs_observed_wan_ip_enable is False:
+    strict = (
+        desired.tr181_wan_paths is not None
+        and (acs.acs_data_model_root or desired.tr069_data_model_root) == "Device"
+    )
+
+    def differs(observed_value, desired_value) -> bool:
+        return (
+            observed_value != desired_value
+            if strict
+            else _observed_differs(observed_value, desired_value)
+        )
+
+    if differs(acs.acs_observed_wan_ip_enable, True):
         return True
-    if _observed_differs(acs.acs_observed_wan_addressing_type, expected_type):
+    if differs(acs.acs_observed_wan_addressing_type, expected_type):
+        return True
+    if differs(acs.acs_observed_wan_vlan, desired.wan_vlan):
+        return True
+    if differs(acs.acs_observed_nat_enabled, desired.nat_enabled):
         return True
     if desired.wan_mode == "static":
         return any(
             (
-                _observed_differs(
-                    acs.acs_observed_wan_ip_address, desired.wan_static_ip
-                ),
-                _observed_differs(
-                    acs.acs_observed_wan_subnet_mask, desired.wan_static_subnet
-                ),
-                _observed_differs(
-                    acs.acs_observed_wan_gateway, desired.wan_static_gateway
+                differs(acs.acs_observed_wan_ip_address, desired.wan_static_ip),
+                differs(acs.acs_observed_wan_subnet_mask, desired.wan_static_subnet),
+                differs(acs.acs_observed_wan_gateway, desired.wan_static_gateway),
+                differs(
+                    _normalise_dns_servers(acs.acs_observed_wan_dns_servers),
+                    _normalise_dns_servers(desired.wan_static_dns),
                 ),
             )
         )
     return False
+
+
+def _normalise_dns_servers(value: str | None) -> str | None:
+    if value is None:
+        return None
+    servers = [item for item in re.split(r"[\s,]+", value) if item]
+    return ",".join(servers) or None
 
 
 def _ipv6_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:

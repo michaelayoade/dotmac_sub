@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from .state import WriteSurface
+from .state import Tr181WanParameterPaths, WriteSurface
 
 # ── OLT-side actions ────────────────────────────────────────────────────────
 
@@ -400,6 +400,7 @@ class AcsSetWanIp:
     subnet_mask: str | None = None
     gateway: str | None = None
     dns_servers: str | None = None
+    tr181_paths: Tr181WanParameterPaths | None = None
 
 
 @dataclass(frozen=True)
