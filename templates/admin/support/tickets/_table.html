@@ -29,7 +29,7 @@
                 </td>
                 <td data-column="ticket_type" class="px-3 py-2.5 text-slate-700 dark:text-slate-300">{{ ticket.ticket_type or '-' }}</td>
                 <td data-column="priority" class="px-3 py-2.5">{{ ticket_priority_badge(ticket.priority) }}</td>
-                <td data-column="status" class="px-3 py-2.5">{{ ticket_status_badge(ticket.status, status_colors) }}</td>
+                <td data-column="status" class="px-3 py-2.5">{{ ticket_status_badge(status_presentations.get(ticket.status)) }}</td>
                 <td data-column="customer" class="px-3 py-2.5 font-medium text-slate-800 dark:text-slate-100">{{ subscriber_lookup.get(ticket.customer_person_id|string, ticket.customer_person_id or '-') if subscriber_lookup is defined else (ticket.customer_person_id or '-') }}</td>
                 <td data-column="customer_id" class="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ subscriber_lookup.get(ticket.customer_account_id|string, ticket.customer_account_id or '-') if subscriber_lookup is defined else (ticket.customer_account_id or '-') }}</td>
                 <td data-column="subscriber" class="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ subscriber_lookup.get(ticket.subscriber_id|string, ticket.subscriber_id or '-') if subscriber_lookup is defined else (ticket.subscriber_id or '-') }}</td>

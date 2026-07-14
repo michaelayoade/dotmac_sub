@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, data_table, table_head, table_row, status_badge, empty_state, action_button, metric_row, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card, data_table, table_head, table_row, status_badge, status_presentation_badge, empty_state, action_button, metric_row, animation_styles %}
 
 {% block title %}Network Monitoring - Admin{% endblock %}
 
@@ -79,7 +79,7 @@
     {% endif %}
 
     {# Getting Started Banner (when no devices at all) #}
-    {% if stats.devices_online == 0 and stats.devices_offline == 0 %}
+    {% if stats.devices_total == 0 %}
     <div class="rounded-xl border border-blue-200 bg-blue-50 p-6 dark:border-blue-900 dark:bg-blue-900/20 animate-fade-in-up">
         <div class="flex items-start gap-4">
             <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/40">
@@ -291,18 +291,14 @@
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                         <td class="px-4 py-3">
                             <div class="flex items-center gap-2">
-                                <span class="h-2 w-2 rounded-full {% if dev.status == 'online' %}bg-emerald-500{% elif dev.status == 'degraded' %}bg-amber-500{% else %}bg-rose-500{% endif %}"></span>
+                                {{ status_presentation_badge(dev.status_presentation, size="sm", show_icon=False) }}
                                 <span class="text-sm font-medium text-slate-900 dark:text-white">{{ dev.name }}</span>
                             </div>
                         </td>
                         <td class="px-4 py-3 font-mono text-sm text-slate-600 dark:text-slate-400">{{ dev.ip or '—' }}</td>
                         <td class="px-4 py-3 text-center">
-                            <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold
-                                {% if dev.status == 'online' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400
-                                {% elif dev.status == 'degraded' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400
-                                {% elif dev.status == 'offline' %}bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-400
-                                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                                {{ dev.status }}
+                            <span title="{{ dev.status_reason | replace('_', ' ') }}">
+                                {{ status_presentation_badge(dev.status_presentation, size="sm") }}
                             </span>
                         </td>
                         <td class="px-4 py-3 text-right text-sm font-mono
@@ -567,30 +563,22 @@
                         {% endif %}
                     </td>
                     <td class="px-6 py-3 whitespace-nowrap">
-                        {% if device.status == 'online' %}
-                        {{ status_badge("Online", "active", size="sm") }}
-                        {% elif device.status == 'offline' %}
-                        {{ status_badge("Offline", "error", size="sm") }}
-                        {% elif device.status == 'degraded' %}
-                        {{ status_badge("Degraded", "warning", size="sm") }}
-                        {% elif device.status == 'maintenance' %}
-                        {{ status_badge("Maintenance", "neutral", size="sm") }}
-                        {% else %}
-                        {{ status_badge(device.status|title, "neutral", size="sm") }}
-                        {% endif %}
+                        <span title="{{ device.status_reason | replace('_', ' ') }}">
+                            {{ status_presentation_badge(device.status_presentation, size="sm") }}
+                        </span>
                     </td>
                     <td class="px-6 py-3 whitespace-nowrap">
                         {% if device.health_status == 'healthy' %}
-                        <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                            <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Healthy
+                        <span class="status-tone status-tone-positive inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium">
+                            <span class="status-tone-dot status-tone-dot-positive h-1.5 w-1.5 rounded-full"></span>Healthy
                         </span>
                         {% elif device.health_status == 'degraded' %}
-                        <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                            <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Degraded
+                        <span class="status-tone status-tone-warning inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium">
+                            <span class="status-tone-dot status-tone-dot-warning h-1.5 w-1.5 rounded-full"></span>Degraded
                         </span>
                         {% elif device.health_status == 'unhealthy' %}
-                        <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">
-                            <span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>Unhealthy
+                        <span class="status-tone status-tone-negative inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium">
+                            <span class="status-tone-dot status-tone-dot-negative h-1.5 w-1.5 rounded-full"></span>Unhealthy
                         </span>
                         {% else %}
                         <span class="text-xs text-slate-400">&mdash;</span>
@@ -695,15 +683,19 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const isDark = document.documentElement.classList.contains('dark');
-    const gridColor = isDark ? 'rgba(148,163,184,0.15)' : 'rgba(203,213,225,0.5)';
-    const textColor = isDark ? '#94a3b8' : '#64748b';
+    const gridColor = themeColor(isDark ? 'slate-400' : 'slate-300', isDark ? 0.15 : 0.5);
+    const textColor = themeColor(isDark ? 'slate-400' : 'slate-500');
 
     {% if device_status_chart %}
     // Device Status Doughnut Chart
     (function() {
         const labels = {{ device_status_chart["labels"] | tojson | safe }};
         const values = {{ device_status_chart["values"] | tojson | safe }};
-        const colors = {{ device_status_chart["colors"] | tojson | safe }};
+        const tones = {{ device_status_chart["tones"] | tojson | safe }};
+        const theme = getComputedStyle(document.documentElement);
+        const colors = tones.map((tone) =>
+            theme.getPropertyValue(`--color-semantic-${tone}-600`).trim()
+        );
 
         if (values.some(function(v) { return v > 0; })) {
             new Chart(document.getElementById('deviceStatusChart'), {
@@ -752,8 +744,8 @@ document.addEventListener('DOMContentLoaded', function() {
             datasets.push({
                 label: 'Service Online',
                 data: timestamps.map(function(t, i) { return { x: t, y: onlineVals[i] }; }),
-                borderColor: '#10b981',
-                backgroundColor: 'rgba(16,185,129,0.08)',
+                borderColor: themeColor('semantic-positive-600'),
+                backgroundColor: themeColor('semantic-positive-600', 0.08),
                 borderWidth: 2,
                 pointRadius: 0,
                 tension: 0.3,
@@ -764,8 +756,8 @@ document.addEventListener('DOMContentLoaded', function() {
             datasets.push({
                 label: 'Service Offline',
                 data: timestamps.map(function(t, i) { return { x: t, y: offlineVals[i] }; }),
-                borderColor: '#f43f5e',
-                backgroundColor: 'rgba(244,63,94,0.08)',
+                borderColor: themeColor('semantic-negative-600'),
+                backgroundColor: themeColor('semantic-negative-600', 0.08),
                 borderWidth: 2,
                 pointRadius: 0,
                 tension: 0.3,
@@ -776,7 +768,7 @@ document.addEventListener('DOMContentLoaded', function() {
             datasets.push({
                 label: 'PON Online',
                 data: timestamps.map(function(t, i) { return { x: t, y: oltOnlineVals[i] }; }),
-                borderColor: '#0f766e',
+                borderColor: themeColor('semantic-positive-700'),
                 borderWidth: 2,
                 pointRadius: 0,
                 tension: 0.3,
@@ -788,7 +780,7 @@ document.addEventListener('DOMContentLoaded', function() {
             datasets.push({
                 label: 'PON Offline',
                 data: timestamps.map(function(t, i) { return { x: t, y: oltOfflineVals[i] }; }),
-                borderColor: '#be123c',
+                borderColor: themeColor('semantic-negative-700'),
                 borderWidth: 2,
                 pointRadius: 0,
                 tension: 0.3,
@@ -800,8 +792,8 @@ document.addEventListener('DOMContentLoaded', function() {
             datasets.push({
                 label: 'Low Signal',
                 data: timestamps.map(function(t, i) { return { x: t, y: lowSignalVals[i] }; }),
-                borderColor: '#f59e0b',
-                backgroundColor: 'rgba(245,158,11,0.08)',
+                borderColor: themeColor('semantic-warning-600'),
+                backgroundColor: themeColor('semantic-warning-600', 0.08),
                 borderWidth: 2,
                 pointRadius: 0,
                 tension: 0.3,
@@ -871,8 +863,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     datasets: [{
                         label: 'New ONTs',
                         data: values,
-                        backgroundColor: 'rgba(139,92,246,0.6)',
-                        borderColor: '#8b5cf6',
+                        backgroundColor: themeColor('data-1', 0.6),
+                        borderColor: themeColor('data-1'),
                         borderWidth: 1,
                         borderRadius: 3,
                     }]

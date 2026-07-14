@@ -17,6 +17,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "events_webhooks",
         "runtime_infrastructure",
         "observability",
+        "support_operations",
         "provisioning_operations",
         "feature_control_plane",
         "authorization_control_plane",
@@ -24,6 +25,8 @@ def test_domain_sot_relationships_cover_expected_domains():
         "network_access_control_plane",
         "service_intent_control_plane",
         "integration_control_plane",
+        "ui_list_projection",
+        "ui_semantic_presentation",
     ]
 
 
@@ -90,6 +93,31 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.ledger",
         "customer.financial_position",
     )
+    assert sot_relationships.dependencies_for("ui.customer_list_projection") == (
+        "ui.list_contracts",
+    )
+    customer_api_mapping = sot_relationships.owning_service_for(
+        "legacy customer offset API compatibility mapping"
+    )
+    assert customer_api_mapping is not None
+    assert customer_api_mapping.name == "ui.customer_list_projection"
+    assert sot_relationships.dependencies_for("ui.subscriber_list_projection") == (
+        "ui.list_contracts",
+    )
+    assert sot_relationships.dependencies_for("ui.status_presentation") == (
+        "financial.invoices",
+        "financial.payments",
+        "network.device_state",
+        "network.connection_health",
+        "network.outage_lifecycle",
+        "support.ticket_lifecycle",
+        "operations.work_order_status",
+    )
+    subscriber_api_mapping = sot_relationships.owning_service_for(
+        "legacy subscriber offset API compatibility mapping"
+    )
+    assert subscriber_api_mapping is not None
+    assert subscriber_api_mapping.name == "ui.subscriber_list_projection"
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
     ) == ("communications.channel_policy", "communications.event_policy")
@@ -139,6 +167,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("operations.field_completion") == (
         "operations.work_orders",
+        "operations.work_order_status",
         "control.domain_settings",
     )
     assert sot_relationships.dependencies_for("network.nas_lifecycle") == (
@@ -187,6 +216,105 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert service is not None
     assert service.name == "financial.access_resolution"
     assert service.module == "app.services.access_resolution"
+
+    presentation_service = sot_relationships.owning_service_for(
+        "account status labels, semantic tones, and icon keys"
+    )
+
+    assert presentation_service is not None
+    assert presentation_service.name == "ui.status_presentation"
+    assert presentation_service.module == "app.services.status_presentation"
+
+    work_order_status = sot_relationships.owning_service_for(
+        "persisted work-order status vocabulary"
+    )
+    assert work_order_status is not None
+    assert work_order_status.name == "operations.work_order_status"
+
+    work_order_presentation = sot_relationships.owning_service_for(
+        "field work-order status labels, semantic tones, and icon keys"
+    )
+    assert work_order_presentation is not None
+    assert work_order_presentation.name == "ui.status_presentation"
+
+    ticket_lifecycle = sot_relationships.owning_service_for(
+        "guarded ticket status transitions"
+    )
+    assert ticket_lifecycle is not None
+    assert ticket_lifecycle.name == "support.ticket_lifecycle"
+    assert ticket_lifecycle.module == "app.services.support"
+
+    ticket_presentation = sot_relationships.owning_service_for(
+        "support-ticket status labels, semantic tones, and icon keys"
+    )
+    assert ticket_presentation is not None
+    assert ticket_presentation.name == "ui.status_presentation"
+
+    invoice_presentation = sot_relationships.owning_service_for(
+        "invoice status labels, semantic tones, and icon keys"
+    )
+    assert invoice_presentation is not None
+    assert invoice_presentation.name == "ui.status_presentation"
+
+    invoice_lifecycle = sot_relationships.owning_service_for(
+        "invoice status transitions"
+    )
+    assert invoice_lifecycle is not None
+    assert invoice_lifecycle.name == "financial.invoices"
+
+    payment_presentation = sot_relationships.owning_service_for(
+        "payment status labels, semantic tones, and icon keys"
+    )
+    assert payment_presentation is not None
+    assert payment_presentation.name == "ui.status_presentation"
+
+    payment_lifecycle = sot_relationships.owning_service_for(
+        "payment document lifecycle"
+    )
+    assert payment_lifecycle is not None
+    assert payment_lifecycle.name == "financial.payments"
+
+    semantic_palette = sot_relationships.owning_service_for(
+        "brand primary, secondary, and semantic UI color roles"
+    )
+    assert semantic_palette is not None
+    assert semantic_palette.name == "customer.branding"
+
+    outage_lifecycle = sot_relationships.owning_service_for(
+        "persisted outage incident status vocabulary"
+    )
+    assert outage_lifecycle is not None
+    assert outage_lifecycle.name == "network.outage_lifecycle"
+
+    outage_presentation = sot_relationships.owning_service_for(
+        "outage incident status labels, semantic tones, and icon keys"
+    )
+    assert outage_presentation is not None
+    assert outage_presentation.name == "ui.status_presentation"
+
+    device_state = sot_relationships.owning_service_for(
+        "device operational status vocabulary"
+    )
+    assert device_state is not None
+    assert device_state.name == "network.device_state"
+
+    device_presentation = sot_relationships.owning_service_for(
+        "device operational status labels, semantic tones, and icon keys"
+    )
+    assert device_presentation is not None
+    assert device_presentation.name == "ui.status_presentation"
+
+    connection_health = sot_relationships.owning_service_for(
+        "customer-safe connection health vocabulary"
+    )
+    assert connection_health is not None
+    assert connection_health.name == "network.connection_health"
+
+    connection_presentation = sot_relationships.owning_service_for(
+        "customer connection health labels, semantic tones, and icon keys"
+    )
+    assert connection_presentation is not None
+    assert connection_presentation.name == "ui.status_presentation"
 
     control_service = sot_relationships.owning_service_for(
         "module/feature/safety control resolution"

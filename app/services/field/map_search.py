@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.field.jobs import _location, _profile_from_principal, _scoped_query
 from app.services.field.map_assets import field_map_assets
+from app.services.status_presentation import work_order_status_presentation
 
 
 class FieldMapSearch:
@@ -83,6 +84,7 @@ def _search_jobs(db: Session, profile, term: str, *, limit: int) -> list[dict]:
                 "latitude": location.latitude,
                 "longitude": location.longitude,
                 "status": row.status,
+                "status_presentation": work_order_status_presentation(row.status),
                 "address_text": row.address,
             }
         )

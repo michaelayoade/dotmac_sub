@@ -170,6 +170,12 @@ def test_manager_me_summary_and_technicians(db_session):
     assert item["last_latitude"] == pytest.approx(9.0765)
     assert item["active_work_order"]["id"] == "wo-mgr-assigned"
     assert item["active_work_order"]["status"] == "in_progress"
+    assert item["active_work_order"]["status_presentation"].model_dump(mode="json") == {
+        "value": "in_progress",
+        "label": "In progress",
+        "tone": "info",
+        "icon": "clock",
+    }
 
 
 def test_manager_jobs_and_assign_flow(db_session):
@@ -183,6 +189,7 @@ def test_manager_jobs_and_assign_flow(db_session):
     job = next(entry for entry in jobs if entry["id"] == "wo-assign")
     assert job["assigned_to_person_id"] is None
     assert subscriber.account_number in job["subscriber_label"]
+    assert job["status_presentation"].value == "scheduled"
 
     assigned = field_manager.assign_job(
         db_session,
@@ -350,10 +357,20 @@ def test_manager_api(db_session):
     )
     assert item["person_label"] == "Tech Staff"
     assert item["active_work_order"]["id"] == "wo-mgr-api"
+    assert item["active_work_order"]["status_presentation"] == {
+        "value": "in_progress",
+        "label": "In progress",
+        "tone": "info",
+        "icon": "clock",
+    }
 
     jobs = client.get("/api/v1/field/manager/jobs")
     assert jobs.status_code == 200
     assert "wo-mgr-api" in [entry["id"] for entry in jobs.json()["items"]]
+    manager_job = next(
+        entry for entry in jobs.json()["items"] if entry["id"] == "wo-mgr-api"
+    )
+    assert manager_job["status_presentation"]["value"] == "in_progress"
 
     assigned = client.post(
         "/api/v1/field/manager/jobs/wo-mgr-api/assign",

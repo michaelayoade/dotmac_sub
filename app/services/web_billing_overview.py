@@ -21,6 +21,7 @@ from app.models.subscriber import Reseller, Subscriber, UserType
 from app.services import settings_spec
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
+from app.services.status_presentation import invoice_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +227,15 @@ def build_overview_data(
     result["partner_options"] = [
         {"id": str(r.id), "name": r.name} for r in partner_rows
     ]
+    invoices = result.get("invoices")
+    result["invoice_status_presentations"] = (
+        {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        }
+        if isinstance(invoices, list)
+        else {}
+    )
     return result
 
 
@@ -499,6 +509,10 @@ def build_invoices_list_data(
     ]
     return {
         "invoices": invoices,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        },
         "status_totals": status_totals,
         "page": page,
         "per_page": per_page,

@@ -142,7 +142,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             child: Icon(
                               Icons.location_pin,
                               size: 40,
-                              color: AppColors.status(pin.status),
+                              color: AppColors.statusTone(
+                                context,
+                                pin.presentation.tone,
+                              ),
                             ),
                           ),
                         ),
@@ -231,6 +234,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               id: result.id,
               title: result.title,
               status: result.status ?? 'scheduled',
+              statusPresentation: result.statusPresentation,
               latitude: result.latitude,
               longitude: result.longitude,
               addressText: result.addressText ?? result.subtitle,
@@ -299,10 +303,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             ListTile(
               leading: Icon(
                 Icons.assignment_outlined,
-                color: AppColors.status(pin.status),
+                color: AppColors.statusTone(context, pin.presentation.tone),
               ),
               title: Text(pin.title),
-              subtitle: Text(pin.status.replaceAll('_', ' ')),
+              subtitle: Text(pin.presentation.label),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 Navigator.pop(sheetContext, _MapSheetAction.open);
@@ -410,10 +414,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ListTile(
                 leading: Icon(
                   Icons.location_pin,
-                  color: AppColors.status(pin.status),
+                  color: AppColors.statusTone(context, pin.presentation.tone),
                 ),
                 title: Text(pin.title),
-                subtitle: Text(pin.status.replaceAll('_', ' ')),
+                subtitle: Text(pin.presentation.label),
                 onTap: () =>
                     Navigator.pop(sheetContext, _JobEditSelection(pin)),
               ),
@@ -469,7 +473,7 @@ sealed class _MapSearchResult {
   String get title;
   String get subtitle;
   IconData get icon;
-  Color get color;
+  Color color(BuildContext context);
   LatLng get point;
 }
 
@@ -505,14 +509,15 @@ class _JobSearchResult extends _MapSearchResult {
   @override
   String get subtitle => [
     if (pin.addressText != null) pin.addressText!,
-    pin.status.replaceAll('_', ' '),
+    pin.presentation.label,
   ].join(' · ');
 
   @override
   IconData get icon => Icons.location_pin;
 
   @override
-  Color get color => AppColors.status(pin.status);
+  Color color(BuildContext context) =>
+      AppColors.statusTone(context, pin.presentation.tone);
 
   @override
   LatLng get point => safeLatLng(pin.latitude, pin.longitude)!;
@@ -540,7 +545,7 @@ class _AssetSearchResult extends _MapSearchResult {
   IconData get icon => _assetIcon(asset.type);
 
   @override
-  Color get color => _assetColor(asset.type);
+  Color color(BuildContext context) => _assetColor(asset.type);
 
   @override
   LatLng get point => safeLatLng(asset.latitude, asset.longitude)!;
@@ -621,7 +626,10 @@ class _MapSearchOverlay extends StatelessWidget {
                           return ListTile(
                             key: Key('map-search-result-${result.id}'),
                             dense: true,
-                            leading: Icon(result.icon, color: result.color),
+                            leading: Icon(
+                              result.icon,
+                              color: result.color(context),
+                            ),
                             title: Text(result.title),
                             subtitle: Text(result.subtitle),
                             onTap: () => onSelected(result),
@@ -700,13 +708,13 @@ IconData _assetIcon(String type) => switch (type) {
 };
 
 Color _assetColor(String type) => switch (type) {
-  'olt' => Colors.deepPurple,
-  'fdh' => Colors.teal,
-  'fiber_access_point' => Colors.indigo,
-  'splice_closure' => Colors.orange,
-  'wireless_mast' => Colors.redAccent,
-  'service_building' => Colors.brown,
-  _ => Colors.blueGrey,
+  'olt' => AppColors.category(0),
+  'fdh' => AppColors.category(1),
+  'fiber_access_point' => AppColors.category(2),
+  'splice_closure' => AppColors.category(4),
+  'wireless_mast' => AppColors.category(5),
+  'service_building' => AppColors.category(6),
+  _ => AppColors.category(6),
 };
 
 int _assetPaintRank(String type) => switch (type) {

@@ -8,6 +8,23 @@
 
 ## Architecture Principles
 
+### Branding Owns Color
+
+Palette names in the module specifications below are historical design
+references, not implementation sources of truth. New and touched surfaces use
+branding-generated `primary-*` and `accent-*` identity tokens and the shared
+`status-*` semantic roles. Services and API payloads emit semantic roles or
+categorical keys, never literal colors; web and mobile theme adapters resolve
+those roles. Categorical chart palettes are likewise centralized in the theme
+layer.
+
+On web, `/branding/theme.css` remaps legacy non-neutral Tailwind palette names
+to configured branding roles and exposes `data-1` through `data-7` for charts
+and maps. Flutter theme owners expose the same brand-derived categorical order.
+New slices use primary, accent, semantic, or data tokens directly. Structural
+neutral surfaces, text, borders, shadows, white, and black remain in the shared
+design-system foundation and are not tenant identity colors.
+
 ### Centralized Service Layer
 
 Every feature follows a **three-tier pattern** where business logic lives once:
@@ -130,6 +147,13 @@ class DashboardStats:
 ---
 
 ## 2. SUBSCRIBERS MODULE (`/admin/subscribers`)
+
+> **Target-state design, not a current route contract.** The production list is
+> `/admin/customers`; `app.web.admin.subscribers` and the subscriber Playwright
+> page object are backward-compatible facades. Current list behavior is governed
+> by `docs/FRONTEND_SPEC.md` and `docs/SOT_RELATIONSHIP_MAP.md`. Implementing a
+> distinct subscriber screen requires a new approved product boundary rather
+> than copying the customer list.
 
 **Accent color:** indigo
 **Purpose:** Complete subscriber lifecycle management.
@@ -2116,8 +2140,9 @@ class ResellerPortalService:
 | Stat Card | `data/stats_card.html` | KPI cards on all dashboards |
 | Data Table | `data/table_interactive.html` | All list pages |
 | Pagination | `data/table_pagination.html` | All list pages |
+| List interaction standard | Per-resource query/projection owner plus product-native components | Global Dotmac standard: Carbon table/filter/search/pagination behavior with WCAG 2.2 AA as the accessibility floor; no Carbon visual-theme requirement |
 | Empty State | `data/empty_state.html` | All list pages when no data |
-| Status Badge | macro in `ui/macros.html` | Every status display |
+| Status Badge | `status_presentation_badge` in `ui/macros.html`; `StatusChip`/`StatusPill` in Flutter | Account, subscription, invoice, payment, outage-incident, device operational, customer connection-health, support-ticket, and field work-order displays consume the server semantic contract; concrete role colors come only from branding/theme tokens |
 | Chart Container | `charts/*.html` | All dashboard charts |
 | Toast Container | `feedback/toast_container.html` | All pages (notifications) |
 | Confirm Modal | `modals/confirm_modal.html` | Delete/suspend actions |

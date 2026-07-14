@@ -42,6 +42,7 @@ from app.services.customer_context import (
 )
 from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.network.radius_sessions import live_framed_ips_by_subscription
+from app.services.status_presentation import account_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -406,13 +407,6 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
 
 _RESTRICTED_STATUSES = RESTRICTED_CUSTOMER_STATUSES
 
-STATUS_DISPLAY = {
-    "blocked": "Blocked — Non-payment",
-    "suspended": "Suspended",
-    "disabled": "Disabled by administrator",
-    "canceled": "Canceled",
-}
-
 
 def get_restricted_since(subscriber: Subscriber) -> datetime | None:
     """Return when the subscriber most recently entered a restricted status."""
@@ -443,7 +437,13 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
 
     subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
     if not subscriber:
-        return {"restricted": True, "account_status": "Unknown"}
+        status_presentation = account_status_presentation(None)
+        return {
+            "restricted": True,
+            "account_status": status_presentation.value,
+            "account_status_display": status_presentation.label,
+            "account_status_presentation": status_presentation,
+        }
 
     user_name = session.get("username") or "Customer"
     if subscriber.category == SubscriberCategory.business:
@@ -489,15 +489,18 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
         plan_name = subscriptions[0].offer.name
 
     status_value = subscriber.status.value if subscriber.status else "unknown"
+    status_presentation = account_status_presentation(
+        subscriber.status,
+        is_active=subscriber.is_active,
+    )
 
     return {
         "restricted": True,
         "user_name": user_name,
         "subscriber_number": subscriber.subscriber_number or subscriber.account_number,
         "account_status": status_value,
-        "account_status_display": STATUS_DISPLAY.get(
-            status_value, status_value.title()
-        ),
+        "account_status_display": status_presentation.label,
+        "account_status_presentation": status_presentation,
         "plan_name": plan_name,
         "outstanding_balance": balance,
         "recent_invoices": recent_invoices,

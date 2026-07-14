@@ -32,7 +32,7 @@ class StatTile extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(13, 12, 12, 11),
       decoration: BoxDecoration(
         gradient: highlighted
-            ? const LinearGradient(
+            ? LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [AppColors.primary, AppColors.primaryDeep],

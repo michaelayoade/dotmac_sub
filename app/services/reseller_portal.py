@@ -50,6 +50,12 @@ from app.services.session_store import (
     store_session,
 )
 from app.services.settings_spec import resolve_value
+from app.services.status_presentation import (
+    account_status_presentation,
+    connection_health_status_presentation,
+    invoice_status_presentation,
+    payment_status_presentation,
+)
 from app.services.topology.connection_status import connection_status
 
 logger = logging.getLogger(__name__)
@@ -1049,6 +1055,9 @@ def list_accounts(
                 "account_number": account.account_number,
                 "subscriber_name": _subscriber_label(account),
                 "status": account.status.value if account.status else "active",
+                "status_presentation": account_status_presentation(
+                    account.status
+                ).model_dump(mode="json"),
                 "open_balance": summary.get("balance", 0),
                 "open_invoices": summary.get("count", 0),
                 "last_payment_at": last_payments.get(str(account.id)),
@@ -1092,9 +1101,13 @@ def _subscriptions_for_connection_status(
 
 
 def _inactive_connection_status(subscription: Subscription | None) -> dict:
+    presentation = connection_health_status_presentation("trouble").model_dump(
+        mode="json"
+    )
     if subscription is None:
         return {
             "state": "trouble",
+            "status_presentation": presentation,
             "headline": "No active service",
             "message": "No active service is available for this customer.",
             "advice": None,
@@ -1105,6 +1118,7 @@ def _inactive_connection_status(subscription: Subscription | None) -> dict:
     status_value = subscription.status.value if subscription.status else "unknown"
     return {
         "state": "trouble",
+        "status_presentation": presentation,
         "headline": f"Service {status_value.replace('_', ' ')}",
         "message": "The customer's service is not currently active.",
         "advice": None,
@@ -1152,6 +1166,9 @@ def list_customer_connection_statuses(
                     )
                     status_payload = {
                         "state": "unknown",
+                        "status_presentation": connection_health_status_presentation(
+                            "unknown"
+                        ).model_dump(mode="json"),
                         "headline": "Status unavailable",
                         "message": "We couldn't check this customer's connection.",
                         "advice": None,
@@ -1163,6 +1180,11 @@ def list_customer_connection_statuses(
                 status_payload = _inactive_connection_status(subscription)
 
             state = str(status_payload.get("state") or "unknown")
+            presentation = status_payload.get("status_presentation")
+            if not isinstance(presentation, dict):
+                presentation = connection_health_status_presentation(state).model_dump(
+                    mode="json"
+                )
             counts[state if state in counts else "unknown"] += 1
             rows.append(
                 {
@@ -1180,6 +1202,7 @@ def list_customer_connection_statuses(
                         else None
                     ),
                     "state": state,
+                    "status_presentation": presentation,
                     "headline": status_payload.get("headline"),
                     "message": status_payload.get("message"),
                     "medium": status_payload.get("medium"),
@@ -1191,6 +1214,10 @@ def list_customer_connection_statuses(
     return {
         "rows": rows,
         "counts": counts,
+        "count_presentations": {
+            state: connection_health_status_presentation(state).model_dump(mode="json")
+            for state in counts
+        },
         "total": (
             _customer_accounts_query(db, reseller_id)
             .with_entities(func.count(Subscriber.id))
@@ -1561,6 +1588,9 @@ def list_account_invoices(
                 "id": str(inv.id),
                 "invoice_number": getattr(inv, "invoice_number", None),
                 "status": inv.status.value if inv.status else "draft",
+                "status_presentation": invoice_status_presentation(
+                    inv.status
+                ).model_dump(mode="json"),
                 "total_amount": getattr(inv, "total", 0),
                 "balance_due": inv.balance_due or 0,
                 "issued_at": getattr(inv, "issued_at", None),
@@ -1626,6 +1656,9 @@ def get_invoice_detail(
                     "id": str(pmt.id),
                     "amount": alloc.amount,
                     "status": pmt.status.value if pmt.status else "pending",
+                    "status_presentation": payment_status_presentation(
+                        pmt.status
+                    ).model_dump(mode="json"),
                     "paid_at": pmt.paid_at,
                     "method": getattr(pmt, "label", None),
                 }
@@ -1635,6 +1668,9 @@ def get_invoice_detail(
         "id": str(invoice.id),
         "invoice_number": getattr(invoice, "invoice_number", None),
         "status": invoice.status.value if invoice.status else "draft",
+        "status_presentation": invoice_status_presentation(invoice.status).model_dump(
+            mode="json"
+        ),
         "total_amount": getattr(invoice, "total", 0),
         "balance_due": invoice.balance_due or 0,
         "issued_at": getattr(invoice, "issued_at", None),

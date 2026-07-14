@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.models.subscriber import Subscriber
 from app.services import subscriber as subscriber_service
 from app.services.common import parse_date_filter as _parse_date
+from app.services.status_presentation import invoice_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +324,10 @@ def get_invoice_report_data(
 
     return {
         "invoices": invoices,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        },
         "total_count": len(invoices),
         "date_from": date_from or "",
         "date_to": date_to or "",

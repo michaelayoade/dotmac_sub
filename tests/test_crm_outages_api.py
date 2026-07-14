@@ -78,6 +78,12 @@ def test_list_serializes_scope_and_detection_source(db_session, catalog_offer):
     assert row["scope"]["name"] == node.name
     assert row["status"] == "open"
     assert row["state"] == "open"
+    assert row["status_presentation"] == {
+        "value": "open",
+        "label": "Open",
+        "tone": "negative",
+        "icon": "alert",
+    }
     assert row["affected_count"] == 2
     assert row["started_at"] is not None
     assert row["resolved_at"] is None

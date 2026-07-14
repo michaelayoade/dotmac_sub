@@ -1,4 +1,5 @@
 {% extends "layouts/reseller.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block page_header %}
 <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -19,25 +20,23 @@
     <!-- Alert Notifications -->
     <div class="space-y-3">
         {% for alert in summary.alerts %}
-        <a href="{{ alert.action_url }}" class="flex items-center gap-3 rounded-xl border p-4 transition-all hover:shadow-md
-            {% if alert.level == 'danger' %}border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-900/20
-            {% elif alert.level == 'warning' %}border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20
-            {% else %}border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20{% endif %}">
+        {% set alert_tone = 'negative' if alert.level == 'danger' else 'warning' if alert.level == 'warning' else 'info' %}
+        <a href="{{ alert.action_url }}" class="status-panel status-panel-{{ alert_tone }} flex items-center gap-3 rounded-xl border p-4 transition-all hover:shadow-md">
             {% if alert.level == 'danger' %}
-            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-900/40">
-                <svg class="h-5 w-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+            <div class="status-tone status-tone-negative flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
             </div>
-            <p class="text-sm font-medium text-rose-800 dark:text-rose-300">{{ alert.message }}</p>
+            <p class="status-foreground status-tone-negative text-sm font-medium">{{ alert.message }}</p>
             {% elif alert.level == 'warning' %}
-            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/40">
-                <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <div class="status-tone status-tone-warning flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             </div>
-            <p class="text-sm font-medium text-amber-800 dark:text-amber-300">{{ alert.message }}</p>
+            <p class="status-foreground status-tone-warning text-sm font-medium">{{ alert.message }}</p>
             {% else %}
-            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/40">
-                <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+            <div class="status-tone status-tone-info flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
             </div>
-            <p class="text-sm font-medium text-blue-800 dark:text-blue-300">{{ alert.message }}</p>
+            <p class="status-foreground status-tone-info text-sm font-medium">{{ alert.message }}</p>
             {% endif %}
             <svg class="ml-auto h-4 w-4 flex-shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
         </a>
@@ -131,21 +130,21 @@
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Live connection status for each service on your managed customer accounts.</p>
             </div>
             <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                <div class="rounded-lg bg-emerald-50 px-3 py-2 text-center dark:bg-emerald-900/20">
-                    <p class="text-lg font-bold text-emerald-700 dark:text-emerald-300">{{ customer_statuses.counts.connected }}</p>
-                    <p class="text-[11px] font-semibold uppercase text-emerald-700/70 dark:text-emerald-300/70">Connected</p>
+                <div class="rounded-lg bg-slate-50 px-3 py-2 text-center dark:bg-slate-700/40">
+                    <p class="text-lg font-bold text-slate-900 dark:text-white">{{ customer_statuses.counts.connected }}</p>
+                    {{ status_presentation_badge(customer_statuses.count_presentations.connected, size="sm") }}
                 </div>
-                <div class="rounded-lg bg-amber-50 px-3 py-2 text-center dark:bg-amber-900/20">
-                    <p class="text-lg font-bold text-amber-700 dark:text-amber-300">{{ customer_statuses.counts.trouble }}</p>
-                    <p class="text-[11px] font-semibold uppercase text-amber-700/70 dark:text-amber-300/70">Trouble</p>
+                <div class="rounded-lg bg-slate-50 px-3 py-2 text-center dark:bg-slate-700/40">
+                    <p class="text-lg font-bold text-slate-900 dark:text-white">{{ customer_statuses.counts.trouble }}</p>
+                    {{ status_presentation_badge(customer_statuses.count_presentations.trouble, size="sm") }}
                 </div>
-                <div class="rounded-lg bg-rose-50 px-3 py-2 text-center dark:bg-rose-900/20">
-                    <p class="text-lg font-bold text-rose-700 dark:text-rose-300">{{ customer_statuses.counts.outage }}</p>
-                    <p class="text-[11px] font-semibold uppercase text-rose-700/70 dark:text-rose-300/70">Outage</p>
+                <div class="rounded-lg bg-slate-50 px-3 py-2 text-center dark:bg-slate-700/40">
+                    <p class="text-lg font-bold text-slate-900 dark:text-white">{{ customer_statuses.counts.outage }}</p>
+                    {{ status_presentation_badge(customer_statuses.count_presentations.outage, size="sm") }}
                 </div>
-                <div class="rounded-lg bg-slate-100 px-3 py-2 text-center dark:bg-slate-700/60">
-                    <p class="text-lg font-bold text-slate-700 dark:text-slate-200">{{ customer_statuses.counts.unknown }}</p>
-                    <p class="text-[11px] font-semibold uppercase text-slate-500 dark:text-slate-400">Unknown</p>
+                <div class="rounded-lg bg-slate-50 px-3 py-2 text-center dark:bg-slate-700/40">
+                    <p class="text-lg font-bold text-slate-900 dark:text-white">{{ customer_statuses.counts.unknown }}</p>
+                    {{ status_presentation_badge(customer_statuses.count_presentations.unknown, size="sm") }}
                 </div>
             </div>
         </div>
@@ -162,7 +161,6 @@
                 </thead>
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                     {% for row in customer_statuses.rows %}
-                    {% set state = row.state | lower if row.state else 'unknown' %}
                     <tr class="transition-colors duration-200 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/10">
                         <td class="px-6 py-4">
                             <div class="flex items-center gap-3">
@@ -176,19 +174,7 @@
                             </div>
                         </td>
                         <td class="px-6 py-4">
-                            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold
-                                {% if state == 'connected' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                                {% elif state == 'outage' %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400
-                                {% elif state == 'trouble' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
-                                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                                <span class="relative flex h-2 w-2">
-                                    <span class="relative inline-flex h-2 w-2 rounded-full {% if state == 'connected' %}bg-emerald-500{% elif state == 'outage' %}bg-rose-500{% elif state == 'trouble' %}bg-amber-500{% else %}bg-slate-400{% endif %}"></span>
-                                </span>
-                                {{ state | replace('_', ' ') | title }}
-                            </span>
-                            {% if row.area_outage %}
-                            <span class="ml-2 inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">Area outage</span>
-                            {% endif %}
+                            {{ status_presentation_badge(row.status_presentation, size="sm") }}
                         </td>
                         <td class="px-6 py-4">
                             <div class="text-sm font-medium text-slate-700 dark:text-slate-200">
@@ -276,19 +262,7 @@
                             </span>
                         </td>
                         <td class="px-6 py-4">
-                            {% set status_lower = account.status | lower if account.status else '' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold
-                                {% if status_lower == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                                {% elif status_lower == 'suspended' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
-                                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                                {% if status_lower == 'active' %}
-                                <span class="relative flex h-2 w-2">
-                                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-                                    <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
-                                </span>
-                                {% endif %}
-                                {{ account.status }}
-                            </span>
+                            {{ status_presentation_badge(account.status_presentation, pulse=(account.status == 'active'), size="sm") }}
                         </td>
                         <td class="px-6 py-4">
                             <span class="font-semibold text-slate-900 dark:text-white">{{ account.open_balance }}</span>

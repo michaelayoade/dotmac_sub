@@ -1549,8 +1549,8 @@ def onts_list_page_data(
         ont_op = derive_ont_operational_status(ont)
         signal_data[str(ont.id)] = {
             "operational": ont_op.status,
-            "operational_label": ont_op.label,
             "operational_reason": ont_op.reason,
+            "status_presentation": ont_op.presentation,
             "retry_pending": effective_status.retry_pending,
             "olt_rx_dbm": olt_rx_dbm,
             "onu_rx_dbm": onu_rx_dbm,
@@ -2998,34 +2998,11 @@ def _core_device_table_maps(
     db: Session, devices: Sequence[object]
 ) -> dict[str, object]:
     from app.services.web_network_core_devices_forms import (
-        _display_status_value,
         _format_uptime_short,
-        _live_status_available,
     )
 
     real_devices = [device for device in devices if isinstance(device, NetworkDevice)]
     device_ids = [device.id for device in real_devices]
-    live_status_available = _live_status_available()
-    display_status_map: dict[str, str] = {}
-    for device in devices:
-        key = str(getattr(device, "id", ""))
-        if isinstance(device, NetworkDevice):
-            display_status_map[key] = _display_status_value(
-                device, live_status_available=live_status_available
-            )
-            continue
-        live_status = str(getattr(device, "live_status", "") or "").strip().lower()
-        if live_status == "up":
-            display_status_map[key] = DeviceStatus.online.value
-        elif live_status == "down":
-            display_status_map[key] = DeviceStatus.offline.value
-        elif live_status == "problem":
-            display_status_map[key] = DeviceStatus.degraded.value
-        else:
-            status = getattr(device, "status", None)
-            display_status_map[key] = (
-                getattr(status, "value", status) or DeviceStatus.offline.value
-            )
 
     uptime_map: dict[str, str | None] = {}
     ping_history_map: dict[str, list[dict[str, object]]] = {}
@@ -3088,7 +3065,6 @@ def _core_device_table_maps(
             ]
 
     return {
-        "display_status_map": display_status_map,
         "uptime_map": uptime_map,
         "ping_history_map": ping_history_map,
     }
@@ -3516,8 +3492,8 @@ def consolidated_page_data(
             operational = derive_ont_operational_status(ont)
             signal_data[str(ont.id)] = {
                 "operational": operational.status,
-                "operational_label": operational.label,
                 "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
             }
 
     stats = {

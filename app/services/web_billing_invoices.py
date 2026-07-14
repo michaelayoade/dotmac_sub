@@ -38,6 +38,12 @@ from app.services.audit_helpers import (
     format_changes,
     log_audit_event,
 )
+from app.services.brand_theme import (
+    DEFAULT_HEX,
+    DEFAULT_SEMANTIC_COLORS,
+    generate_scale,
+)
+from app.services.status_presentation import invoice_status_presentation
 from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
 
 logger = logging.getLogger(__name__)
@@ -285,6 +291,22 @@ def maybe_send_invoice_notification(
     )
     amount_label = f"{currency} {Decimal(str(amount_due or 0)):,.2f}".strip()
     subject = f"Invoice {inv_num} — payment due {due_date}"
+    brand = resolve_brand(db, subscriber_id=account.id).to_dict()
+    semantic_colors = brand.get("semantic_colors")
+    semantic_colors = semantic_colors if isinstance(semantic_colors, dict) else {}
+    email_primary = escape(str(brand.get("primary_color") or DEFAULT_HEX))
+    email_positive = escape(
+        str(semantic_colors.get("positive") or DEFAULT_SEMANTIC_COLORS["positive"])
+    )
+    email_negative = escape(
+        str(semantic_colors.get("negative") or DEFAULT_SEMANTIC_COLORS["negative"])
+    )
+    email_neutral = str(
+        semantic_colors.get("neutral") or DEFAULT_SEMANTIC_COLORS["neutral"]
+    )
+    email_neutral_scale = generate_scale(email_neutral)
+    email_muted = escape(email_neutral_scale[600])
+    email_surface = escape(email_neutral_scale[50])
     body_html = wrap_email_html(
         (
             f'<p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6;">'
@@ -293,18 +315,18 @@ def maybe_send_invoice_notification(
             f'<p style="margin: 0 0 18px; font-size: 15px; line-height: 1.6;">'
             "Your invoice has been issued. Please review the details below and make payment through the customer portal before the due date."
             "</p>"
-            '<div style="margin: 22px 0; padding: 18px; border: 1px solid #008000; border-left: 5px solid #FF0000; background: #F4F4F9;">'
-            '<p style="margin: 0 0 12px; color: #FF0000; font-size: 16px; font-weight: 700;">Invoice Summary</p>'
+            f'<div style="margin: 22px 0; padding: 18px; border: 1px solid {email_positive}; border-left: 5px solid {email_primary}; background: {email_surface};">'
+            f'<p style="margin: 0 0 12px; color: {email_primary}; font-size: 16px; font-weight: 700;">Invoice Summary</p>'
             '<table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; border-collapse: collapse; font-size: 14px;">'
-            f'<tr><td style="padding: 7px 0; color: #555;">Account ID</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(str(account_ref))}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: #555;">Invoice ID</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(str(inv_num))}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: #555;">Amount to Pay</td><td style="padding: 7px 0; text-align: right; color: #FF0000; font-weight: 700;">{escape(amount_label)}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: #555;">Due Date</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(due_date)}</td></tr>'
+            f'<tr><td style="padding: 7px 0; color: {email_muted};">Account ID</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(str(account_ref))}</td></tr>'
+            f'<tr><td style="padding: 7px 0; color: {email_muted};">Invoice ID</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(str(inv_num))}</td></tr>'
+            f'<tr><td style="padding: 7px 0; color: {email_muted};">Amount to Pay</td><td style="padding: 7px 0; text-align: right; color: {email_negative}; font-weight: 700;">{escape(amount_label)}</td></tr>'
+            f'<tr><td style="padding: 7px 0; color: {email_muted};">Due Date</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(due_date)}</td></tr>'
             "</table>"
             "</div>"
-            f'<p style="margin: 0 0 20px;"><a href="{escape(payment_url)}" style="display: inline-block; padding: 12px 20px; background: #FF0000; color: #ffffff; text-decoration: none; font-weight: 700;">Pay Invoice in Portal</a></p>'
+            f'<p style="margin: 0 0 20px;"><a href="{escape(payment_url)}" style="display: inline-block; padding: 12px 20px; background: {email_primary}; color: #ffffff; text-decoration: none; font-weight: 700;">Pay Invoice in Portal</a></p>'
             '<div style="margin-top: 24px;">'
-            '<p style="margin: 0 0 10px; color: #008000; font-size: 15px; font-weight: 700;">How to pay through the portal</p>'
+            f'<p style="margin: 0 0 10px; color: {email_positive}; font-size: 15px; font-weight: 700;">How to pay through the portal</p>'
             '<ol style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.7;">'
             "<li>Open the customer portal and sign in to your account.</li>"
             "<li>Go to <strong>Billing</strong>, then select <strong>Invoices</strong>.</li>"
@@ -313,10 +335,10 @@ def maybe_send_invoice_notification(
             "<li>Wait for the payment confirmation page before closing the browser.</li>"
             "</ol>"
             "</div>"
-            f'<p style="margin: 18px 0 0; font-size: 13px; line-height: 1.6; color: #555;">You can also view the invoice here: <a href="{escape(invoice_url)}" style="color: #008000;">{escape(invoice_url)}</a></p>'
+            f'<p style="margin: 18px 0 0; font-size: 13px; line-height: 1.6; color: {email_muted};">You can also view the invoice here: <a href="{escape(invoice_url)}" style="color: {email_positive};">{escape(invoice_url)}</a></p>'
         ),
         subject=subject,
-        brand=resolve_brand(db, subscriber_id=account.id).to_dict(),
+        brand=brand,
     )
     body_text = (
         f"Dear {getattr(account, 'display_name', None) or getattr(account, 'first_name', None) or 'Customer'},\n\n"
@@ -782,6 +804,7 @@ def load_invoice_detail_data(
     )
     return {
         "invoice": invoice,
+        "invoice_status_presentation": invoice_status_presentation(invoice.status),
         "tax_rates": load_tax_rates(db),
         "credit_notes": load_credit_notes_for_account(
             db, account_id=invoice.account_id

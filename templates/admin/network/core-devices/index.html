@@ -1,16 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
-    table_head, table_row, status_badge, empty_state,
+    table_head, table_row, status_presentation_badge, empty_state,
     animation_styles
 %}
-
-{% set device_status_variants = {
-    'online': 'online',
-    'degraded': 'warning',
-    'maintenance': 'info',
-    'offline': 'offline'
-} %}
 
 {% block title %}Core Network Devices - Admin{% endblock %}
 
@@ -225,11 +218,9 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            {% set status_val = display_status_map.get(device.id|string) if display_status_map else none %}
-                            {% if not status_val %}
-                            {% set status_val = device.status.value if device.status else 'offline' %}
-                            {% endif %}
-                            {{ status_badge(status_val | title, variant=device_status_variants.get(status_val, 'offline')) }}
+                            <span title="{{ device.operational_reason | replace('_', ' ') }}">
+                                {{ status_presentation_badge(device.status_presentation, size="sm") }}
+                            </span>
                             {% set child_impact = child_impacts.get(device.id|string) if child_impacts else None %}
                             {% if child_impact and child_impact.impacted %}
                             <div class="mt-1">

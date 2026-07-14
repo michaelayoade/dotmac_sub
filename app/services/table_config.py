@@ -13,15 +13,11 @@ from sqlalchemy import case, func, literal, or_, select
 from sqlalchemy.orm import Query, Session
 
 from app.models.catalog import CatalogOffer, NasDevice, Subscription, SubscriptionStatus
-from app.models.domain_settings import SettingDomain
-from app.models.network import OntAssignment, OntUnit
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import (
     Reseller,
     Subscriber,
     SubscriberCategory,
-    SubscriberStatus,
-    UserType,
 )
 from app.models.table_column_config import TableColumnConfig
 from app.models.table_column_default_config import TableColumnDefaultConfig
@@ -30,21 +26,9 @@ from app.schemas.table_config import (
     TableColumnPreference,
     TableColumnResolved,
 )
-from app.services import numbering, settings_spec
+from app.services import web_customer_lists, web_subscriber_lists
 
 logger = logging.getLogger(__name__)
-
-ReservedParamKeys = {
-    "limit",
-    "offset",
-    "sort_by",
-    "sort_dir",
-    "table_key",
-    "q",
-    "_ts",
-    "nas_id",
-    "pop_site_id",
-}
 
 ExpressionResolver = Callable[[type], Any]
 FilterResolver = Callable[[Query, type, Any], Query]
@@ -77,6 +61,17 @@ class TableDefinition:
     model: type
     fields: tuple[TableFieldDefinition, ...]
     row_meta_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TableDataProjection:
+    """Transport-ready table projection with effective pagination metadata."""
+
+    columns: list[TableColumnResolved]
+    items: list[dict[str, Any]]
+    count: int
+    limit: int
+    offset: int
 
 
 class TableRegistry:
@@ -150,6 +145,14 @@ class TableConfigurationService:
     @staticmethod
     def _field_map(definition: TableDefinition) -> dict[str, TableFieldDefinition]:
         return {field.key: field for field in definition.fields}
+
+    @staticmethod
+    def _column_is_sortable(table_key: str, column_key: str) -> bool:
+        if table_key == "customers":
+            return column_key in web_customer_lists.CUSTOMER_TABLE_SORT_ALIASES
+        if table_key == "subscribers":
+            return column_key in web_subscriber_lists.SUBSCRIBER_TABLE_SORT_ALIASES
+        return False
 
     @staticmethod
     def _default_state(definition: TableDefinition) -> dict[str, dict[str, Any]]:
@@ -242,7 +245,9 @@ class TableConfigurationService:
             TableColumnResolved(
                 column_key=field.key,
                 label=field.label,
-                sortable=field.sortable,
+                sortable=TableConfigurationService._column_is_sortable(
+                    table_key, field.key
+                ),
                 display_order=state[field.key]["display_order"],
                 is_visible=state[field.key]["is_visible"],
             )
@@ -321,7 +326,9 @@ class TableConfigurationService:
             TableColumnResolved(
                 column_key=field.key,
                 label=field.label,
-                sortable=field.sortable,
+                sortable=TableConfigurationService._column_is_sortable(
+                    table_key, field.key
+                ),
                 display_order=state[field.key]["display_order"],
                 is_visible=state[field.key]["is_visible"],
             )
@@ -335,7 +342,9 @@ class TableConfigurationService:
             TableColumnAvailable(
                 key=field.key,
                 label=field.label,
-                sortable=field.sortable,
+                sortable=TableConfigurationService._column_is_sortable(
+                    table_key, field.key
+                ),
                 hidden_by_default=field.hidden_by_default,
             )
             for field in definition.fields
@@ -432,264 +441,86 @@ class TableConfigurationService:
         return value
 
     @staticmethod
-    def _subscriber_number_prefix(db: Session) -> str:
-        prefix = settings_spec.resolve_value(
-            db,
-            SettingDomain.subscriber,
-            "subscriber_number_prefix",
-        )
-        if isinstance(prefix, str):
-            return prefix
-        return "SUB-"
-
-    @staticmethod
-    def _looks_like_valid_subscriber_number(value: Any, prefix: str) -> bool:
-        if not isinstance(value, str):
-            return False
-        normalized = value.strip()
-        if not normalized:
-            return False
-        if not prefix:
-            return True
-        return normalized.startswith(prefix)
-
-    @staticmethod
-    def _ensure_subscriber_numbers(
-        db: Session,
-        items: list[dict[str, Any]],
-        selected_keys: list[str],
-    ) -> None:
-        if "subscriber_number" not in selected_keys:
-            return
-
-        prefix = TableConfigurationService._subscriber_number_prefix(db)
-        changed = False
-
-        for item in items:
-            current_value = item.get("subscriber_number")
-            if TableConfigurationService._looks_like_valid_subscriber_number(
-                current_value, prefix
-            ):
-                continue
-
-            subscriber_id = item.get("id")
-            if not subscriber_id:
-                continue
-            subscriber = db.get(Subscriber, subscriber_id)
-            if not subscriber:
-                continue
-
-            existing_number = subscriber.subscriber_number
-            if TableConfigurationService._looks_like_valid_subscriber_number(
-                existing_number, prefix
-            ):
-                item["subscriber_number"] = existing_number
-                continue
-
-            generated = numbering.generate_number(
-                db,
-                SettingDomain.subscriber,
-                "subscriber_number",
-                "subscriber_number_enabled",
-                "subscriber_number_prefix",
-                "subscriber_number_padding",
-                "subscriber_number_start",
-            )
-            if not generated:
-                continue
-
-            subscriber.subscriber_number = generated
-            item["subscriber_number"] = generated
-            changed = True
-
-        if changed:
-            db.commit()
-
-    @staticmethod
-    def _apply_scalar_filters(
-        query: Query,
-        model: type,
-        field_map: dict[str, TableFieldDefinition],
-        request_params: dict[str, Any],
-    ) -> Query:
-        for key, value in request_params.items():
-            if key in ReservedParamKeys or value is None or value == "":
-                continue
-            field = field_map.get(key)
-            if not field or not field.filterable:
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid filter field: {key}"
-                )
-
-            if field.filter_resolver is not None:
-                query = field.filter_resolver(query, model, value)
-                continue
-
-            expression = field.expression(model)
-            if field.key == "status":
-                try:
-                    value = SubscriberStatus(str(value))
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=400, detail="Invalid status filter"
-                    ) from exc
-            if isinstance(value, str) and "*" in value:
-                query = query.filter(expression.ilike(value.replace("*", "%")))
-            else:
-                query = query.filter(expression == value)
-
-        return query
-
-    @staticmethod
-    def _apply_customers_page_filters(
-        query: Query, request_params: dict[str, Any]
-    ) -> Query:
-        """Apply filters from the admin customers page that are not table columns."""
-        nas_id = str(request_params.get("nas_id") or "").strip()
-        if nas_id:
-            query = query.filter(
-                Subscriber.subscriptions.any(
-                    Subscription.provisioning_nas_device_id == nas_id
-                )
-            )
-
-        pop_site_id = str(request_params.get("pop_site_id") or "").strip()
-        if pop_site_id:
-            query = query.filter(
-                Subscriber.subscriptions.any(
-                    Subscription.provisioning_nas_device.has(
-                        NasDevice.pop_site_id == pop_site_id
-                    )
-                )
-            )
-
-        return query
-
-    @staticmethod
-    def apply_query_config(
+    def _build_customer_data_projection(
         db: Session,
         user_id: UUID,
-        table_key: str,
         request_params: dict[str, Any],
-    ) -> tuple[list[TableColumnResolved], list[dict[str, Any]], int]:
-        definition = TableRegistry.get(table_key)
-        field_map = TableConfigurationService._field_map(definition)
+    ) -> TableDataProjection:
+        """Project configurable columns over the canonical customer-list owner."""
 
-        columns = TableConfigurationService.get_columns(db, user_id, table_key)
+        definition = TableRegistry.get("customers")
+        columns = TableConfigurationService.get_columns(db, user_id, "customers")
+
+        try:
+            list_query = (
+                web_customer_lists.build_customer_list_query_from_legacy_params(
+                    request_params
+                )
+            )
+            page = web_customer_lists.build_customer_list_page(
+                db,
+                list_query=list_query,
+                include_related=False,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return TableConfigurationService._serialize_list_page(
+            definition,
+            columns,
+            page,
+        )
+
+    @staticmethod
+    def _build_subscriber_data_projection(
+        db: Session,
+        user_id: UUID,
+        request_params: dict[str, Any],
+    ) -> TableDataProjection:
+        """Project configurable columns over the canonical subscriber owner."""
+
+        definition = TableRegistry.get("subscribers")
+        columns = TableConfigurationService.get_columns(db, user_id, "subscribers")
+        try:
+            list_query = (
+                web_subscriber_lists.build_subscriber_list_query_from_legacy_params(
+                    request_params
+                )
+            )
+            page = web_subscriber_lists.build_subscriber_list_page(
+                db,
+                list_query=list_query,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return TableConfigurationService._serialize_list_page(
+            definition,
+            columns,
+            page,
+        )
+
+    @staticmethod
+    def _serialize_list_page(
+        definition: TableDefinition,
+        columns: list[TableColumnResolved],
+        page: Any,
+    ) -> TableDataProjection:
+        """Apply column preferences after a resource owner selects its page."""
+
+        field_map = TableConfigurationService._field_map(definition)
         visible_columns = [column for column in columns if column.is_visible]
         selected_keys = [column.column_key for column in visible_columns]
         meta_keys = [key for key in definition.row_meta_fields if key in field_map]
 
-        limit = int(request_params.get("limit", 50) or 50)
-        offset = int(request_params.get("offset", 0) or 0)
-        if limit < 1 or limit > 200:
-            raise HTTPException(
-                status_code=400, detail="limit must be between 1 and 200"
-            )
-        if offset < 0:
-            raise HTTPException(status_code=400, detail="offset must be >= 0")
-
-        query = db.query(definition.model)
-
-        # Exclude legacy soft-deleted imports and system users for subscriber tables
-        if definition.model is Subscriber:
-            from app.services.subscriber import splynx_deleted_import_clause
-
-            query = query.filter(~splynx_deleted_import_clause())
-            query = query.filter(Subscriber.user_type != UserType.system_user)
-
-        q = request_params.get("q")
-        if isinstance(q, str) and q.strip():
-            search_term = q.strip()
-            like_term = f"%{search_term}%"
-            search_columns = []
-            for field_name in (
-                "first_name",
-                "last_name",
-                "display_name",
-                "company_name",
-                "legal_name",
-                "email",
-                "phone",
-                "subscriber_number",
-                "account_number",
-                "name",
-                "code",
-            ):
-                if hasattr(definition.model, field_name):
-                    field = getattr(definition.model, field_name)
-                    if hasattr(field, "ilike"):
-                        search_columns.append(field.ilike(like_term))
-            if search_columns:
-                if definition.model is Subscriber:
-                    ont_like_terms = [like_term]
-                    normalized_serial_term = "".join(
-                        char for char in search_term.upper() if char.isalnum()
-                    )
-                    if (
-                        normalized_serial_term.startswith("HWTC")
-                        and len(normalized_serial_term) > 4
-                    ):
-                        ont_like_terms.append(f"%{normalized_serial_term[4:]}%")
-                    search_columns.extend(
-                        [
-                            Subscriber.subscriptions.any(
-                                Subscription.login.ilike(like_term)
-                            ),
-                            Subscriber.subscriptions.any(
-                                Subscription.ipv4_address.ilike(like_term)
-                            ),
-                            Subscriber.ont_assignments.any(
-                                OntAssignment.ont_unit.has(
-                                    or_(
-                                        *[
-                                            OntUnit.serial_number.ilike(term)
-                                            for term in ont_like_terms
-                                        ],
-                                        *[
-                                            OntUnit.vendor_serial_number.ilike(term)
-                                            for term in ont_like_terms
-                                        ],
-                                        OntUnit.external_id.ilike(like_term),
-                                    )
-                                )
-                            ),
-                        ]
-                    )
-                query = query.filter(or_(*search_columns))
-
-        if table_key == "customers":
-            query = TableConfigurationService._apply_customers_page_filters(
-                query, request_params
-            )
-
-        query = TableConfigurationService._apply_scalar_filters(
-            query,
-            definition.model,
-            field_map,
-            request_params,
-        )
-
-        total = query.count()
-
-        sort_by = str(request_params.get("sort_by") or "created_at")
-        sort_dir = str(request_params.get("sort_dir") or "desc").lower()
-        if sort_dir not in {"asc", "desc"}:
-            raise HTTPException(status_code=400, detail="sort_dir must be asc or desc")
-
-        sort_field = field_map.get(sort_by)
-        if not sort_field or not sort_field.sortable:
-            raise HTTPException(status_code=400, detail="Invalid sort field")
-
-        sort_expression = sort_field.expression(definition.model)
-        query = query.order_by(
-            sort_expression.desc() if sort_dir == "desc" else sort_expression.asc()
-        )
-
-        query = query.offset(offset).limit(limit)
-
         if not selected_keys and not meta_keys:
-            return columns, [], total
+            return TableDataProjection(
+                columns=columns,
+                items=[],
+                count=page.page_meta.total_items,
+                limit=page.list_query.per_page,
+                offset=page.list_query.offset,
+            )
 
         selected_expressions = [
             field_map[key].expression(definition.model).label(key)
@@ -700,7 +531,7 @@ class TableConfigurationService:
             for key in meta_keys
             if key not in selected_keys
         )
-        rows = query.with_entities(*selected_expressions).all()
+        rows = page.query.with_entities(*selected_expressions).all()
 
         items: list[dict[str, Any]] = []
         for row in rows:
@@ -713,12 +544,54 @@ class TableConfigurationService:
                 item[key] = TableConfigurationService._convert_value(getattr(row, attr))
             items.append(item)
 
-        if table_key == "subscribers":
-            TableConfigurationService._ensure_subscriber_numbers(
-                db, items, selected_keys
-            )
+        return TableDataProjection(
+            columns=columns,
+            items=items,
+            count=page.page_meta.total_items,
+            limit=page.list_query.per_page,
+            offset=page.list_query.offset,
+        )
 
-        return columns, items, total
+    @staticmethod
+    def build_data_projection(
+        db: Session,
+        user_id: UUID,
+        table_key: str,
+        request_params: dict[str, Any],
+    ) -> TableDataProjection:
+        """Build table data while preserving each resource's named query owner."""
+
+        if table_key == "customers":
+            return TableConfigurationService._build_customer_data_projection(
+                db,
+                user_id,
+                request_params,
+            )
+        if table_key == "subscribers":
+            return TableConfigurationService._build_subscriber_data_projection(
+                db,
+                user_id,
+                request_params,
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f"No list projection owner is registered for table: {table_key}",
+        )
+
+    @staticmethod
+    def apply_query_config(
+        db: Session,
+        user_id: UUID,
+        table_key: str,
+        request_params: dict[str, Any],
+    ) -> tuple[list[TableColumnResolved], list[dict[str, Any]], int]:
+        projection = TableConfigurationService.build_data_projection(
+            db,
+            user_id,
+            table_key,
+            request_params,
+        )
+        return projection.columns, projection.items, projection.count
 
 
 def _full_name_expression(model: type) -> Any:

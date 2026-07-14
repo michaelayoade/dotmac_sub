@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}{{ device.name }} - Network Device - Admin{% endblock %}
 
@@ -26,10 +27,12 @@
         </div>
         <div class="flex items-center gap-2">
             <div id="device-status-badge">
-                <span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium {% if device.status.value == 'online' %}bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400{% elif device.status.value == 'offline' %}bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400{% elif device.status.value == 'degraded' %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400{% endif %}">
-                    <span class="h-2 w-2 rounded-full {% if device.status.value == 'online' %}bg-green-500{% elif device.status.value == 'offline' %}bg-red-500{% elif device.status.value == 'degraded' %}bg-amber-500{% else %}bg-blue-500{% endif %}"></span>
-                    {{ device.status.value | title }}
+                <span title="{{ device.operational_reason | replace('_', ' ') }}">
+                    {{ status_presentation_badge(device.status_presentation) }}
                 </span>
+                {% if device.operational.admin_status and device.operational.admin_status != device.operational_status %}
+                <p class="mt-1 text-right text-[10px] text-slate-400">admin: {{ device.operational.admin_status | replace('_', ' ') }}</p>
+                {% endif %}
             </div>
             <span id="device-ping-badge" class="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-medium
                 {% if not device.ping_enabled %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300
@@ -259,7 +262,7 @@
                             {% for child in child_devices %}
                             <li>
                                 <a href="/admin/network/core-devices/{{ child.id }}" class="text-primary-600 hover:text-primary-700">{{ child.name }}</a>
-                                <span class="text-slate-400">({{ child.status.value | title }})</span>
+                                {{ status_presentation_badge(child.status_presentation, size="sm") }}
                             </li>
                             {% endfor %}
                         </ul>
@@ -276,13 +279,7 @@
                                 <div class="flex items-center gap-1 text-xs" style="margin-left: {{ node.depth * 14 }}px;">
                                     <span class="text-slate-400">└─</span>
                                     <a href="/admin/network/core-devices/{{ node.device.id }}" class="text-primary-600 hover:text-primary-700">{{ node.device.name }}</a>
-                                    {% set node_status = node.device.status.value if node.device.status else 'unknown' %}
-                                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium
-                                        {% if node_status == 'online' %}bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300
-                                        {% elif node_status == 'offline' %}bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300
-                                        {% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
-                                        {{ node_status | title }}
-                                    </span>
+                                    {{ status_presentation_badge(node.device.status_presentation, size="sm") }}
                                 </div>
                                 {% if node.children %}
                                 <ul class="space-y-1">{{ loop(node.children) }}</ul>

@@ -32,6 +32,7 @@ from app.services import (
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services.file_storage import file_uploads
+from app.services.status_presentation import ticket_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -957,7 +958,13 @@ def build_tickets_list_context(
             )
             for ticket in rows
         },
-        "status_colors": support_ticket_settings_service.status_color_options(db),
+        "status_presentations": {
+            value: ticket_status_presentation(value)
+            for value in {
+                *status_options,
+                *(ticket.status for ticket in rows),
+            }
+        },
     }
 
 
@@ -1154,7 +1161,9 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
                 str(ticket.id)
             ),
         ),
-        "status_colors": support_ticket_settings_service.status_color_options(db),
+        "status_presentations": {
+            value: ticket_status_presentation(value) for value in status_options
+        },
         "is_merged_source": bool(
             ticket.merged_into_ticket_id
             or support_ticket_settings_service.status_is_merged(ticket.status)

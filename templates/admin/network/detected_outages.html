@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Detected Outages - Admin{% endblock %}
 
@@ -36,9 +37,7 @@
                     {% for row in classifier_incidents %}
                     <tr class="border-t border-slate-100 dark:border-slate-700">
                         <td class="py-2">
-                            {% if row.state == 'confirmed' %}<span class="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">confirmed</span>
-                            {% elif row.state == 'clearing' %}<span class="rounded bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">clearing</span>
-                            {% else %}<span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{{ row.state }}</span>{% endif %}
+                            {{ status_presentation_badge(row.status_presentation, size="sm") }}
                         </td>
                         <td class="py-2 text-slate-500">{{ row.detection_source }}</td>
                         <td class="py-2 font-medium text-slate-900 dark:text-white">{{ row.node_name or '—' }}</td>
@@ -222,7 +221,13 @@ document.addEventListener('DOMContentLoaded', function () {
             {{ summary.counts.get('monitoring_fault', 0) }},
             {{ summary.counts.get('unknown', 0) }}
         ],
-        colors: ['#10b981', '#ef4444', '#f59e0b', '#8b5cf6', '#94a3b8']
+        colors: [
+            themeColor('semantic-positive-600'),
+            themeColor('semantic-negative-600'),
+            themeColor('semantic-warning-600'),
+            themeColor('semantic-info-600'),
+            themeColor('semantic-neutral-600')
+        ]
     };
     const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
     DotmacCharts.registerChart('node-health-chart', chart);

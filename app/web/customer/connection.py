@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services.customer_portal_context import resolve_customer_subscription
+from app.services.status_presentation import connection_health_status_presentation
 from app.services.topology.connection_status import connection_status
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -28,6 +29,9 @@ logger = logging.getLogger(__name__)
 # yet) — a calm, non-alarming default rather than an error.
 _NO_SUBSCRIPTION_STATUS = {
     "state": "connected",
+    "status_presentation": connection_health_status_presentation(
+        "connected"
+    ).model_dump(mode="json"),
     "headline": "No active service",
     "message": "We couldn't find an active service on your account to check.",
     "advice": None,

@@ -343,6 +343,7 @@ def test_map_search_finds_scoped_jobs_then_assets(db_session):
 
     assert items[0]["kind"] == "job"
     assert items[0]["id"] == "wo-search-visible"
+    assert items[0]["status_presentation"].value == "dispatched"
     assert {item["id"] for item in items} == {"wo-search-visible"}
 
     asset_items = field_map_search.search(db_session, _auth(user), "FDH Jabi")

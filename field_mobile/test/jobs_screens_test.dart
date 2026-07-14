@@ -1,3 +1,4 @@
+import 'package:dotmac_field/app/status_presentation.dart';
 import 'package:dotmac_field/app/theme.dart';
 import 'package:dotmac_field/features/execution/completion_wizard.dart';
 import 'package:dotmac_field/features/jobs/job_chat_screen.dart';
@@ -18,6 +19,14 @@ JobSummary _job({String status = 'dispatched', String workType = 'install'}) =>
       priority: 'normal',
       scheduledStart: DateTime.utc(2026, 6, 10, 9),
       estimatedDurationMinutes: 90,
+      statusPresentation: StatusPresentation(
+        value: status,
+        label: status == 'dispatched'
+            ? 'Dispatched'
+            : status.replaceAll('_', ' '),
+        tone: status == 'completed' ? StatusTone.positive : StatusTone.info,
+        icon: status == 'completed' ? 'check' : 'info',
+      ),
     );
 
 JobDetail _detail({
@@ -76,16 +85,16 @@ void main() {
 
     expect(find.text('Install'), findsOneWidget);
     expect(find.text('Install fiber — Adaeze Okafor'), findsOneWidget);
-    expect(find.text('ASSIGNED'), findsOneWidget);
+    expect(find.text('DISPATCHED'), findsOneWidget);
     expect(find.text('~90 min'), findsOneWidget);
 
     final stripe = tester
         .widgetList<Container>(find.byType(Container))
         .firstWhere(
-          (c) => c.color == AppColors.status('dispatched'),
+          (c) => c.color == AppColors.semanticInfo,
           orElse: () => tester.widget<Container>(find.byType(Container).first),
         );
-    expect(stripe.color, AppColors.status('dispatched'));
+    expect(stripe.color, AppColors.semanticInfo);
   });
 
   group('action bar shows work actions per status', () {

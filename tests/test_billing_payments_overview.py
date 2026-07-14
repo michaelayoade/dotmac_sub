@@ -98,6 +98,23 @@ def test_build_payments_list_data_filters_by_status_and_method(db_session, subsc
     assert result["total"] == 1
     assert len(result["payments"]) == 1
     assert result["payments"][0].display_method == "Card"
+    payment = result["payments"][0]
+    assert result["payment_status_presentations"][str(payment.id)].model_dump(
+        mode="json"
+    ) == {
+        "value": "succeeded",
+        "label": "Succeeded",
+        "tone": "positive",
+        "icon": "check",
+    }
+    assert result["payment_status_options"] == [
+        {"value": "pending", "label": "Pending"},
+        {"value": "succeeded", "label": "Succeeded"},
+        {"value": "failed", "label": "Failed"},
+        {"value": "refunded", "label": "Refunded"},
+        {"value": "partially_refunded", "label": "Partially refunded"},
+        {"value": "canceled", "label": "Canceled"},
+    ]
 
 
 def test_build_payments_list_data_search_and_date_range(db_session, subscriber):

@@ -1,3 +1,4 @@
+{% from "components/ui/macros.html" import status_presentation_badge %}
 <div class="overflow-x-auto">
     <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
         <thead class="bg-slate-50 dark:bg-slate-800/50">
@@ -16,8 +17,6 @@
         <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
             {% if invoices %}
             {% for invoice in invoices %}
-            {% set status = invoice.status|default('draft') %}
-            {% set status_val = status.value if status is not string else status %}
             {% set invoice_currency = invoice.currency or 'NGN' %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                 <td class="whitespace-nowrap px-6 py-4">
@@ -32,15 +31,7 @@
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</td>
                 <td class="whitespace-nowrap px-6 py-4">
-                    {% if status_val == 'paid' %}
-                    <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400">Paid</span>
-                    {% elif status_val in ['pending', 'sent'] %}
-                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">Pending</span>
-                    {% elif status_val == 'overdue' %}
-                    <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-400">Overdue</span>
-                    {% else %}
-                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-800 dark:bg-slate-700 dark:text-slate-300">{{ status_val | title }}</span>
-                    {% endif %}
+                    {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>

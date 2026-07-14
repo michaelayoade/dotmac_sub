@@ -35,7 +35,7 @@ class WorkOrderMirror(Base):
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     description: Mapped[str | None] = mapped_column(Text)
-    # draft|scheduled|dispatched|in_progress|completed|canceled (WorkOrderStatus)
+    # Values are declared by app.services.field.work_order_status.WorkOrderStatus.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="scheduled")
     work_type: Mapped[str | None] = mapped_column(String(20))
     priority: Mapped[str | None] = mapped_column(String(20))

@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
-    table_head, table_row, row_actions, row_action, status_badge,
+    table_head, table_row, row_actions, row_action, status_badge, status_presentation_badge,
     empty_state, action_button, animation_styles, timeline_item,
     icon_plus, icon_view, icon_invoice
 %}
@@ -178,7 +178,6 @@
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if invoices %}
                     {% for invoice in invoices %}
-                    {% set inv_status = invoice.status.value if invoice.status else 'draft' %}
                     {% set invoice_currency = invoice.currency or account_currency %}
                     {% call table_row(color="emerald") %}
                         <td class="whitespace-nowrap px-6 py-4">
@@ -187,15 +186,7 @@
                             </a>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% if inv_status == 'paid' %}
-                            {{ status_badge("Paid", variant="paid") }}
-                            {% elif inv_status == 'issued' %}
-                            {{ status_badge("Issued", variant="info") }}
-                            {% elif inv_status == 'overdue' %}
-                            {{ status_badge("Overdue", variant="overdue") }}
-                            {% else %}
-                            {{ status_badge(inv_status | title, variant="default") }}
-                            {% endif %}
+                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else '—' }}</td>

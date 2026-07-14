@@ -1,7 +1,7 @@
 {% extends "layouts/reseller.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block page_header %}
-{% set status_lower = (invoice.status | lower) if invoice.status else 'draft' %}
 <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
     <div>
         <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
@@ -15,23 +15,7 @@
         </nav>
         <div class="flex items-center gap-3">
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">Invoice {{ invoice.invoice_number or '' }}</h1>
-            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold
-                {% if status_lower == 'paid' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                {% elif status_lower in ['issued', 'partially_paid'] %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
-                {% elif status_lower == 'overdue' %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400
-                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                {% if status_lower == 'paid' %}
-                <span class="relative flex h-2 w-2">
-                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-                    <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
-                </span>
-                {% elif status_lower in ['issued', 'partially_paid'] %}
-                <span class="h-2 w-2 rounded-full bg-amber-500"></span>
-                {% elif status_lower == 'overdue' %}
-                <span class="h-2 w-2 rounded-full bg-rose-500"></span>
-                {% endif %}
-                {{ invoice.status | replace('_', ' ') | title if invoice.status else 'Draft' }}
-            </span>
+            {{ status_presentation_badge(invoice.status_presentation) }}
         </div>
     </div>
     <a href="/reseller/accounts/{{ account_id }}/invoices"
@@ -62,15 +46,8 @@
                 <!-- Status -->
                 <div>
                     <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</p>
-                    {% set status_lower = (invoice.status | lower) if invoice.status else 'draft' %}
                     <p class="mt-1">
-                        <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold
-                            {% if status_lower == 'paid' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                            {% elif status_lower in ['issued', 'partially_paid'] %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
-                            {% elif status_lower == 'overdue' %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400
-                            {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                            {{ invoice.status | replace('_', ' ') | title if invoice.status else 'Draft' }}
-                        </span>
+                        {{ status_presentation_badge(invoice.status_presentation, size="sm") }}
                     </p>
                 </div>
                 <!-- Total -->
@@ -99,8 +76,7 @@
                 <!-- Due Date -->
                 <div>
                     <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Due Date</p>
-                    {% set status_lower = (invoice.status | lower) if invoice.status else 'draft' %}
-                    <p class="mt-1 text-base font-medium {% if status_lower == 'overdue' %}text-rose-600 dark:text-rose-400{% else %}text-slate-900 dark:text-white{% endif %}">
+                    <p class="mt-1 text-base font-medium text-slate-900 dark:text-white">
                         {% if invoice.due_at %}
                         {{ invoice.due_at.strftime('%b %d, %Y') }}
                         {% else %}
@@ -180,17 +156,10 @@
                 </thead>
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                     {% for payment in payments %}
-                    {% set pstatus_lower = (payment.status | lower) if payment.status else 'pending' %}
                     <tr class="transition-colors duration-200 hover:bg-emerald-50/50 dark:hover:bg-emerald-900/10">
                         <td class="whitespace-nowrap px-6 py-4 text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">{{ '{:,.2f}'.format(payment.amount or 0) }}</td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold
-                                {% if pstatus_lower in ['succeeded', 'completed', 'paid'] %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                                {% elif pstatus_lower in ['pending', 'processing'] %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
-                                {% elif pstatus_lower in ['failed', 'refunded'] %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400
-                                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                                {{ payment.status | replace('_', ' ') | title if payment.status else 'Pending' }}
-                            </span>
+                            {{ status_presentation_badge(payment.status_presentation, size="sm") }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">
                             {% if payment.paid_at %}

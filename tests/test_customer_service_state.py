@@ -193,6 +193,12 @@ def test_area_outage_suppresses_and_links_incident(db_session, subscriber, monke
     context = state.support_context()
     assert context["billing_reminders_suppressed"] is True
     assert context["active_outage_id"] == str(incident_id)
+    assert context["connection_status_presentation"] == {
+        "value": "outage",
+        "label": "Area outage",
+        "tone": "negative",
+        "icon": "alert",
+    }
 
 
 def test_inferred_area_outage_suppresses_without_incident(

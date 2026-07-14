@@ -208,6 +208,12 @@ class TestInvoiceVisibility:
         )
         assert result is not None
         assert result["balance_due"] == Decimal("100.00")
+        assert result["status_presentation"] == {
+            "value": "issued",
+            "label": "Issued",
+            "tone": "info",
+            "icon": "info",
+        }
 
 
 # ---------------------------------------------------------------------------

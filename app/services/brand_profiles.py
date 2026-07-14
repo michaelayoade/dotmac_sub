@@ -13,6 +13,11 @@ from sqlalchemy.orm import Session
 from app.models.branding import BrandProfile
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
+from app.services.brand_theme import (
+    DEFAULT_SECONDARY_HEX,
+    SEMANTIC_TONES,
+    is_accessible_semantic_color,
+)
 from app.services.branding_config import get_brand as get_deployment_brand
 
 BRAND_SCOPE_PRECEDENCE = ("organization", "reseller", "platform")
@@ -20,6 +25,13 @@ _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _ASSET_URL_FIELDS = {"logo_url", "dark_logo_url", "favicon_url"}
 _LEGACY_CACHE_KEY = "brand_profiles.legacy"
 _PROFILE_CACHE_KEY = "brand_profiles.active_profiles"
+_LEGACY_SEMANTIC_SETTING_KEYS = {
+    "positive": "brand_semantic_positive_color",
+    "info": "brand_semantic_info_color",
+    "warning": "brand_semantic_warning_color",
+    "negative": "brand_semantic_negative_color",
+    "neutral": "brand_semantic_neutral_color",
+}
 
 
 @dataclass(frozen=True)
@@ -30,6 +42,7 @@ class ResolvedBrand:
     tagline: str
     primary_color: str
     secondary_color: str
+    semantic_colors: dict[str, str]
     logo_url: str
     dark_logo_url: str
     favicon_url: str
@@ -96,7 +109,14 @@ def _legacy_brand(db: Session) -> dict[str, Any]:
         "legal_name": legal_name,
         "tagline": static["tagline"],
         "primary_color": comms("brand_primary_color", static["primary_color"]),
-        "secondary_color": comms("brand_secondary_color", "#06b6d4"),
+        "secondary_color": comms("brand_secondary_color", DEFAULT_SECONDARY_HEX),
+        "semantic_colors": {
+            tone: comms(
+                setting_key,
+                static[f"semantic_{tone}_color"],
+            )
+            for tone, setting_key in _LEGACY_SEMANTIC_SETTING_KEYS.items()
+        },
         "logo_url": comms("sidebar_logo_url"),
         "dark_logo_url": comms("sidebar_logo_dark_url"),
         "favicon_url": comms("favicon_url"),
@@ -151,6 +171,15 @@ def _apply_profile(values: dict[str, Any], profile: BrandProfile) -> None:
             values[field] = value
     if profile.legal_address:
         values["legal_address"] = dict(profile.legal_address)
+    profile_semantic_colors = (profile.metadata_ or {}).get("semantic_colors")
+    if isinstance(profile_semantic_colors, dict):
+        semantic_colors = dict(values.get("semantic_colors") or {})
+        for tone, color in profile_semantic_colors.items():
+            if tone in SEMANTIC_TONES and (
+                isinstance(color, str) and _HEX_COLOR.fullmatch(color)
+            ):
+                semantic_colors[tone] = color
+        values["semantic_colors"] = semantic_colors
     values["source_scope"] = profile.scope_type
     values["source_scope_id"] = str(profile.scope_id) if profile.scope_id else None
 
@@ -223,6 +252,24 @@ def upsert_brand_profile(
         if field in {"primary_color", "secondary_color"} and value:
             if not _HEX_COLOR.fullmatch(str(value)):
                 raise ValueError(f"{field} must be a 6-digit hex colour")
+        if field == "metadata_" and value:
+            if not isinstance(value, dict):
+                raise ValueError("metadata must be an object")
+            semantic_colors = value.get("semantic_colors")
+            if semantic_colors is not None:
+                if not isinstance(semantic_colors, dict):
+                    raise ValueError("metadata semantic_colors must be an object")
+                for tone, color in semantic_colors.items():
+                    if tone not in SEMANTIC_TONES or not _HEX_COLOR.fullmatch(
+                        str(color)
+                    ):
+                        raise ValueError(
+                            "semantic colors must use known tones and 6-digit hex values"
+                        )
+                    if not is_accessible_semantic_color(str(color)):
+                        raise ValueError(
+                            "semantic colors must meet WCAG AA contrast in light and dark themes"
+                        )
         if field in _ASSET_URL_FIELDS and value:
             candidate = str(value).strip()
             if not candidate.startswith(
@@ -248,6 +295,7 @@ def sync_platform_brand_from_legacy_settings(
     if existing is None:
         values = {field: legacy[field] for field in _PROFILE_FIELDS}
         values["legal_address"] = legacy["legal_address"]
+        values["metadata_"] = {"semantic_colors": legacy["semantic_colors"]}
     else:
         overwrite = overwrite_fields or set()
         values = {
@@ -257,6 +305,12 @@ def sync_platform_brand_from_legacy_settings(
         }
         if "legal_address" in overwrite or not existing.legal_address:
             values["legal_address"] = legacy["legal_address"]
+        if "semantic_colors" in overwrite or not (existing.metadata_ or {}).get(
+            "semantic_colors"
+        ):
+            metadata = dict(existing.metadata_ or {})
+            metadata["semantic_colors"] = legacy["semantic_colors"]
+            values["metadata_"] = metadata
     return upsert_brand_profile(
         db,
         scope_type="platform",

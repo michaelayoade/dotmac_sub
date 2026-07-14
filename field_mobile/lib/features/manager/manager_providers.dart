@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app/status_presentation.dart';
 import '../auth/auth_state.dart';
 import '../../core/api/token_store.dart';
 import '../expenses/expense_models.dart';
@@ -69,6 +70,7 @@ class ManagerTechnician {
     this.lastLocationAt,
     this.activeWorkOrderTitle,
     this.activeWorkOrderStatus,
+    this.activeWorkOrderStatusPresentation,
   });
 
   final String personId;
@@ -85,6 +87,7 @@ class ManagerTechnician {
   final DateTime? lastLocationAt;
   final String? activeWorkOrderTitle;
   final String? activeWorkOrderStatus;
+  final StatusPresentation? activeWorkOrderStatusPresentation;
 
   factory ManagerTechnician.fromJson(Map<String, dynamic> json) {
     final activeWork = (json['active_work_order'] as Map?)
@@ -104,12 +107,18 @@ class ManagerTechnician {
       lastLocationAt: _date(json['last_location_at']),
       activeWorkOrderTitle: activeWork?['title']?.toString(),
       activeWorkOrderStatus: activeWork?['status']?.toString(),
+      activeWorkOrderStatusPresentation: activeWork == null
+          ? null
+          : StatusPresentation.fromJsonOrFallback(
+              activeWork['status_presentation'],
+              activeWork['status']?.toString() ?? 'unknown',
+            ),
     );
   }
 }
 
 class ManagerJob {
-  const ManagerJob({
+  ManagerJob({
     required this.id,
     required this.title,
     required this.status,
@@ -123,11 +132,14 @@ class ManagerJob {
     this.addressText,
     this.latitude,
     this.longitude,
-  });
+    StatusPresentation? statusPresentation,
+  }) : statusPresentation =
+           statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String title;
   final String status;
+  final StatusPresentation statusPresentation;
   final String priority;
   final String workType;
   final DateTime? scheduledStart;
@@ -143,6 +155,10 @@ class ManagerJob {
     id: json['id']?.toString() ?? '',
     title: json['title']?.toString() ?? 'Work order',
     status: json['status']?.toString() ?? 'scheduled',
+    statusPresentation: StatusPresentation.fromJsonOrFallback(
+      json['status_presentation'],
+      json['status']?.toString() ?? 'scheduled',
+    ),
     priority: json['priority']?.toString() ?? 'normal',
     workType: json['work_type']?.toString() ?? 'other',
     scheduledStart: _date(json['scheduled_start']),

@@ -1,3 +1,5 @@
+import 'status_presentation.dart';
+
 /// Mirrors ServiceStatusResponse from app/schemas/service_status.py.
 ///
 /// The truthful "is my service good, and when does it lapse" view. Expiry is
@@ -91,6 +93,7 @@ class ServiceStatusItem {
     required this.billingMode,
     required this.usable,
     required this.reason,
+    required this.statusPresentation,
     this.offerName,
     this.expiresAt,
     this.nextChargeAt,
@@ -100,6 +103,7 @@ class ServiceStatusItem {
   final String subscriptionId;
   final String? offerName;
   final String status;
+  final StatusPresentation statusPresentation;
   final String billingMode;
   final bool usable;
   final DateTime? expiresAt;
@@ -111,21 +115,27 @@ class ServiceStatusItem {
 
   bool get actionable => action != null;
 
-  factory ServiceStatusItem.fromJson(Map<String, dynamic> json) =>
-      ServiceStatusItem(
-        subscriptionId: json['subscription_id'].toString(),
-        offerName: json['offer_name'] as String?,
-        status: json['status'] as String? ?? 'active',
-        billingMode: json['billing_mode'] as String? ?? 'prepaid',
-        usable: json['usable'] as bool? ?? false,
-        expiresAt: _toDate(json['expires_at']),
-        nextChargeAt: _toDate(json['next_charge_at']),
-        reason: json['reason'] as String? ?? 'ok',
-        action: json['action'] is Map
-            ? ServiceStatusAction.fromJson(
-                (json['action'] as Map).cast<String, dynamic>())
-            : null,
-      );
+  factory ServiceStatusItem.fromJson(Map<String, dynamic> json) {
+    final status = json['status'] as String? ?? 'active';
+    return ServiceStatusItem(
+      subscriptionId: json['subscription_id'].toString(),
+      offerName: json['offer_name'] as String?,
+      status: status,
+      statusPresentation: json['status_presentation'] is Map
+          ? StatusPresentation.fromJson(
+              (json['status_presentation'] as Map).cast<String, dynamic>())
+          : StatusPresentation.neutralFallback(status),
+      billingMode: json['billing_mode'] as String? ?? 'prepaid',
+      usable: json['usable'] as bool? ?? false,
+      expiresAt: _toDate(json['expires_at']),
+      nextChargeAt: _toDate(json['next_charge_at']),
+      reason: json['reason'] as String? ?? 'ok',
+      action: json['action'] is Map
+          ? ServiceStatusAction.fromJson(
+              (json['action'] as Map).cast<String, dynamic>())
+          : null,
+    );
+  }
 }
 
 class ServiceStatusAction {

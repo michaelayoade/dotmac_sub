@@ -137,12 +137,24 @@ Gap analysis identified 42 issues across 5 areas. Fixed 13 of 14 tasks:
 - `app/tasks/__init__.py` — Task registration
 - `app/api/search.py` — Search scope additions
 - `app/services/audit_helpers.py` — Audit support
-- `app/services/table_config.py` — Table config for new views
+- `app/services/table_config.py` — Saved column preferences and serialization;
+  customer/subscriber row queries delegate to named list projection owners
+- `app/services/status_presentation.py` — Account/subscription/invoice/payment/
+  outage-incident/device-operational/customer-connection/access-session/support-ticket/
+  work-order labels, semantic tones, and icon keys shared by admin Jinja, customer portal,
+  billing/support/network APIs, customer mobile, and field mobile
+- `app/services/brand_profiles.py` + `/branding/theme.css` — sole concrete-color
+  owner for primary, secondary, and semantic UI roles; web/Flutter status
+  renderers consume theme tokens and semantic seed inputs rather than local
+  color maps
+- `app/services/field/work_order_status.py` — Persisted work-order vocabulary
+  and canonical open/assignable/terminal sets used by field workflow readers
 - `app/services/typeahead.py` — Typeahead additions
 - `app/services/radius_reject.py` — RADIUS reject handling
 - `app/services/events/handlers/enforcement.py` — Enforcement changes
 - `templates/components/navigation/admin_sidebar.html` — Sidebar links
-- `static/js/dynamic-table-config.js`
+- `static/js/dynamic-table-config.js` — Compatibility client asset; no production
+  template currently mounts it
 
 ---
 

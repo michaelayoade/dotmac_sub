@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../../core/formatters.dart';
 import '../../core/semantic_colors.dart';
 import '../auth/biometric_enrollment_prompt.dart';
-import '../service/connection_status_screen.dart' show connectionVisual;
 import '../../models/project.dart';
 import '../../models/connection_status.dart';
 import '../../models/service_status.dart';
@@ -575,8 +574,8 @@ class ConnectionBanner extends StatelessWidget {
   });
 
   /// The outage-classifier verdict for this customer, when loaded. This is the
-  /// SOURCE OF TRUTH for the displayed state: connected → healthy, trouble →
-  /// amber, outage → red (carrying the classifier's headline/message/advice).
+  /// SOURCE OF TRUTH for the displayed state and customer-safe wording. Its
+  /// status presentation supplies the semantic tone and icon.
   /// Null while it loads or errors, in which case the banner falls back to the
   /// session-derived rendering below so it never shows a blank/spinner.
   final ConnectionStatus? classifier;
@@ -626,32 +625,24 @@ class ConnectionBanner extends StatelessWidget {
     final bool tappable;
 
     final c = classifier;
-    if (c != null && c.state == ConnectionHealth.connected) {
-      // CLASSIFIER (source of truth): healthy. Keep the friendly filled
-      // treatment and enrich the line with the live session detail when we
-      // have it (uptime / IP).
-      bg = scheme.secondaryContainer;
-      fg = scheme.onSecondaryContainer;
-      icon = Icons.wifi;
-      text = _connectedLine();
-      tappable = false;
-    } else if (c != null &&
-        (c.state == ConnectionHealth.trouble ||
-            c.state == ConnectionHealth.outage)) {
-      // CLASSIFIER (source of truth): trouble = amber, outage = red — the same
-      // visual language as the /connection screen (via [connectionVisual]) so
-      // the Home banner can never disagree with it. Under a known area outage
-      // the state is `outage` and the classifier's own message is the
-      // reassuring "we're on it", so the calm wording falls out naturally here.
-      final visual = connectionVisual(context, c.state);
+    if (c != null) {
+      // The classifier owns the state and the backend presentation contract
+      // owns its semantic tone/icon. Raw state is used only for drill-in
+      // behavior and connected-session enrichment.
+      final visual = statusPresentationVisual(context, c.statusPresentation);
       bg = visual.color.withValues(alpha: 0.12);
       fg = visual.color;
       icon = visual.icon;
-      text = c.headline;
-      // `advice` is the ONE action; the server nulls it under an area outage
-      // (this guard is belt-and-suspenders) so the banner never self-blames.
-      subtitle = (c.advice != null && !c.areaOutage) ? c.advice! : c.message;
-      tappable = true;
+      if (c.isConnected) {
+        text = _connectedLine();
+        tappable = false;
+      } else {
+        text = c.headline;
+        // `advice` is the ONE action; the server nulls it under an area outage
+        // (this guard is belt-and-suspenders) so the banner never self-blames.
+        subtitle = (c.advice != null && !c.areaOutage) ? c.advice! : c.message;
+        tappable = true;
+      }
     } else if (!known) {
       // FALLBACK (classifier absent / loading / unknown): the original
       // session-derived rendering, so the banner always shows something sane.
@@ -666,14 +657,6 @@ class ConnectionBanner extends StatelessWidget {
       icon = Icons.wifi;
       text = _connectedLine();
       tappable = false;
-    } else if (c?.areaOutage ?? false) {
-      // A known area outage above this customer — reassure, don't blame their
-      // router. Calm tertiary styling, not alarming red.
-      bg = scheme.tertiaryContainer;
-      fg = scheme.onTertiaryContainer;
-      icon = Icons.cloud_off;
-      text = "Known outage in your area — we're on it";
-      tappable = true;
     } else if (serviceActive) {
       bg = scheme.surfaceContainerHighest;
       fg = scheme.onSurfaceVariant;
@@ -1144,7 +1127,7 @@ class _CurrentServiceCard extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis),
                   ),
-                  StatusChip.forSubscription(s.status),
+                  StatusChip.fromPresentation(s.statusPresentation),
                 ],
               ),
               if (s.planType != null) ...[

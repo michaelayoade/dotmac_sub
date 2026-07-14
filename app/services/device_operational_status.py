@@ -30,12 +30,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+
 
 # Derived UI buckets (keep small — reasons live in `reason`, not extra pills).
-UP = "up"
-DEGRADED = "degraded"
-DOWN = "down"
-MAINTENANCE = "maintenance"
+class DeviceOperationalState(StrEnum):
+    """Authoritative vocabulary for the derived NOC-facing projection."""
+
+    up = "up"
+    degraded = "degraded"
+    down = "down"
+    maintenance = "maintenance"
+
+
+DEVICE_OPERATIONAL_STATE_VALUES = tuple(state.value for state in DeviceOperationalState)
+
+# Compatibility aliases for existing decision and policy callers.
+UP = DeviceOperationalState.up.value
+DEGRADED = DeviceOperationalState.degraded.value
+DOWN = DeviceOperationalState.down.value
+MAINTENANCE = DeviceOperationalState.maintenance.value
 
 # Reuse the customer-facing warmer staleness threshold (selfcare uses the same).
 _WARM_STALE_SECONDS = 600
@@ -50,13 +64,18 @@ class OperationalStatus:
     mismatch_reason: str | None
 
     @property
+    def presentation(self):
+        """Return the shared cross-client semantic presentation contract."""
+        from app.services.status_presentation import (
+            device_operational_status_presentation,
+        )
+
+        return device_operational_status_presentation(self)
+
+    @property
     def label(self) -> str:
-        return {
-            UP: "Up",
-            DEGRADED: "Degraded",
-            DOWN: "Down",
-            MAINTENANCE: "Maintenance",
-        }.get(self.status, self.status.title())
+        """Compatibility accessor; semantic labels are owned by presentation."""
+        return self.presentation.label
 
     @property
     def alarming(self) -> bool:
@@ -335,7 +354,7 @@ def mismatch_worklist(
                 "mgmt_ip": getattr(d, "mgmt_ip", None),
                 "admin": op.admin_status,
                 "operational": op.status,
-                "operational_label": op.label,
+                "status_presentation": op.presentation,
             }
         )
 
@@ -379,7 +398,7 @@ def mismatch_worklist(
 
 
 def annotate_operational_status(devices, *, now: datetime | None = None) -> None:
-    """Attach a transient ``.operational`` to each device for templates.
+    """Attach the transient operational and presentation projections.
 
     Computes warmer staleness + monitoring coverage once for the whole batch.
     Safe on ORM instances and on stub objects (attributes read defensively).
@@ -393,15 +412,25 @@ def annotate_operational_status(devices, *, now: datetime | None = None) -> None
         coverage = None
     for device in devices:
         try:
-            device.operational = derive_operational_status(
+            operational = derive_operational_status(
                 device, warm_stale=warm_stale, coverage=coverage
             )
         except Exception:
             # Never let status derivation break a page render.
-            device.operational = OperationalStatus(
+            operational = OperationalStatus(
                 DOWN,
                 "derivation_error_retry_pending",
                 _enum_value(getattr(device, "status", None)),
                 False,
                 None,
             )
+        _attach_operational_projection(device, operational)
+
+
+def _attach_operational_projection(device, operational: OperationalStatus) -> None:
+    """Expose one derived state consistently to Jinja and API serializers."""
+    device.operational = operational
+    device.operational_status = operational.status
+    device.operational_reason = operational.reason
+    device.operational_retry_pending = operational.retry_pending
+    device.status_presentation = operational.presentation

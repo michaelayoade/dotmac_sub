@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.status_presentation import StatusPresentation
+
 
 class DeviceTokenRegister(BaseModel):
     platform: str = Field(min_length=1, max_length=20)
@@ -45,6 +47,7 @@ class FieldJobSummary(BaseModel):
     title: str
     description: str | None = None
     status: str
+    status_presentation: StatusPresentation
     priority: str | None = None
     work_type: str | None = None
     scheduled_start: datetime | None = None
@@ -639,6 +642,7 @@ class FieldMapSearchResult(BaseModel):
     latitude: float
     longitude: float
     status: str | None = None
+    status_presentation: StatusPresentation | None = None
     address_text: str | None = None
 
 
@@ -750,6 +754,7 @@ class FieldManagerActiveWorkOrder(BaseModel):
     id: str
     title: str
     status: str
+    status_presentation: StatusPresentation
 
 
 class FieldManagerTechnician(BaseModel):
@@ -784,6 +789,7 @@ class FieldManagerJob(BaseModel):
     title: str
     description: str | None = None
     status: str
+    status_presentation: StatusPresentation
     priority: str | None = None
     work_type: str | None = None
     scheduled_start: datetime | None = None

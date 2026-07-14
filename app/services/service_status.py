@@ -44,6 +44,7 @@ from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.collections import has_overdue_balance
 from app.services.common import coerce_uuid
 from app.services.service_entitlements import current_prepaid_entitlement_end
+from app.services.status_presentation import subscription_status_presentation
 
 # Statuses the customer still has an operational relationship with (mirrors the
 # mobile `currentStatuses`); terminal/historical ones are excluded entirely.
@@ -272,6 +273,7 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
                 subscription_id=s.id,
                 offer_name=s.offer.name if s.offer else None,
                 status=s.status.value,
+                status_presentation=subscription_status_presentation(s.status),
                 billing_mode=(s.billing_mode or account_mode).value,
                 usable=usable,
                 expires_at=expires_at,

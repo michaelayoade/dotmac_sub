@@ -1,81 +1,102 @@
 import 'package:flutter/material.dart';
 
 import '../core/semantic_colors.dart';
+import '../models/status_presentation.dart';
 
-/// Small coloured label used for invoice/ticket/subscription statuses.
+/// Platform-native rendering for the server's transport-neutral semantics.
+({Color color, IconData icon}) statusPresentationVisual(
+  BuildContext context,
+  StatusPresentation presentation,
+) {
+  final semantic = context.semantic;
+  final color = switch (presentation.tone) {
+    StatusTone.positive => semantic.success,
+    StatusTone.negative => semantic.negative,
+    StatusTone.warning => semantic.warning,
+    StatusTone.info => semantic.info,
+    StatusTone.neutral => semantic.neutral,
+  };
+  return (
+    color: color,
+    icon: _statusIcon(presentation.icon) ?? Icons.info_outline,
+  );
+}
+
+IconData? _statusIcon(String? icon) => switch (icon) {
+      'check' => Icons.check_circle_outline,
+      'info' => Icons.info_outline,
+      'clock' => Icons.schedule,
+      'alert' => Icons.warning_amber_rounded,
+      'x' => Icons.cancel_outlined,
+      'minus' => Icons.remove_circle_outline,
+      'archive' => Icons.archive_outlined,
+      _ => null,
+    };
+
+/// Small semantic status label rendered from server-owned presentation data.
 class StatusChip extends StatelessWidget {
-  const StatusChip(this.label, {super.key, this.tone = StatusTone.neutral});
+  const StatusChip(
+    this.label, {
+    super.key,
+    this.tone = StatusTone.neutral,
+    this.icon,
+  });
 
   final String label;
   final StatusTone tone;
+  final String? icon;
 
-  factory StatusChip.forInvoice(String status) {
-    final tone = switch (status) {
-      'paid' => StatusTone.positive,
-      'overdue' || 'void' => StatusTone.negative,
-      'issued' || 'open' => StatusTone.warning,
-      _ => StatusTone.neutral,
-    };
-    return StatusChip(status, tone: tone);
-  }
-
-  factory StatusChip.forTicket(String status) {
-    final tone = switch (status) {
-      'resolved' || 'closed' => StatusTone.positive,
-      'open' || 'new' => StatusTone.warning,
-      'pending' || 'on_hold' => StatusTone.neutral,
-      _ => StatusTone.neutral,
-    };
-    return StatusChip(status, tone: tone);
-  }
-
-  factory StatusChip.forSubscription(String status) {
-    final tone = switch (status) {
-      'active' => StatusTone.positive,
-      'suspended' || 'canceled' => StatusTone.negative,
-      'pending' => StatusTone.warning,
-      _ => StatusTone.neutral,
-    };
-    return StatusChip(status, tone: tone);
-  }
+  factory StatusChip.fromPresentation(StatusPresentation presentation) =>
+      StatusChip(
+        presentation.label,
+        tone: presentation.tone,
+        icon: presentation.icon,
+      );
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final semantic = context.semantic;
-    // Tonal pill: a translucent fill of the foreground hue. Because the
-    // semantic tokens (and colorScheme.error) already adapt to brightness,
-    // this reads correctly in both light and dark mode.
+    // Tonal pill: every hue is resolved by the branding theme extension.
     final (Color bg, Color fg) = switch (tone) {
       StatusTone.positive => (
           semantic.success.withValues(alpha: 0.15),
           semantic.success
         ),
       StatusTone.negative => (
-          scheme.error.withValues(alpha: 0.15),
-          scheme.error
+          semantic.negative.withValues(alpha: 0.15),
+          semantic.negative
         ),
       StatusTone.warning => (
           semantic.warning.withValues(alpha: 0.15),
           semantic.warning
         ),
+      StatusTone.info => (semantic.info.withValues(alpha: 0.15), semantic.info),
       StatusTone.neutral => (
-          scheme.surfaceContainerHighest,
-          scheme.onSurfaceVariant
+          semantic.neutral.withValues(alpha: 0.15),
+          semantic.neutral
         ),
     };
+    final iconData = _statusIcon(icon);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Text(
-        label.replaceAll('_', ' '),
-        style: TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w600),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (iconData != null) ...[
+            Icon(iconData, size: 13, color: fg),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label.replaceAll('_', ' '),
+            style:
+                TextStyle(color: fg, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ],
       ),
     );
   }
 }
-
-enum StatusTone { positive, negative, warning, neutral }

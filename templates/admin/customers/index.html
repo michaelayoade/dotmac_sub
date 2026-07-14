@@ -112,7 +112,9 @@
             hx-push-url="true"
             hx-sync="this:replace"
         >
-            <input type="hidden" name="page" value="{{ page or 1 }}" data-page-input />
+            <input type="hidden" name="page" value="{{ list_query.page }}" data-page-input />
+            <input type="hidden" name="sort" value="{{ list_query.sort_by }}" data-sort-input />
+            <input type="hidden" name="dir" value="{{ list_query.sort_dir }}" data-sort-direction-input />
             <div class="relative overflow-visible bg-gradient-to-br from-amber-50 via-white to-orange-50/80 p-4 dark:[background-image:none] dark:bg-slate-950 sm:p-5">
                 <div class="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-gradient-to-br from-amber-400/15 to-orange-400/10 blur-2xl dark:hidden"></div>
                 <div class="pointer-events-none absolute -bottom-10 left-8 h-24 w-24 rounded-full bg-gradient-to-tr from-orange-300/10 to-transparent blur-2xl dark:hidden"></div>
@@ -308,7 +310,7 @@
                                 {"value": "50", "label": "50 rows"},
                                 {"value": "100", "label": "100 rows"}
                             ] %}
-                            {{ filter_select("per_page", per_page_options, value=per_page|string, label="Show", color="amber", attrs=live_filter_attrs) }}
+                            {{ filter_select("per_page", per_page_options, value=list_query.per_page|string, label="Show", color="primary", attrs=live_filter_attrs) }}
                         </div>
                     </div>
                     <div class="mt-4 flex flex-col gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-end dark:border-slate-600/80">
@@ -867,6 +869,16 @@ function customersPage() {
             if (pageInput && stateSource.dataset.currentPage) {
                 pageInput.value = stateSource.dataset.currentPage;
             }
+
+            const sortInput = document.querySelector('[data-sort-input]');
+            if (sortInput && stateSource.dataset.currentSort) {
+                sortInput.value = stateSource.dataset.currentSort;
+            }
+
+            const sortDirectionInput = document.querySelector('[data-sort-direction-input]');
+            if (sortDirectionInput && stateSource.dataset.currentSortDirection) {
+                sortDirectionInput.value = stateSource.dataset.currentSortDirection;
+            }
         },
 
         syncSelectionFromDom() {
@@ -1413,7 +1425,6 @@ function customersPage() {
     };
 }
 </script>
-<script src="/static/js/dynamic-table-config.js"></script>
 
 {{ animation_styles() }}
 {% endblock %}

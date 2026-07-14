@@ -66,6 +66,12 @@ def test_postpaid_active_no_overdue_is_ok_with_no_expiry(
     svc = resp.services[0]
     assert svc.usable is True
     assert svc.reason == "ok"
+    assert svc.status_presentation.model_dump(mode="json") == {
+        "value": "active",
+        "label": "Active",
+        "tone": "positive",
+        "icon": "check",
+    }
     # A stale next_billing_at must NOT become an expiry for postpaid.
     assert svc.expires_at is None
     assert svc.next_charge_at == subscription.next_billing_at
@@ -396,6 +402,12 @@ def test_overdue_lock_offers_exact_payment_that_restores_service(
     assert "NGN 6,500.00" in action.message
     assert resp.primary_action == action
     payload = resp.model_dump(mode="json")
+    assert payload["services"][0]["status_presentation"] == {
+        "value": "suspended",
+        "label": "Suspended",
+        "tone": "warning",
+        "icon": "alert",
+    }
     assert payload["primary_action"]["kind"] == "pay_invoices"
     assert payload["primary_action"]["amount"] == "6500.00"
     assert payload["primary_action"]["restores_service"] is True

@@ -286,6 +286,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
     from app.models.network import FdhCabinet
     from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.operational_escalation_delivery import delivery_audit_for_entity
+    from app.services.status_presentation import outage_status_presentation
     from app.services.topology.affected import (
         list_basestations,
         list_fdh_cabinets,
@@ -322,6 +323,7 @@ def outages_console(request: Request, db: Session = Depends(get_db)):
                 "incident": inc,
                 "target": target,
                 "stale": is_stale_open(inc),
+                "status_presentation": outage_status_presentation(inc.status),
                 "delivery_audit": delivery_audit_for_entity(
                     db,
                     entity_type="outage",
@@ -418,6 +420,7 @@ def detected_outages_console(
     import uuid as _uuid
 
     from app.models.network_monitoring import NetworkDevice, PopSite
+    from app.services.status_presentation import outage_status_presentation
     from app.services.topology.outage import (
         list_classifier_incidents,
         mttr_so_far_seconds,
@@ -447,6 +450,7 @@ def detected_outages_console(
             {
                 "incident": inc,
                 "state": inc.status,
+                "status_presentation": outage_status_presentation(inc.status),
                 "detection_source": inc.detection_source,
                 "affected_count": inc.affected_count,
                 "confidence": inc.confidence,
@@ -549,6 +553,7 @@ def detected_outage_notify_preview(
     Read-only: shows who *would* be emailed (area vs per-customer, opt-out
     suppressed, qualifies/debounced) and the current OUTAGE_NOTIFY_ENABLED
     state. Never sends — the confirm POST is the only dispatch path."""
+    from app.services.status_presentation import outage_status_presentation
     from app.services.topology.outage_notifications import (
         plan_outage_notifications,
         recent_dispatches,
@@ -559,6 +564,10 @@ def detected_outage_notify_preview(
         db, incident_id
     )
     context["incident"] = incident
+    if incident is not None:
+        context["incident_status_presentation"] = outage_status_presentation(
+            incident.status
+        )
     context["boundary"] = boundary
     context["incident_id"] = str(incident.id) if incident is not None else incident_id
     if incident is None or boundary is None:
@@ -589,6 +598,7 @@ def detected_outage_notify_send(
     stray navigation never sends) and passes the operator's ``actor_id`` to the
     hard-gated dispatcher, which itself no-ops unless OUTAGE_NOTIFY_ENABLED is
     on. COMMITS the session so audit rows + the persisted debounce survive."""
+    from app.services.status_presentation import outage_status_presentation
     from app.services.topology.outage_notifications import (
         dispatch_outage_notifications,
         plan_outage_notifications,
@@ -603,6 +613,9 @@ def detected_outage_notify_send(
 
     context = _base_context(request, db, active_page="monitoring")
     context["incident"] = incident
+    context["incident_status_presentation"] = outage_status_presentation(
+        incident.status
+    )
     context["boundary"] = boundary
     context["incident_id"] = str(incident.id)
     if confirm != "send":

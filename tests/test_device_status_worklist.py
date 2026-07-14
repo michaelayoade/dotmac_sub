@@ -36,6 +36,13 @@ def test_worklist_groups_mismatches_by_reason_with_owner(db_session):
     assert by_reason["admin_online_observed_down"]["owner"] == "Field ops"
     assert by_reason["admin_offline_observed_up"]["owner"] == "Inventory hygiene"
     assert by_reason["active_retry_pending"]["owner"] == "Net-eng / VPN"
+    retry_row = by_reason["active_retry_pending"]["rows"][0]
+    assert retry_row["status_presentation"].model_dump(mode="json") == {
+        "value": "down",
+        "label": "Down",
+        "tone": "warning",
+        "icon": "clock",
+    }
     # the agreeing device is absent
     names = {r["name"] for g in wl["groups"] for r in g["rows"]}
     assert "R4" not in names

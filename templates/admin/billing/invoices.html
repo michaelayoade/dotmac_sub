@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge, empty_state, action_button, row_action, icon_plus, icon_invoice, icon_view, icon_edit %}
+{% from "components/ui/macros.html" import status_presentation_badge, empty_state, action_button, row_action, icon_plus, icon_invoice, icon_view, icon_edit %}
 
 {% block title %}Invoices - Admin{% endblock %}
 
@@ -195,7 +195,6 @@
                     {% set status = invoice.status | default('draft') %}
                     {% set status_val = status.value if status is not string else status %}
                     {% set invoice_currency = invoice.currency or 'NGN' %}
-                    {% set status_map = {'paid': 'paid', 'issued': 'info', 'partially_paid': 'warning', 'overdue': 'overdue', 'void': 'inactive', 'draft': 'draft'} %}
                     <tr class="transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/40"
                         :class="{ 'bg-emerald-50/30 dark:bg-emerald-900/5': selectedIds.includes('{{ invoice.id }}') }">
                         <td class="whitespace-nowrap px-3 py-2.5">
@@ -209,9 +208,6 @@
                             <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400 transition-colors">
                                 {{ invoice.invoice_number | default('INV-' ~ (invoice.id|string)[:8]) }}
                             </a>
-                            {% if status_val == 'draft' %}
-                            <p class="text-xs text-slate-500 dark:text-slate-400">Draft</p>
-                            {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5">
                             {% if invoice.account %}
@@ -234,15 +230,14 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5">
-                            {% set badge_variant = status_map.get(status_val, 'default') %}
-                            {{ status_badge(status_val|replace('_', ' ')|title, badge_variant, size="sm") }}
+                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5">
                             <span class="text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else '—' }}</span>
                         </td>
                         <td class="whitespace-nowrap px-3 py-2.5">
                             {% if invoice.due_at %}
-                            <span class="text-sm {% if status_val == 'overdue' %}text-red-600 dark:text-red-400 font-semibold{% else %}text-slate-600 dark:text-slate-400{% endif %}">
+                            <span class="text-sm text-slate-600 dark:text-slate-400">
                                 {{ invoice.due_at.strftime('%b %d, %Y') }}
                             </span>
                             {% else %}

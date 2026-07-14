@@ -34,6 +34,7 @@ from app.services.customer_portal_context import (
     get_outstanding_balance,
 )
 from app.services.customer_portal_flow_common import _compute_total_pages
+from app.services.status_presentation import invoice_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +194,7 @@ def get_billing_page(
         "prepaid_balance": None,
         "ledger_entries": [],
         "billing_activity": [],
+        "invoice_status_presentations": {},
     }
     if not account_id_str:
         return empty_result
@@ -244,6 +246,10 @@ def get_billing_page(
         "prepaid_balance": prepaid_balance,
         "ledger_entries": ledger_entries,
         "billing_activity": billing_activity,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        },
     }
 
 
@@ -518,6 +524,7 @@ def get_invoice_detail(
 
     return {
         "invoice": invoice,
+        "invoice_status_presentation": invoice_status_presentation(invoice.status),
         "billing_name": billing_contact["billing_name"],
         "billing_email": billing_contact["billing_email"],
     }

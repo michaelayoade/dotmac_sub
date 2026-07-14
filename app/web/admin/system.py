@@ -98,6 +98,11 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.brand_theme import (
+    DEFAULT_HEX,
+    DEFAULT_SECONDARY_HEX,
+    is_accessible_semantic_color,
+)
 from app.services.common import coerce_uuid
 from app.tasks.exports import run_export_job
 from app.tasks.gis import run_batch_geocode_job
@@ -3370,6 +3375,11 @@ def settings_branding_update(
     favicon_file: UploadFile | None = File(None),
     brand_primary_color: str | None = Form(None),
     brand_secondary_color: str | None = Form(None),
+    brand_semantic_positive_color: str | None = Form(None),
+    brand_semantic_info_color: str | None = Form(None),
+    brand_semantic_warning_color: str | None = Form(None),
+    brand_semantic_negative_color: str | None = Form(None),
+    brand_semantic_neutral_color: str | None = Form(None),
     login_hero_customer_url: str | None = Form(None),
     login_hero_reseller_url: str | None = Form(None),
     login_hero_admin_url: str | None = Form(None),
@@ -3551,7 +3561,7 @@ def settings_branding_update(
         if color_candidate:
             if not re.fullmatch(r"#?[0-9a-fA-F]{6}", color_candidate):
                 raise ValueError(
-                    "Brand colour must be a 6-digit hex value, e.g. #206a07."
+                    f"Brand colour must be a 6-digit hex value, e.g. {DEFAULT_HEX}."
                 )
             normalised = color_candidate.lstrip("#").lower()
             _persist_setting("brand_primary_color", f"#{normalised}")
@@ -3560,10 +3570,37 @@ def settings_branding_update(
         if secondary_candidate:
             if not re.fullmatch(r"#?[0-9a-fA-F]{6}", secondary_candidate):
                 raise ValueError(
-                    "Brand colour must be a 6-digit hex value, e.g. #06b6d4."
+                    "Brand colour must be a 6-digit hex value, "
+                    f"e.g. {DEFAULT_SECONDARY_HEX}."
                 )
             normalised_secondary = secondary_candidate.lstrip("#").lower()
             _persist_setting("brand_secondary_color", f"#{normalised_secondary}")
+
+        semantic_candidates = {
+            "positive": brand_semantic_positive_color,
+            "info": brand_semantic_info_color,
+            "warning": brand_semantic_warning_color,
+            "negative": brand_semantic_negative_color,
+            "neutral": brand_semantic_neutral_color,
+        }
+        for tone, raw_color in semantic_candidates.items():
+            candidate = (raw_color or "").strip()
+            if not candidate:
+                continue
+            if not re.fullmatch(r"#?[0-9a-fA-F]{6}", candidate):
+                raise ValueError(
+                    f"{tone.title()} semantic colour must be a 6-digit hex value."
+                )
+            normalised_semantic = f"#{candidate.lstrip('#').lower()}"
+            if not is_accessible_semantic_color(normalised_semantic):
+                raise ValueError(
+                    f"{tone.title()} semantic colour must meet WCAG AA contrast "
+                    "in light and dark themes."
+                )
+            _persist_setting(
+                f"brand_semantic_{tone}_color",
+                normalised_semantic,
+            )
 
         from app.services.brand_profiles import (
             sync_platform_brand_from_legacy_settings_committed,
@@ -3577,6 +3614,7 @@ def settings_branding_update(
                 "favicon_url",
                 "primary_color",
                 "secondary_color",
+                "semantic_colors",
             },
         )
 
@@ -4353,8 +4391,6 @@ def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
             db
         ),
         "sla_policy": support_ticket_settings_service.sla_policy(db),
-        "status_colors": support_ticket_settings_service.status_color_options(db),
-        "status_color_variants": support_ticket_settings_service.STATUS_COLOR_VARIANTS,
         "staff_options": staff_options,
         "assignment_rules": support_ticket_settings_service.list_assignment_rules(db),
         "assignment_strategies": ["round_robin", "least_loaded"],
@@ -4406,8 +4442,6 @@ def ticket_settings_update(
     sla_response_hours = form.getlist("sla_response_hours")
     sla_resolution_hours = form.getlist("sla_resolution_hours")
     sla_aging_hours = form.getlist("sla_aging_hours")
-    status_color_statuses = form.getlist("status_color_statuses")
-    status_color_values = form.getlist("status_color_values")
     errors: list[str] = []
     try:
         support_ticket_settings_service.update_options(
@@ -4432,8 +4466,6 @@ def ticket_settings_update(
             sla_response_hours=sla_response_hours,
             sla_resolution_hours=sla_resolution_hours,
             sla_aging_hours=sla_aging_hours,
-            status_color_statuses=status_color_statuses,
-            status_color_values=status_color_values,
         )
         return RedirectResponse(
             url="/admin/system/ticket-settings?saved=1", status_code=303
@@ -4476,10 +4508,6 @@ def ticket_settings_update(
                     db
                 ),
                 "sla_policy": support_ticket_settings_service.sla_policy(db),
-                "status_colors": support_ticket_settings_service.status_color_options(
-                    db
-                ),
-                "status_color_variants": support_ticket_settings_service.STATUS_COLOR_VARIANTS,
                 "staff_options": support_service.list_assignment_people(db),
                 "assignment_rules": support_ticket_settings_service.list_assignment_rules(
                     db

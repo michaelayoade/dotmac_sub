@@ -26,6 +26,7 @@ from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
+from app.services.status_presentation import payment_status_presentation
 
 logger = logging.getLogger(__name__)
 MANUAL_PAYMENT_IDEMPOTENCY_SCOPE = "admin_manual_payment"
@@ -200,6 +201,7 @@ def build_payment_detail_data(
         return None
     return {
         "payment": payment,
+        "payment_status_presentation": payment_status_presentation(payment.status),
         "primary_invoice_id": payment_primary_invoice_id(payment),
         "active_page": "payments",
         "active_menu": "billing",
@@ -768,6 +770,17 @@ def build_payments_list_data(
 
     return {
         "payments": payments,
+        "payment_status_presentations": {
+            str(payment.id): payment_status_presentation(payment.status)
+            for payment in payments
+        },
+        "payment_status_options": [
+            {
+                "value": payment_status.value,
+                "label": payment_status_presentation(payment_status).label,
+            }
+            for payment_status in PaymentStatus
+        ],
         "page": page,
         "per_page": per_page,
         "total": total,

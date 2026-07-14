@@ -9,7 +9,6 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.services.branding_config import get_brand
-from app.services.email_template import DOTMAC_GREEN
 from app.tasks.notifications import _deliver_notification_queue
 
 
@@ -119,14 +118,11 @@ def test_deliver_notification_queue_brands_plain_text_email(db_session, monkeypa
     assert email.status == NotificationStatus.delivered
     # Plain text is wrapped in the branded template with a text/plain part.
     assert "<!DOCTYPE html>" in captured["body_html"]
-    # The accent comes from the brand config, not a hardcoded palette -- that is
-    # the whole point of the branding SOT, and what makes the product
-    # white-labellable. Assert against the resolved brand rather than a literal
-    # hex, so a rebrand cannot silently diverge from what we actually send.
-    assert get_brand()["primary_color"] in captured["body_html"]
-    # secondary_color has no brand key yet, so it still falls back to the
-    # built-in constant.
-    assert DOTMAC_GREEN in captured["body_html"]
+    # Identity accents come from the branding owner. Assert against the
+    # resolved values so a rebrand cannot diverge from outgoing email.
+    brand = get_brand()
+    assert brand["primary_color"] in captured["body_html"]
+    assert brand["secondary_color"] in captured["body_html"]
     assert "/static/branding/favicon/icon-192.png" in captured["body_html"]
     assert "static/illustrations/email-header.png" not in captured["body_html"]
     assert "Your invoice is overdue.<br>Please pay soon." in captured["body_html"]

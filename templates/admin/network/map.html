@@ -17,11 +17,11 @@
         border-radius: 0.5rem;
     }
     .dark .leaflet-popup-content-wrapper {
-        background: #1e293b;
-        color: #f1f5f9;
+        background: var(--surface-secondary);
+        color: var(--text-primary);
     }
     .dark .leaflet-popup-tip {
-        background: #1e293b;
+        background: var(--surface-secondary);
     }
     .map-popup-title {
         font-weight: 600;
@@ -43,7 +43,7 @@
         display: inline-block;
         margin-top: 0.5rem;
         font-size: 0.875rem;
-        color: #0891b2;
+        color: var(--color-accent-600);
     }
     .legend-item {
         display: flex;
@@ -82,8 +82,8 @@
         overflow-y: auto;
     }
     .dark .asset-detail-panel {
-        background: #1e293b;
-        color: #f1f5f9;
+        background: var(--surface-secondary);
+        color: var(--text-primary);
     }
     .asset-detail-panel.hidden {
         display: none;
@@ -116,20 +116,20 @@
         display: flex;
         justify-content: space-between;
         padding: 8px 0;
-        border-bottom: 1px solid #e2e8f0;
+        border-bottom: 1px solid var(--border-default);
     }
     .dark .asset-detail-row {
-        border-bottom-color: #334155;
+        border-bottom-color: var(--border-default);
     }
     .asset-detail-row:last-child {
         border-bottom: none;
     }
     .asset-detail-label {
-        color: #64748b;
+        color: var(--text-tertiary);
         font-size: 0.875rem;
     }
     .dark .asset-detail-label {
-        color: #94a3b8;
+        color: var(--color-slate-400);
     }
     .asset-detail-value {
         font-weight: 500;
@@ -155,10 +155,10 @@
         color: white;
     }
     .marker-cluster-customer {
-        background: rgba(34, 197, 94, 0.4);
+        background: color-mix(in srgb, var(--color-semantic-positive-600) 40%, transparent);
     }
     .marker-cluster-customer div {
-        background: #22c55e;
+        background: var(--color-semantic-positive-600);
     }
     /* Search box */
     .map-search {
@@ -179,8 +179,8 @@
         font-size: 14px;
     }
     .dark .map-search input {
-        background: #1e293b;
-        color: #f1f5f9;
+        background: var(--surface-secondary);
+        color: var(--text-primary);
     }
     .map-search-clear {
         position: absolute;
@@ -191,11 +191,11 @@
         border: none;
         cursor: pointer;
         padding: 4px;
-        color: #94a3b8;
+        color: var(--color-slate-400);
         display: none;
     }
     .map-search-clear:hover {
-        color: #64748b;
+        color: var(--text-tertiary);
     }
     .map-search-clear.visible {
         display: block;
@@ -217,7 +217,7 @@
         display: block;
     }
     .dark .search-results {
-        background: #1e293b;
+        background: var(--surface-secondary);
     }
     .search-result-item {
         padding: 10px 12px;
@@ -225,21 +225,21 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        border-bottom: 1px solid #e2e8f0;
+        border-bottom: 1px solid var(--border-default);
     }
     .dark .search-result-item {
-        border-bottom-color: #334155;
+        border-bottom-color: var(--border-default);
     }
     .search-result-item:last-child {
         border-bottom: none;
     }
     .search-result-item:hover,
     .search-result-item.selected {
-        background: #f1f5f9;
+        background: var(--surface-tertiary);
     }
     .dark .search-result-item:hover,
     .dark .search-result-item.selected {
-        background: #334155;
+        background: var(--surface-tertiary);
     }
     .search-result-icon {
         width: 28px;
@@ -257,51 +257,51 @@
     .search-result-name {
         font-weight: 500;
         font-size: 14px;
-        color: #1e293b;
+        color: var(--text-primary);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
     }
     .dark .search-result-name {
-        color: #f1f5f9;
+        color: var(--text-primary);
     }
     .search-result-meta {
         font-size: 12px;
-        color: #64748b;
+        color: var(--text-tertiary);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
     }
     .dark .search-result-meta {
-        color: #94a3b8;
+        color: var(--color-slate-400);
     }
     .search-result-type {
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        color: #94a3b8;
+        color: var(--color-slate-400);
         flex-shrink: 0;
     }
     .search-no-results {
         padding: 16px 12px;
         text-align: center;
-        color: #64748b;
+        color: var(--text-tertiary);
         font-size: 14px;
     }
     .dark .search-no-results {
-        color: #94a3b8;
+        color: var(--color-slate-400);
     }
     .search-result-count {
         padding: 8px 12px;
         font-size: 12px;
-        color: #64748b;
-        background: #f8fafc;
-        border-bottom: 1px solid #e2e8f0;
+        color: var(--text-tertiary);
+        background: var(--surface-secondary);
+        border-bottom: 1px solid var(--border-default);
     }
     .dark .search-result-count {
-        color: #94a3b8;
-        background: #0f172a;
-        border-bottom-color: #334155;
+        color: var(--color-slate-400);
+        background: var(--surface-primary);
+        border-bottom-color: var(--border-default);
     }
 </style>
 {% endblock %}
@@ -408,33 +408,43 @@
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.network_devices }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="text-green-600 dark:text-green-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500"></span>Device Online</span>
-                        <span class="font-medium text-green-600 dark:text-green-400">{{ stats.network_devices_online }}</span>
+                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>Device Up</span>
+                        <span class="status-foreground status-tone-positive font-medium">{{ stats.network_devices_online }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="text-red-600 dark:text-red-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span>Device Offline</span>
-                        <span class="font-medium text-red-600 dark:text-red-400">{{ stats.network_devices_offline }}</span>
+                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>Device Down</span>
+                        <span class="status-foreground status-tone-negative font-medium">{{ stats.network_devices_offline }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="text-amber-600 dark:text-amber-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span>Device Degraded</span>
-                        <span class="font-medium text-amber-600 dark:text-amber-400">{{ stats.network_devices_degraded }}</span>
+                        <span class="status-foreground status-tone-warning flex items-center gap-1"><span class="status-tone-dot status-tone-dot-warning h-2 w-2 rounded-full"></span>Device Degraded</span>
+                        <span class="status-foreground status-tone-warning font-medium">{{ stats.network_devices_degraded }}</span>
                     </div>
+                    <div class="flex justify-between pl-3">
+                        <span class="status-foreground status-tone-neutral flex items-center gap-1"><span class="status-tone-dot status-tone-dot-neutral h-2 w-2 rounded-full"></span>Maintenance</span>
+                        <span class="status-foreground status-tone-neutral font-medium">{{ stats.network_devices_maintenance }}</span>
+                    </div>
+                    {% if stats.network_devices_retry_pending %}
+                    <div class="flex justify-between pl-3">
+                        <span class="status-foreground status-tone-warning">Refresh pending</span>
+                        <span class="status-foreground status-tone-warning font-medium">{{ stats.network_devices_retry_pending }}</span>
+                    </div>
+                    {% endif %}
                     <div class="flex justify-between">
                         <span class="text-slate-500 dark:text-slate-400">ONT Units (GPS)</span>
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.onts }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="text-cyan-600 dark:text-cyan-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-cyan-500"></span>ONT Online</span>
-                        <span class="font-medium text-cyan-600 dark:text-cyan-400">{{ stats.onts_online }}</span>
+                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>ONT Online</span>
+                        <span class="status-foreground status-tone-positive font-medium">{{ stats.onts_online }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="text-red-600 dark:text-red-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span>ONT Offline</span>
-                        <span class="font-medium text-red-600 dark:text-red-400">{{ stats.onts_offline }}</span>
+                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>ONT Offline</span>
+                        <span class="status-foreground status-tone-negative font-medium">{{ stats.onts_offline }}</span>
                     </div>
                     {% if stats.onts_warning %}
                     <div class="flex justify-between pl-3">
-                        <span class="text-amber-600 dark:text-amber-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span>ONT Low Signal</span>
-                        <span class="font-medium text-amber-600 dark:text-amber-400">{{ stats.onts_warning }}</span>
+                        <span class="status-foreground status-tone-warning flex items-center gap-1"><span class="status-tone-dot status-tone-dot-warning h-2 w-2 rounded-full"></span>ONT Low Signal</span>
+                        <span class="status-foreground status-tone-warning font-medium">{{ stats.onts_warning }}</span>
                     </div>
                     {% endif %}
                     <hr class="border-slate-200 dark:border-slate-700">
@@ -443,12 +453,12 @@
                         <span class="font-medium text-slate-900 dark:text-white">{{ stats.customers }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="text-green-600 dark:text-green-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-green-500"></span>Online</span>
-                        <span class="font-medium text-green-600 dark:text-green-400">{{ stats.customers_online }}</span>
+                        <span class="status-foreground status-tone-positive flex items-center gap-1"><span class="status-tone-dot status-tone-dot-positive h-2 w-2 rounded-full"></span>Online</span>
+                        <span class="status-foreground status-tone-positive font-medium">{{ stats.customers_online }}</span>
                     </div>
                     <div class="flex justify-between pl-3">
-                        <span class="text-red-600 dark:text-red-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span>Offline</span>
-                        <span class="font-medium text-red-600 dark:text-red-400">{{ stats.customers_offline }}</span>
+                        <span class="status-foreground status-tone-negative flex items-center gap-1"><span class="status-tone-dot status-tone-dot-negative h-2 w-2 rounded-full"></span>Offline</span>
+                        <span class="status-foreground status-tone-negative font-medium">{{ stats.customers_offline }}</span>
                     </div>
                     {% if customer_map_count is defined and customer_count is defined and customer_map_count < customer_count %}
                     <div class="mt-2 text-xs text-slate-500 dark:text-slate-400">
@@ -489,31 +499,31 @@
                         <span class="text-sm text-slate-700 dark:text-slate-300">Access Point</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-color bg-green-600">
+                        <div class="legend-color status-tone-dot status-tone-dot-positive">
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">Network Device (Online)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-color bg-red-600">
+                        <div class="legend-color status-tone-dot status-tone-dot-negative">
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">Network Device (Offline)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-color bg-amber-500">
+                        <div class="legend-color status-tone-dot status-tone-dot-warning">
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">Network Device (Degraded)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-color bg-cyan-500">
+                        <div class="legend-color status-tone-dot status-tone-dot-positive">
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="2"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">ONT (Online)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-color bg-amber-500">
+                        <div class="legend-color status-tone-dot status-tone-dot-warning">
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="2"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">ONT (Signal Warning)</span>
@@ -525,13 +535,13 @@
                         <span class="text-sm text-slate-700 dark:text-slate-300">Survey Point</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-color bg-green-500">
+                        <div class="legend-color status-tone-dot status-tone-dot-positive">
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">Customer (Online)</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-color bg-red-500">
+                        <div class="legend-color status-tone-dot status-tone-dot-negative">
                             <svg class="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>
                         </div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">Customer (Offline)</span>
@@ -551,15 +561,15 @@
                     </div>
                     <hr class="border-slate-200 dark:border-slate-700 my-2">
                     <div class="legend-item">
-                        <div class="legend-line" style="height:0;border-top:2px dashed #64748b"></div>
+                        <div class="legend-line" style="height:0;border-top:2px dashed var(--color-semantic-neutral-600)"></div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">8-core Fiber</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-line" style="height:0;border-top:2px dotted #64748b"></div>
+                        <div class="legend-line" style="height:0;border-top:2px dotted var(--color-semantic-neutral-600)"></div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">12-core Fiber</span>
                     </div>
                     <div class="legend-item">
-                        <div class="legend-line" style="height:4px;background:#64748b"></div>
+                        <div class="legend-line" style="height:4px;background:var(--color-semantic-neutral-600)"></div>
                         <span class="text-sm text-slate-700 dark:text-slate-300">48-core Fiber</span>
                     </div>
                 </div>
@@ -702,94 +712,106 @@
         drop: L.layerGroup().addTo(map)
     };
 
+    const semanticTones = new Set(['positive', 'info', 'warning', 'negative', 'neutral']);
+    const semanticTone = tone => semanticTones.has(tone) ? tone : 'neutral';
+    const semanticToneColor = tone =>
+        `var(--color-semantic-${semanticTone(tone)}-600)`;
+
     // Custom icons
     const icons = {
         pop_site: L.divIcon({
-            html: '<div style="background:#8b5cf6;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"><svg style="width:16px;height:16px;color:white" fill="currentColor" viewBox="0 0 20 20"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg></div>',
+            html: '<div style="background:var(--color-data-1);width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"><svg style="width:16px;height:16px;color:white" fill="currentColor" viewBox="0 0 20 20"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg></div>',
             className: '',
             iconSize: [28, 28],
             iconAnchor: [14, 14],
             popupAnchor: [0, -14]
         }),
         fdh_cabinet: L.divIcon({
-            html: '<div style="background:#f97316;width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
+            html: '<div style="background:var(--color-semantic-warning-600);width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
             className: '',
             iconSize: [24, 24],
             iconAnchor: [12, 12],
             popupAnchor: [0, -12]
         }),
         splice_closure: L.divIcon({
-            html: '<div style="background:#14b8a6;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6"/></svg></div>',
+            html: '<div style="background:var(--color-accent-600);width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="6"/></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
         access_point: L.divIcon({
-            html: '<div style="background:#8b5cf6;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg></div>',
+            html: '<div style="background:var(--color-data-1);width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
         network_device_online: L.divIcon({
-            html: '<div style="background:#16a34a;width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
+            html: '<div style="background:var(--color-semantic-positive-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
         network_device_offline: L.divIcon({
-            html: '<div style="background:#dc2626;width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
+            html: '<div style="background:var(--color-semantic-negative-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
         network_device_degraded: L.divIcon({
-            html: '<div style="background:#f59e0b;width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
+            html: '<div style="background:var(--color-semantic-warning-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
+            className: '',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10],
+            popupAnchor: [0, -10]
+        }),
+        network_device_neutral: L.divIcon({
+            html: '<div style="background:var(--color-semantic-neutral-600);width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
         survey_point: L.divIcon({
-            html: '<div style="background:#d946ef;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 18l6-6 6 6" /></svg></div>',
+            html: '<div style="background:var(--color-data-2);width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 18l6-6 6 6" /></svg></div>',
             className: '',
             iconSize: [20, 20],
             iconAnchor: [10, 10],
             popupAnchor: [0, -10]
         }),
         ont_online: L.divIcon({
-            html: '<div style="background:#06b6d4;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
+            html: '<div style="background:var(--color-accent-600);width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
             className: '',
             iconSize: [16, 16],
             iconAnchor: [8, 8],
             popupAnchor: [0, -8]
         }),
         ont_offline: L.divIcon({
-            html: '<div style="background:#ef4444;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
+            html: '<div style="background:var(--color-semantic-negative-600);width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
             className: '',
             iconSize: [16, 16],
             iconAnchor: [8, 8],
             popupAnchor: [0, -8]
         }),
         ont_warning: L.divIcon({
-            html: '<div style="background:#f59e0b;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
+            html: '<div style="background:var(--color-semantic-warning-600);width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:8px;height:8px;color:white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg></div>',
             className: '',
             iconSize: [16, 16],
             iconAnchor: [8, 8],
             popupAnchor: [0, -8]
         }),
         customer_online: L.divIcon({
-            html: '<div style="background:#22c55e;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
+            html: '<div style="background:var(--color-semantic-positive-600);width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [18, 18],
             iconAnchor: [9, 9],
             popupAnchor: [0, -9]
         }),
         customer_offline: L.divIcon({
-            html: '<div style="background:#ef4444;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
+            html: '<div style="background:var(--color-semantic-negative-600);width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3)"><svg style="width:10px;height:10px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [18, 18],
             iconAnchor: [9, 9],
@@ -799,9 +821,9 @@
 
     // Segment styles
     const segmentStyles = {
-        feeder: { color: '#ef4444', weight: 4, opacity: 0.9 },
-        distribution: { color: '#3b82f6', weight: 3, opacity: 0.8 },
-        drop: { color: '#22c55e', weight: 2, opacity: 0.7 }
+        feeder: { color: themeColor('semantic-negative-600'), weight: 4, opacity: 0.9 },
+        distribution: { color: themeColor('semantic-info-600'), weight: 3, opacity: 0.8 },
+        drop: { color: themeColor('semantic-positive-600'), weight: 2, opacity: 0.7 }
     };
 
     const coreStyles = {
@@ -845,7 +867,7 @@
         const panel = document.getElementById('asset-detail-panel');
         const content = document.getElementById('asset-detail-content');
 
-        let iconBg = '#64748b';
+        let iconBg = themeColor('semantic-neutral-600');
         let iconSvg = '';
         let typeLabel = p.type.replace(/_/g, ' ');
         let detailUrl = null;
@@ -853,62 +875,60 @@
 
         switch (p.type) {
             case 'pop_site':
-                iconBg = '#8b5cf6';
+                iconBg = themeColor('data-1');
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/></svg>';
                 typeLabel = 'POP Site';
                 detailUrl = `/admin/network/pop-sites/${p.id}`;
                 editUrl = `/admin/network/pop-sites/${p.id}/edit`;
                 break;
             case 'fdh_cabinet':
-                iconBg = '#f97316';
+                iconBg = themeColor('semantic-warning-600');
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg>';
                 typeLabel = 'FDH Cabinet';
                 detailUrl = `/admin/network/fdh-cabinets/${p.id}`;
                 editUrl = `/admin/network/fdh-cabinets/${p.id}/edit`;
                 break;
             case 'splice_closure':
-                iconBg = '#14b8a6';
+                iconBg = themeColor('accent-600');
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8"/></svg>';
                 typeLabel = 'Splice Closure';
                 detailUrl = `/admin/network/splice-closures/${p.id}`;
                 editUrl = `/admin/network/splice-closures/${p.id}/edit`;
                 break;
             case 'access_point':
-                iconBg = '#8b5cf6';
+                iconBg = themeColor('data-1');
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"/></svg>';
                 typeLabel = 'Access Point';
                 break;
             case 'ont':
                 if (p.signal_quality === 'warning' || p.signal_quality === 'critical') {
-                    iconBg = p.signal_quality === 'critical' ? '#dc2626' : '#f59e0b';
+                    iconBg = p.signal_quality === 'critical'
+                        ? themeColor('semantic-negative-600')
+                        : themeColor('semantic-warning-600');
                     typeLabel = `ONT (Signal ${p.signal_quality})`;
                 } else if (p.status === 'online') {
-                    iconBg = '#06b6d4';
+                    iconBg = themeColor('accent-600');
                     typeLabel = 'ONT (Online)';
                 } else {
-                    iconBg = '#ef4444';
+                    iconBg = themeColor('semantic-negative-600');
                     typeLabel = 'ONT (Offline)';
                 }
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2"/></svg>';
                 detailUrl = `/admin/network/onts/${p.id}`;
                 break;
             case 'network_device':
-                if (p.status === 'online') {
-                    iconBg = '#16a34a';
-                    typeLabel = 'Network Device (Online)';
-                } else if (p.status === 'offline') {
-                    iconBg = '#dc2626';
-                    typeLabel = 'Network Device (Offline)';
-                } else {
-                    iconBg = '#f59e0b';
-                    typeLabel = 'Network Device (Degraded)';
-                }
+                const deviceTone = p.status_presentation?.tone || 'neutral';
+                const deviceLabel = p.status_presentation?.label || 'Unknown';
+                iconBg = semanticToneColor(deviceTone);
+                typeLabel = `Network Device (${deviceLabel})`;
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 4a2 2 0 012-2h6a2 2 0 012 2v11l-4-2-4 2V4z" clip-rule="evenodd"/></svg>';
                 detailUrl = `/admin/network/core-devices/${p.id}`;
                 editUrl = `/admin/network/core-devices/${p.id}/edit`;
                 break;
             case 'customer':
-                iconBg = p.is_online ? '#22c55e' : '#ef4444';
+                iconBg = p.is_online
+                    ? themeColor('semantic-positive-600')
+                    : themeColor('semantic-negative-600');
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg>';
                 if (p.source_type === 'service_building') {
                     typeLabel = 'Customer (Service Building)';
@@ -924,8 +944,12 @@
                 }
                 break;
             case 'fiber_segment':
-                const segColors = { feeder: '#ef4444', distribution: '#3b82f6', drop: '#22c55e' };
-                iconBg = segColors[p.segment_type] || '#3b82f6';
+                const segColors = {
+                    feeder: themeColor('semantic-negative-600'),
+                    distribution: themeColor('semantic-info-600'),
+                    drop: themeColor('semantic-positive-600')
+                };
+                iconBg = segColors[p.segment_type] || themeColor('semantic-info-600');
                 iconSvg = '<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>';
                 typeLabel = `${(p.segment_type || 'distribution').replace(/_/g, ' ')} Cable`.replace(/\b\w/g, l => l.toUpperCase());
                 break;
@@ -1025,12 +1049,15 @@
                         icon = icons.ont_offline;
                     }
                 } else if (p.type === 'network_device') {
-                    if (p.status === 'online') {
+                    const tone = p.status_presentation?.tone || 'neutral';
+                    if (tone === 'positive') {
                         icon = icons.network_device_online;
-                    } else if (p.status === 'offline') {
+                    } else if (tone === 'negative') {
                         icon = icons.network_device_offline;
-                    } else {
+                    } else if (tone === 'warning') {
                         icon = icons.network_device_degraded;
+                    } else {
+                        icon = icons.network_device_neutral;
                     }
                 } else {
                     icon = icons[p.type] || icons.customer_online;
@@ -1156,15 +1183,15 @@
 
     // Type labels and colors
     const typeConfig = {
-        pop_site: { label: 'POP Site', color: '#8b5cf6' },
-        fdh_cabinet: { label: 'FDH Cabinet', color: '#f97316' },
-        splice_closure: { label: 'Splice Closure', color: '#14b8a6' },
-        access_point: { label: 'Access Point', color: '#8b5cf6' },
-        network_device: { label: 'Network Device', color: '#16a34a' },
-        ont: { label: 'ONT', color: '#06b6d4' },
-        customer: { label: 'Customer', color: '#22c55e' },
-        fiber_segment: { label: 'Fiber', color: '#3b82f6' },
-        coordinate: { label: 'Coordinates', color: '#0f766e' }
+        pop_site: { label: 'POP Site', color: themeColor('data-1') },
+        fdh_cabinet: { label: 'FDH Cabinet', color: themeColor('semantic-warning-600') },
+        splice_closure: { label: 'Splice Closure', color: themeColor('accent-600') },
+        access_point: { label: 'Access Point', color: themeColor('data-1') },
+        network_device: { label: 'Network Device', color: themeColor('semantic-positive-700') },
+        ont: { label: 'ONT', color: themeColor('accent-600') },
+        customer: { label: 'Customer', color: themeColor('semantic-positive-600') },
+        fiber_segment: { label: 'Fiber', color: themeColor('semantic-info-600') },
+        coordinate: { label: 'Coordinates', color: themeColor('accent-700') }
     };
 
     let coordMarker = null;
@@ -1216,7 +1243,10 @@
 
         let html = countHtml;
         displayMatches.forEach((match, idx) => {
-            const config = typeConfig[match.type] || { label: match.type, color: '#64748b' };
+            const config = typeConfig[match.type] || {
+                label: match.type,
+                color: themeColor('semantic-neutral-600')
+            };
             const meta = [match.code, match.address, match.city].filter(Boolean).join(' · ');
 
             html += `

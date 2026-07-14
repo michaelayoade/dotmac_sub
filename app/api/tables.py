@@ -68,21 +68,18 @@ def get_table_data(
     user_id = UUID(auth["subscriber_id"])
     request_params = dict(request.query_params)
 
-    columns, items, count = TableConfigurationService.apply_query_config(
+    projection = TableConfigurationService.build_data_projection(
         db,
         user_id,
         table_key,
         request_params,
     )
 
-    limit = int(request_params.get("limit", 50) or 50)
-    offset = int(request_params.get("offset", 0) or 0)
-
     return TableDataResponse(
         table_key=table_key,
-        columns=columns,
-        items=items,
-        count=count,
-        limit=limit,
-        offset=offset,
+        columns=projection.columns,
+        items=projection.items,
+        count=projection.count,
+        limit=projection.limit,
+        offset=projection.offset,
     )

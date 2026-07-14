@@ -18,8 +18,9 @@ from sqlalchemy.orm import Session
 from app.models.subscriber import Subscriber
 from app.models.work_order_mirror import WorkOrderMirror
 from app.services.common import coerce_uuid
+from app.services.field.work_order_status import WORK_ORDER_TERMINAL_VALUES
 
-TERMINAL_STATUSES = frozenset({"completed", "canceled", "cancelled"})
+TERMINAL_STATUSES = WORK_ORDER_TERMINAL_VALUES
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 

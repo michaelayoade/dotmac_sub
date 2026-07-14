@@ -22,9 +22,11 @@ from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
 from app.services.topology import last_mile
 from app.services.topology.connection_status import (
+    CONNECTION_HEALTH_STATE_VALUES,
     STATE_CONNECTED,
     STATE_OUTAGE,
     STATE_TROUBLE,
+    ConnectionHealthState,
     assess,
     connection_status,
 )
@@ -38,6 +40,7 @@ NOW = datetime(2026, 7, 6, 12, 0, tzinfo=UTC)
 
 _SAFE_KEYS = {
     "state",
+    "status_presentation",
     "headline",
     "message",
     "advice",
@@ -45,6 +48,13 @@ _SAFE_KEYS = {
     "area_outage",
     "checked_at",
 }
+
+
+def test_connection_health_declares_one_complete_customer_safe_vocabulary():
+    assert CONNECTION_HEALTH_STATE_VALUES == tuple(
+        state.value for state in ConnectionHealthState
+    )
+    assert CONNECTION_HEALTH_STATE_VALUES == ("connected", "trouble", "outage")
 
 
 # --- builders -------------------------------------------------------------
@@ -126,6 +136,12 @@ def test_connected_when_session_live(db_session, catalog_offer):
     assert out["state"] == STATE_CONNECTED
     assert out["area_outage"] is False
     assert out["advice"] is None
+    assert out["status_presentation"] == {
+        "value": "connected",
+        "label": "Connected",
+        "tone": "positive",
+        "icon": "check",
+    }
     assert set(out) == _SAFE_KEYS
 
 

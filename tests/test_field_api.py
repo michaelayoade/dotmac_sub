@@ -95,10 +95,17 @@ def test_field_api_me_jobs_and_detail(db_session):
     assert jobs.status_code == 200
     assert jobs.json()["count"] == 1
     assert jobs.json()["items"][0]["id"] == "wo-field-api"
+    assert jobs.json()["items"][0]["status_presentation"] == {
+        "value": "dispatched",
+        "label": "Dispatched",
+        "tone": "info",
+        "icon": "info",
+    }
 
     detail = client.get("/api/v1/field/jobs/wo-field-api")
     assert detail.status_code == 200
     assert detail.json()["job"]["title"] == "Fibre install"
+    assert detail.json()["job"]["status_presentation"]["value"] == "dispatched"
     assert detail.json()["customer"]["name"] == "Adaeze Nwosu"
     assert detail.json()["completion_requirements"] == {
         "evidence_required": True,

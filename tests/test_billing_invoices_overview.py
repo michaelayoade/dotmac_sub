@@ -169,6 +169,9 @@ def test_invoices_list_returns_status_totals_and_payment_split(db_session, subsc
     assert result["status_totals"]["all"]["count"] == 2
     assert result["status_totals"]["all"]["due_total"] == 25.0
     assert result["status_totals"]["all"]["received_total"] == 155.0
+    presentations = result["invoice_status_presentations"]
+    for invoice in result["invoices"]:
+        assert presentations[str(invoice.id)].value == invoice.status.value
 
 
 def test_invoices_list_status_totals_are_grouped_by_currency(db_session, subscriber):

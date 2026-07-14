@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, detail_header, card, info_grid, info_row,
-    metric_row, timeline_item, table_head, status_badge,
+    metric_row, timeline_item, table_head, status_badge, status_presentation_badge,
     animation_styles,
     icon_invoice
 %}
@@ -14,23 +14,11 @@
 {% set status = invoice.status|default('draft') %}
 {% set status_val = status.value if status is not string else status %}
 {% set invoice_currency = invoice.currency or 'NGN' %}
-{% set status_variant_map = {
-    'paid': 'paid',
-    'issued': 'info',
-    'sent': 'pending',
-    'pending': 'pending',
-    'partially_paid': 'warning',
-    'overdue': 'overdue',
-    'void': 'inactive',
-    'written_off': 'inactive',
-    'draft': 'draft'
-} %}
-{% set status_label = status_val | replace('_', ' ') | title %}
 
 <div class="relative space-y-8">
     {# ── Detail Header ── #}
     {% set status_html %}
-        {{ status_badge(status_label, variant=status_variant_map.get(status_val, 'default')) }}
+        {{ status_presentation_badge(invoice_status_presentation) }}
     {% endset %}
 
     <div class="relative z-40">

@@ -34,9 +34,11 @@ from app.services.field.jobs import (
     _technician_name,
 )
 from app.services.field.source import mark_sub_authoritative
+from app.services.field.work_order_status import ASSIGNABLE_WORK_ORDER_STATUSES
+from app.services.status_presentation import work_order_status_presentation
 
 DEFAULT_STALE_AFTER_SECONDS = 120
-_ASSIGNABLE_STATUSES = frozenset({"scheduled", "dispatched", "in_progress", "paused"})
+_ASSIGNABLE_STATUSES = ASSIGNABLE_WORK_ORDER_STATUSES
 
 
 def _now() -> datetime:
@@ -189,6 +191,9 @@ class FieldManager:
                             "id": order.crm_work_order_id,
                             "title": order.title,
                             "status": order.status,
+                            "status_presentation": work_order_status_presentation(
+                                order.status
+                            ),
                         }
                         if order is not None
                         else None
@@ -338,6 +343,7 @@ class FieldManager:
             "title": row.title,
             "description": row.description,
             "status": row.status,
+            "status_presentation": work_order_status_presentation(row.status),
             "priority": row.priority,
             "work_type": row.work_type,
             "scheduled_start": row.scheduled_start,

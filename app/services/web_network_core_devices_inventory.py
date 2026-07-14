@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -14,12 +14,16 @@ from app.models.network_monitoring import DeviceInterface, NetworkDevice
 from app.services import network as network_service
 from app.services.device_operational_status import (
     DEGRADED,
+    DOWN,
     UP,
+    annotate_operational_status,
     derive_olt_operational_status,
+    derive_ont_operational_status,
     warmer_is_stale,
 )
 from app.services.network import cpe as cpe_service
 from app.services.network.imported_service_ports import imported_service_port_summary
+from app.services.status_presentation import device_operational_status_presentation
 
 if TYPE_CHECKING:
     from app.models.network import Port
@@ -187,6 +191,24 @@ def collect_devices(db: Session) -> list[dict]:
     devices: list[dict] = []
     seen_keys: set[tuple[str, str]] = set()
 
+    monitoring_devices = list(
+        db.scalars(select(NetworkDevice).order_by(NetworkDevice.name.asc())).all()
+    )
+    by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
+    by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
+    by_name = {d.name: d for d in monitoring_devices if d.name}
+    warm_stale = warmer_is_stale()
+
+    def _linked_monitoring(device: object) -> NetworkDevice | None:
+        mgmt_ip = getattr(device, "mgmt_ip", None)
+        hostname = getattr(device, "hostname", None)
+        name = getattr(device, "name", None)
+        return (
+            (by_mgmt_ip.get(mgmt_ip) if mgmt_ip else None)
+            or (by_hostname.get(hostname) if hostname else None)
+            or (by_name.get(name) if name else None)
+        )
+
     def _add_seen(kind: str, value: object | None) -> None:
         text = str(value or "").strip().lower()
         if text:
@@ -200,6 +222,14 @@ def collect_devices(db: Session) -> list[dict]:
         db=db, is_active=True, order_by="name", order_dir="asc", limit=500, offset=0
     )
     for olt in olts:
+        linked = _linked_monitoring(olt)
+        linked_live_status = getattr(linked, "live_status", None)
+        linked_live_status = getattr(linked_live_status, "value", linked_live_status)
+        operational = derive_olt_operational_status(
+            olt,
+            linked_live_status=linked_live_status,
+            warm_stale=warm_stale,
+        )
         devices.append(
             {
                 "id": str(olt.id),
@@ -209,7 +239,9 @@ def collect_devices(db: Session) -> list[dict]:
                 "ip_address": getattr(olt, "mgmt_ip", None),
                 "vendor": olt.vendor,
                 "model": olt.model,
-                "status": "online" if olt.is_active else "offline",
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
                 "last_seen": getattr(olt, "last_seen", None),
                 "subscriber": None,
             }
@@ -219,13 +251,8 @@ def collect_devices(db: Session) -> list[dict]:
         _add_seen("hostname", getattr(olt, "hostname", None))
         _add_seen("name", getattr(olt, "name", None))
 
-    core_devices = list(
-        db.scalars(
-            select(NetworkDevice)
-            .where(NetworkDevice.is_active.is_(True))
-            .order_by(NetworkDevice.name.asc())
-        ).all()
-    )
+    core_devices = [device for device in monitoring_devices if device.is_active]
+    annotate_operational_status(core_devices)
     for device in core_devices:
         if _network_device_is_olt_candidate(device):
             continue
@@ -235,14 +262,7 @@ def collect_devices(db: Session) -> list[dict]:
             or _seen("name", getattr(device, "name", None))
         ):
             continue
-        status_value = getattr(getattr(device, "status", None), "value", None)
-        status = (
-            "online"
-            if status_value == "online"
-            else "warning"
-            if status_value in {"degraded", "maintenance"}
-            else "offline"
-        )
+        operational = cast(Any, device).operational
         devices.append(
             {
                 "id": str(device.id),
@@ -252,7 +272,9 @@ def collect_devices(db: Session) -> list[dict]:
                 "ip_address": device.mgmt_ip,
                 "vendor": device.vendor,
                 "model": device.model,
-                "status": status,
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
                 "last_seen": device.last_ping_at or device.last_snmp_at,
                 "subscriber": None,
             }
@@ -271,6 +293,7 @@ def collect_devices(db: Session) -> list[dict]:
         offset=0,
     )
     for ont in onts:
+        operational = derive_ont_operational_status(ont)
         devices.append(
             {
                 "id": str(ont.id),
@@ -280,7 +303,9 @@ def collect_devices(db: Session) -> list[dict]:
                 "ip_address": getattr(ont, "ip_address", None),
                 "vendor": ont.vendor,
                 "model": ont.model,
-                "status": "online" if ont.is_active else "offline",
+                "status": operational.status,
+                "operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
                 "last_seen": getattr(ont, "last_seen", None),
                 "subscriber": None,
             }
@@ -312,7 +337,11 @@ def collect_devices(db: Session) -> list[dict]:
                 "ip_address": getattr(cpe, "ip_address", None),
                 "vendor": getattr(cpe, "vendor", None),
                 "model": getattr(cpe, "model", None),
-                "status": "online",
+                "status": "unknown",
+                "operational_reason": "operational_state_not_available",
+                "status_presentation": device_operational_status_presentation(
+                    "unknown"
+                ),
                 "last_seen": getattr(cpe, "last_seen", None),
                 "subscriber": None,
             }
@@ -373,10 +402,11 @@ def compute_device_stats(devices: list[dict]) -> dict[str, int]:
         "olt": sum(1 for d in devices if d["type"] == "olt"),
         "ont": sum(1 for d in devices if d["type"] == "ont"),
         "cpe": sum(1 for d in devices if d["type"] == "cpe"),
-        "online": sum(1 for d in devices if d["status"] == "online"),
-        "offline": sum(1 for d in devices if d["status"] == "offline"),
-        "warning": 0,
-        "unprovisioned": 0,
+        "up": sum(1 for d in devices if d["status"] == UP),
+        "down": sum(1 for d in devices if d["status"] == DOWN),
+        "degraded": sum(1 for d in devices if d["status"] == DEGRADED),
+        "maintenance": sum(1 for d in devices if d["status"] == "maintenance"),
+        "unknown": sum(1 for d in devices if d["status"] == "unknown"),
     }
 
 
@@ -553,9 +583,6 @@ def olts_list_page_data(
             linked_live_status=linked_live_status,
             warm_stale=warm_stale,
         )
-        operational_status = (
-            "online" if operational.status in {UP, DEGRADED} else "offline"
-        )
         if operational.alarming:
             health_state = "attention"
             health_label = "Attention"
@@ -588,8 +615,9 @@ def olts_list_page_data(
                 "runtime_health_label": health_label,
                 "runtime_health_state": health_state,
                 "runtime_health_reason": health_reason,
-                "runtime_operational_status": operational_status,
+                "operational_status": operational.status,
                 "runtime_operational_reason": operational.reason,
+                "status_presentation": operational.presentation,
                 "runtime_retry_pending": operational.retry_pending,
                 "runtime_ping_label": ping_label,
                 "runtime_ping_state": ping_state,
@@ -635,17 +663,21 @@ def olts_list_page_data(
             for item in filtered_olts
             if item.get("runtime_health_state") == "attention"
         ]
-    elif normalized_status in {"online", "healthy"}:
+    elif normalized_status in {"up", "online", "healthy"}:
         filtered_olts = [
-            item
-            for item in filtered_olts
-            if item.get("runtime_operational_status") == "online"
+            item for item in filtered_olts if item.get("operational_status") == UP
         ]
-    elif normalized_status == "offline":
+    elif normalized_status == "degraded":
         filtered_olts = [
-            item
-            for item in filtered_olts
-            if item.get("runtime_operational_status") == "offline"
+            item for item in filtered_olts if item.get("operational_status") == DEGRADED
+        ]
+    elif normalized_status in {"down", "offline"}:
+        filtered_olts = [
+            item for item in filtered_olts if item.get("operational_status") == DOWN
+        ]
+    elif normalized_status == "retry_pending":
+        filtered_olts = [
+            item for item in filtered_olts if item.get("runtime_retry_pending")
         ]
 
     filtered_total = len(filtered_olts)
@@ -657,12 +689,12 @@ def olts_list_page_data(
     attention_items = [
         item for item in olts if item.get("runtime_health_state") == "attention"
     ]
-    online_count = sum(
-        1 for item in olts if item.get("runtime_operational_status") == "online"
+    up_count = sum(1 for item in olts if item.get("operational_status") == UP)
+    degraded_count = sum(
+        1 for item in olts if item.get("operational_status") == DEGRADED
     )
-    offline_count = sum(
-        1 for item in olts if item.get("runtime_operational_status") == "offline"
-    )
+    down_count = sum(1 for item in olts if item.get("operational_status") == DOWN)
+    retry_pending_count = sum(1 for item in olts if item.get("runtime_retry_pending"))
     total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)  # type: ignore[call-overload]
 
     stats = {
@@ -670,9 +702,10 @@ def olts_list_page_data(
         "fleet_total": len(olts),
         "active": sum(1 for o in filtered_olts if o["is_active"]),
         "attention": len(attention_items),
-        "online": online_count,
-        "healthy": online_count,
-        "offline": offline_count,
+        "up": up_count,
+        "degraded": degraded_count,
+        "down": down_count,
+        "retry_pending": retry_pending_count,
         "total_pon_ports": total_pon_ports,
     }
 

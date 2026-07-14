@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../app/theme.dart';
+import '../../app/status_presentation.dart';
 import '../../app/widgets/primary_action_button.dart';
 import '../../core/offline/draft_store.dart';
 import '../execution/execution_controller.dart';
@@ -954,7 +955,7 @@ class _NewExpenseRequestScreenState
                   decoration: InputDecoration(
                     labelText: 'Amount',
                     prefixText: '₦ ',
-                    prefixStyle: const TextStyle(
+                    prefixStyle: TextStyle(
                       fontFamily: 'Outfit',
                       fontWeight: FontWeight.w700,
                       fontSize: 18,
@@ -1124,9 +1125,8 @@ String _money(String? currency, double value) =>
 Color _expenseStatusColor(BuildContext context, String status) {
   final scheme = Theme.of(context).colorScheme;
   return switch (status) {
-    'submitted' => Colors.blue.shade700,
-    'approved' => Colors.green.shade700,
-    'paid' => Colors.teal.shade700,
+    'submitted' => AppColors.statusTone(context, StatusTone.info),
+    'approved' || 'paid' => AppColors.statusTone(context, StatusTone.positive),
     'rejected' => scheme.error,
     'canceled' || 'cancelled' || 'draft' => scheme.outline,
     _ => scheme.outline,

@@ -24,6 +24,7 @@ from app.schemas.dispatch import (
 )
 from app.services import dispatch as dispatch_service
 from app.services.common import coerce_uuid
+from app.services.field.work_order_status import WORK_ORDER_TERMINAL_VALUES
 
 STATUS_OPTIONS = (
     "draft",
@@ -109,7 +110,7 @@ def _work_order_counts(db: Session) -> dict[str, int]:
         "active": sum(
             count
             for status, count in counts.items()
-            if status not in {"completed", "canceled", "cancelled"}
+            if status not in WORK_ORDER_TERMINAL_VALUES
         ),
         "scheduled": counts.get("scheduled", 0),
         "in_progress": counts.get("in_progress", 0),

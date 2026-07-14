@@ -1,15 +1,11 @@
 from pathlib import Path
 
 
-def test_invoice_detail_status_badge_map_covers_terminal_and_partial_states():
+def test_invoice_detail_consumes_server_owned_status_presentation():
     template = Path("templates/admin/billing/invoice_detail.html").read_text()
 
-    assert "'issued': 'info'" in template
-    assert "'partially_paid': 'warning'" in template
-    assert "'void': 'inactive'" in template
-    assert "'written_off': 'inactive'" in template
-    assert "replace('_', ' ') | title" in template
-    assert "status_variant_map.get(status_val, 'default')" in template
+    assert "status_presentation_badge(invoice_status_presentation)" in template
+    assert "status_variant_map" not in template
 
 
 def test_invoice_edit_form_locks_currency_while_submitting_existing_value():
