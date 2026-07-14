@@ -26,6 +26,7 @@ def _bare_request(path: str = "/admin/customers/person/x/pppoe-password") -> Req
     )
 
 
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import AccessCredential, ConnectionType, SubscriptionStatus
 from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
@@ -191,6 +192,28 @@ def test_customer_detail_includes_crm_sync_link_status(db_session, subscriber):
         context["account_status_presentations"][str(subscriber.id)]
         == context["customer_status_presentation"]
     )
+
+
+def test_customer_detail_exposes_invoice_status_presentations(db_session, subscriber):
+    subscriber.user_type = UserType.customer
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-DETAIL-001",
+        status=InvoiceStatus.issued,
+        subtotal=Decimal("100.00"),
+        tax_total=Decimal("0.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        is_active=True,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    presentation = context["invoice_status_presentations"][str(invoice.id)]
+    assert presentation.value == "issued"
+    assert presentation.label == "Issued"
 
 
 def test_customer_detail_includes_masked_identity_profile(db_session, subscriber):
