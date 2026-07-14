@@ -145,7 +145,7 @@
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div class="sm:col-span-2">
                         <label for="offer_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Plan / Tariff <span class="text-red-500">*</span></label>
-                        <select name="offer_id" id="offer_id" required
+                        <select name="offer_id" id="offer_id" required {% if subscription.id %}disabled aria-disabled="true"{% endif %}
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="" disabled {% if not subscription.offer_id %}selected{% endif %}>Select a plan</option>
                             {% for offer in offer_options or [] %}
@@ -154,6 +154,7 @@
                                 </option>
                             {% endfor %}
                         </select>
+                        {% if subscription.id %}<input type="hidden" name="offer_id" value="{{ subscription.offer_id }}">{% endif %}
                         {% if not offers %}
                         <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">No active plans found. Create a tariff first.</p>
                         {% endif %}
@@ -171,12 +172,13 @@
 
                     <div>
                         <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
-                        <select name="status" id="status"
+                        <select name="status" id="status" {% if subscription.id %}disabled aria-disabled="true"{% endif %}
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for status in subscription_statuses %}
                             <option value="{{ status }}" {% if subscription.status == status or (is_new and status == 'pending') %}selected{% endif %}>{{ status | title }}</option>
                             {% endfor %}
                         </select>
+                        {% if subscription.id %}<input type="hidden" name="status" value="{{ subscription.status }}">{% endif %}
                         {% if is_new %}
                         <p class="mt-1 text-xs text-slate-500">Pending subscriptions create a service order for installation</p>
                         {% endif %}
@@ -184,12 +186,13 @@
 
                     <div>
                         <label for="billing_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Mode</label>
-                        <select name="billing_mode" id="billing_mode" x-model="billingMode"
+                        <select name="billing_mode" id="billing_mode" x-model="billingMode" {% if subscription.id %}disabled aria-disabled="true"{% endif %}
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for mode in billing_modes %}
                             <option value="{{ mode }}" {% if subscription.billing_mode == mode or (is_new and mode == 'prepaid') %}selected{% endif %}>{{ mode | title }}</option>
                             {% endfor %}
                         </select>
+                        {% if subscription.id %}<input type="hidden" name="billing_mode" value="{{ subscription.billing_mode }}">{% endif %}
                         <p class="mt-1 text-xs text-slate-500">{{ billing_mode_help_text }}</p>
                     </div>
                 </div>
@@ -265,7 +268,7 @@
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
                         <label for="start_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Start Date</label>
-                        <input type="datetime-local" name="start_at" id="start_at"
+                        <input type="datetime-local" name="start_at" id="start_at" {% if subscription.id %}readonly aria-readonly="true"{% endif %}
                             value="{{ subscription.start_at }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <p class="mt-1 text-xs text-slate-500">Auto-set when activated</p>
@@ -273,7 +276,7 @@
 
                     <div>
                         <label for="next_billing_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Next Billing Date</label>
-                        <input type="datetime-local" name="next_billing_at" id="next_billing_at"
+                        <input type="datetime-local" name="next_billing_at" id="next_billing_at" {% if subscription.id %}readonly aria-readonly="true"{% endif %}
                             value="{{ subscription.next_billing_at }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <p class="mt-1 text-xs text-slate-500">Auto-calculated from billing cycle</p>
@@ -281,7 +284,7 @@
 
                     <div>
                         <label for="end_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">End Date</label>
-                        <input type="datetime-local" name="end_at" id="end_at"
+                        <input type="datetime-local" name="end_at" id="end_at" {% if subscription.id %}readonly aria-readonly="true"{% endif %}
                             value="{{ subscription.end_at }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
@@ -289,14 +292,14 @@
                     {% if subscription.id %}
                     <div>
                         <label for="canceled_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Canceled At</label>
-                        <input type="datetime-local" name="canceled_at" id="canceled_at"
+                        <input type="datetime-local" name="canceled_at" id="canceled_at" readonly aria-readonly="true"
                             value="{{ subscription.canceled_at }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
 
                     <div class="sm:col-span-2">
                         <label for="cancel_reason" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Cancel Reason</label>
-                        <input type="text" name="cancel_reason" id="cancel_reason"
+                        <input type="text" name="cancel_reason" id="cancel_reason" readonly aria-readonly="true"
                             value="{{ subscription.cancel_reason }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>

@@ -153,6 +153,38 @@ def test_customer_list_excludes_reseller_users(db_session):
     assert reseller.email not in emails
 
 
+def test_customer_list_projects_service_counts_without_action_ids(db_session):
+    customer = _make_customer(db_session, "service-counts@example.com")
+    _make_subscription(
+        db_session,
+        customer,
+        status=SubscriptionStatus.active,
+    )
+    _make_subscription(
+        db_session,
+        customer,
+        status=SubscriptionStatus.suspended,
+    )
+    db_session.commit()
+
+    context = _build_context(
+        db_session,
+        search="service-counts",
+        status=None,
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        page=1,
+        per_page=25,
+    )
+
+    projected = context["customers"][0]
+    assert projected["active_subscription_count"] == 1
+    assert projected["suspended_subscription_count"] == 1
+    assert "active_subscription_ids" not in projected
+    assert "suspended_subscription_ids" not in projected
+
+
 def test_customer_list_ip_search_matches_exact_current_ipv4_only(db_session):
     current = _make_customer(db_session, "current-ip@example.com")
     current_sub = _make_subscription(

@@ -9,13 +9,14 @@ from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 from starlette.datastructures import FormData
 
+from app.models.audit import AuditActorType
 from app.models.billing import InvoiceStatus, TaxRate
 from app.models.catalog import (
     AccessCredential,
@@ -3912,54 +3913,48 @@ def bulk_update_status(
     request: object,
     actor_id: str | None,
 ) -> dict[str, Any]:
-    """Bulk-update subscription statuses, logging audit events.
+    """Compatibility adapter for canonical lifecycle command execution."""
+    from app.services.subscription_lifecycle import SubscriptionCommandKind
+    from app.services.subscription_lifecycle_commands import (
+        execute_subscription_command_batch,
+    )
 
-    Only transitions subscriptions whose current status is in *allowed_from*.
-    Returns ``{changed, skipped_ids, failed_ids}`` so callers can surface
-    partial success instead of a bare count.
-    """
     action_labels = {
         SubscriptionStatus.active: "activate",
         SubscriptionStatus.suspended: "suspend",
         SubscriptionStatus.canceled: "cancel",
     }
-    action = action_labels.get(target_status, "update")
-    changed = 0
-    skipped_ids: list[str] = []
-    failed_ids: list[str] = []
+    action = action_labels.get(target_status)
+    if action is None:
+        raise ValueError(f"Unsupported bulk lifecycle status {target_status.value}")
 
-    for sub_id in subscription_ids_csv.split(","):
-        sub_id = sub_id.strip()
-        if not sub_id:
-            continue
-        try:
-            sub = catalog_service.subscriptions.get(db, sub_id)
-            if not sub or sub.status not in allowed_from:
-                skipped_ids.append(sub_id)
-                continue
-            payload_kwargs: dict[str, Any] = {"status": target_status}
-            if target_status == SubscriptionStatus.canceled:
-                payload_kwargs["canceled_at"] = datetime.now(UTC)
-            payload = SubscriptionUpdate(**payload_kwargs)
-            catalog_service.subscriptions.update(
-                db=db, subscription_id=sub_id, payload=payload
-            )
-            record_audit_event(
-                db,
-                action=action,
-                entity_type="subscription",
-                entity_id=sub_id,
-                actor_id=actor_id,
-            )
-            changed += 1
-        except Exception as exc:
-            logger.error(
-                "Bulk status update failed for subscription %s: %s", sub_id, exc
-            )
-            failed_ids.append(sub_id)
-            continue
+    command_kind_by_status: dict[SubscriptionStatus, SubscriptionCommandKind] = {}
+    for status in allowed_from:
+        if target_status == SubscriptionStatus.active:
+            if status == SubscriptionStatus.pending:
+                command_kind_by_status[status] = SubscriptionCommandKind.activate
+            elif status in {
+                SubscriptionStatus.blocked,
+                SubscriptionStatus.suspended,
+                SubscriptionStatus.stopped,
+            }:
+                command_kind_by_status[status] = SubscriptionCommandKind.restore
+        elif target_status == SubscriptionStatus.suspended:
+            command_kind_by_status[status] = SubscriptionCommandKind.suspend
+        elif target_status == SubscriptionStatus.canceled:
+            command_kind_by_status[status] = SubscriptionCommandKind.cancel
 
-    return {"changed": changed, "skipped_ids": skipped_ids, "failed_ids": failed_ids}
+    result = execute_subscription_command_batch(
+        db,
+        subscription_ids_csv.split(","),
+        command_kind_by_status=command_kind_by_status,
+        source=f"admin:catalog_bulk:{action}:{actor_id or 'system'}",
+        idempotency_key=_bulk_lifecycle_operation_key(request, action=action),
+        actor_id=actor_id,
+        actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        reason=f"Bulk {action} requested from the admin catalog",
+    )
+    return result.as_dict()
 
 
 def bulk_change_plan(
@@ -3971,7 +3966,7 @@ def bulk_change_plan(
     effective_timing: str = "instant",
     include_suspended: bool = False,
 ) -> dict[str, Any]:
-    """Bulk-change plan/offer for subscriptions, logging audit events.
+    """Compatibility adapter for canonical plan-change command execution.
 
     Only changes active subscriptions by default; when ``include_suspended`` is
     true, suspended subscriptions are eligible too. Returns ``{changed,
@@ -3986,6 +3981,13 @@ def bulk_change_plan(
       boundary with no proration. The offer is NOT swapped now.
     """
     from app.models.catalog import CatalogOffer
+    from app.services.subscription_lifecycle import (
+        SubscriptionCommandKind,
+        SubscriptionEffectiveTiming,
+    )
+    from app.services.subscription_lifecycle_commands import (
+        execute_subscription_command_batch,
+    )
 
     target_offer = db.get(CatalogOffer, target_offer_id)
     if not target_offer:
@@ -3996,90 +3998,35 @@ def bulk_change_plan(
     allowed_from = {SubscriptionStatus.active}
     if include_suspended:
         allowed_from.add(SubscriptionStatus.suspended)
-
-    changed = 0
-    skipped_ids: list[str] = []
-    failed_ids: list[str] = []
-    for sub_id in subscription_ids_csv.split(","):
-        sub_id = sub_id.strip()
-        if not sub_id:
-            continue
-        try:
-            sub = catalog_service.subscriptions.get(db, sub_id)
-            if not sub or sub.status not in allowed_from:
-                skipped_ids.append(sub_id)
-                continue
-            if effective_timing == "next_cycle":
-                _schedule_next_cycle_plan_change(
-                    db,
-                    sub,
-                    target_offer_id=target_offer_id,
-                    target_offer_name=target_offer.name,
-                    actor_id=actor_id,
-                )
-                changed += 1
-                continue
-            payload = SubscriptionUpdate(offer_id=UUID(target_offer_id))
-            catalog_service.subscriptions.update(
-                db=db, subscription_id=sub_id, payload=payload
-            )
-            record_audit_event(
-                db,
-                action="change_plan",
-                entity_type="subscription",
-                entity_id=sub_id,
-                actor_id=actor_id,
-                metadata={
-                    "new_offer_id": target_offer_id,
-                    "offer_name": target_offer.name,
-                },
-            )
-            changed += 1
-        except Exception as exc:
-            logger.error("Bulk plan change failed for subscription %s: %s", sub_id, exc)
-            failed_ids.append(sub_id)
-            continue
-
-    return {"changed": changed, "skipped_ids": skipped_ids, "failed_ids": failed_ids}
-
-
-def _schedule_next_cycle_plan_change(
-    db: Session,
-    subscription: Any,
-    *,
-    target_offer_id: str,
-    target_offer_name: str,
-    actor_id: str | None,
-) -> None:
-    """Record an approved change effective at the subscription's next cycle."""
-    from datetime import date as _date
-
-    from app.services.customer_portal_flow_common import _resolve_next_billing_date
-    from app.services.subscription_changes import subscription_change_requests
-
-    effective_date = _resolve_next_billing_date(db, subscription) or _date.today()
-    # requested_by_person_id is a subscribers.id FK; the admin actor is a
-    # SystemUser, so it is recorded on the audit event instead of this column.
-    subscription_change_requests.schedule(
-        db,
-        subscription_id=str(subscription.id),
-        new_offer_id=target_offer_id,
-        effective_date=effective_date,
-        requested_by_person_id=None,
-        notes="Scheduled via admin change-plan (next cycle)",
+    timing = (
+        SubscriptionEffectiveTiming.immediate
+        if effective_timing == "instant"
+        else SubscriptionEffectiveTiming.next_cycle
     )
-    record_audit_event(
+    result = execute_subscription_command_batch(
         db,
-        action="schedule_plan_change",
-        entity_type="subscription",
-        entity_id=str(subscription.id),
+        subscription_ids_csv.split(","),
+        command_kind_by_status=dict.fromkeys(
+            allowed_from, SubscriptionCommandKind.change_plan
+        ),
+        source=f"admin:catalog_bulk:change_plan:{actor_id or 'system'}",
+        idempotency_key=_bulk_lifecycle_operation_key(request, action="change_plan"),
         actor_id=actor_id,
-        metadata={
-            "new_offer_id": target_offer_id,
-            "offer_name": target_offer_name,
-            "effective_date": effective_date.isoformat(),
-        },
+        actor_type=AuditActorType.user if actor_id else AuditActorType.system,
+        reason="Bulk plan change requested from the admin catalog",
+        target_offer_id=target_offer_id,
+        effective_timing=timing,
     )
+    return result.as_dict()
+
+
+def _bulk_lifecycle_operation_key(request: object, *, action: str) -> str:
+    headers = getattr(request, "headers", None)
+    supplied = headers.get("Idempotency-Key") if headers is not None else None
+    state = getattr(request, "state", None)
+    request_id = getattr(state, "request_id", None) if state is not None else None
+    root = str(supplied or request_id or uuid4())
+    return f"admin-catalog-bulk:{action}:{root}"
 
 
 def force_subscription_reauth(
@@ -4368,6 +4315,21 @@ def update_subscription_with_audit(
     Returns the updated subscription ORM object.
     """
     before = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
+    # Generic edits own technical metadata only; lifecycle and commercial facts
+    # change through subscription_lifecycle_commands.
+    payload_data = dict(payload_data)
+    payload_data.update(
+        {
+            "offer_id": before.offer_id,
+            "status": before.status,
+            "billing_mode": before.billing_mode,
+            "start_at": before.start_at,
+            "end_at": before.end_at,
+            "next_billing_at": before.next_billing_at,
+            "canceled_at": before.canceled_at,
+            "cancel_reason": before.cancel_reason,
+        }
+    )
     update_subscription(db, subscription_id, payload_data)
     after = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
     manage_ipv4_assignment = ipv4_assignment_submitted or bool(

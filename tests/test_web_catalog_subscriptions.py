@@ -14,6 +14,7 @@ from app.models.catalog import (
     AddOn,
     AddOnPrice,
     AddOnType,
+    BillingMode,
     NasDevice,
     PriceType,
     SubscriptionAddOn,
@@ -211,6 +212,62 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
     assert credential.username == "10004167"
     assert credential.secret_hash == original_hash
     assert auth_flow_service.verify_password("InitialPass123", credential.secret_hash)
+
+
+def test_generic_edit_preserves_lifecycle_and_commercial_facts(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.active,
+        ),
+    )
+    subscription.start_at = datetime(2026, 7, 1, tzinfo=UTC)
+    subscription.next_billing_at = datetime(2026, 8, 1, tzinfo=UTC)
+    db_session.commit()
+    original_offer_id = subscription.offer_id
+    original_billing_mode = subscription.billing_mode
+
+    web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {
+            "offer_id": uuid4(),
+            "status": SubscriptionStatus.suspended,
+            "billing_mode": (
+                BillingMode.postpaid
+                if original_billing_mode == BillingMode.prepaid
+                else BillingMode.prepaid
+            ),
+            "start_at": datetime(2025, 1, 1, tzinfo=UTC),
+            "next_billing_at": datetime(2025, 2, 1, tzinfo=UTC),
+            "end_at": datetime(2025, 3, 1, tzinfo=UTC),
+            "canceled_at": datetime(2025, 3, 1, tzinfo=UTC),
+            "cancel_reason": "bypass lifecycle owner",
+            "service_description": "technical metadata remains editable",
+        },
+        "",
+        [],
+        [],
+        None,
+        None,
+    )
+
+    db_session.refresh(subscription)
+    assert subscription.offer_id == original_offer_id
+    assert subscription.status == SubscriptionStatus.active
+    assert subscription.billing_mode == original_billing_mode
+    assert subscription.start_at.date().isoformat() == "2026-07-01"
+    assert subscription.next_billing_at.date().isoformat() == "2026-08-01"
+    assert subscription.end_at is None
+    assert subscription.canceled_at is None
+    assert subscription.cancel_reason is None
+    assert subscription.service_description == "technical metadata remains editable"
 
 
 def test_upsert_access_credential_prefers_active_matching_username(
@@ -2590,6 +2647,8 @@ def test_bulk_update_status_reports_partial_success(
             status=SubscriptionStatus.pending,
         ),
     )
+    active_id = str(active.id)
+    pending_id = str(pending.id)
     bogus = str(uuid4())
 
     result = bulk_update_status(
@@ -2602,7 +2661,13 @@ def test_bulk_update_status_reports_partial_success(
     )
 
     assert result["changed"] == 1
-    assert str(pending.id) in result["skipped_ids"]
+    assert pending_id in result["skipped_ids"]
+    assert bogus in result["failed_ids"]
+    outcome = result["outcomes"][0]
+    assert outcome["subscription_id"] == active_id
+    assert outcome["kind"] == "suspend"
+    assert outcome["status"] == "applied"
+    assert outcome["artifact_ids"]
     db_session.refresh(active)
     assert active.status == SubscriptionStatus.suspended
 

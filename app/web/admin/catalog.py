@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, cast
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, Header, Query, Request
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -23,7 +23,11 @@ from app.services import (
 )
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_fup as web_fup_service
-from app.services.auth_dependencies import require_any_permission, require_permission
+from app.services.auth_dependencies import (
+    has_permission,
+    require_any_permission,
+    require_permission,
+)
 from app.services.subscription_lifecycle import (
     SubscriptionCommandKind,
     SubscriptionEffectiveTiming,
@@ -52,6 +56,24 @@ def _base_context(
 
 def _get_actor_id(request: Request) -> str | None:
     return web_admin_service.get_actor_id(request)
+
+
+def _assert_lifecycle_command_permission(
+    request: Request,
+    db: Session,
+    kind: SubscriptionCommandKind,
+) -> None:
+    auth = getattr(request.state, "auth", None) or {}
+    if auth and has_permission(auth, db, "catalog:write"):
+        return
+    action_permission = {
+        SubscriptionCommandKind.activate: "subscription:activate",
+        SubscriptionCommandKind.restore: "subscription:activate",
+        SubscriptionCommandKind.suspend: "subscription:suspend",
+    }.get(kind)
+    if action_permission and auth and has_permission(auth, db, action_permission):
+        return
+    raise HTTPException(status_code=403, detail="Forbidden")
 
 
 @router.get(
@@ -789,7 +811,15 @@ def catalog_subscription_update(
 
 @router.post(
     "/subscriptions/{subscription_id}/lifecycle/execute",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(
+            require_any_permission(
+                "catalog:write",
+                "subscription:activate",
+                "subscription:suspend",
+            )
+        )
+    ],
 )
 def catalog_subscription_execute_lifecycle_command(
     request: Request,
@@ -801,11 +831,12 @@ def catalog_subscription_execute_lifecycle_command(
     effective_at: datetime | None = Form(None),
     target_offer_id: str | None = Form(None),
     reason: str | None = Form(None),
-    expected_head: str | None = Form(None),
-    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    expected_head: str = Form(...),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Execute one canonical, reviewed subscription lifecycle command."""
+    _assert_lifecycle_command_permission(request, db, kind)
     payload, status_code = (
         web_catalog_subscription_workflows_service.execute_lifecycle_command_response(
             db,

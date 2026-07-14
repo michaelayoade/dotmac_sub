@@ -1257,6 +1257,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription command locking and reviewed-head enforcement",
                     "subscription command idempotent replay",
                     "structured subscription command outcomes",
+                    "independently committed subscription command batches",
                 ),
                 depends_on=(
                     "service_intent.subscription_lifecycle",
@@ -1268,7 +1269,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Delegates mutations and side effects to the established "
                     "account lifecycle, catalog, billing, scheduler, and RADIUS "
                     "owners. Renewal and deferred status execution fail closed "
-                    "until their dedicated owner slices are available."
+                    "until their dedicated owner slices are available. Admin "
+                    "single and bulk adapters delegate here instead of writing "
+                    "subscription lifecycle fields directly."
                 ),
             ),
             SOTService(

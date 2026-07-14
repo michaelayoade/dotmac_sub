@@ -439,8 +439,10 @@ def _bulk_result_payload(verb: str, result: dict) -> dict[str, object]:
         "message": "; ".join(parts),
         "count": changed,
         "changed": changed,
+        "changed_ids": result.get("changed_ids", []),
         "skipped_ids": skipped,
         "failed_ids": failed,
+        "outcomes": result.get("outcomes", []),
     }
 
 

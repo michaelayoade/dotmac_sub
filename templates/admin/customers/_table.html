@@ -220,7 +220,7 @@
                                         Send Message
                                     </button>
                                     <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
-                                    {% if customer.suspended_subscription_count %}
+                                    {% if can_activate_subscriptions and customer.suspended_subscription_count %}
                                     <button hx-post="{{ customer_path }}/activate-services"
                                             hx-confirm="Activate {{ customer.suspended_subscription_count }} suspended service{{ 's' if customer.suspended_subscription_count != 1 else '' }} for this customer?"
                                             hx-swap="none"
@@ -230,7 +230,7 @@
                                         Activate service{{ 's' if customer.suspended_subscription_count != 1 else '' }}
                                     </button>
                                     {% endif %}
-                                    {% if customer.active_subscription_count %}
+                                    {% if can_suspend_subscriptions and customer.active_subscription_count %}
                                     <button hx-post="{{ customer_path }}/suspend-services"
                                             hx-confirm="Suspend {{ customer.active_subscription_count }} active service{{ 's' if customer.active_subscription_count != 1 else '' }} for this customer?"
                                             hx-swap="none"

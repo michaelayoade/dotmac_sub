@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
@@ -46,6 +48,40 @@ class SubscriptionCommandExecutionRejected(ValueError):
         self.code = code
 
 
+@dataclass(frozen=True)
+class SubscriptionCommandBatchResult:
+    """Structured aggregate for a set of independently committed commands."""
+
+    changed_ids: tuple[str, ...]
+    skipped_ids: tuple[str, ...]
+    failed_ids: tuple[str, ...]
+    outcomes: tuple[SubscriptionCommandOutcome, ...]
+
+    @property
+    def changed(self) -> int:
+        return len(self.changed_ids)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "changed": self.changed,
+            "changed_ids": list(self.changed_ids),
+            "skipped_ids": list(self.skipped_ids),
+            "failed_ids": list(self.failed_ids),
+            "outcomes": [
+                {
+                    "subscription_id": outcome.command.subscription_id,
+                    "kind": outcome.command.kind.value,
+                    "status": outcome.status.value,
+                    "message": outcome.message,
+                    "artifact_ids": list(outcome.artifact_ids),
+                    "error_code": outcome.error_code,
+                    "replayed": outcome.replayed,
+                }
+                for outcome in self.outcomes
+            ],
+        }
+
+
 def execute_subscription_command(
     db: Session,
     command: SubscriptionLifecycleCommand,
@@ -73,6 +109,19 @@ def execute_subscription_command(
         )
 
     current = resolve_subscription_lifecycle(db, command.subscription_id)
+    contract_rejection = _command_contract_rejection(command)
+    if contract_rejection is not None:
+        outcome = SubscriptionCommandOutcome(
+            command=command,
+            status=SubscriptionCommandOutcomeStatus.rejected,
+            message=contract_rejection[1],
+            previous_head=current.head,
+            current_head=current.head,
+            error_code=contract_rejection[0],
+        )
+        _record_outcome(db, outcome, actor_id=actor_id, actor_type=actor_type)
+        return outcome
+
     prior = _find_idempotency_reservation(db, command)
     if prior is not None:
         outcome = _replay_outcome(db, command, current_head=current.head, prior=prior)
@@ -160,6 +209,114 @@ def execute_subscription_command(
     )
     _record_outcome(db, outcome, actor_id=actor_id, actor_type=actor_type)
     return outcome
+
+
+def execute_subscription_command_batch(
+    db: Session,
+    subscription_ids: Iterable[str],
+    *,
+    command_kind_by_status: Mapping[SubscriptionStatus, SubscriptionCommandKind],
+    source: str,
+    idempotency_key: str,
+    actor_id: str | None = None,
+    actor_type: AuditActorType = AuditActorType.system,
+    reason: str | None = None,
+    target_offer_id: str | None = None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+) -> SubscriptionCommandBatchResult:
+    """Execute a batch through the single-subscription command owner.
+
+    The status-to-command map is the caller's explicit eligibility policy. Each
+    item gets a fresh reviewed head and a deterministic child idempotency key;
+    one rejected item does not roll back commands already committed for others.
+    """
+    operation_key = idempotency_key.strip()
+    if not operation_key:
+        raise ValueError("idempotency_key is required for a lifecycle batch")
+
+    normalized_ids = tuple(
+        dict.fromkeys(
+            subscription_id
+            for raw_id in subscription_ids
+            if (subscription_id := str(raw_id).strip())
+        )
+    )
+    changed_ids: list[str] = []
+    skipped_ids: list[str] = []
+    failed_ids: list[str] = []
+    outcomes: list[SubscriptionCommandOutcome] = []
+
+    for subscription_id in normalized_ids:
+        try:
+            snapshot = resolve_subscription_lifecycle(db, subscription_id)
+            status = SubscriptionStatus(snapshot.state.status)
+            kind = command_kind_by_status.get(status)
+            if kind is None:
+                skipped_ids.append(subscription_id)
+                continue
+            command = SubscriptionLifecycleCommand(
+                subscription_id=subscription_id,
+                kind=kind,
+                source=source,
+                effective_timing=effective_timing,
+                effective_at=effective_at,
+                target_offer_id=target_offer_id,
+                reason=reason,
+                expected_head=snapshot.head,
+                idempotency_key=f"{operation_key}:{subscription_id}",
+            )
+            outcome = execute_subscription_command(
+                db,
+                command,
+                actor_id=actor_id,
+                actor_type=actor_type,
+            )
+        except Exception:
+            logger.exception(
+                "Subscription lifecycle batch item failed before an outcome: "
+                "subscription=%s source=%s",
+                subscription_id,
+                source,
+            )
+            failed_ids.append(subscription_id)
+            continue
+
+        outcomes.append(outcome)
+        if outcome.status in {
+            SubscriptionCommandOutcomeStatus.applied,
+            SubscriptionCommandOutcomeStatus.scheduled,
+        }:
+            changed_ids.append(subscription_id)
+        elif outcome.status == SubscriptionCommandOutcomeStatus.failed:
+            failed_ids.append(subscription_id)
+        else:
+            skipped_ids.append(subscription_id)
+
+    return SubscriptionCommandBatchResult(
+        changed_ids=tuple(changed_ids),
+        skipped_ids=tuple(skipped_ids),
+        failed_ids=tuple(failed_ids),
+        outcomes=tuple(outcomes),
+    )
+
+
+def _command_contract_rejection(
+    command: SubscriptionLifecycleCommand,
+) -> tuple[str, str] | None:
+    if command.expected_head is None:
+        return (
+            "expected_head_required",
+            "A reviewed subscription head is required before execution",
+        )
+    if command.idempotency_key is None:
+        return (
+            "idempotency_key_required",
+            "An idempotency key is required before execution",
+        )
+    return None
 
 
 def _execution_rejection(
@@ -477,6 +634,8 @@ def _aware_utc(value: datetime | None) -> datetime | None:
 
 
 __all__ = [
+    "SubscriptionCommandBatchResult",
     "SubscriptionCommandExecutionRejected",
+    "execute_subscription_command_batch",
     "execute_subscription_command",
 ]

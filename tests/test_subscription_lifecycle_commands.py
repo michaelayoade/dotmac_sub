@@ -181,6 +181,41 @@ def test_admin_workflow_returns_structured_validation_error(
     assert "target_offer_id" in str(payload["message"])
 
 
+def test_execution_requires_reviewed_head_and_idempotency_key(
+    db_session, subscriber, catalog_offer
+):
+    subscription = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
+        status=SubscriptionStatus.pending,
+    )
+    missing_head = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.activate,
+            source="admin:test",
+            idempotency_key="missing-head",
+        ),
+    )
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
+    missing_key = execute_subscription_command(
+        db_session,
+        SubscriptionLifecycleCommand(
+            subscription_id=str(subscription.id),
+            kind=SubscriptionCommandKind.activate,
+            source="admin:test",
+            expected_head=reviewed.head,
+        ),
+    )
+
+    assert missing_head.error_code == "expected_head_required"
+    assert missing_key.error_code == "idempotency_key_required"
+    db_session.refresh(subscription)
+    assert subscription.status == SubscriptionStatus.pending
+
+
 def test_idempotent_replay_precedes_stale_head_validation(
     db_session, subscriber, catalog_offer
 ):
@@ -232,6 +267,7 @@ def test_reused_idempotency_key_with_changed_payload_is_rejected(
         kind=SubscriptionCommandKind.suspend,
         source="admin:test",
         reason="different command",
+        expected_head=reviewed.head,
         idempotency_key="shared-key",
     )
 
@@ -268,14 +304,20 @@ def test_suspend_and_restore_delegate_to_account_lifecycle(
     db_session, subscriber, catalog_offer
 ):
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
     suspend = SubscriptionLifecycleCommand(
         subscription_id=str(subscription.id),
         kind=SubscriptionCommandKind.suspend,
         source="admin:test",
         reason="operator hold",
+        expected_head=reviewed.head,
+        idempotency_key="suspend-then-restore:suspend",
     )
 
     suspended = execute_subscription_command(db_session, suspend)
+    suspended_head = resolve_subscription_lifecycle(
+        db_session, str(subscription.id)
+    ).head
     restored = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(
@@ -283,6 +325,8 @@ def test_suspend_and_restore_delegate_to_account_lifecycle(
             kind=SubscriptionCommandKind.restore,
             source="admin:test",
             reason="operator cleared hold",
+            expected_head=suspended_head,
+            idempotency_key="suspend-then-restore:restore",
         ),
     )
 
@@ -301,11 +345,13 @@ def test_immediate_plan_change_delegates_to_catalog_owner(
 ):
     target = _target_offer(db_session, catalog_offer)
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
     command = SubscriptionLifecycleCommand(
         subscription_id=str(subscription.id),
         kind=SubscriptionCommandKind.change_plan,
         source="admin:test",
         target_offer_id=str(target.id),
+        expected_head=reviewed.head,
         idempotency_key="plan-now-1",
     )
 
@@ -322,12 +368,14 @@ def test_deferred_plan_change_returns_scheduled_artifact_and_replays_it(
 ):
     target = _target_offer(db_session, catalog_offer)
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
     command = SubscriptionLifecycleCommand(
         subscription_id=str(subscription.id),
         kind=SubscriptionCommandKind.change_plan,
         source="admin:test",
         target_offer_id=str(target.id),
         effective_timing=SubscriptionEffectiveTiming.next_cycle,
+        expected_head=reviewed.head,
         idempotency_key="plan-next-1",
     )
 
@@ -350,6 +398,7 @@ def test_renewal_and_deferred_status_commands_fail_closed(
     db_session, subscriber, catalog_offer
 ):
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
 
     renewal = execute_subscription_command(
         db_session,
@@ -357,6 +406,8 @@ def test_renewal_and_deferred_status_commands_fail_closed(
             subscription_id=str(subscription.id),
             kind=SubscriptionCommandKind.renew,
             source="admin:test",
+            expected_head=reviewed.head,
+            idempotency_key="renewal-owned-by-billing",
         ),
     )
     deferred_cancel = execute_subscription_command(
@@ -367,6 +418,8 @@ def test_renewal_and_deferred_status_commands_fail_closed(
             source="admin:test",
             effective_timing=SubscriptionEffectiveTiming.scheduled,
             effective_at=datetime(2026, 8, 15, tzinfo=UTC),
+            expected_head=reviewed.head,
+            idempotency_key="deferred-status-owned-by-scheduler",
         ),
         now=datetime(2026, 7, 14, tzinfo=UTC),
     )
@@ -381,6 +434,7 @@ def test_future_time_is_not_executed_under_immediate_timing(
     db_session, subscriber, catalog_offer
 ):
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
 
     outcome = execute_subscription_command(
         db_session,
@@ -389,6 +443,8 @@ def test_future_time_is_not_executed_under_immediate_timing(
             kind=SubscriptionCommandKind.cancel,
             source="admin:test",
             effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+            expected_head=reviewed.head,
+            idempotency_key="future-immediate-command",
         ),
         now=datetime(2026, 7, 14, tzinfo=UTC),
     )
@@ -433,6 +489,9 @@ def test_owner_failure_rolls_back_idempotency_reservation(
         subscription_id=str(subscription.id),
         kind=SubscriptionCommandKind.activate,
         source="admin:test",
+        expected_head=resolve_subscription_lifecycle(
+            db_session, str(subscription.id)
+        ).head,
         idempotency_key="activation-owner-failure",
     )
 
@@ -457,6 +516,9 @@ def test_expired_subscription_is_rejected_before_reservation(
         subscription_id=str(subscription.id),
         kind=SubscriptionCommandKind.cancel,
         source="admin:test",
+        expected_head=resolve_subscription_lifecycle(
+            db_session, str(subscription.id)
+        ).head,
         idempotency_key="terminal-cancel",
     )
 

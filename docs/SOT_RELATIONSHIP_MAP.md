@@ -523,12 +523,21 @@ Service intent:
 3. `service_intent.catalog_billing_governance`: owns billing-critical catalog
    mutation safety, audit, and operator alerts. Live pricing/cadence is versioned
    rather than edited in place, and routes require `catalog:billing_write`.
-4. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
+4. `service_intent.subscription_lifecycle`: owns the current/proposed lifecycle
+   projection, command eligibility, reviewed-head contract, and billing/access
+   impact preview.
+5. `service_intent.subscription_lifecycle_execution`: owns serialized,
+   idempotent execution and structured single/batch outcomes. It delegates the
+   resulting mutations to account lifecycle, catalog, billing, scheduler, and
+   RADIUS owners. Admin routes and bulk adapters submit commands to this owner;
+   they do not update subscription status or offers directly.
+6. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
    assignment.
-5. `service_intent.ont`: projects provisioning intent to ONT operations.
+7. `service_intent.ont`: projects provisioning intent to ONT operations.
 
-Rule: catalog policy and subscription owners define commercial intent. Network
-owners project configured intent without a parallel catalog-to-network adapter.
+Rule: catalog policy and subscription owners define commercial intent. Every
+lifecycle execution carries a reviewed head and idempotency key. Network owners
+project configured intent without a parallel catalog-to-network adapter.
 
 Integrations:
 

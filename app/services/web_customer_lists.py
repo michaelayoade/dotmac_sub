@@ -361,8 +361,6 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
         for sub in (person.subscriptions or [])
         if sub.status == SubscriptionStatus.suspended
     ]
-    active_subscription_ids_str = [str(sub.id) for sub in active_subscriptions]
-    suspended_subscription_ids_str = [str(sub.id) for sub in suspended_subscriptions]
     active_subscription_ids = {sub.id for sub in active_subscriptions}
     active_ipam_assignments = sorted(
         (
@@ -441,10 +439,8 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
             pppoe_login,
         ),
         "pppoe_login": pppoe_login,
-        "active_subscription_ids": active_subscription_ids_str,
-        "active_subscription_count": len(active_subscription_ids_str),
-        "suspended_subscription_ids": suspended_subscription_ids_str,
-        "suspended_subscription_count": len(suspended_subscription_ids_str),
+        "active_subscription_count": len(active_subscriptions),
+        "suspended_subscription_count": len(suspended_subscriptions),
         "ipv4": ipv4,
         "ipv4_label": ipv4_label,
         "nas_name": nas_name,
