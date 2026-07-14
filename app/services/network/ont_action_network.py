@@ -61,6 +61,42 @@ _LAN_CONFIG_PATHS = {
     },
 }
 
+_LAN_PORT_PATHS = {
+    "Device": "Ethernet.Interface.{port}.Enable",
+    "InternetGatewayDevice": "LANDevice.1.LANEthernetInterfaceConfig.{port}.Enable",
+}
+
+
+def toggle_lan_port(
+    db: Session,
+    ont_id: str,
+    port: int,
+    enabled: bool,
+) -> ActionResult:
+    """Compatibility writer for LAN ports pending their reconciler slice."""
+    if port < 1 or port > 4:
+        return ActionResult(
+            success=False, message="Port number must be between 1 and 4."
+        )
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error or resolved is None:
+        return error or ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
+    root = detect_data_model_root(db, ont, client, device_id)
+    path = _LAN_PORT_PATHS[root].format(port=port)
+    params = build_tr069_params(root, {path: "true" if enabled else "false"})
+    try:
+        result = set_and_verify(client, device_id, params)
+    except GenieACSError as exc:
+        return genieacs_error_result(exc, "Failed to update LAN port")
+    action_word = "enabled" if enabled else "disabled"
+    logger.info("LAN port %d %s on ONT %s", port, action_word, ont.serial_number)
+    return ActionResult(
+        success=True,
+        message=f"LAN port {port} {action_word}.",
+        data=result,
+    )
+
 
 def _igd_ip_wan_details(
     client: Any,

@@ -20,6 +20,7 @@ from app.services.network.reconcile import (
     AcsSetNatEnabled,
     AcsSetPppoe,
     AcsSetWanIp,
+    AcsSetWifiConfig,
     AcsSetWifiPassword,
     AcsSetWifiSsid,
     ApplyContext,
@@ -40,6 +41,7 @@ from app.services.network.reconcile import (
     OltTr069ServerConfig,
     Plan,
     ReconcileFailureReason,
+    Tr069WifiParameterPaths,
     Tr181WanParameterPaths,
     apply_plan,
 )
@@ -622,6 +624,46 @@ def test_acs_set_wifi_password_pushes_resolved_psk_and_records_redacted():
     # ...but the AppliedAction record carries "[redacted]" so logs/audit
     # never surface the password.
     assert result.actions_applied[0].new_value == "[redacted]"
+
+
+def test_acs_set_wifi_config_batches_fields_and_resolves_password():
+    acs = _StubAcsClient()
+    paths = Tr069WifiParameterPaths(
+        enabled="Device.WiFi.SSID.1.Enable",
+        ssid="Device.WiFi.SSID.1.SSID",
+        psk_path="Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+        channel="Device.WiFi.Radio.1.Channel",
+        security_mode="Device.WiFi.AccessPoint.1.Security.ModeEnabled",
+    )
+    result = apply_plan(
+        _plan(
+            AcsSetWifiConfig(
+                device_id="dev",
+                paths=paths,
+                enabled=False,
+                ssid="DOTMAC",
+                password_ref="bao://wifi",
+                channel=6,
+                security_mode="WPA2-Personal",
+            )
+        ),
+        _ctx(
+            acs_client=acs,
+            resolve_secret=lambda ref: "ACTUAL_PSK" if ref == "bao://wifi" else ref,
+        ),
+    )
+
+    assert result.success is True
+    assert len(acs.calls) == 1
+    params = acs.calls[0][1][1]
+    assert params == {
+        paths.enabled: False,
+        paths.ssid: "DOTMAC",
+        paths.channel: 6,
+        paths.security_mode: "WPA2-Personal",
+        paths.psk_path: "ACTUAL_PSK",
+    }
+    assert "ACTUAL_PSK" not in str(result.actions_applied)
 
 
 def test_acs_set_nat_enabled_pushes_single_param():

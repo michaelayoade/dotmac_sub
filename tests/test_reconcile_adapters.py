@@ -127,11 +127,24 @@ def test_desired_pppoe_credentials_round_trip_through_desired_config(db_session,
 
 
 def test_desired_wifi_credentials_round_trip(db_session, ont):
-    ont.desired_config = {"wifi": {"ssid": "KURSI", "password": "kursimining@98765"}}
+    ont.desired_config = {
+        "wifi": {
+            "ssid": "KURSI",
+            "password": "kursimining@98765",
+            "enabled": False,
+            "channel": "auto",
+            "security_mode": "WPA2-Personal",
+        }
+    }
     db_session.commit()
     desired = desired_from_ont_unit(db_session, ont)
     assert desired.wifi_ssid == "KURSI"
     assert desired.wifi_password_ref == "kursimining@98765"
+    assert desired.wifi_enabled is False
+    assert desired.wifi_channel == 0
+    assert desired.wifi_security_mode == "WPA2-Personal"
+    assert desired.wifi_paths is not None
+    assert desired.wifi_paths.ssid.endswith("WLANConfiguration.1.SSID")
 
 
 def test_desired_defaults_dhcp_pool_for_empty_lan_config(db_session, ont):
@@ -394,6 +407,10 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
             acs_observed_nat_enabled=True,
             acs_observed_dhcp_enabled=True,
             acs_observed_ssid="KURSI",
+            acs_observed_wifi_enabled=True,
+            acs_observed_wifi_channel=6,
+            acs_observed_wifi_security_mode="11i",
+            acs_observed_wifi_instance_index=7,
             acs_observed_periodic_inform_interval_sec=300,
             acs_observed_cr_username="admin",
             acs_observed_cr_username_set=True,
@@ -414,6 +431,10 @@ def test_observed_round_trips_olt_and_acs_fields(db_session, ont):
     assert materialised.olt.olt_description.startswith("Kolawole_Idiaro_2")
     assert materialised.olt.olt_service_ports[0]["vlan"] == 203
     assert materialised.acs.acs_observed_ssid == "KURSI"
+    assert materialised.acs.acs_observed_wifi_enabled is True
+    assert materialised.acs.acs_observed_wifi_channel == 6
+    assert materialised.acs.acs_observed_wifi_security_mode == "11i"
+    assert materialised.acs.acs_observed_wifi_instance_index == 7
     assert materialised.acs.acs_observed_software_version == "V5R019C10S100"
 
 

@@ -62,6 +62,10 @@ def validate_desired(
     if not sp_check.ok:
         return sp_check
 
+    wifi_check = _check_wifi(target, current)
+    if not wifi_check.ok:
+        return wifi_check
+
     contradiction = _check_mode_contradictions(target)
     if not contradiction.ok:
         return contradiction
@@ -113,6 +117,21 @@ def _check_service_port_immutability(
         and target.wan_service_port_index != current.wan_service_port_index
     ):
         return Validation(False, "wan_service_port_index is immutable post-allocation")
+    return Validation(True)
+
+
+def _check_wifi(target: OntDesiredState, current: OntDesiredState) -> Validation:
+    if target.wifi_ssid and len(target.wifi_ssid) > 32:
+        return Validation(False, "wifi_ssid must be at most 32 characters")
+    if (
+        target.wifi_password_ref != current.wifi_password_ref
+        and not 8 <= len(target.wifi_password_ref) <= 63
+    ):
+        return Validation(False, "WiFi password must be 8-63 characters")
+    if target.wifi_channel is not None and not 0 <= target.wifi_channel <= 196:
+        return Validation(False, "wifi_channel must be between 0 and 196")
+    if target.wifi_security_mode and len(target.wifi_security_mode) > 40:
+        return Validation(False, "wifi_security_mode must be at most 40 characters")
     return Validation(True)
 
 

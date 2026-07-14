@@ -399,6 +399,8 @@ def set_ont_wifi_config(
         password=payload.password,
         enabled=payload.enabled,
         band=payload.band,
+        channel=payload.channel,
+        security_mode=payload.security_mode,
     )
     return _action_response(result)
 

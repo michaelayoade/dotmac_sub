@@ -52,8 +52,7 @@ from .actions import (
     AcsSetNatEnabled,
     AcsSetPppoe,
     AcsSetWanIp,
-    AcsSetWifiPassword,
-    AcsSetWifiSsid,
+    AcsSetWifiConfig,
     Action,
     OltAuthorize,
     OltClearIphost,
@@ -74,8 +73,10 @@ from .state import (
     OntDesiredState,
     OntObservedState,
     ReconcileMode,
+    Tr069WifiParameterPaths,
     WriteSurface,
 )
+from .wifi_paths import wifi_paths_for_instance
 
 # ── Plan ────────────────────────────────────────────────────────────────────
 
@@ -100,12 +101,36 @@ class Plan:
         return not self.actions
 
 
+@dataclass(frozen=True)
+class _WifiChanges:
+    enabled: bool | None
+    ssid: str | None
+    channel: int | None
+    security_mode: str | None
+    drifts: tuple[tuple[str, object, object], ...]
+
+    @property
+    def has_values(self) -> bool:
+        return any(
+            value is not None
+            for value in (self.enabled, self.ssid, self.channel, self.security_mode)
+        )
+
+
 # ── compute_plan ────────────────────────────────────────────────────────────
 
 # Fields a narrow WiFi UI edit may touch. When an operator's proposed change is
 # confined to these, the plan is scoped to the matching ACS writes so unrelated
 # OLT drift doesn't block the action.
-_WIFI_ONLY_FIELDS = frozenset({"wifi_ssid", "wifi_password_ref"})
+_WIFI_ONLY_FIELDS = frozenset(
+    {
+        "wifi_ssid",
+        "wifi_password_ref",
+        "wifi_enabled",
+        "wifi_channel",
+        "wifi_security_mode",
+    }
+)
 _ACS_ENDPOINT_FIELDS = frozenset({"acs_url", "acs_username", "acs_password_ref"})
 
 
@@ -493,34 +518,50 @@ def _plan_acs_side(
                 )
             )
 
-    # WiFi SSID — observable. Push when the read value differs OR when this
-    # is a fresh bring-up (no ACS record yet — we have to seed it).
-    push_ssid = _observed_differs(
-        observed.acs.acs_observed_ssid, desired.wifi_ssid
-    ) or (not observed.acs.acs_present)
-    if push_ssid:
-        actions.append(AcsSetWifiSsid(device_id=device_id, ssid=desired.wifi_ssid))
-        drifts.append(
-            Drift(
-                field="wifi_ssid",
-                surface="acs",
-                desired=desired.wifi_ssid,
-                observed=observed.acs.acs_observed_ssid,
-                repairable=True,
-            )
-        )
-
-    # WiFi password — unobservable, mode-gated (Hole 3 resolution).
-    if _should_push_wifi_password(
+    push_password = _should_push_wifi_password(
         mode,
         observed,
         proposed_fields,
         force_proposed_writes,
-    ):
+    )
+    wifi_changes = _wifi_changes(
+        desired,
+        observed,
+        proposed_fields=proposed_fields,
+        force_proposed_writes=force_proposed_writes,
+    )
+    wifi_paths = desired.wifi_paths or _standard_wifi_paths(
+        observed.acs.acs_data_model_root or desired.tr069_data_model_root
+    )
+    if observed.acs.acs_observed_wifi_instance_index is not None:
+        wifi_paths = wifi_paths_for_instance(
+            wifi_paths,
+            observed.acs.acs_data_model_root or desired.tr069_data_model_root,
+            observed.acs.acs_observed_wifi_instance_index,
+        )
+    for field, desired_value, observed_value in wifi_changes.drifts:
+        drifts.append(
+            Drift(
+                field=field,
+                surface="acs",
+                desired=desired_value,
+                observed=observed_value,
+                repairable=wifi_paths is not None,
+            )
+        )
+
+    # WiFi fields share one CWMP transaction. Password remains mode-gated
+    # because it is write-only on deployed Huawei firmware.
+    if wifi_paths is not None and (wifi_changes.has_values or push_password):
         actions.append(
-            AcsSetWifiPassword(
+            AcsSetWifiConfig(
                 device_id=device_id,
-                password_ref=desired.wifi_password_ref,
+                paths=wifi_paths,
+                enabled=wifi_changes.enabled,
+                ssid=wifi_changes.ssid,
+                password_ref=(desired.wifi_password_ref if push_password else None),
+                channel=wifi_changes.channel,
+                security_mode=wifi_changes.security_mode,
             )
         )
 
@@ -719,6 +760,121 @@ def _observed_differs(observed_value, desired_value) -> bool:
     if observed_value is None:
         return False
     return observed_value != desired_value
+
+
+def _wifi_changes(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+    *,
+    proposed_fields: frozenset[str],
+    force_proposed_writes: bool,
+) -> _WifiChanges:
+    """Return observable WiFi drift and values for one batched write."""
+    acs = observed.acs
+    root = acs.acs_data_model_root or desired.tr069_data_model_root
+    desired_security = _normalise_wifi_security_mode(desired.wifi_security_mode, root)
+    observed_security = _normalise_wifi_security_mode(
+        acs.acs_observed_wifi_security_mode, root
+    )
+    candidates = (
+        ("wifi_ssid", "ssid", desired.wifi_ssid, acs.acs_observed_ssid),
+        (
+            "wifi_enabled",
+            "enabled",
+            desired.wifi_enabled,
+            acs.acs_observed_wifi_enabled,
+        ),
+        (
+            "wifi_channel",
+            "channel",
+            desired.wifi_channel,
+            acs.acs_observed_wifi_channel,
+        ),
+        (
+            "wifi_security_mode",
+            "security_mode",
+            desired_security,
+            observed_security,
+        ),
+    )
+    values: dict[str, object] = {}
+    drifts: list[tuple[str, object, object]] = []
+    for field, action_key, desired_value, observed_value in candidates:
+        if desired_value is None:
+            continue
+        forced = force_proposed_writes and field in proposed_fields
+        differs = _observed_differs(observed_value, desired_value)
+        fresh = not acs.acs_present
+        if not (forced or differs or fresh):
+            continue
+        values[action_key] = desired_value
+        drifts.append((field, desired_value, observed_value))
+    enabled = values.get("enabled")
+    ssid = values.get("ssid")
+    channel = values.get("channel")
+    security_mode = values.get("security_mode")
+    return _WifiChanges(
+        enabled=enabled if isinstance(enabled, bool) else None,
+        ssid=ssid if isinstance(ssid, str) else None,
+        channel=channel if isinstance(channel, int) else None,
+        security_mode=security_mode if isinstance(security_mode, str) else None,
+        drifts=tuple(drifts),
+    )
+
+
+def _normalise_wifi_security_mode(value: str | None, root: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if root != "InternetGatewayDevice":
+        return text
+    aliases = {
+        "none": "None",
+        "open": "None",
+        "wep": "Basic",
+        "basic": "Basic",
+        "wpa": "WPA",
+        "wpa-personal": "WPA",
+        "wpapsk": "WPA",
+        "wpa-psk": "WPA",
+        "wpa2": "11i",
+        "wpa2-personal": "11i",
+        "wpa2psk": "11i",
+        "wpa2-psk": "11i",
+        "11i": "11i",
+        "wpa-wpa2": "WPAand11i",
+        "wpa-wpa2-personal": "WPAand11i",
+        "wpa/wpa2": "WPAand11i",
+        "wpa2/wpa": "WPAand11i",
+        "wpaand11i": "WPAand11i",
+        "mixed": "WPAand11i",
+    }
+    return aliases.get(text.lower(), text)
+
+
+def _standard_wifi_paths(root: str | None) -> Tr069WifiParameterPaths:
+    if root == "Device":
+        return Tr069WifiParameterPaths(
+            enabled="Device.WiFi.SSID.1.Enable",
+            ssid="Device.WiFi.SSID.1.SSID",
+            psk_path="Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+            channel="Device.WiFi.Radio.1.Channel",
+            security_mode="Device.WiFi.AccessPoint.1.Security.ModeEnabled",
+        )
+    return Tr069WifiParameterPaths(
+        enabled="InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
+        ssid="InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+        psk_path=(
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1."
+            "PreSharedKey.1.PreSharedKey"
+        ),
+        channel="InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Channel",
+        security_mode=(
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType"
+        ),
+    )
 
 
 def _iphost_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:

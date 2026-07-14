@@ -154,6 +154,8 @@ class OntWifiConfigRequest(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=63)
     enabled: bool | None = None
     band: str | None = None  # 2.4ghz, 5ghz
+    channel: int | None = Field(default=None, ge=0, le=196)
+    security_mode: str | None = Field(default=None, max_length=40)
 
 
 class OntFeatureToggleRequest(BaseModel):

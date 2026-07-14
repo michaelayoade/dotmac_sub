@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from .state import Tr181WanParameterPaths, WriteSurface
+from .state import Tr069WifiParameterPaths, Tr181WanParameterPaths, WriteSurface
 
 # ── OLT-side actions ────────────────────────────────────────────────────────
 
@@ -348,6 +348,27 @@ class AcsSetWifiPassword:
 
 
 @dataclass(frozen=True)
+class AcsSetWifiConfig:
+    """Apply all changed WiFi fields in one CWMP transaction.
+
+    One combined request avoids a separate connection-request round trip for
+    every field. ``None`` means that field is not part of this action; ``False``
+    and channel ``0`` remain explicit values.
+    """
+
+    surface: ClassVar[WriteSurface] = "acs"
+    requires_reset: ClassVar[bool] = False
+
+    device_id: str
+    paths: Tr069WifiParameterPaths
+    enabled: bool | None = None
+    ssid: str | None = None
+    password_ref: str | None = None
+    channel: int | None = None
+    security_mode: str | None = None
+
+
+@dataclass(frozen=True)
 class AcsSetNatEnabled:
     """``setParameterValues`` for ``WANPPPConnection.NATEnabled``.
 
@@ -469,6 +490,7 @@ AcsAction = (
     | AcsSetPppoe
     | AcsSetWifiSsid
     | AcsSetWifiPassword
+    | AcsSetWifiConfig
     | AcsSetNatEnabled
     | AcsSetIpv6
     | AcsSetWanIp
@@ -493,6 +515,7 @@ __all__ = (
     "AcsSetNatEnabled",
     "AcsSetPppoe",
     "AcsSetWifiPassword",
+    "AcsSetWifiConfig",
     "AcsSetWifiSsid",
     "OltAuthorize",
     "OltClearIphost",

@@ -19,6 +19,7 @@ import pytest
 from app.services.genieacs_client import GenieACSError
 from app.services.network.reconcile import (
     OntDesiredState,
+    Tr069WifiParameterPaths,
     Tr181WanParameterPaths,
     read_acs_state,
     read_olt_state,
@@ -774,7 +775,14 @@ def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
             "LANDevice": {
                 "1": {
                     "LANHostConfigManagement": {"DHCPServerEnable": _leaf("true")},
-                    "WLANConfiguration": {"1": {"SSID": _leaf("KURSI")}},
+                    "WLANConfiguration": {
+                        "1": {
+                            "SSID": _leaf("KURSI"),
+                            "Enable": _leaf("true"),
+                            "Channel": _leaf("6"),
+                            "BeaconType": _leaf("11i"),
+                        }
+                    },
                 }
             },
         },
@@ -819,6 +827,25 @@ def test_acs_reader_uses_trailing_serial_regex_match():
     assert "Device.IP.Interface" in projection
 
 
+def test_acs_reader_never_projects_wifi_psk() -> None:
+    desired = _desired(
+        wifi_paths=Tr069WifiParameterPaths(
+            enabled="Device.WiFi.SSID.1.Enable",
+            ssid="Device.WiFi.SSID.1.SSID",
+            psk_path="Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+            channel="Device.WiFi.Radio.1.Channel",
+            security_mode="Device.WiFi.AccessPoint.1.Security.ModeEnabled",
+        )
+    )
+    client = _StubGenieAcsClient(devices=[])
+
+    read_acs_state(client, desired)
+
+    projection = client.list_calls[0][1]
+    assert "Device.WiFi.SSID.1.SSID" in projection
+    assert "KeyPassphrase" not in projection
+
+
 def test_acs_reader_parses_a_full_device_document():
     client = _StubGenieAcsClient(devices=[_device_doc()])
     result = read_acs_state(client, _desired())
@@ -833,6 +860,10 @@ def test_acs_reader_parses_a_full_device_document():
     assert obs.acs_observed_nat_enabled is True
     assert obs.acs_observed_dhcp_enabled is True
     assert obs.acs_observed_ssid == "KURSI"
+    assert obs.acs_observed_wifi_enabled is True
+    assert obs.acs_observed_wifi_channel == 6
+    assert obs.acs_observed_wifi_security_mode == "11i"
+    assert obs.acs_observed_wifi_instance_index == 1
     assert obs.acs_observed_periodic_inform_interval_sec == 300
     assert obs.acs_observed_cr_username == "admin"
     assert obs.acs_observed_cr_username_set is True
@@ -843,6 +874,30 @@ def test_acs_reader_parses_a_full_device_document():
     assert obs.acs_observed_wan_wcd_index == 1
     assert obs.acs_observed_wan_instance_index == 1
     assert obs.acs_observed_wan_ppp_locations == ((1, 1),)
+
+
+def test_acs_reader_selects_active_wifi_instance() -> None:
+    doc = _device_doc()
+    wlan = doc["InternetGatewayDevice"]["LANDevice"]["1"]["WLANConfiguration"]
+    wlan["1"] = {
+        "SSID": _leaf("placeholder"),
+        "Enable": _leaf("false"),
+        "Status": _leaf("Down"),
+    }
+    wlan["7"] = {
+        "SSID": _leaf("CUSTOMER"),
+        "Enable": _leaf("true"),
+        "Status": _leaf("Up"),
+        "Channel": _leaf("11"),
+        "BeaconType": _leaf("11i"),
+    }
+
+    observed = read_acs_state(_StubGenieAcsClient(devices=[doc]), _desired()).observed
+
+    assert observed is not None
+    assert observed.acs_observed_wifi_instance_index == 7
+    assert observed.acs_observed_ssid == "CUSTOMER"
+    assert observed.acs_observed_wifi_channel == 11
 
 
 def test_acs_reader_parses_tr098_static_wan_ip_state():

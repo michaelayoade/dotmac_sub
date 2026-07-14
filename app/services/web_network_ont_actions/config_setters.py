@@ -14,6 +14,7 @@ from app.services.network.effective_ont_config import resolve_effective_ont_conf
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_desired_config import set_access_flag
+from app.services.network.ont_features import OntFeatureService
 from app.services.network.provisioning_settings import (
     get_olt_write_mode_enabled,
     get_pppoe_provisioning_method,
@@ -615,7 +616,7 @@ def set_wifi_config(
     request: Request | None = None,
 ) -> ActionResult:
     """Set WiFi radio, SSID, security, and password fields."""
-    result = genieacs_service.set_wifi_config(
+    result = OntFeatureService.set_wifi_config(
         db,
         ont_id,
         enabled=enabled,
