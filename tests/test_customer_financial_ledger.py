@@ -4,6 +4,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from app.models.billing import (
+    CreditNote,
+    CreditNoteStatus,
     Invoice,
     InvoiceStatus,
     LedgerEntry,
@@ -15,7 +17,12 @@ from app.models.billing import (
 from app.models.splynx_transaction import SplynxBillingTransaction
 from app.services.customer_financial_ledger import (
     calculate_customer_balance,
+    customer_financial_balances_by_currency,
     list_customer_financial_events,
+)
+from app.services.customer_financial_position import (
+    prepaid_available_balance,
+    prepaid_available_balances,
 )
 
 
@@ -91,6 +98,9 @@ def test_canonical_ledger_uses_real_legacy_and_post_cutover_documents(
         "Service charge",
     ]
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("75.00")
+    assert customer_financial_balances_by_currency(db_session, [subscriber.id]) == {
+        subscriber.id: {"NGN": Decimal("75.00")}
+    }
 
 
 def test_canonical_ledger_includes_native_real_adjustments_only(db_session, subscriber):
@@ -119,3 +129,69 @@ def test_canonical_ledger_includes_native_real_adjustments_only(db_session, subs
     events = list_customer_financial_events(db_session, subscriber.id, currency=None)
     assert [event.memo for event in events] == ["Approved billing adjustment"]
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("120.00")
+    assert customer_financial_balances_by_currency(db_session, [subscriber.id]) == {
+        subscriber.id: {"NGN": Decimal("120.00")}
+    }
+
+
+def test_bulk_balance_matches_canonical_multi_currency_refund_rules(
+    db_session, subscriber
+):
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=Decimal("100.00"),
+        refunded_amount=Decimal("20.00"),
+        currency="USD",
+        status=PaymentStatus.partially_refunded,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    db_session.add_all(
+        [
+            Invoice(
+                account_id=subscriber.id,
+                status=InvoiceStatus.issued,
+                total=Decimal("30.00"),
+                balance_due=Decimal("30.00"),
+                currency="USD",
+                is_proforma=False,
+            ),
+            CreditNote(
+                account_id=subscriber.id,
+                status=CreditNoteStatus.issued,
+                total=Decimal("5.00"),
+                currency="USD",
+            ),
+            LedgerEntry(
+                account_id=subscriber.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.adjustment,
+                amount=Decimal("200.00"),
+                currency="NGN",
+                memo="Approved customer credit",
+            ),
+            # The payment document already represents this refund through
+            # refunded_amount, so the linked ledger row must not count twice.
+            LedgerEntry(
+                account_id=subscriber.id,
+                payment_id=payment.id,
+                entry_type=LedgerEntryType.debit,
+                source=LedgerSource.refund,
+                amount=Decimal("20.00"),
+                currency="USD",
+                memo="Provider refund",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    assert customer_financial_balances_by_currency(db_session, [subscriber.id]) == {
+        subscriber.id: {
+            "NGN": Decimal("200.00"),
+            "USD": Decimal("55.00"),
+        }
+    }
+    assert prepaid_available_balance(db_session, subscriber.id) == Decimal("55.00")
+    assert prepaid_available_balances(db_session, [subscriber.id]) == {
+        subscriber.id: Decimal("55.00")
+    }
