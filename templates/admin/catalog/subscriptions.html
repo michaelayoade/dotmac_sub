@@ -7,29 +7,34 @@
 <div class="space-y-6" x-data="subscriptionBulkActions()" x-cloak.remove>
     <!-- Bulk Action Bar -->
     <div x-show="selectedIds.length > 0" x-cloak
-         class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
-        <div class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white px-6 py-3 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+         class="fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-4xl -translate-x-1/2">
+        <div class="flex flex-wrap items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-xl dark:border-slate-700 dark:bg-slate-800">
             <span class="text-sm font-medium text-slate-600 dark:text-slate-300">
                 <span x-text="selectedIds.length" class="font-bold text-primary-600"></span> selected
             </span>
             <div class="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
-            <button type="button" @click="bulkActivate()"
+            <button type="button" @click="openBulkLifecycle('activate')"
                     class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                 Activate
             </button>
-            <button type="button" @click="bulkSuspend()"
+            <button type="button" @click="openBulkLifecycle('restore')"
+                    class="inline-flex items-center gap-2 rounded-lg border border-emerald-600 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-900/20">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5 19a9 9 0 0014.13-3M19 5A9 9 0 004.87 8"/></svg>
+                Restore
+            </button>
+            <button type="button" @click="openBulkLifecycle('suspend')"
                     class="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Suspend
             </button>
-            <button type="button" @click="bulkCancel()"
+            <button type="button" @click="openBulkLifecycle('cancel')"
                     class="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                 Cancel
             </button>
-            <button type="button" @click="showChangePlanModal = true"
-                    class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700">
+            <button type="button" @click="openBulkLifecycle('change_plan')"
+                    class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
                 Change Plan
             </button>
@@ -170,45 +175,119 @@
         {% endif %}
     </div>
 
-{# Bulk Change Plan Modal — kept inside subscriptionBulkActions() x-data scope #}
-<div x-show="showChangePlanModal" x-transition.opacity x-cloak
-     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-     @keydown.escape.window="showChangePlanModal = false">
-    <div @click.outside="showChangePlanModal = false"
-         class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-        <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change Plan</h3>
-        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Move <span x-text="selectedIds.length" class="font-bold"></span> selected subscription(s) to a new plan.
-        </p>
-        <div class="mt-4">
-            <label for="bulk-target-offer" class="block text-sm font-medium text-slate-700 dark:text-slate-300">New Plan</label>
-            <select id="bulk-target-offer" x-model="targetOfferId"
-                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="">Select a plan</option>
-                {% for offer in offer_options or [] %}
-                <option value="{{ offer.id }}">{{ offer.label }}</option>
-                {% endfor %}
-            </select>
+{# Canonical batch preview, confirmation, and outcome modal. #}
+<div x-show="showLifecycleModal" x-transition.opacity x-cloak
+     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+     @keydown.escape.window="closeLifecycle()">
+    <div @click.outside="closeLifecycle()"
+         class="flex max-h-[92vh] w-full max-w-4xl flex-col rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800"
+         role="dialog" aria-modal="true" aria-labelledby="bulk-lifecycle-title">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h3 id="bulk-lifecycle-title" class="text-lg font-semibold text-slate-900 dark:text-white" x-text="actionTitle()"></h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400"><span x-text="selectedIds.length"></span> selected subscriptions</p>
         </div>
-        <div class="mt-4 flex items-start gap-2">
-            <input type="checkbox" id="bulk-include-suspended" x-model="includeSuspended"
-                   class="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
-            <label for="bulk-include-suspended" class="text-sm text-slate-700 dark:text-slate-300">
-                Also change suspended subscriptions
-                <span class="block text-xs text-slate-500 dark:text-slate-400">By default only active subscriptions are changed.</span>
-            </label>
+
+        <div class="space-y-4 overflow-y-auto px-6 py-5">
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div x-show="kind === 'change_plan'" x-cloak>
+                    <label for="bulk-target-offer" class="block text-sm font-medium text-slate-700 dark:text-slate-300">New plan</label>
+                    <select id="bulk-target-offer" x-model="targetOfferId" @change="refreshPreview()"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select a plan</option>
+                        {% for offer in offer_options or [] %}
+                        <option value="{{ offer.id }}">{{ offer.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="bulk-effective-timing" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Effective</label>
+                    <select id="bulk-effective-timing" x-model="effectiveTiming" @change="timingChanged()"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="immediate">Immediately</option>
+                        <option value="next_cycle">At each next billing cycle</option>
+                        <option value="scheduled">On a specific date</option>
+                    </select>
+                </div>
+                <div x-show="effectiveTiming === 'scheduled'" x-cloak>
+                    <label for="bulk-effective-at" class="block text-sm font-medium text-slate-700 dark:text-slate-300" x-text="kind === 'change_plan' ? 'Effective date' : 'Effective date and time'"></label>
+                    <input id="bulk-effective-at" :type="kind === 'change_plan' ? 'date' : 'datetime-local'" x-model="effectiveAt" @change="refreshPreview()"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div :class="kind === 'change_plan' || effectiveTiming === 'scheduled' ? '' : 'sm:col-span-2'">
+                    <label for="bulk-reason" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reason</label>
+                    <input id="bulk-reason" type="text" x-model="reason" @change="refreshPreview()"
+                           class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                           placeholder="Operational reason for this change">
+                </div>
+            </div>
+
+            <div x-show="previewLoading" class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Reviewing selected subscriptions...</div>
+            <div x-show="errorMessage" x-cloak class="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300" x-text="errorMessage"></div>
+
+            <template x-if="preview && !result">
+                <div class="space-y-4">
+                    <div class="grid grid-cols-3 divide-x divide-slate-200 border-y border-slate-200 py-3 text-center dark:divide-slate-700 dark:border-slate-700">
+                        <div><p class="text-xl font-semibold text-slate-900 dark:text-white" x-text="preview.total"></p><p class="text-xs text-slate-500 dark:text-slate-400">Selected</p></div>
+                        <div><p class="text-xl font-semibold text-emerald-700 dark:text-emerald-300" x-text="preview.eligible_count"></p><p class="text-xs text-slate-500 dark:text-slate-400">Eligible</p></div>
+                        <div><p class="text-xl font-semibold text-red-700 dark:text-red-300" x-text="preview.ineligible_count"></p><p class="text-xs text-slate-500 dark:text-slate-400">Ineligible</p></div>
+                    </div>
+
+                    <dl class="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                        <div class="flex justify-between gap-3 border-b border-slate-100 py-2 dark:border-slate-700"><dt class="text-slate-500 dark:text-slate-400">Billing</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="summary(preview.billing_impact.actions)"></dd></div>
+                        <div class="flex justify-between gap-3 border-b border-slate-100 py-2 dark:border-slate-700"><dt class="text-slate-500 dark:text-slate-400">Net amount</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="moneySummary(preview.billing_impact.net_amounts)"></dd></div>
+                        <div class="flex justify-between gap-3 border-b border-slate-100 py-2 dark:border-slate-700 sm:col-span-2"><dt class="text-slate-500 dark:text-slate-400">Access/session impact</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="summary(preview.access_impact.session_actions)"></dd></div>
+                    </dl>
+
+                    <div class="max-h-72 overflow-auto border border-slate-200 dark:border-slate-700">
+                        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                            <thead class="sticky top-0 bg-slate-50 text-left text-xs uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr><th class="px-3 py-2">Subscription</th><th class="px-3 py-2">Current</th><th class="px-3 py-2">Proposed</th><th class="px-3 py-2">Effective</th><th class="px-3 py-2">Eligibility</th></tr></thead>
+                            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                                <template x-for="item in preview.items" :key="item.subscription_id">
+                                    <tr>
+                                        <td class="whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-700 dark:text-slate-300" x-text="shortId(item.subscription_id)"></td>
+                                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300" x-text="humanize(item.current?.status || 'unknown')"></td>
+                                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300" x-text="humanize(item.proposed?.status || 'none')"></td>
+                                        <td class="whitespace-nowrap px-3 py-2 text-slate-500 dark:text-slate-400" x-text="formatDate(item.effective_at)"></td>
+                                        <td class="px-3 py-2"><span :class="item.eligible ? 'text-emerald-700 dark:text-emerald-300' : 'text-red-700 dark:text-red-300'" x-text="item.eligible ? 'Eligible' : reasonLabel(item)"></span></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </template>
+
+            <template x-if="result">
+                <div class="space-y-4">
+                    <div :class="result.status === 'completed' ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300' : result.status === 'partial' ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200' : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300'" class="border px-4 py-3 text-sm">
+                        <p class="font-semibold" x-text="humanize(result.status)"></p>
+                        <p x-text="result.message"></p>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
+                        <div><p class="text-xl font-semibold text-emerald-700 dark:text-emerald-300" x-text="result.counts.applied"></p><p class="text-xs text-slate-500">Applied</p></div>
+                        <div><p class="text-xl font-semibold text-sky-700 dark:text-sky-300" x-text="result.counts.scheduled"></p><p class="text-xs text-slate-500">Scheduled</p></div>
+                        <div><p class="text-xl font-semibold text-amber-700 dark:text-amber-300" x-text="result.counts.rejected + result.counts.superseded"></p><p class="text-xs text-slate-500">Not applied</p></div>
+                        <div><p class="text-xl font-semibold text-red-700 dark:text-red-300" x-text="result.counts.failed"></p><p class="text-xs text-slate-500">Failed</p></div>
+                    </div>
+                    <div class="max-h-72 overflow-auto border border-slate-200 dark:border-slate-700">
+                        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                            <thead class="sticky top-0 bg-slate-50 text-left text-xs uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400"><tr><th class="px-3 py-2">Subscription</th><th class="px-3 py-2">Outcome</th><th class="px-3 py-2">Detail</th></tr></thead>
+                            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                                <template x-for="item in result.items" :key="item.subscription_id">
+                                    <tr><td class="whitespace-nowrap px-3 py-2 font-mono text-xs text-slate-700 dark:text-slate-300" x-text="shortId(item.subscription_id)"></td><td class="px-3 py-2 font-medium" x-text="humanize(item.status)"></td><td class="px-3 py-2 text-slate-500 dark:text-slate-400" x-text="item.message"></td></tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </template>
         </div>
-        <div class="mt-6 flex justify-end gap-3">
-            <button @click="showChangePlanModal = false"
-                    class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
-                Cancel
-            </button>
-            <button @click="bulkChangePlan()"
-                    :disabled="!targetOfferId || bulkBusy"
-                    :class="(targetOfferId && !bulkBusy) ? 'bg-violet-600 hover:bg-violet-700' : 'bg-slate-300 cursor-not-allowed'"
-                    class="rounded-lg px-4 py-2 text-sm font-medium text-white">
-                <span x-show="!bulkBusy">Apply Change</span>
-                <span x-show="bulkBusy">Applying…</span>
+
+        <div class="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-700">
+            <button type="button" @click="closeLifecycle()" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200" x-text="result ? 'Close and refresh' : 'Close'"></button>
+            <button x-show="!result" type="button" @click="executeLifecycle()" :disabled="bulkBusy || previewLoading || !preview || preview.eligible_count === 0"
+                    class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50">
+                <span x-text="bulkBusy ? 'Applying...' : confirmLabel()"></span>
             </button>
         </div>
     </div>
@@ -219,9 +298,20 @@
 function subscriptionBulkActions() {
     return {
         selectedIds: [],
-        showChangePlanModal: false,
+        showLifecycleModal: false,
+        kind: '',
         targetOfferId: '',
-        includeSuspended: false,
+        effectiveTiming: 'immediate',
+        effectiveAt: '',
+        reason: '',
+        preview: null,
+        result: null,
+        previewLoading: false,
+        bulkBusy: false,
+        errorMessage: '',
+        idempotencyKey: '',
+        previewRequestId: 0,
+        csrfToken: document.querySelector('meta[name="csrf-token"]')?.content || document.querySelector('[name="_csrf_token"]')?.value || '',
         subscriptionIds: [{% for subscription in subscriptions %}'{{ subscription.id }}'{% if not loop.last %}, {% endif %}{% endfor %}],
 
         toggleSelection(id) {
@@ -245,126 +335,142 @@ function subscriptionBulkActions() {
             this.selectedIds = [];
         },
 
-        bulkBusy: false,
-
-        async bulkAction(action) {
+        openBulkLifecycle(kind) {
             if (this.selectedIds.length === 0) return;
-            if (this.bulkBusy) return;  // double-submit guard
+            this.previewRequestId += 1;
+            this.kind = kind;
+            this.targetOfferId = '';
+            this.effectiveTiming = 'immediate';
+            this.effectiveAt = '';
+            this.reason = '';
+            this.preview = null;
+            this.result = null;
+            this.errorMessage = '';
+            this.idempotencyKey = '';
+            this.showLifecycleModal = true;
+            if (kind !== 'change_plan') this.refreshPreview();
+        },
+
+        closeLifecycle() {
+            if (this.bulkBusy) return;
+            this.previewRequestId += 1;
+            this.previewLoading = false;
+            this.showLifecycleModal = false;
+            if (this.result) window.location.reload();
+        },
+
+        timingChanged() {
+            if (this.effectiveTiming !== 'scheduled') this.effectiveAt = '';
+            this.refreshPreview();
+        },
+
+        actionTitle() {
+            return `${this.humanize(this.kind)} subscriptions`;
+        },
+
+        confirmLabel() {
+            return this.effectiveTiming === 'immediate' ? 'Confirm changes' : 'Schedule changes';
+        },
+
+        humanize(value) {
+            return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, char => char.toUpperCase());
+        },
+
+        shortId(value) {
+            const text = String(value || '');
+            return text.length > 12 ? `${text.slice(0, 8)}...` : text;
+        },
+
+        formatDate(value) {
+            return value ? new Date(value).toLocaleString() : '-';
+        },
+
+        reasonLabel(item) {
+            return this.humanize(item.eligibility_reasons?.[0] || item.error_code || 'Not eligible');
+        },
+
+        summary(values) {
+            const entries = Object.entries(values || {});
+            if (!entries.length) return 'No change';
+            return entries.map(([name, count]) => `${count} ${this.humanize(name)}`).join(', ');
+        },
+
+        moneySummary(values) {
+            const entries = Object.entries(values || {}).filter(([, amount]) => Number(amount) !== 0);
+            if (!entries.length) return 'No net charge';
+            return entries.map(([currency, amount]) => `${currency === 'N/A' ? '' : currency + ' '}${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim()).join(', ');
+        },
+
+        commandBody(includeReview = false) {
+            const body = new URLSearchParams({
+                subscription_ids: this.selectedIds.join(','),
+                kind: this.kind,
+                effective_timing: this.effectiveTiming,
+                reason: this.reason,
+                _csrf_token: this.csrfToken,
+            });
+            if (this.targetOfferId) body.set('target_offer_id', this.targetOfferId);
+            if (this.effectiveTiming === 'scheduled' && this.effectiveAt) {
+                const localValue = this.effectiveAt.includes('T') ? this.effectiveAt : `${this.effectiveAt}T00:00:00`;
+                body.set('effective_at', new Date(localValue).toISOString());
+            }
+            if (includeReview && this.preview) body.set('reviewed_heads', JSON.stringify(this.preview.reviewed_heads));
+            return body;
+        },
+
+        async refreshPreview() {
+            const requestId = ++this.previewRequestId;
+            this.preview = null;
+            this.result = null;
+            this.idempotencyKey = '';
+            this.errorMessage = '';
+            if (!this.kind || (this.kind === 'change_plan' && !this.targetOfferId)) return;
+            if (this.effectiveTiming === 'scheduled' && !this.effectiveAt) return;
+            this.previewLoading = true;
+            try {
+                const response = await fetch('/admin/catalog/subscriptions/bulk/lifecycle/preview', {
+                    method: 'POST',
+                    headers: { 'X-CSRF-Token': this.csrfToken },
+                    body: this.commandBody(),
+                });
+                const data = await response.json();
+                if (requestId !== this.previewRequestId) return;
+                if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+                this.preview = data;
+                this.idempotencyKey = window.crypto?.randomUUID?.() || `${Date.now()}-${this.kind}`;
+            } catch (error) {
+                if (requestId !== this.previewRequestId) return;
+                this.errorMessage = error.message || 'Could not preview the selected subscriptions.';
+            } finally {
+                if (requestId === this.previewRequestId) this.previewLoading = false;
+            }
+        },
+
+        async executeLifecycle() {
+            if (this.bulkBusy || !this.preview || this.preview.eligible_count === 0) return;
             this.bulkBusy = true;
-
-            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
-                             document.querySelector('[name="_csrf_token"]')?.value || '';
-
+            this.errorMessage = '';
+            const action = this.kind === 'change_plan' ? 'change-plan' : this.kind;
             try {
                 const response = await fetch(`/admin/catalog/subscriptions/bulk/${action}`, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'X-CSRF-Token': csrfToken
+                        'X-CSRF-Token': this.csrfToken,
+                        'Idempotency-Key': this.idempotencyKey,
                     },
-                    body: `subscription_ids=${this.selectedIds.join(',')}`
+                    body: this.commandBody(true),
                 });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    const skipped = result.skipped_ids || [];
-                    const failed = result.failed_ids || [];
-                    if (failed.length > 0 || skipped.length > 0) {
-                        // Blocking summary so a partial result can't be missed.
-                        let detail = result.message || 'Bulk action partially completed.';
-                        if (skipped.length) detail += `\nSkipped (not eligible): ${skipped.join(', ')}`;
-                        if (failed.length) detail += `\nFailed: ${failed.join(', ')}`;
-                        alert(detail);
-                    } else {
-                        // Persist the toast across the reload that used to destroy it.
-                        sessionStorage.setItem('bulk_result_toast', result.message || 'Subscriptions updated');
-                    }
-                    window.location.reload();
-                } else {
-                    const error = await response.json().catch(() => ({}));
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: error.message || error.detail || `Failed to ${action} subscriptions`, type: 'error' }
-                    }));
-                    this.bulkBusy = false;
-                }
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.message || `HTTP ${response.status}`);
+                this.result = data;
             } catch (error) {
-                window.dispatchEvent(new CustomEvent('show-toast', {
-                    detail: { message: `Bulk ${action} failed: ${error.message || 'network error'}`, type: 'error' }
-                }));
-                this.bulkBusy = false;
-            }
-        },
-
-        bulkActivate() {
-            if (confirm(`Activate ${this.selectedIds.length} selected subscriptions?`)) {
-                this.bulkAction('activate');
-            }
-        },
-
-        bulkSuspend() {
-            if (confirm(`Suspend ${this.selectedIds.length} selected subscriptions?`)) {
-                this.bulkAction('suspend');
-            }
-        },
-
-        bulkCancel() {
-            if (confirm(`Cancel ${this.selectedIds.length} selected subscriptions? This cannot be undone.`)) {
-                this.bulkAction('cancel');
-            }
-        },
-
-        async bulkChangePlan() {
-            if (!this.targetOfferId || this.selectedIds.length === 0) return;
-            if (this.bulkBusy) return;  // double-submit guard: rapid clicks duplicated proration artifacts
-            if (!confirm(`Change the plan for ${this.selectedIds.length} selected subscription(s) now? This applies immediately.`)) return;
-            this.bulkBusy = true;
-
-            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
-                             document.querySelector('[name="_csrf_token"]')?.value || '';
-
-            try {
-                const response = await fetch('/admin/catalog/subscriptions/bulk/change-plan', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'X-CSRF-Token': csrfToken
-                    },
-                    body: `subscription_ids=${this.selectedIds.join(',')}&target_offer_id=${this.targetOfferId}&include_suspended=${this.includeSuspended}`
-                });
-
-                if (response.ok) {
-                    const result = await response.json();
-                    this.showChangePlanModal = false;
-                    this.targetOfferId = '';
-                    this.includeSuspended = false;
-                    const skipped = result.skipped_ids || [];
-                    const failed = result.failed_ids || [];
-                    if (failed.length > 0 || skipped.length > 0) {
-                        let detail = result.message || 'Plan change partially completed.';
-                        if (skipped.length) detail += `\nSkipped (not active): ${skipped.join(', ')}`;
-                        if (failed.length) detail += `\nFailed: ${failed.join(', ')}`;
-                        alert(detail);
-                    } else {
-                        sessionStorage.setItem('bulk_result_toast', result.message || 'Plan changed');
-                    }
-                    window.location.reload();
-                } else {
-                    const error = await response.json().catch(() => ({}));
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: error.message || error.detail || 'Failed to change plan', type: 'error' }
-                    }));
-                    this.bulkBusy = false;
-                }
-            } catch (error) {
-                window.dispatchEvent(new CustomEvent('show-toast', {
-                    detail: { message: `Plan change failed: ${error.message || 'network error'}`, type: 'error' }
-                }));
+                this.errorMessage = error.message || 'The lifecycle batch failed.';
+            } finally {
                 this.bulkBusy = false;
             }
         },
 
         init() {
-            // Replay the success toast that a post-action reload used to destroy.
             const msg = sessionStorage.getItem('bulk_result_toast');
             if (msg) {
                 sessionStorage.removeItem('bulk_result_toast');
