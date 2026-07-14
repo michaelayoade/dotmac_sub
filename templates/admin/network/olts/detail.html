@@ -319,7 +319,10 @@
                 </button>
             </form>
             {% else %}
-            <p class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No compatible active firmware image is available for this OLT.</p>
+            <p class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                No compatible active firmware image is available for this OLT.
+                <a href="/admin/network/firmware-images/create?kind=olt" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">Add image</a>
+            </p>
             {% endif %}
         </div>
     </details>
