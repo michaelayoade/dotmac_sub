@@ -19,6 +19,7 @@ from app.models.catalog import (
     ContractTerm,
     GuaranteedSpeedType,
     NasVendor,
+    OfferPrice,
     OfferStatus,
     PlanCategory,
     PriceBasis,
@@ -46,7 +47,7 @@ from app.schemas.catalog import (
     RadiusProfileUpdate,
 )
 from app.services import catalog as catalog_service
-from app.services import settings_spec
+from app.services import catalog_billing_governance, settings_spec
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -537,7 +538,14 @@ def backfill_offer_radius_profiles(
     return {"offers_processed": created_or_updated, "links_updated": linked}
 
 
-def create_recurring_price(db: Session, offer_id: str, offer: dict[str, object]):
+def create_recurring_price(
+    db: Session,
+    offer_id: str,
+    offer: dict[str, object],
+    *,
+    actor_id: str | None = None,
+    actor_type: str | None = None,
+):
     """Create recurring offer price if amount is provided."""
     if not offer.get("price_amount"):
         return None
@@ -554,11 +562,21 @@ def create_recurring_price(db: Session, offer_id: str, offer: dict[str, object])
     if offer.get("price_description"):
         price_payload["description"] = offer["price_description"]
     return catalog_service.offer_prices.create(
-        db=db, payload=OfferPriceCreate.model_validate(price_payload)
+        db=db,
+        payload=OfferPriceCreate.model_validate(price_payload),
+        actor_id=actor_id,
+        actor_type=actor_type,
     )
 
 
-def upsert_recurring_price(db: Session, offer_id: str, offer: dict[str, object]):
+def upsert_recurring_price(
+    db: Session,
+    offer_id: str,
+    offer: dict[str, object],
+    *,
+    actor_id: str | None = None,
+    actor_type: str | None = None,
+):
     """Create/update recurring offer price if amount is provided."""
     if not offer.get("price_amount"):
         return None, None
@@ -578,11 +596,16 @@ def upsert_recurring_price(db: Session, offer_id: str, offer: dict[str, object])
             db=db,
             price_id=str(offer["price_id"]),
             payload=OfferPriceUpdate.model_validate(price_payload),
+            actor_id=actor_id,
+            actor_type=actor_type,
         )
         return updated, "updated"
     price_payload["offer_id"] = offer_id
     created = catalog_service.offer_prices.create(
-        db=db, payload=OfferPriceCreate.model_validate(price_payload)
+        db=db,
+        payload=OfferPriceCreate.model_validate(price_payload),
+        actor_id=actor_id,
+        actor_type=actor_type,
     )
     return created, "created"
 
@@ -1086,7 +1109,12 @@ def create_offer_with_audit(
     Returns the created offer ORM object.
     """
     payload = create_offer_payload(offer)
-    created_offer = catalog_service.offers.create(db=db, payload=payload)
+    created_offer = catalog_service.offers.create(
+        db=db,
+        payload=payload,
+        actor_id=actor_id,
+        actor_type="user",
+    )
 
     log_audit_event(
         db=db,
@@ -1118,7 +1146,13 @@ def create_offer_with_audit(
         )
 
     if offer["price_amount"]:
-        created_price = create_recurring_price(db, str(created_offer.id), offer)
+        created_price = create_recurring_price(
+            db,
+            str(created_offer.id),
+            offer,
+            actor_id=actor_id,
+            actor_type="user",
+        )
         if created_price:
             log_audit_event(
                 db=db,
@@ -1149,11 +1183,36 @@ def update_offer_with_audit(
 
     Returns the updated offer ORM object.
     """
+    price_id = str(offer_data.get("price_id") or "").strip()
+    if price_id and offer_data.get("price_amount"):
+        existing_price = db.get(OfferPrice, coerce_uuid(price_id))
+        if existing_price is not None:
+            candidate_price = {
+                "price_type": str(offer_data.get("price_type") or "recurring"),
+                "amount": offer_data["price_amount"],
+                "currency": offer_data["price_currency"],
+                "billing_cycle": offer_data.get("price_billing_cycle"),
+                "unit": offer_data.get("price_unit"),
+            }
+            price_changes = catalog_billing_governance.billing_field_changes(
+                existing_price,
+                candidate_price,
+            )
+            catalog_billing_governance.assert_offer_price_update_safe(
+                db,
+                existing_price,
+                price_changes,
+            )
+
     before_snapshot = model_to_dict(existing_offer)
     previous_profile_id = get_linked_radius_profile_id(db, offer_id)
     payload = update_offer_payload(offer_data)
     updated_offer = catalog_service.offers.update(
-        db=db, offer_id=offer_id, payload=payload
+        db=db,
+        offer_id=offer_id,
+        payload=payload,
+        actor_id=actor_id,
+        actor_type="user",
     )
     after_snapshot = model_to_dict(updated_offer)
     changes = diff_dicts(before_snapshot, after_snapshot)
@@ -1197,7 +1256,13 @@ def update_offer_with_audit(
         addon_configs=addon_configs,
     )
 
-    price, price_action = upsert_recurring_price(db, offer_id, offer_data)
+    price, price_action = upsert_recurring_price(
+        db,
+        offer_id,
+        offer_data,
+        actor_id=actor_id,
+        actor_type="user",
+    )
     if price and price_action:
         log_audit_event(
             db=db,

@@ -126,7 +126,10 @@ def catalog_offers_create(
 @router.post(
     "/offers",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def catalog_offers_create_post(
     request: Request,
@@ -188,7 +191,10 @@ def catalog_offer_edit(
 @router.post(
     "/offers/{offer_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def catalog_offer_edit_post(
     request: Request,
@@ -220,26 +226,42 @@ def catalog_offer_edit_post(
 
 @router.post(
     "/offers/{offer_id}/archive",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def catalog_offer_archive(
-    offer_id: str, db: Session = Depends(get_db)
+    request: Request, offer_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
     """Archive an offer (soft-delete: status=archived, is_active=False)."""
-    catalog_service.offers.delete(db, offer_id)
+    catalog_service.offers.delete(
+        db,
+        offer_id,
+        actor_id=_get_actor_id(request),
+        actor_type="user",
+    )
     db.commit()
     return RedirectResponse("/admin/catalog/offers", status_code=303)
 
 
 @router.post(
     "/offers/{offer_id}/restore",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[
+        Depends(require_permission("catalog:write")),
+        Depends(require_permission("catalog:billing_write")),
+    ],
 )
 def catalog_offer_restore(
-    offer_id: str, db: Session = Depends(get_db)
+    request: Request, offer_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
     """Restore an archived offer (status=active, is_active=True)."""
-    catalog_service.offers.restore(db, offer_id)
+    catalog_service.offers.restore(
+        db,
+        offer_id,
+        actor_id=_get_actor_id(request),
+        actor_type="user",
+    )
     db.commit()
     return RedirectResponse("/admin/catalog/offers?status=archived", status_code=303)
 

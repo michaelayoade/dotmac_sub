@@ -51,7 +51,18 @@ def _reversal_target_statement(entry_id: str):
 
 class LedgerEntries(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: LedgerEntryCreate):
+    def create(
+        db: Session,
+        payload: LedgerEntryCreate,
+        *,
+        commit: bool = True,
+    ) -> LedgerEntry:
+        """Post a validated ledger entry.
+
+        ``commit=False`` stages the append in the caller's transaction so a
+        domain owner can commit its state transition and monetary consequence
+        atomically without constructing ledger rows outside this owner.
+        """
         _validate_ledger_linkages(
             db,
             str(payload.account_id),
@@ -60,8 +71,11 @@ class LedgerEntries(ListResponseMixin):
         )
         entry = LedgerEntry(**payload.model_dump())
         db.add(entry)
-        db.commit()
-        db.refresh(entry)
+        if commit:
+            db.commit()
+            db.refresh(entry)
+        else:
+            db.flush()
         return entry
 
     @staticmethod
