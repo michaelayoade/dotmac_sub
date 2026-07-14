@@ -377,31 +377,34 @@ def test_olt_ssh_connection(
 
 def get_olt_firmware_images(db: Session, olt_id: str) -> list:
     from app.models.network import OltFirmwareImage
+    from app.services.network.olt_firmware import validate_image_compatibility
 
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         return []
-    stmt = select(OltFirmwareImage).where(OltFirmwareImage.is_active.is_(True))
-    if olt.vendor:
-        stmt = stmt.where(OltFirmwareImage.vendor.ilike(f"%{olt.vendor}%"))
-    return list(db.scalars(stmt.order_by(OltFirmwareImage.version.desc())).all())
+    stmt = (
+        select(OltFirmwareImage)
+        .where(OltFirmwareImage.is_active.is_(True))
+        .order_by(OltFirmwareImage.version.desc())
+    )
+    return [
+        image
+        for image in db.scalars(stmt).all()
+        if validate_image_compatibility(olt, image) is None
+    ]
 
 
 def trigger_olt_firmware_upgrade(
     db: Session, olt_id: str, image_id: str, *, request: Request | None = None
 ) -> tuple[bool, str]:
-    from app.models.network import OltFirmwareImage
+    from app.services.network.olt_firmware import request_firmware_upgrade
+    from app.services.network.olt_web_audit import actor_name_from_request
 
-    olt = get_olt_or_none(db, olt_id)
-    if not olt:
-        return False, "OLT not found"
-    image = db.get(OltFirmwareImage, image_id)
-    if not image:
-        return False, "Firmware image not found"
-    if not image.is_active:
-        return False, "Firmware image is not active"
-    ok, message = olt_ssh_service.upgrade_firmware(
-        olt, image.file_url, method=image.upgrade_method or "sftp"
+    result = request_firmware_upgrade(
+        db,
+        olt_id,
+        image_id,
+        initiated_by=actor_name_from_request(request),
     )
     log_olt_audit_event(
         db,
@@ -409,14 +412,15 @@ def trigger_olt_firmware_upgrade(
         action="firmware_upgrade",
         entity_id=olt_id,
         metadata={
-            "result": "success" if ok else "error",
-            "message": message,
+            "result": "queued" if result.success else "error",
+            "message": result.message,
             "firmware_image_id": image_id,
+            "operation_id": (result.data or {}).get("operation_id"),
         },
-        status_code=200 if ok else 500,
-        is_success=ok,
+        status_code=202 if result.success else 500,
+        is_success=result.success,
     )
-    return ok, message
+    return result.success, result.message
 
 
 def run_test_backup(db: Session, olt_id: str) -> tuple[OltConfigBackup | None, str]:

@@ -75,7 +75,7 @@ class OltDetailAdapter:
                 "detail_actions": self._build_detail_actions(olt_id, olt),
                 "terminal_context": self._build_terminal_context(olt_id),
                 "firmware_context": self._build_firmware_context(
-                    olt, available_firmware
+                    olt, available_firmware, operations
                 ),
                 "config_context": self._build_config_context(page_data),
                 "ont_relationship_context": self._build_ont_relationship_context(
@@ -216,13 +216,31 @@ class OltDetailAdapter:
         }
 
     def _build_firmware_context(
-        self, olt: object | None, available_firmware: list[object]
+        self,
+        olt: object | None,
+        available_firmware: list[object],
+        operations: list[dict[str, Any]],
     ) -> dict[str, object]:
+        latest_operation = next(
+            (
+                operation
+                for operation in operations
+                if isinstance(operation, dict)
+                and operation.get("operation_type") == "olt_firmware_upgrade"
+            ),
+            None,
+        )
         return {
             "current_version": getattr(olt, "firmware_version", None) or "Unknown",
             "software_version": getattr(olt, "software_version", None),
             "vendor": getattr(olt, "vendor", None),
             "images": available_firmware,
+            "latest_operation": latest_operation,
+            "upgrade_active": bool(
+                latest_operation
+                and latest_operation.get("status_value")
+                in {"pending", "running", "waiting"}
+            ),
         }
 
     def _build_config_context(self, page_data: dict[str, object]) -> dict[str, object]:

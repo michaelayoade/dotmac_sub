@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.olt_firmware.upgrade_with_verification")
 @idempotent_task(
-    key_func=lambda olt_id, image_id, **kw: f"firmware_upgrade:{olt_id}:{image_id}"
+    key_func=lambda olt_id, image_id, **kw: (
+        f"firmware_upgrade:{olt_id}:{image_id}:{kw.get('operation_id') or 'untracked'}"
+    )
 )
 def upgrade_firmware_task(
     olt_id: str,
@@ -34,7 +36,7 @@ def upgrade_firmware_task(
         timeout_sec: Total timeout for reachability polling.
         poll_interval_sec: Interval between reachability checks.
         initial_wait_sec: Initial wait before first check (for reboot).
-        operation_id: Optional network operation ID for tracking.
+        operation_id: Required network operation ID that owns this write.
 
     Returns:
         Dict with upgrade result details.
@@ -43,22 +45,58 @@ def upgrade_firmware_task(
 
     db = db_session_adapter.create_session()
     try:
-        # Mark operation as running if tracked
-        if operation_id:
+        if not operation_id:
+            return {
+                "success": False,
+                "message": "Tracked OLT firmware operation is required.",
+            }
+
+        from app.models.network_operation import (
+            NetworkOperationTargetType,
+            NetworkOperationType,
+        )
+        from app.services.network.olt_firmware import operation_is_active
+        from app.services.network_operations import network_operations
+
+        operation = network_operations.get(db, operation_id)
+        if not operation_is_active(operation):
+            return {
+                "success": operation.status.value == "succeeded",
+                "operation_id": operation_id,
+                "status": operation.status.value,
+            }
+        input_payload = operation.input_payload or {}
+        operation_matches = (
+            operation.operation_type == NetworkOperationType.olt_firmware_upgrade
+            and operation.target_type == NetworkOperationTargetType.olt
+            and str(operation.target_id) == str(olt_id)
+            and str(input_payload.get("firmware_image_id")) == str(image_id)
+        )
+        if not operation_matches:
+            message = "Firmware task arguments do not match the tracked operation."
+            network_operations.mark_failed(db, operation_id, message)
+            db.commit()
+            return {
+                "success": False,
+                "operation_id": operation_id,
+                "message": message,
+            }
+        network_operations.mark_running(db, operation_id)
+        db.commit()
+
+        def _mark_waiting(reason: str) -> None:
             from app.services.network_operations import network_operations
 
-            try:
-                network_operations.mark_running(db, operation_id)
-                db.commit()
-            except Exception as exc:
-                logger.warning(
-                    "Could not mark operation %s as running: %s",
-                    operation_id,
-                    exc,
-                )
-                db.rollback()
+            waiting_operation = network_operations.mark_waiting(
+                db, operation_id, reason
+            )
+            waiting_operation.output_payload = {
+                "phase": "reboot_wait",
+                "verified": False,
+                "message": reason,
+            }
+            db.commit()
 
-        # Run the upgrade
         result = upgrade_with_verification_audited(
             db,
             olt_id,
@@ -66,6 +104,9 @@ def upgrade_firmware_task(
             dry_run=False,
             verify_after=verify_after,
             timeout_sec=timeout_sec,
+            poll_interval_sec=poll_interval_sec,
+            initial_wait_sec=initial_wait_sec,
+            on_waiting=_mark_waiting,
         )
 
         # Update operation status
@@ -74,11 +115,31 @@ def upgrade_firmware_task(
 
             try:
                 if result.success:
-                    network_operations.mark_succeeded(
-                        db,
-                        operation_id,
-                        output_payload=result.to_dict(),
-                    )
+                    if result.verified_version:
+                        from app.models.network import OLTDevice
+
+                        olt = db.get(OLTDevice, olt_id)
+                        if olt is None:
+                            network_operations.mark_failed(
+                                db,
+                                operation_id,
+                                "OLT disappeared before firmware SOT commit.",
+                                output_payload=result.to_dict(),
+                            )
+                        else:
+                            olt.firmware_version = result.verified_version
+                            network_operations.mark_succeeded(
+                                db,
+                                operation_id,
+                                output_payload={**result.to_dict(), "verified": True},
+                            )
+                    else:
+                        network_operations.mark_warning(
+                            db,
+                            operation_id,
+                            "Firmware command completed without version readback.",
+                            output_payload={**result.to_dict(), "verified": False},
+                        )
                 else:
                     network_operations.mark_failed(
                         db,
@@ -88,12 +149,13 @@ def upgrade_firmware_task(
                     )
                 db.commit()
             except Exception as exc:
-                logger.warning(
-                    "Could not update operation %s status: %s",
+                logger.exception(
+                    "Could not atomically commit firmware readback for operation %s: %s",
                     operation_id,
                     exc,
                 )
                 db.rollback()
+                raise
 
         logger.info(
             "Firmware upgrade task completed for OLT %s: success=%s message=%s",

@@ -10,16 +10,27 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OltFirmwareImage
+from app.models.network_operation import (
+    NetworkOperationStatus,
+    NetworkOperationTargetType,
+    NetworkOperationType,
+)
 from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.network.ont_action_common import ActionResult
+from app.services.network_operations import network_operations
+from app.services.queue_adapter import enqueue_task
 
 logger = logging.getLogger(__name__)
+FIRMWARE_TASK_NAME = "app.tasks.olt_firmware.upgrade_with_verification"
 
 
 @dataclass
@@ -31,7 +42,9 @@ class FirmwareUpgradeResult:
     dry_run: bool = False
     current_version: str | None = None
     target_version: str | None = None
+    verified_version: str | None = None
     reachable_after: bool | None = None
+    rollback_available: bool = False
     rollback_attempted: bool = False
     rollback_success: bool | None = None
     steps: list[dict[str, object]] = field(default_factory=list)
@@ -45,12 +58,124 @@ class FirmwareUpgradeResult:
             "dry_run": self.dry_run,
             "current_version": self.current_version,
             "target_version": self.target_version,
+            "verified_version": self.verified_version,
+            "verified": bool(self.verified_version),
             "reachable_after": self.reachable_after,
+            "rollback_available": self.rollback_available,
             "rollback_attempted": self.rollback_attempted,
             "rollback_success": self.rollback_success,
             "steps": self.steps,
             "duration_sec": self.duration_sec,
         }
+
+
+def normalized_version(value: object) -> str:
+    return str(value or "").strip().lower().removeprefix("v")
+
+
+def validate_image_compatibility(olt: OLTDevice, image: OltFirmwareImage) -> str | None:
+    olt_vendor = str(olt.vendor or "").strip().lower()
+    image_vendor = str(image.vendor or "").strip().lower()
+    if olt_vendor and image_vendor != olt_vendor:
+        return f"Firmware vendor {image.vendor} does not match OLT vendor {olt.vendor}."
+
+    olt_model = str(olt.model or "").strip().lower()
+    image_model = str(image.model or "").strip().lower()
+    if image_model and (not olt_model or image_model != olt_model):
+        return f"Firmware model {image.model} does not match OLT model {olt.model}."
+    return None
+
+
+def request_firmware_upgrade(
+    db: Session,
+    olt_id: str,
+    image_id: str,
+    *,
+    initiated_by: str | None = None,
+) -> ActionResult:
+    """Persist a deduplicated OLT upgrade intent and queue verified execution."""
+    olt = get_olt_or_none(db, olt_id)
+    if olt is None:
+        return ActionResult(success=False, message="OLT not found.")
+    image = db.get(OltFirmwareImage, image_id)
+    if image is None:
+        return ActionResult(success=False, message="Firmware image not found.")
+    if not image.is_active:
+        return ActionResult(success=False, message="Firmware image is not active.")
+    compatibility_error = validate_image_compatibility(olt, image)
+    if compatibility_error:
+        return ActionResult(success=False, message=compatibility_error)
+
+    try:
+        operation = network_operations.start(
+            db,
+            NetworkOperationType.olt_firmware_upgrade,
+            NetworkOperationTargetType.olt,
+            olt_id,
+            correlation_key=f"olt_firmware_upgrade:{olt_id}",
+            input_payload={
+                "firmware_image_id": str(image.id),
+                "target_version": image.version,
+                "previous_version": olt.firmware_version,
+                "vendor": image.vendor,
+                "model": image.model,
+                "checksum": image.checksum,
+            },
+            initiated_by=initiated_by,
+        )
+        db.commit()
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        return ActionResult(
+            success=True,
+            waiting=True,
+            message="A firmware upgrade is already in progress for this OLT.",
+        )
+
+    dispatch = enqueue_task(
+        FIRMWARE_TASK_NAME,
+        args=(olt_id, str(image.id)),
+        kwargs={"operation_id": str(operation.id)},
+        correlation_id=operation.correlation_key,
+        source="olt_firmware_upgrade",
+        actor_id=initiated_by,
+    )
+    if not dispatch.queued:
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            dispatch.error or "Unable to queue OLT firmware upgrade.",
+        )
+        db.commit()
+        return ActionResult(
+            success=False,
+            message="Unable to queue OLT firmware upgrade.",
+            data={"operation_id": str(operation.id)},
+        )
+
+    return ActionResult(
+        success=True,
+        waiting=True,
+        message=(
+            f"Firmware v{image.version} is queued. Success will be recorded only "
+            "after reboot and exact version readback."
+        ),
+        data={
+            "operation_id": str(operation.id),
+            "task_id": dispatch.task_id,
+            "target_version": image.version,
+            "verified": False,
+        },
+    )
+
+
+def operation_is_active(operation) -> bool:
+    return operation.status in {
+        NetworkOperationStatus.pending,
+        NetworkOperationStatus.running,
+        NetworkOperationStatus.waiting,
+    }
 
 
 def _add_step(
@@ -138,8 +263,9 @@ def upgrade_with_verification(
     timeout_sec: int = 300,
     poll_interval_sec: int = 15,
     initial_wait_sec: int = 60,
+    on_waiting: Callable[[str], None] | None = None,
 ) -> FirmwareUpgradeResult:
-    """Upgrade OLT firmware with verification and optional rollback.
+    """Upgrade OLT firmware and require exact post-reboot version readback.
 
     Workflow:
     1. Get current firmware info
@@ -147,7 +273,7 @@ def upgrade_with_verification(
     3. Initiate upgrade
     4. Poll for reachability (up to timeout_sec)
     5. Verify new version
-    6. On failure, attempt rollback if dual-image
+    6. Record whether operator rollback is available when recovery fails
 
     Args:
         db: Database session.
@@ -183,6 +309,11 @@ def upgrade_with_verification(
         result.message = "Firmware image is not active"
         _add_step(result, "Get firmware image", False, result.message)
         return result
+    compatibility_error = validate_image_compatibility(olt, image)
+    if compatibility_error:
+        result.message = compatibility_error
+        _add_step(result, "Validate compatibility", False, result.message)
+        return result
     result.target_version = image.version
     _add_step(
         result,
@@ -204,6 +335,15 @@ def upgrade_with_verification(
         True,
         f"Current: {fw_info.current_version}, Dual-image: {fw_info.has_dual_image}",
     )
+
+    if normalized_version(fw_info.current_version) == normalized_version(image.version):
+        result.success = True
+        result.reachable_after = True
+        result.verified_version = fw_info.current_version
+        result.message = f"OLT already reports target firmware v{image.version}."
+        _add_step(result, "Verify target version", True, result.message)
+        result.duration_sec = time.time() - start_time
+        return result
 
     # Dry run: return preview
     if dry_run:
@@ -236,6 +376,11 @@ def upgrade_with_verification(
         result.duration_sec = time.time() - start_time
         return result
 
+    if on_waiting is not None:
+        on_waiting(
+            f"Firmware v{image.version} accepted; waiting for OLT reboot and readback."
+        )
+
     # Poll for reachability
     reachable, reach_msg = poll_olt_reachability(
         olt,
@@ -249,21 +394,18 @@ def upgrade_with_verification(
     if not reachable:
         result.message = f"OLT not reachable after upgrade: {reach_msg}"
 
-        # Attempt rollback if dual-image available
+        # Surface rollback capability without claiming an action we cannot run.
         if fw_info.has_dual_image:
-            result.rollback_attempted = True
+            result.rollback_available = True
             logger.warning(
-                "OLT %s not reachable after upgrade, attempting rollback...",
+                "OLT %s not reachable after upgrade; operator rollback is available",
                 olt.name,
             )
-            # We can't rollback if OLT is not reachable - this would require
-            # out-of-band access or waiting for OLT to recover
-            result.rollback_success = False
             _add_step(
                 result,
-                "Rollback attempt",
+                "Operator rollback",
                 False,
-                "Cannot rollback - OLT not reachable",
+                "Standby image detected, but rollback requires reachable or out-of-band access",
             )
 
         result.duration_sec = time.time() - start_time
@@ -280,14 +422,16 @@ def upgrade_with_verification(
         return result
 
     new_version = verify_info.current_version
-    if new_version == fw_info.current_version:
+    if normalized_version(new_version) != normalized_version(image.version):
         result.message = (
-            f"Firmware version unchanged ({new_version}) - upgrade may have failed"
+            f"Firmware readback mismatch: expected {image.version}, got "
+            f"{new_version or 'no version'}"
         )
         _add_step(result, "Verify firmware version", False, result.message)
         result.duration_sec = time.time() - start_time
         return result
 
+    result.verified_version = new_version
     _add_step(
         result,
         "Verify firmware version",
@@ -312,6 +456,9 @@ def upgrade_with_verification_audited(
     dry_run: bool = False,
     verify_after: bool = True,
     timeout_sec: int = 300,
+    poll_interval_sec: int = 15,
+    initial_wait_sec: int = 60,
+    on_waiting: Callable[[str], None] | None = None,
     request=None,
 ) -> FirmwareUpgradeResult:
     """Wrapper that logs audit event for firmware upgrade."""
@@ -322,6 +469,9 @@ def upgrade_with_verification_audited(
         dry_run=dry_run,
         verify_after=verify_after,
         timeout_sec=timeout_sec,
+        poll_interval_sec=poll_interval_sec,
+        initial_wait_sec=initial_wait_sec,
+        on_waiting=on_waiting,
     )
 
     action = "firmware_upgrade_dry_run" if dry_run else "firmware_upgrade_verified"
@@ -338,6 +488,7 @@ def upgrade_with_verification_audited(
             "current_version": result.current_version,
             "target_version": result.target_version,
             "reachable_after": result.reachable_after,
+            "rollback_available": result.rollback_available,
             "rollback_attempted": result.rollback_attempted,
             "rollback_success": result.rollback_success,
             "duration_sec": result.duration_sec,
