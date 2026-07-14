@@ -138,6 +138,13 @@ class SubscriptionLifecycleCommand:
             raise SubscriptionLifecycleError(
                 "effective_at is required for scheduled commands"
             )
+        if (
+            self.effective_timing == SubscriptionEffectiveTiming.next_cycle
+            and self.effective_at is not None
+        ):
+            raise SubscriptionLifecycleError(
+                "effective_at is not valid for next_cycle commands; use scheduled"
+            )
         if self.reason is not None:
             object.__setattr__(self, "reason", self.reason.strip() or None)
         if self.expected_head is not None:
@@ -237,6 +244,7 @@ class SubscriptionCommandOutcome:
     current_head: str | None = None
     artifact_ids: tuple[str, ...] = ()
     error_code: str | None = None
+    replayed: bool = False
 
 
 def assert_subscription_transition(
