@@ -425,18 +425,12 @@ class TestNumbering:
         assert result == "99"
 
     def test_next_sequence_value_creates_new(self, db_session):
-        from app.models.sequence import DocumentSequence  # noqa: F401
-
-        DocumentSequence.__table__.create(db_session.get_bind(), checkfirst=True)
         from app.services.numbering import _next_sequence_value
 
         value = _next_sequence_value(db_session, "test_seq_new", 100)
         assert value == 100
 
     def test_next_sequence_value_increments(self, db_session):
-        from app.models.sequence import DocumentSequence  # noqa: F401
-
-        DocumentSequence.__table__.create(db_session.get_bind(), checkfirst=True)
         from app.services.numbering import _next_sequence_value
 
         v1 = _next_sequence_value(db_session, "test_seq_inc", 1)
@@ -467,9 +461,6 @@ class TestNumbering:
 
     def test_generate_number_enabled(self, db_session):
         from app.models.domain_settings import SettingDomain
-        from app.models.sequence import DocumentSequence  # noqa: F401
-
-        DocumentSequence.__table__.create(db_session.get_bind(), checkfirst=True)
         from app.services.numbering import generate_number
 
         settings_map = {

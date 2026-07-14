@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
+from app.services.genieacs_client import GenieACSDeliveryCode
 from app.services.genieacs_service import genieacs_service
 from app.services.network._common import NasTarget
 from app.services.network.config_pack_resolution import (
@@ -77,23 +78,43 @@ _TR069_TASK_READY_POLL_INTERVAL_SEC = (
 )
 _TR069_BINDING_READBACK_RETRY_DELAY_SEC = 2.0
 
-_QUEUED_ACS_DELIVERY_MARKERS = (
-    "setparametervalues queued but connection request failed",
-    "setparametervalues task timed out",
-)
+_QUEUED_ACS_DELIVERY_CODES = frozenset(code.value for code in GenieACSDeliveryCode)
 
 
-def _is_queued_acs_delivery(message: object) -> bool:
-    normalized = str(message or "").casefold()
-    return any(marker in normalized for marker in _QUEUED_ACS_DELIVERY_MARKERS)
+def _is_queued_acs_delivery_code(value: object) -> bool:
+    return str(value or "") in _QUEUED_ACS_DELIVERY_CODES
 
 
 def _result_is_queued_acs_delivery(result: object) -> bool:
     data = getattr(result, "data", None)
-    if isinstance(data, dict) and data.get("delivery_status") == "queued":
+    if isinstance(data, dict) and (
+        data.get("delivery_status") == "queued"
+        or _is_queued_acs_delivery_code(data.get("delivery_code"))
+    ):
         return True
-    return bool(getattr(result, "waiting", False)) or _is_queued_acs_delivery(
-        getattr(result, "message", "")
+    return bool(getattr(result, "waiting", False)) or _is_queued_acs_delivery_code(
+        getattr(result, "error_code", None)
+    )
+
+
+def _action_step(name: str, result: object) -> dict[str, object]:
+    """Preserve machine-readable delivery state while serializing an action."""
+    payload: dict[str, object] = {
+        "step": name,
+        "success": bool(getattr(result, "success", False)),
+        "message": str(getattr(result, "message", "")),
+    }
+    error_code = getattr(result, "error_code", None)
+    if error_code:
+        payload["error_code"] = str(error_code)
+    if _result_is_queued_acs_delivery(result):
+        payload["waiting"] = True
+    return payload
+
+
+def _step_is_queued_acs_delivery(step: dict[str, object]) -> bool:
+    return bool(step.get("waiting")) or _is_queued_acs_delivery_code(
+        step.get("error_code")
     )
 
 
@@ -794,14 +815,8 @@ def _provision_wan_service_instances(
         needs_input.append(f"Unsupported WAN mode in desired_config: {wan_mode}")
         return steps, needs_input, hard_failures
 
-    steps.append(
-        {
-            "step": "provision_wan_desired_config",
-            "success": result.success,
-            "message": result.message,
-        }
-    )
-    if not result.success:
+    steps.append(_action_step("provision_wan_desired_config", result))
+    if not result.success and not _result_is_queued_acs_delivery(result):
         hard_failures.append(f"provision_wan_desired_config: {result.message}")
     return steps, needs_input, hard_failures
 
@@ -856,14 +871,9 @@ def apply_saved_service_config(
         success = bool(getattr(result, "success", False))
         message = str(getattr(result, "message", ""))
         waiting = not success and _result_is_queued_acs_delivery(result)
-        steps.append(
-            {
-                "step": name,
-                "success": success,
-                "waiting": waiting,
-                "message": message,
-            }
-        )
+        step = _action_step(name, result)
+        step["waiting"] = waiting
+        steps.append(step)
         if not success:
             detail = f"{name}: {message}"
             if waiting:
@@ -898,16 +908,12 @@ def apply_saved_service_config(
             )
         )
         for step in wan_instance_steps:
-            if not step.get("success") and _is_queued_acs_delivery(step.get("message")):
+            if not step.get("success") and _step_is_queued_acs_delivery(step):
                 step["waiting"] = True
                 pending_deliveries.append(f"{step.get('step')}: {step.get('message')}")
             steps.append(step)
         needs_input.extend(wan_instance_needs)
-        hard_failures.extend(
-            failure
-            for failure in wan_instance_failures
-            if not _is_queued_acs_delivery(failure)
-        )
+        hard_failures.extend(wan_instance_failures)
         logger.info(
             "ONT %s: Provisioned %d WAN desired-config steps",
             ont.serial_number,

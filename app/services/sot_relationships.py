@@ -55,6 +55,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "customer balance summaries",
                     "customer-visible financial position",
+                    "bounded cohort financial projections",
                 ),
                 depends_on=("financial.ledger",),
             ),
@@ -862,7 +863,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=("app.tasks.*", "app.main", "app.services.*"),
         rule=(
             "Tasks and service loops record lifecycle through observability "
-            "helpers instead of writing heartbeat/run state directly."
+            "helpers instead of writing heartbeat/run state directly. Metrics "
+            "collectors read counters or bounded snapshots; unbounded business "
+            "queries run only in scheduled single-flight producers."
         ),
     ),
     DomainSOT(

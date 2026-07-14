@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 
+from billiard.exceptions import SoftTimeLimitExceeded
+
 from app.services import billing_automation as billing_automation_service
 from app.services.billing_enforcement_guards import (
     billing_enforcement_health,
@@ -128,19 +130,77 @@ def check_billing_switch_health() -> dict:
                 "will silently under-run",
                 ",".join(disabled_components),
             )
-        _append_billing_health_snapshot(session, result)
         return result
     finally:
         session.close()
 
 
+def refresh_billing_health_snapshot() -> dict:
+    """Single-flight producer for the bounded snapshot consumed by ``/metrics``."""
+    from app.services.billing_health import (
+        BILLING_HEALTH_SNAPSHOT_LOCK_KEY,
+        BILLING_HEALTH_SNAPSHOT_TASK,
+    )
+    from app.services.observability import record_task_run, record_task_skip
+
+    with db_session_adapter.advisory_lock(
+        BILLING_HEALTH_SNAPSHOT_LOCK_KEY,
+        timeout_ms=30_000,
+    ) as (session, acquired):
+        if not acquired:
+            streak = record_task_skip(
+                BILLING_HEALTH_SNAPSHOT_TASK, reason="already_running"
+            )
+            return {"skipped": "already_running", "skip_streak": streak}
+
+        try:
+            result: dict = {}
+            _append_billing_health_snapshot(session, result)
+            snapshot = result.get("billing_health")
+            if not isinstance(snapshot, dict):
+                raise RuntimeError("billing_health_snapshot_failed")
+            session.rollback()
+            record_task_run(
+                BILLING_HEALTH_SNAPSHOT_TASK,
+                status="success",
+                counters=snapshot,
+            )
+            return snapshot
+        except SoftTimeLimitExceeded:
+            session.rollback()
+            error = {"error": "billing_health_snapshot_timed_out"}
+            logger.error(error["error"])
+            record_task_run(
+                BILLING_HEALTH_SNAPSHOT_TASK,
+                status="error",
+                counters=error,
+            )
+            return error
+        except Exception as exc:  # noqa: BLE001 - runner records bounded failure
+            session.rollback()
+            error = {"error": str(exc)[:500]}
+            logger.exception("billing_health_snapshot_refresh_failed")
+            record_task_run(
+                BILLING_HEALTH_SNAPSHOT_TASK,
+                status="error",
+                counters=error,
+            )
+            return error
+
+
 def _append_billing_health_snapshot(session, result: dict) -> None:
     try:
-        from app.services.billing_health import billing_health_snapshot
+        from app.services.billing_health import (
+            billing_health_snapshot,
+            publish_billing_health_snapshot,
+        )
 
         health = billing_health_snapshot(session)
+        if not publish_billing_health_snapshot(health):
+            raise RuntimeError("billing_health_snapshot_publish_failed")
         anomalies = set(health.anomalies)
         result["billing_health"] = {
+            "published": True,
             "paid_with_balance_count": health.paid_with_balance_count,
             "last_scanned": health.last_scanned,
             "eligible_active_subs": health.eligible_active_subs,
@@ -218,6 +278,8 @@ def _append_billing_health_snapshot(session, result: dict) -> None:
                 "account(s) exist while prepaid_balance_sweep is disabled",
                 health.negative_prepaid_with_sweep_disabled_count,
             )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:
         logger.exception(
             "billing_health_snapshot_failed: monitoring snapshot raised; "

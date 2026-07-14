@@ -39,7 +39,9 @@ that obscure business behavior.
    their document lifecycles and the ledger postings those transitions require.
 3. `financial.vas_wallet` owns its separate append-only wallet, spendable
    balance, and atomic bridge into `financial.payments` for bill settlement.
-4. Customer financial position owns read-side financial summaries.
+4. Customer financial position owns read-side financial summaries, including
+   the bounded bulk projection used by cohort monitoring. Bulk callers do not
+   loop the single-customer ledger reader.
 5. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold`; the
@@ -158,9 +160,18 @@ Rule: handlers orchestrate. Persistence and retry bookkeeping live in services.
 1. Observability service owns task/job run recording.
 2. Task reliability owns task metadata, heartbeat interpretation, and alerting.
 3. Metrics collectors expose read-only gauges/counters for runtime pressure.
+4. Scheduled single-flight producers own expensive business-health snapshots;
+   metrics collectors only read those bounded snapshots.
+5. The cross-Dotmac scrape contract is defined in
+   `docs/METRICS_SCRAPE_SAFETY.md`: `/metrics` reads process-local instruments,
+   bounded snapshots, and static metadata only. It never opens a database
+   session or invokes a business resolver.
 
 Rule: Celery tasks report lifecycle through shared observability helpers; they
 should not write heartbeat/run rows directly unless they are the helper.
+Scrape-time collectors must never perform unbounded business-table scans or
+per-customer financial reconstruction. Database and infrastructure queries are
+also produced out of band so pool exhaustion cannot make the scrape path block.
 
 ## Network Domain
 
