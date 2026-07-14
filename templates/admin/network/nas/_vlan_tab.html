@@ -84,7 +84,8 @@
                         <td class="px-6 py-3 text-right">
                             <form method="POST" action="/admin/network/nas/devices/{{ device_id }}/vlans/{{ vlan.vlan_id }}/delete"
                                   class="inline"
-                                  onsubmit="return confirm('Remove VLAN {{ vlan.vlan_id }} ({{ vlan.name }})? This will also remove its IP and PPPoE server.')">
+                                  data-confirm="Remove VLAN {{ vlan.vlan_id }} ({{ vlan.name }})? This will also remove its IP and PPPoE server."
+                                  data-confirm-label="Remove">
                                 {% include "components/forms/csrf_input.html" %}
                                 <input type="hidden" name="parent_interface" value="{{ vlan.interface }}">
                                 <button type="submit"

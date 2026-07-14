@@ -45,6 +45,7 @@ from app.services.common import (
 )
 from app.services.locking import lock_for_update
 from app.services.response import ListResponseMixin
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,43 @@ class CreditNotes(ListResponseMixin):
         # Stable, keyset-friendly tiebreaker for deterministic forward paging.
         query = query.order_by(CreditNote.id.asc())
         return apply_pagination(query, limit, offset).all()
+
+    @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        account_id: str | None,
+        status: str | None,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ):
+        query = db.query(CreditNote).options(
+            selectinload(CreditNote.lines.and_(CreditNoteLine.is_active.is_(True)))
+        )
+        if account_id:
+            query = query.filter(CreditNote.account_id == account_id)
+        if status:
+            query = query.filter(
+                CreditNote.status == validate_enum(status, CreditNoteStatus, "status")
+            )
+        if is_active is None:
+            query = query.filter(CreditNote.is_active.is_(True))
+        else:
+            query = query.filter(CreditNote.is_active == is_active)
+        return apply_sync_page(
+            query,
+            CreditNote,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
 
     @staticmethod
     def update(db: Session, credit_note_id: str, payload: CreditNoteUpdate):

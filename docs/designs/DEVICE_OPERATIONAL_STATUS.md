@@ -31,27 +31,28 @@ Keep these distinct; never collapse them into one field.
 |---------|---------|----------|
 | `device.status` | **administrative / lifecycle intent** | active, inactive, maintenance, (decommissioned) |
 | `live_status` | **raw monitoring observation** | up, down, problem, unknown |
-| **`operational_status`** | **derived, UI-facing NOC truth** (a *projection*, not a stored column) | up, degraded, down, unmonitored, maintenance, unknown |
+| **`operational_status`** | **derived, UI-facing NOC truth** (a *projection*, not a stored column) | up, degraded, down, maintenance |
 
 `operational_status` is a pure function of:
 `lifecycle intent + monitoring coverage + live state + freshness + trigger severity`.
 
 ### Precedence ladder (first match wins)
 ```
-if admin intent is maintenance / decommissioned / retired:  -> that (intentional; never alarm)
-elif no monitoring target / no monitoring path:             -> unmonitored   (reason: no_path / no_target)
-elif no live_status row:                                    -> unmonitored   (reason: not_warmed)
-elif warmer heartbeat is stale:                             -> unmonitored   (reason: stale)
-elif live_status == unknown:                               -> unmonitored   (reason: monitoring_unknown)
-elif live_status == problem:                               -> degraded
-elif live_status == down:                                  -> down
-elif live_status == up:                                    -> up
-else:                                                       -> unknown
+if admin intent is maintenance / decommissioned / retired:  -> maintenance (intentional; never alarm)
+elif no monitoring target / no monitoring path:             -> retain state or down (reason: no_path_retry_pending)
+elif no live_status row:                                    -> down (reason: not_warmed_retry_pending)
+elif warmer heartbeat is stale:                             -> retain state (reason: stale_retry_pending)
+elif live_status == unknown:                                -> down (reason: monitoring_unknown_retry_pending)
+elif live_status == problem:                                -> degraded
+elif live_status == down:                                   -> down
+elif live_status == up:                                     -> up
+else:                                                       -> down (reason: indeterminate_retry_pending)
 ```
 
-Key rule: **never alarm on `unmonitored`.** Alarm only on `monitored + down/degraded`.
-This is the line that lets the NOC use live truth without turning monitoring
-gaps into fake outages.
+Key rule: **every device is binary, but retry-pending telemetry gaps do not
+alarm.** Alarm on explicit negative evidence or after a retry policy reaches
+its terminal threshold. This lets the NOC use live truth without turning
+monitoring gaps into fake outages.
 
 ## 3. Non-negotiable refinements (from how this lands in the codebase)
 
@@ -73,10 +74,10 @@ gaps into fake outages.
    reconcile.
 4. **Share the coverage predicate with the SLA bridge.** The availability →
    uptime-alert bridge (already live) must not log downtime for
-   `unmonitored`/`stale` devices, or the SLA numbers inherit the same blind-spot
+   stale/retry-pending devices, or the SLA numbers inherit the same blind-spot
    pollution. One coverage predicate, used by this page *and* the bridge.
-5. **Render ~5 pills, not 8 states.** UI buckets: **Up / Degraded / Down /
-   Unmonitored / Maintenance** (+ Unknown). The fine-grained reason
+5. **Render a small set of pills.** UI buckets: **Up / Degraded / Down /
+   Maintenance**. The fine-grained reason
    (`no_path`, `stale`, `not_warmed`, `monitoring_unknown`) lives in the tooltip
    and the filter values, not as competing pills.
 
@@ -86,19 +87,18 @@ gaps into fake outages.
 - **Secondary text:** admin status, shown only when it differs.
 - **Tooltip:** source + reason ("Zabbix unreachable", "No monitoring path",
   "Admin: maintenance", "Warmer stale").
-- **Filters:** Operational status · Admin status · Coverage (monitored /
-  unmonitored) · Status mismatch.
+- **Filters:** Operational status · Admin status · Retry pending · Status mismatch.
 - **Mismatch worklist** (inventory-hygiene engine; each reason routes to an owner):
   - `admin_online + observed down/problem`  → field ops
   - `admin_offline + observed up/problem`   → inventory hygiene
-  - `active + unmonitored`                  → net-eng / VPN
+  - `active + retry_pending`                → net-eng / VPN
   - `monitored + stale`                     → monitoring infra
   - `monitored + down >30d + 0 customers`   → decommission candidate (the 171 dead Zabbix hosts)
 
 ## 5. Phasing
 
 1. **Phase 1 (this PR — read-only, no schema):** `derive_operational_status()`
-   pure function (lifecycle override + not_warmed/stale/unknown → unmonitored +
+   pure function (lifecycle override + not_warmed/stale/unknown → binary retry-pending +
    live mapping + mismatch flag), reusing the warmer-heartbeat staleness reader.
    Network Devices page renders the derived pill primary, admin secondary,
    reason tooltip. Tests on the pure function.

@@ -189,6 +189,7 @@ class RouterConfigPushRead(BaseModel):
     failure_policy: str
     allow_dangerous_commands: bool
     initiated_by: uuid.UUID
+    operation_id: uuid.UUID | None
     status: str
     created_at: datetime
     completed_at: datetime | None
@@ -200,8 +201,9 @@ class RouterConfigPushResultRead(BaseModel):
     id: uuid.UUID
     push_id: uuid.UUID
     router_id: uuid.UUID
+    operation_id: uuid.UUID | None
     status: str
-    response_data: dict | None
+    response_data: dict | list | None
     error_message: str | None
     pre_snapshot_id: uuid.UUID | None
     post_snapshot_id: uuid.UUID | None

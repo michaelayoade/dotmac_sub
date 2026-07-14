@@ -15,8 +15,13 @@ import pytest
 from app.models.network import (
     OLTDevice,
     OntUnit,
+    OntWanServiceInstance,
+    VendorModelCapability,
+    WanConnectionType,
+    WanServiceType,
 )
 from app.models.ont_observation import OntObservation
+from app.models.tr069 import Tr069AcsServer
 from app.services.network.reconcile import (
     AcsObservedFields,
     OltObservedFields,
@@ -71,6 +76,24 @@ def test_desired_carries_identity_from_ont_unit(db_session, ont, olt):
     assert desired.olt_id == str(olt.id)
     assert desired.fsp == "0/1/3"
     assert desired.olt_ont_id == 11
+
+
+def test_desired_inherits_acs_assignment_and_interval_from_olt(db_session, ont, olt):
+    server = Tr069AcsServer(
+        name="Inherited ACS",
+        base_url="http://genieacs:7557",
+        is_active=True,
+        periodic_inform_interval=420,
+    )
+    db_session.add(server)
+    db_session.flush()
+    olt.tr069_acs_server_id = server.id
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.acs_server_id == str(server.id)
+    assert desired.periodic_inform_interval_sec == 420
 
 
 def test_desired_builds_fsp_from_board_and_port(db_session, ont):
@@ -166,6 +189,57 @@ def test_desired_nat_enabled_follows_wan_mode(db_session, ont):
     assert desired.nat_enabled is False  # bridge → NAT off
 
 
+@pytest.mark.parametrize(
+    ("static_ip", "nat_enabled", "is_public"),
+    [
+        ("10.20.30.2", True, False),
+        ("160.119.127.194", False, True),
+    ],
+)
+def test_desired_static_nat_comes_from_primary_internet_service(
+    db_session, ont, static_ip, nat_enabled, is_public
+):
+    db_session.add(
+        VendorModelCapability(
+            vendor="Huawei",
+            model="EG8145V5",
+            tr069_root="Device",
+            is_active=True,
+        )
+    )
+    db_session.add(
+        OntWanServiceInstance(
+            ont_id=ont.id,
+            service_type=WanServiceType.internet,
+            connection_type=WanConnectionType.static,
+            nat_enabled=nat_enabled,
+            is_active=True,
+            priority=1,
+        )
+    )
+    ont.vendor = "Huawei"
+    ont.model = "EG8145V5"
+    ont.tr069_data_model = "Device"
+    ont.desired_config = {
+        "wan": {
+            "mode": "static_ip",
+            "static_ip": static_ip,
+            "static_subnet": "255.255.255.0",
+            "static_gateway": "10.20.30.1",
+        }
+    }
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.nat_enabled is nat_enabled
+    assert desired.wan_static_ip_is_public is is_public
+    assert desired.tr181_wan_paths is not None
+    assert desired.tr181_wan_paths.gateway == (
+        "Device.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress"
+    )
+
+
 def test_desired_dual_stack_is_loaded_from_wan_intent(db_session, ont):
     ont.desired_config = {"wan": {"ip_protocol": "dual_stack"}}
     ont.tr069_data_model = "Device"
@@ -175,6 +249,29 @@ def test_desired_dual_stack_is_loaded_from_wan_intent(db_session, ont):
 
     assert desired.ipv6_enabled is True
     assert desired.tr069_data_model_root == "Device"
+
+
+def test_device_root_is_inferred_from_model_capability_before_first_inform(
+    db_session, ont
+):
+    db_session.add(
+        VendorModelCapability(
+            vendor="Huawei",
+            model="EG8145V5",
+            tr069_root="Device",
+            is_active=True,
+        )
+    )
+    ont.vendor = "Huawei"
+    ont.model = "EG8145V5"
+    ont.tr069_data_model = None
+    ont.desired_config = {"wan": {"mode": "dhcp"}}
+    db_session.commit()
+
+    desired = desired_from_ont_unit(db_session, ont)
+
+    assert desired.tr069_data_model_root == "Device"
+    assert desired.tr181_wan_paths is not None
 
 
 def test_desired_description_uses_serial_stub_when_no_subscriber_binding(

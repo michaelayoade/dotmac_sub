@@ -16,7 +16,7 @@
         </a>
     </div>
 
-    {% set push_status_map = {'completed': 'active', 'partial_failure': 'warning', 'failed': 'error', 'pending': 'neutral', 'running': 'neutral', 'rolled_back': 'warning'} %}
+    {% set push_status_map = {'completed': 'active', 'partial_failure': 'warning', 'failed': 'error', 'pending': 'neutral', 'running': 'neutral', 'pending_readback': 'warning'} %}
     {% call page_header(
         title="Push Results",
         subtitle="Config push " ~ push.id | string,
@@ -40,7 +40,7 @@
     <div class="mt-3 flex flex-wrap gap-4 text-xs text-slate-500 dark:text-slate-400">
         <span>Mode: {{ "Dry-run preview" if push.dry_run else "Live push" }}</span>
         <span>Failure policy: {{ push.failure_policy | replace('_', ' ') | title }}</span>
-        <span>Blocked-command override: {{ "Enabled" if push.allow_dangerous_commands else "Off" }}</span>
+        {% if push.operation_id %}<span>Operation: <span class="font-mono">{{ push.operation_id }}</span></span>{% endif %}
         <span>Created: {{ push.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
         {% if push.completed_at %}
         <span>Completed: {{ push.completed_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
@@ -59,6 +59,7 @@
     {# Summary row #}
     {% set success_count = results | selectattr('status.value', 'equalto', 'success') | list | length %}
     {% set failed_count = results | selectattr('status.value', 'equalto', 'failed') | list | length %}
+    {% set pending_readback_count = results | selectattr('status.value', 'equalto', 'pending_readback') | list | length %}
     <div class="mb-4 flex gap-4 text-sm">
         <span class="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
             <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
@@ -69,6 +70,9 @@
             {{ failed_count }} failed
         </span>
         <span class="text-slate-500 dark:text-slate-400">{{ results | length }} total</span>
+        {% if pending_readback_count %}
+        <span class="text-amber-600 dark:text-amber-400">{{ pending_readback_count }} awaiting verification</span>
+        {% endif %}
     </div>
 
     <div class="overflow-x-auto">
@@ -84,7 +88,7 @@
             </thead>
             <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
                 {% for r in results %}
-                {% set r_map = {'success': 'active', 'failed': 'error', 'pending': 'warning', 'skipped': 'neutral'} %}
+                {% set r_map = {'success': 'active', 'failed': 'error', 'pending': 'warning', 'running': 'warning', 'pending_readback': 'warning', 'skipped': 'neutral'} %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                     <td class="py-3 pr-4">
                         <a href="/admin/network/routers/{{ r.router_id }}"
@@ -127,14 +131,14 @@
     </div>
 
     {# Auto-refresh for running pushes #}
-    {% if push.status.value in ['pending', 'running'] %}
+    {% if push.status.value in ['pending', 'running', 'pending_readback'] %}
     <script>
         setTimeout(() => window.location.reload(), 5000);
     </script>
     <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300 animate-fade-in-up" style="animation-delay: 100ms;">
         <div class="flex items-center gap-2">
             <svg class="h-4 w-4 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-            Push in progress — page will refresh automatically every 5 seconds.
+            Push verification is in progress. The page refreshes every 5 seconds.
         </div>
     </div>
     {% endif %}

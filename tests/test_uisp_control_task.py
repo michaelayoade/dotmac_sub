@@ -368,12 +368,10 @@ def test_task_marks_model_unsupported_warning(
     assert operation.status == NetworkOperationStatus.warning
 
 
-def test_uisp_control_tasks_use_ingestion_queue():
+def test_uisp_apply_uses_default_queue_and_reconcile_uses_ingestion():
     from app.celery_app import celery_app
 
-    assert celery_app.conf.task_routes["app.tasks.uisp_control.apply_uisp_intent"] == {
-        "queue": "ingestion"
-    }
+    assert "app.tasks.uisp_control.apply_uisp_intent" not in celery_app.conf.task_routes
     assert celery_app.conf.task_routes[
         "app.tasks.uisp_control.reconcile_uisp_config_readback"
     ] == {"queue": "ingestion"}

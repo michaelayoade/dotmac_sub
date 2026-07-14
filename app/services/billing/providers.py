@@ -3,6 +3,7 @@
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import or_
@@ -194,15 +195,14 @@ class PaymentProviderEvents(ListResponseMixin):
         from app.services.billing.payments import Payments
 
         provider = _validate_payment_provider(db, str(payload.provider_id))
+        existing_event: PaymentProviderEvent | None = None
         if payload.idempotency_key:
-            existing = (
+            existing_event = (
                 db.query(PaymentProviderEvent)
                 .filter(PaymentProviderEvent.provider_id == provider.id)
                 .filter(PaymentProviderEvent.idempotency_key == payload.idempotency_key)
                 .first()
             )
-            if existing:
-                return existing
         invoice = (
             get_by_id(db, Invoice, payload.invoice_id) if payload.invoice_id else None
         )
@@ -222,6 +222,12 @@ class PaymentProviderEvents(ListResponseMixin):
         new_status = payload.status_hint or PaymentProviderEvents._event_status_map.get(
             payload.event_type
         )
+        if existing_event is not None and not (
+            existing_event.payment_id is None
+            and new_status == PaymentStatus.succeeded
+            and payload.amount is not None
+        ):
+            return existing_event
         payment = None
         created_settled = False
         if payload.payment_id:
@@ -343,21 +349,32 @@ class PaymentProviderEvents(ListResponseMixin):
                 from app.services.billing.payments import _create_payment_ledger_entry
 
                 _create_payment_ledger_entry(db, payment, invoice, alloc_amount)
-        allocation_invoice_id = payload.invoice_id or (
-            str(payment.allocations[0].invoice_id)
-            if payment and payment.allocations
-            else None
-        )
-        event = PaymentProviderEvent(
-            provider_id=provider.id,
-            payment_id=payment.id if payment else None,
-            invoice_id=allocation_invoice_id,
-            event_type=payload.event_type,
-            external_id=payload.external_id,
-            idempotency_key=payload.idempotency_key,
-            payload=payload.payload,
-        )
-        db.add(event)
+        allocation_invoice_id: UUID | None = payload.invoice_id
+        if allocation_invoice_id is None and payment and payment.allocations:
+            allocation_invoice_id = payment.allocations[0].invoice_id
+        if existing_event is not None:
+            # Legacy dead-letter replay created the idempotency event without
+            # settlement fields, leaving payment_id NULL. The idempotency row
+            # proves receipt, not completion: resume it through the payment
+            # owner and attach the result instead of returning early forever.
+            event = existing_event
+            event.payment_id = payment.id if payment else None
+            event.invoice_id = allocation_invoice_id
+            event.event_type = payload.event_type
+            event.external_id = payload.external_id
+            event.payload = payload.payload
+            event.error = None
+        else:
+            event = PaymentProviderEvent(
+                provider_id=provider.id,
+                payment_id=payment.id if payment else None,
+                invoice_id=allocation_invoice_id,
+                event_type=payload.event_type,
+                external_id=payload.external_id,
+                idempotency_key=payload.idempotency_key,
+                payload=payload.payload,
+            )
+            db.add(event)
         db.flush()
         if created_settled:
             # Payments.create already ran the full success pipeline; calling

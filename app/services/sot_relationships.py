@@ -55,8 +55,37 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "customer balance summaries",
                     "customer-visible financial position",
+                    "bounded cohort financial projections",
                 ),
                 depends_on=("financial.ledger",),
+            ),
+            SOTService(
+                name="customer.service_status",
+                module="app.services.service_status",
+                owns=(
+                    "customer-visible service health",
+                    "customer financial action hints",
+                    "payment-restores-service claims",
+                ),
+                depends_on=(
+                    "financial.access_resolution",
+                    "customer.financial_position",
+                ),
+            ),
+            SOTService(
+                name="customer.usage_summary",
+                module="app.services.usage_summary",
+                owns=(
+                    "customer usage window definitions",
+                    "customer usage headline totals",
+                    "customer usage total provenance",
+                ),
+                depends_on=("sessions.radius_reconciliation",),
+                notes=(
+                    "Authoritative zero is a valid total. Customer clients do "
+                    "not replace server totals with loaded-session pages or "
+                    "retention-limited chart series."
+                ),
             ),
             SOTService(
                 name="customer.branding",
@@ -72,12 +101,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=(
             "app.web.customer",
             "app.api.me",
+            "mobile",
             "app.services.customer_portal_*",
             "app.services.crm_api",
         ),
         rule=(
             "Customer-facing surfaces resolve scope once through customer context "
-            "and compose network/financial summaries through services."
+            "and compose network/financial summaries through services. Clients "
+            "consume service-status action hints instead of inferring restoration "
+            "policy from subscription status or invoice rows, and consume usage "
+            "totals with their server-owned provenance instead of reconstructing "
+            "headlines from partial client data."
         ),
     ),
     DomainSOT(
@@ -87,8 +121,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="financial.ledger",
                 module="app.services.billing.ledger",
                 owns=(
-                    "posted money movement",
-                    "ledger-derived balances",
+                    "append-only ledger record lifecycle",
+                    "ledger reversal invariants",
                     "financial transaction history",
                 ),
             ),
@@ -102,11 +136,87 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("financial.ledger",),
             ),
             SOTService(
+                name="financial.payments",
+                module="app.services.billing.payments",
+                owns=(
+                    "payment document lifecycle",
+                    "payment allocation and account credit",
+                    "payment-originated ledger postings",
+                ),
+                depends_on=("financial.ledger", "financial.billing_accounts"),
+            ),
+            SOTService(
+                name="financial.invoices",
+                module="app.services.billing.invoices",
+                owns=(
+                    "invoice document lifecycle",
+                    "invoice status transitions",
+                    "invoice-originated ledger postings",
+                ),
+                depends_on=("financial.ledger", "financial.billing_accounts"),
+            ),
+            SOTService(
+                name="financial.credit_notes",
+                module="app.services.billing.credit_notes",
+                owns=("credit-note lifecycle", "credit-note ledger postings"),
+                depends_on=("financial.ledger", "financial.invoices"),
+            ),
+            SOTService(
+                name="financial.vas_wallet",
+                module="app.services.vas_wallet",
+                owns=(
+                    "VAS wallet entry lifecycle",
+                    "VAS spendable balance",
+                    "atomic wallet-to-billing payment bridge",
+                ),
+                depends_on=("financial.payments",),
+            ),
+            SOTService(
                 name="financial.billing_profile",
                 module="app.services.billing_profile",
                 owns=(
                     "prepaid/postpaid profile resolution",
                     "billing-mode transition policy",
+                ),
+            ),
+            SOTService(
+                name="financial.prepaid_threshold",
+                module="app.services.prepaid_threshold",
+                owns=(
+                    "prepaid enforcement threshold",
+                    "unfunded prepaid renewal requirement",
+                ),
+                depends_on=("financial.billing_profile",),
+            ),
+            SOTService(
+                name="financial.prepaid_enforcement",
+                module="app.services.prepaid_enforcement_planner",
+                owns=(
+                    "prepaid enforcement candidate cohort",
+                    "prepaid warn/suspend/restore planning",
+                    "prepaid enforcement readiness reporting",
+                ),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.billing_profile",
+                    "financial.prepaid_threshold",
+                ),
+            ),
+            SOTService(
+                name="financial.prepaid_plan_change",
+                module="app.services.prepaid_plan_changes",
+                owns=(
+                    "prepaid plan-change proration decision",
+                    "prepaid plan-change wallet affordability",
+                    "idempotent plan-change debit and credit staging",
+                ),
+                depends_on=(
+                    "financial.ledger",
+                    "customer.financial_position",
+                ),
+                notes=(
+                    "Immediate changes lock the account, recompute at write time, "
+                    "and commit the financial adjustment with the subscription."
                 ),
             ),
             SOTService(
@@ -116,8 +226,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "billable service classification",
                     "RADIUS access decision",
                     "postpaid/prepaid enforcement cohorts",
+                    "financial suspension/restoration eligibility",
                 ),
-                depends_on=("financial.billing_profile",),
+                depends_on=(
+                    "financial.billing_profile",
+                    "financial.prepaid_threshold",
+                    "customer.financial_position",
+                ),
             ),
             SOTService(
                 name="financial.dunning",
@@ -152,7 +267,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "financial.dunning",
                     "financial.access_resolution",
+                    "financial.prepaid_enforcement",
                 ),
+            ),
+            SOTService(
+                name="financial.payment_provider_events",
+                module="app.services.billing.providers",
+                owns=(
+                    "payment-provider event ingestion",
+                    "provider-event idempotency",
+                    "incomplete provider settlement resumption",
+                ),
+                depends_on=("financial.payments",),
+            ),
+            SOTService(
+                name="financial.payment_webhooks",
+                module="app.services.api_billing_webhooks",
+                owns=(
+                    "verified payment webhook projection",
+                    "inbound payment dead-letter lifecycle",
+                    "payment dead-letter replay",
+                ),
+                depends_on=("financial.payment_provider_events",),
             ),
             SOTService(
                 name="financial.payment_reconciliation",
@@ -161,18 +297,46 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "stranded top-up reconciliation",
                     "scheduled top-up reconciliation execution",
                 ),
-                depends_on=("financial.ledger",),
+                depends_on=("financial.ledger", "financial.payment_provider_events"),
+            ),
+            SOTService(
+                name="financial.vas_operations",
+                module="app.services.vas_admin_commands",
+                owns=(
+                    "admin VAS mutation transactions",
+                    "VAS manual transaction resolution",
+                ),
+                depends_on=("control.domain_settings", "financial.vas_refunds"),
+            ),
+            SOTService(
+                name="financial.vas_refunds",
+                module="app.services.vas_refunds",
+                owns=(
+                    "VAS refund-to-source eligibility",
+                    "VAS refund request lifecycle",
+                    "VAS refund wallet reservation and reversal projection",
+                    "VAS refund provider reconciliation",
+                ),
+                depends_on=("control.domain_settings",),
+                notes=(
+                    "The VAS wallet is a separate customer-liability ledger; "
+                    "a refund request and wallet reservation commit before the "
+                    "gateway call. Gateway adapters provide observations but do "
+                    "not decide eligibility or lifecycle state."
+                ),
             ),
         ),
         entrypoints=(
             "app.services.billing_automation",
             "app.services.collections.*",
             "app.web.admin.billing_*",
+            "app.web.admin.vas",
             "app.api.billing",
             "app.tasks.billing",
             "app.tasks.collections",
             "app.tasks.enforcement",
             "app.tasks.payment_reconciliation",
+            "app.tasks.vas",
         ),
         rule=(
             "No caller infers access or balances from draft invoices, imported "
@@ -206,20 +370,65 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="network.radius_sessions",
                 module="app.services.network.radius_sessions",
-                owns=("online-now session state", "primary NAS session"),
+                owns=(
+                    "online-now session state",
+                    "primary NAS session",
+                    "bounded historical NAS evidence",
+                ),
                 depends_on=("network.identity",),
             ),
             SOTService(
                 name="network.device_state",
-                module="app.services.network.device_state",
-                owns=("live infrastructure state", "pollability interpretation"),
+                module="app.services.device_operational_status",
+                owns=(
+                    "NOC-facing device operational status",
+                    "device retry-pending and alarm classification",
+                ),
+                depends_on=("runtime.infrastructure_polling",),
+            ),
+            SOTService(
+                name="network.nas_inventory",
+                module="app.services.nas.devices",
+                owns=("NAS administrative lifecycle state", "NAS inventory reads"),
                 depends_on=("network.identity",),
+            ),
+            SOTService(
+                name="network.nas_lifecycle",
+                module="app.services.nas_lifecycle",
+                owns=(
+                    "NAS lifecycle reconciliation plans",
+                    "subscription NAS relink decisions",
+                    "NAS lifecycle RADIUS projection commands",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "network.access_path",
+                    "network.radius_sessions",
+                    "network.nas_inventory",
+                    "service_intent.subscription_nas_assignment",
+                    "access.radius_state",
+                    "runtime.db_sessions",
+                    "observability.recording",
+                ),
+            ),
+            SOTService(
+                name="network.nas_access_path_evidence",
+                module="app.services.nas_access_path_evidence",
+                owns=(
+                    "manual NAS lifecycle evidence reports",
+                    "historical access-path review recommendations",
+                ),
+                depends_on=(
+                    "network.radius_sessions",
+                    "network.nas_lifecycle",
+                    "runtime.db_sessions",
+                ),
             ),
             SOTService(
                 name="network.outage_impact",
                 module="app.services.network.outage_impact",
                 owns=("affected-customer impact", "outage scope impact"),
-                depends_on=("network.access_path", "network.device_state"),
+                depends_on=("network.access_path",),
             ),
             SOTService(
                 name="network.device_groups",
@@ -232,14 +441,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
-                name="network.events",
-                module="app.services.network.events",
-                owns=("network event decisions",),
+                name="network.outage_lifecycle",
+                module="app.services.topology.outage",
+                owns=(
+                    "outage incident lifecycle",
+                    "outage event emission and escalation planning",
+                ),
                 depends_on=(
-                    "network.device_state",
                     "network.outage_impact",
-                    "network.radius_sessions",
-                    "network.device_groups",
+                    "events.dispatcher",
                 ),
             ),
         ),
@@ -258,28 +468,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="subscriber_sessions",
         services=(
             SOTService(
-                name="sessions.radius_live_view",
-                module="app.services.radius_active_sessions",
-                owns=(
-                    "RADIUS active-session mirror",
-                    "accounting start/interim/stop session rows",
-                ),
-                depends_on=("network.identity",),
-            ),
-            SOTService(
                 name="sessions.radius_reconciliation",
                 module="app.services.radius_session_reconcile",
                 owns=(
                     "external radacct open-session discovery",
+                    "RADIUS active-session mirror writes",
                     "live-session mirror pruning",
                 ),
-                depends_on=("sessions.radius_live_view",),
+                depends_on=("network.identity",),
+            ),
+            SOTService(
+                name="sessions.radius_accounting_health",
+                module="app.services.radius_accounting_health",
+                owns=(
+                    "RADIUS accounting source freshness policy",
+                    "accounting source health classification",
+                ),
+                depends_on=("control.domain_settings", "runtime.db_sessions"),
             ),
             SOTService(
                 name="sessions.radius_resolution",
                 module="app.services.network.radius_sessions",
                 owns=("customer online-now resolution", "primary NAS session"),
-                depends_on=("sessions.radius_live_view", "network.identity"),
+                depends_on=("sessions.radius_reconciliation", "network.identity"),
             ),
             SOTService(
                 name="sessions.enforcement",
@@ -418,6 +629,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "runtime.db_sessions",
                 ),
             ),
+            SOTService(
+                name="secrets.credential_recovery",
+                module="app.services.credential_lifecycle_cleanup",
+                owns=(
+                    "lost-key credential recovery planning",
+                    "lifecycle-safe unrecoverable credential cleanup",
+                    "reviewed cleanup plan digest enforcement",
+                ),
+                depends_on=(
+                    "secrets.credential_integrity",
+                    "network.identity",
+                    "network.radius_sessions",
+                    "access.radius_state",
+                    "runtime.db_sessions",
+                    "observability.recording",
+                ),
+            ),
         ),
         entrypoints=(
             "app.tasks.security",
@@ -463,6 +691,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="communications.customer_read_state",
+                module="app.services.customer_portal_notifications",
+                owns=(
+                    "customer notification read/unread state",
+                    "customer notification unread counts",
+                    "legacy device read-state migration boundary",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "communications.customer_policy",
+                    "communications.notification_service",
+                ),
+            ),
+            SOTService(
                 name="communications.staff_notifications",
                 module="app.services.staff_notifications",
                 owns=("admin/staff notification creation",),
@@ -470,12 +712,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             ),
             SOTService(
                 name="communications.team_inbox",
-                module="app.services.team_inbox_operations",
+                module="app.services.team_inbox_commands",
                 owns=(
                     "conversation collaboration",
                     "conversation assignment",
                     "inbox reply and contact-link workflows",
                     "inbound channel ingestion",
+                    "admin inbox mutation transactions",
                 ),
                 depends_on=(
                     "customer.identity_scope",
@@ -487,12 +730,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=(
             "app.services.events.handlers.notification",
             "app.tasks.notifications",
+            "app.api.me",
+            "app.web.customer.routes",
             "app.web.admin.notifications",
+            "app.web.admin.inbox",
             "app.services.team_inbox_*",
         ),
         rule=(
-            "Domain services request communication outcomes; channel choice and "
-            "notification rows stay inside communication services."
+            "Domain services request communication outcomes; channel choice, "
+            "notification rows, and recipient read state stay inside "
+            "communication services. Admin inbox mutation routes delegate to "
+            "the committed team-inbox command boundary."
         ),
     ),
     DomainSOT(
@@ -559,7 +807,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "pollable device predicate",
                     "poll heartbeat result counters",
                 ),
-                depends_on=("runtime.db_sessions", "network.device_state"),
+                depends_on=("runtime.db_sessions",),
             ),
             SOTService(
                 name="runtime.infrastructure_health",
@@ -615,7 +863,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=("app.tasks.*", "app.main", "app.services.*"),
         rule=(
             "Tasks and service loops record lifecycle through observability "
-            "helpers instead of writing heartbeat/run state directly."
+            "helpers instead of writing heartbeat/run state directly. Metrics "
+            "collectors read counters or bounded snapshots; unbounded business "
+            "queries run only in scheduled single-flight producers."
         ),
     ),
     DomainSOT(
@@ -639,16 +889,56 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=("work-order read models", "customer work-order linkage"),
                 depends_on=("customer.identity_scope",),
             ),
+            SOTService(
+                name="operations.field_completion",
+                module="app.services.field.transitions",
+                owns=(
+                    "field job completion eligibility",
+                    "field completion evidence requirements",
+                    "field job completion transitions",
+                ),
+                depends_on=("operations.work_orders", "control.domain_settings"),
+                notes=(
+                    "Authenticated field job detail projects the same completion "
+                    "requirements consumed by transition validation. Field clients "
+                    "do not reconstruct this policy."
+                ),
+            ),
+            SOTService(
+                name="operations.project_lifecycle",
+                module="app.services.projects",
+                owns=(
+                    "native project field and status mutations",
+                    "project SLA clock synchronization",
+                    "project lifecycle event and notification requests",
+                ),
+                depends_on=(
+                    "events.dispatcher",
+                    "communications.staff_notifications",
+                ),
+                notes=(
+                    "Customer and reseller read authority remains controlled by "
+                    "projects.native_read until the CRM mirror cutover is complete."
+                ),
+            ),
         ),
         entrypoints=(
             "app.services.events.handlers.provisioning",
             "app.tasks.ont_provisioning",
             "app.web.admin.provisioning",
+            "app.web.admin.projects",
+            "app.api.projects",
+            "app.api.field.*",
+            "app.services.web_projects",
             "app.services.web_dispatch_work_orders",
+            "field_mobile",
         ),
         rule=(
             "Provisioning callers resolve customer/network context through the "
-            "shared context layer before executing workflow steps."
+            "shared context layer before executing workflow steps. Native project "
+            "mutation adapters delegate to Projects.update for lifecycle consequences. "
+            "Field clients consume completion_requirements from authenticated job "
+            "detail and leave completion eligibility to the field transition service."
         ),
     ),
     DomainSOT(
@@ -823,15 +1113,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="service_intent_control_plane",
         services=(
             SOTService(
-                name="service_intent.catalog_to_network",
-                module="app.services.service_intent_adapter",
-                owns=(
-                    "catalog/subscription to network intent",
-                    "network-safe subscription provisioning payloads",
-                ),
-                depends_on=("service_intent.catalog_policy",),
-            ),
-            SOTService(
                 name="service_intent.catalog_policy",
                 module="app.services.catalog.policies",
                 owns=("catalog policy lookup", "offer policy interpretation"),
@@ -843,10 +1124,32 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("service_intent.catalog_policy",),
             ),
             SOTService(
+                name="service_intent.catalog_billing_governance",
+                module="app.services.catalog_billing_governance",
+                owns=(
+                    "billing-critical catalog mutation policy",
+                    "live pricing and cadence immutability",
+                    "billing catalog audit and operator alerting",
+                ),
+                depends_on=(
+                    "service_intent.catalog_validation",
+                    "auth.permission_gate",
+                    "observability.recording",
+                ),
+            ),
+            SOTService(
+                name="service_intent.subscription_nas_assignment",
+                module="app.services.catalog.subscriptions",
+                owns=(
+                    "subscription provisioning NAS assignment",
+                    "nonterminal services grouped by NAS",
+                ),
+                depends_on=("service_intent.catalog_policy",),
+            ),
+            SOTService(
                 name="service_intent.ont",
                 module="app.services.network.ont_service_intent",
                 owns=("ONT service intent projection",),
-                depends_on=("service_intent.catalog_to_network", "network.access_path"),
             ),
         ),
         entrypoints=(
@@ -856,9 +1159,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.web.admin.provisioning",
         ),
         rule=(
-            "Catalog defines the commercial service; service-intent adapters "
-            "translate it into network/provisioning payloads. Network code should "
-            "not infer plan meaning directly from catalog models."
+            "Catalog policy and subscription services define commercial intent; "
+            "network owners project configured intent without a parallel adapter."
         ),
     ),
     DomainSOT(

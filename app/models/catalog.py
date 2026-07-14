@@ -1139,8 +1139,14 @@ class RadiusProfile(Base):
 
     attributes = relationship("RadiusAttribute", back_populates="profile")
     offer_links = relationship("OfferRadiusProfile", back_populates="profile")
+    # access_credentials now has TWO FKs to radius_profiles: the live
+    # radius_profile_id, and pre_throttle_radius_profile_id which remembers what a
+    # collections throttle replaced. Name the join column explicitly so this
+    # relationship keeps meaning "credentials currently ON this profile".
     access_credentials = relationship(
-        "AccessCredential", back_populates="radius_profile"
+        "AccessCredential",
+        back_populates="radius_profile",
+        foreign_keys="AccessCredential.radius_profile_id",
     )
     subscriptions = relationship("Subscription", back_populates="radius_profile")
 
@@ -1203,6 +1209,14 @@ class AccessCredential(Base):
     radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("radius_profiles.id")
     )
+    # The profile this credential carried before a collections throttle replaced
+    # it. Persisted because the throttle is a TEMPORARY override that has to be
+    # undone exactly, and the customer's real speed is not otherwise recoverable:
+    # the offer's profile is only a guess, and an admin credential-level override
+    # would be silently discarded by it. NULL when the credential is not throttled.
+    pre_throttle_radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_profiles.id"), nullable=True
+    )
     # IPoE/DHCP Option 82 relay agent fields
     circuit_id: Mapped[str | None] = mapped_column(String(255))
     remote_id: Mapped[str | None] = mapped_column(String(255))
@@ -1222,7 +1236,11 @@ class AccessCredential(Base):
 
     subscriber = relationship("Subscriber", back_populates="access_credentials")
     subscription = relationship("Subscription")
-    radius_profile = relationship("RadiusProfile", back_populates="access_credentials")
+    radius_profile = relationship(
+        "RadiusProfile",
+        back_populates="access_credentials",
+        foreign_keys=[radius_profile_id],
+    )
     radius_users = relationship("RadiusUser", back_populates="access_credential")
 
 

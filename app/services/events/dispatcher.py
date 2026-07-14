@@ -8,6 +8,8 @@ Events are persisted before dispatching to enable retry of failed handlers.
 """
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 from uuid import UUID
 
@@ -18,6 +20,34 @@ from app.services.events.types import Event, EventType
 from app.services.session_hooks import run_after_commit
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _isolated_handler_session(db: Session | Any) -> Iterator[Session | Any]:
+    """Contain each handler's transaction without hiding parent writes.
+
+    Handlers share the dispatcher's connection through a savepoint-backed child
+    session. A handler can flush or even commit without ending the parent event
+    transaction, while a database error rolls back only that handler's work.
+    """
+    if not isinstance(db, Session):
+        yield db
+        return
+
+    handler_db = Session(
+        bind=db.connection(),
+        autoflush=False,
+        autocommit=False,
+        join_transaction_mode="create_savepoint",
+    )
+    try:
+        yield handler_db
+        handler_db.commit()
+    except Exception:
+        handler_db.rollback()
+        raise
+    finally:
+        handler_db.close()
 
 
 def _event_extra(
@@ -81,9 +111,12 @@ class EventDispatcher:
             db: Database session for handlers that need DB access
             event: The event to dispatch
         """
+        from app.services.control_relationships import event_execution_plan
+
+        plan = event_execution_plan(event.event_type.value, self._handlers)
         logger.info(
             "event_dispatch_start",
-            extra=_event_extra(event, handler_count=len(self._handlers)),
+            extra=_event_extra(event, handler_count=len(plan)),
         )
 
         # 1. Persist event before processing.
@@ -95,7 +128,7 @@ class EventDispatcher:
             logger.warning(
                 "event_persist_failed",
                 extra={
-                    **_event_extra(event, handler_count=len(self._handlers)),
+                    **_event_extra(event, handler_count=len(plan)),
                     "error": str(persist_exc),
                 },
             )
@@ -104,63 +137,61 @@ class EventDispatcher:
             except Exception:
                 logger.exception("event_persist_rollback_failed")
 
-        # 2. Process all handlers, tracking failures
-        from app.services.control_relationships import (
-            RelationshipMode,
-            event_relationship_mode,
-        )
-
-        chained = (
-            event_relationship_mode(event.event_type.value) == RelationshipMode.chain
-        )
-        blocked_by: str | None = None
+        # 2. Process the event-specific plan, tracking failures and dependency blocks.
+        succeeded_handlers: set[str] = set()
         failed_handlers: list[dict[str, str]] = []
-        for handler in self._handlers:
-            handler_name = handler.__class__.__name__
-            if blocked_by is not None:
-                error = f"blocked by failed chain handler {blocked_by}"
-                failed_handlers.append({"handler": handler_name, "error": error})
+        for step in plan:
+            unmet = sorted(set(step.dependencies) - succeeded_handlers)
+            if unmet:
+                error = f"blocked by event dependencies: {', '.join(unmet)}"
+                failed_handlers.append(
+                    {
+                        "handler": step.handler_name,
+                        "error": error,
+                        "blocked_by": ",".join(unmet),
+                    }
+                )
                 if event_record and event_record.id:
                     event_store_service.record_handler_attempt(
                         db,
                         event_store_id=event_record.id,
-                        handler_name=handler_name,
-                        status="failed",
+                        handler_name=step.handler_name,
+                        status="blocked",
                         error=error,
                     )
                 continue
             try:
-                handler.handle(db, event)
+                with _isolated_handler_session(db) as handler_db:
+                    step.handler.handle(handler_db, event)
+                succeeded_handlers.add(step.handler_name)
                 if event_record and event_record.id:
                     event_store_service.record_handler_attempt(
                         db,
                         event_store_id=event_record.id,
-                        handler_name=handler_name,
+                        handler_name=step.handler_name,
                         status="success",
                     )
             except Exception as exc:
                 logger.exception(
                     "event_handler_failed",
                     extra={
-                        **_event_extra(event, handler_count=len(self._handlers)),
-                        "handler": handler_name,
+                        **_event_extra(event, handler_count=len(plan)),
+                        "handler": step.handler_name,
                         "error": str(exc),
                     },
                 )
                 failed_handlers.append(
                     {
-                        "handler": handler_name,
+                        "handler": step.handler_name,
                         "error": str(exc),
                     }
                 )
-                if chained:
-                    blocked_by = handler_name
                 if event_record and event_record.id:
                     try:
                         event_store_service.record_handler_attempt(
                             db,
                             event_store_id=event_record.id,
-                            handler_name=handler_name,
+                            handler_name=step.handler_name,
                             status="failed",
                             error=str(exc),
                         )
@@ -179,7 +210,7 @@ class EventDispatcher:
                     extra={
                         **_event_extra(
                             event,
-                            handler_count=len(self._handlers),
+                            handler_count=len(plan),
                             failed_handlers=failed_handlers,
                         ),
                         "error": str(update_exc),
@@ -189,7 +220,7 @@ class EventDispatcher:
             "event_dispatch_complete",
             extra=_event_extra(
                 event,
-                handler_count=len(self._handlers),
+                handler_count=len(plan),
                 failed_handlers=failed_handlers,
             ),
         )
@@ -219,6 +250,9 @@ class EventDispatcher:
 
         # Get handlers that failed previously
         failed_handler_names = event_store_service.failed_handler_names(event_record)
+        from app.services.control_relationships import event_execution_plan
+
+        plan = event_execution_plan(event.event_type.value, self._handlers)
 
         # Update retry count and status
         event_store_service.mark_retry_started(db, event_record)
@@ -227,45 +261,48 @@ class EventDispatcher:
             "event_retry_start",
             extra=_event_extra(
                 event,
-                handler_count=len(self._handlers),
+                handler_count=len(plan),
                 retry_count=event_record.retry_count,
             ),
         )
 
-        # Retry only failed handlers (or all if no specific failures recorded)
-        new_failures: list[dict] = []
-        from app.services.control_relationships import (
-            RelationshipMode,
-            event_relationship_mode,
+        # Retry only the current failure manifest. Previously successful
+        # predecessors satisfy dependencies without being executed again.
+        plan_names = {step.handler_name for step in plan}
+        succeeded_handlers = (
+            plan_names - failed_handler_names if failed_handler_names else set()
         )
-
-        chained = (
-            event_relationship_mode(event.event_type.value) == RelationshipMode.chain
-        )
-        blocked_by: str | None = None
-        for handler in self._handlers:
-            handler_name = handler.__class__.__name__
-            # Only retry failed handlers, or all if we don't know which failed
-            if failed_handler_names and handler_name not in failed_handler_names:
+        new_failures: list[dict[str, str]] = []
+        for step in plan:
+            if failed_handler_names and step.handler_name not in failed_handler_names:
                 continue
-            if blocked_by is not None:
-                error = f"blocked by failed chain handler {blocked_by}"
-                new_failures.append({"handler": handler_name, "error": error})
+            unmet = sorted(set(step.dependencies) - succeeded_handlers)
+            if unmet:
+                error = f"blocked by event dependencies: {', '.join(unmet)}"
+                new_failures.append(
+                    {
+                        "handler": step.handler_name,
+                        "error": error,
+                        "blocked_by": ",".join(unmet),
+                    }
+                )
                 event_store_service.record_handler_attempt(
                     db,
                     event_store_id=event_record.id,
-                    handler_name=handler_name,
-                    status="failed",
+                    handler_name=step.handler_name,
+                    status="blocked",
                     error=error,
                     retry_count=event_record.retry_count,
                 )
                 continue
             try:
-                handler.handle(db, event)
+                with _isolated_handler_session(db) as handler_db:
+                    step.handler.handle(handler_db, event)
+                succeeded_handlers.add(step.handler_name)
                 event_store_service.record_handler_attempt(
                     db,
                     event_store_id=event_record.id,
-                    handler_name=handler_name,
+                    handler_name=step.handler_name,
                     status="success",
                     retry_count=event_record.retry_count,
                 )
@@ -275,25 +312,23 @@ class EventDispatcher:
                     extra={
                         **_event_extra(
                             event,
-                            handler_count=len(self._handlers),
+                            handler_count=len(plan),
                             retry_count=event_record.retry_count,
                         ),
-                        "handler": handler_name,
+                        "handler": step.handler_name,
                         "error": str(exc),
                     },
                 )
                 new_failures.append(
                     {
-                        "handler": handler_name,
+                        "handler": step.handler_name,
                         "error": str(exc),
                     }
                 )
-                if chained:
-                    blocked_by = handler_name
                 event_store_service.record_handler_attempt(
                     db,
                     event_store_id=event_record.id,
-                    handler_name=handler_name,
+                    handler_name=step.handler_name,
                     status="failed",
                     error=str(exc),
                     retry_count=event_record.retry_count,
@@ -306,7 +341,7 @@ class EventDispatcher:
             "event_retry_complete",
             extra=_event_extra(
                 event,
-                handler_count=len(self._handlers),
+                handler_count=len(plan),
                 failed_handlers=new_failures,
                 retry_count=event_record.retry_count,
             ),
@@ -358,9 +393,13 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(ArrangementHandler())
     dispatcher.register_handler(ReferralHandler())
 
-    from app.services.control_relationships import validate_and_order_handlers
+    from app.services.control_relationships import (
+        validate_and_order_handlers,
+        validate_event_execution_policy,
+    )
 
     dispatcher._handlers = validate_and_order_handlers(dispatcher._handlers)
+    validate_event_execution_policy(dispatcher._handlers)
 
     logger.info(
         "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, arrangements, referral",

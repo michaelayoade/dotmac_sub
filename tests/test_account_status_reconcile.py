@@ -1,7 +1,7 @@
-"""Tests for blocked-but-all-active subscriber-status drift reconcile.
+"""Tests for safe all-active subscriber-status drift reconcile.
 
-See app/services/account_status_reconcile.py. Cohort = subscriber blocked while
-ALL subscriptions are active; mixed-status accounts are excluded.
+See app/services/account_status_reconcile.py. Cohort = subscriber new/blocked
+while ALL subscriptions are active; mixed-status accounts are excluded.
 """
 
 from __future__ import annotations
@@ -44,6 +44,16 @@ def test_finder_matches_blocked_all_active(db_session, catalog_offer):
     assert str(s.id) in ids
 
 
+def test_finder_matches_new_all_active(db_session, catalog_offer):
+    s = _subscriber(db_session, "new-drift@e.com", status=SubscriberStatus.new)
+    _sub(db_session, s, catalog_offer, SubscriptionStatus.active)
+    db_session.commit()
+
+    ids = find_blocked_all_active_account_ids(db_session)
+
+    assert str(s.id) in ids
+
+
 def test_finder_excludes_mixed_status(db_session, catalog_offer):
     s = _subscriber(db_session, "mixed@e.com")
     _sub(db_session, s, catalog_offer, SubscriptionStatus.active)
@@ -61,6 +71,21 @@ def test_finder_excludes_already_active_subscriber(db_session, catalog_offer):
 
     ids = find_blocked_all_active_account_ids(db_session)
     assert str(s.id) not in ids
+
+
+def test_finder_excludes_explicit_account_override(db_session, catalog_offer):
+    s = _subscriber(db_session, "admin-blocked@e.com")
+    s.lifecycle_override_status = SubscriberStatus.blocked
+    _sub(db_session, s, catalog_offer, SubscriptionStatus.active)
+    db_session.commit()
+
+    ids = find_blocked_all_active_account_ids(db_session)
+
+    assert str(s.id) not in ids
+    assert account_eligibility(db_session, str(s.id)) == (
+        False,
+        "explicit_lifecycle_override",
+    )
 
 
 def test_reconcile_account_flips_to_active(db_session, catalog_offer):
@@ -84,6 +109,9 @@ def test_dry_run_mutates_nothing(db_session, catalog_offer):
     assert summary.candidates >= 1
     assert summary.changed == 0
     assert summary.radius_refreshed is False
+    projected = next(r for r in summary.results if r.account_id == str(s.id))
+    assert projected.new_status == "active"
+    assert projected.changed is True
     assert db_session.get(Subscriber, s.id).status == SubscriberStatus.blocked
 
 
@@ -101,7 +129,7 @@ def test_eligibility_classifies_reasons(db_session, catalog_offer):
     ok, reason = account_eligibility(db_session, str(mixed.id))
     assert ok is False and "mixed" in reason
     ok, reason = account_eligibility(db_session, str(active.id))
-    assert ok is False and "not_blocked" in reason
+    assert ok is False and "not_safe_prior_status" in reason
 
 
 def test_account_ids_filters_ineligible_and_skips(db_session, catalog_offer):

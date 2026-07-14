@@ -27,11 +27,21 @@ from app.models.billing import (
 )
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber
-from app.schemas.service_status import ServiceStatusItem, ServiceStatusResponse
+from app.schemas.service_status import (
+    ServiceStatusAction,
+    ServiceStatusActionKind,
+    ServiceStatusItem,
+    ServiceStatusResponse,
+)
 from app.services import settings_spec
+from app.services.access_resolution import (
+    resolve_customer_access,
+    resolve_prepaid_funding,
+)
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
-from app.services.collections import get_available_balance, has_overdue_balance
+from app.services.collections import has_overdue_balance
 from app.services.common import coerce_uuid
 from app.services.service_entitlements import current_prepaid_entitlement_end
 
@@ -53,8 +63,12 @@ _ENDED_STATUSES = frozenset(
         SubscriptionStatus.hidden,
     }
 )
-_NEEDS_PAYMENT_STATUSES = frozenset(
+_UNAVAILABLE_STATUSES = frozenset(
     {SubscriptionStatus.blocked, SubscriptionStatus.suspended}
+)
+_UNAVAILABLE_STATUS_VALUES = frozenset(
+    {status.value for status in _UNAVAILABLE_STATUSES}
+    | {SubscriptionStatus.stopped.value}
 )
 
 
@@ -122,19 +136,16 @@ def _unfunded_prepaid_renewal_requirement(
 def _prepaid_threshold(
     db: Session, account: Subscriber, *, now: datetime | None = None
 ) -> Decimal:
-    """The min-balance threshold used by the prepaid enforcement gate."""
-    effective_now = now or datetime.now(UTC)
-    if account.min_balance is not None:
-        configured = Decimal(str(account.min_balance))
-    else:
-        default = settings_spec.resolve_value(
-            db, SettingDomain.collections, "prepaid_default_min_balance"
-        )
-        configured = Decimal(str(default)) if default is not None else Decimal("0.00")
-    renewal_requirement = _unfunded_prepaid_renewal_requirement(
-        db, account, effective_now
-    )
-    return max(configured, renewal_requirement)
+    """The min-balance threshold used by the prepaid enforcement gate.
+
+    Thin adapter. ``app.services.prepaid_threshold`` owns the rule; this
+    delegates so the enforcement sweep and every batch consumer resolve the
+    threshold through one implementation. Re-deriving it here would let an audit
+    disagree with the enforcement it exists to check.
+    """
+    from app.services.prepaid_threshold import resolve_prepaid_threshold
+
+    return resolve_prepaid_threshold(db, account, now=now)
 
 
 def _grace_days(db: Session, account: Subscriber) -> int:
@@ -208,8 +219,9 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
     deactivation_at: datetime | None = account.prepaid_deactivation_at
 
     if is_prepaid:
-        balance = get_available_balance(db, subscriber_id)
-        threshold = _prepaid_threshold(db, account, now=now)
+        funding = resolve_prepaid_funding(db, account, now=now)
+        balance = funding.available_balance
+        threshold = funding.required_balance
         low = balance < threshold
         resp.balance = balance
         resp.min_balance = threshold
@@ -236,10 +248,22 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
         .order_by(Subscription.start_at.desc().nullslast())
         .all()
     )
+    lock_reasons = _active_lock_reasons(db, [subscription.id for subscription in subs])
 
     for s in subs:
         usable = s.status == SubscriptionStatus.active
-        reason = _service_reason(s, is_prepaid, resp)
+        access_block_reason = (
+            resolve_customer_access(s, subscriber=account).access_block_reason
+            if s.status in _UNAVAILABLE_STATUSES
+            else None
+        )
+        reason, action = _service_reason_and_action(
+            s,
+            is_prepaid,
+            resp,
+            lock_reasons.get(s.id, frozenset()),
+            access_block_reason,
+        )
         expires_at = _service_expires_at(
             s, is_prepaid, resp, grace_until, deactivation_at, usable
         )
@@ -253,26 +277,265 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
                 expires_at=expires_at,
                 next_charge_at=s.next_billing_at,
                 reason=reason,
+                action=action,
             )
         )
+    resp.primary_action = _primary_action(resp.services, resp.currency)
     return resp
 
 
-def _service_reason(
-    s: Subscription, is_prepaid: bool, resp: ServiceStatusResponse
-) -> str:
-    if s.status in _NEEDS_PAYMENT_STATUSES:
-        return "needs_payment"
+def _active_lock_reasons(
+    db: Session, subscription_ids: list[object]
+) -> dict[object, frozenset[EnforcementReason]]:
+    if not subscription_ids:
+        return {}
+    locks = (
+        db.query(EnforcementLock)
+        .filter(EnforcementLock.subscription_id.in_(subscription_ids))
+        .filter(EnforcementLock.is_active.is_(True))
+        .all()
+    )
+    grouped: dict[object, set[EnforcementReason]] = {}
+    for lock in locks:
+        grouped.setdefault(lock.subscription_id, set()).add(lock.reason)
+    return {
+        subscription_id: frozenset(reasons)
+        for subscription_id, reasons in grouped.items()
+    }
+
+
+def _service_reason_and_action(
+    s: Subscription,
+    is_prepaid: bool,
+    resp: ServiceStatusResponse,
+    lock_reasons: frozenset[EnforcementReason],
+    access_block_reason: str | None,
+) -> tuple[str, ServiceStatusAction | None]:
+    service_name = s.offer.name if s.offer else "Your service"
+    if s.status in _UNAVAILABLE_STATUSES:
+        return _unavailable_service_action(
+            service_name,
+            lock_reasons,
+            resp,
+            access_block_reason=access_block_reason,
+        )
     if s.status == SubscriptionStatus.stopped:
-        return "stopped"
+        return (
+            "stopped",
+            _contact_support_action(
+                f"{service_name} is stopped — contact support to reactivate it.",
+                resp.currency,
+            ),
+        )
     if s.status in _ENDED_STATUSES:
-        return "ended"
+        return "ended", None
     # active / pending and running:
     if is_prepaid and resp.low_balance:
-        return "low_balance"
+        amount = _prepaid_shortfall(resp)
+        return (
+            "low_balance",
+            ServiceStatusAction(
+                kind=ServiceStatusActionKind.top_up,
+                label="Top up",
+                message=(
+                    f"Balance low — top up {_money(amount, resp.currency)} to keep "
+                    "your service."
+                    if amount is not None and amount > 0
+                    else "Balance low — top up to keep your service."
+                ),
+                amount=amount,
+                currency=resp.currency,
+            ),
+        )
     if not is_prepaid and resp.in_dunning:
-        return "overdue"
-    return "ok"
+        amount = _positive_amount(resp.outstanding)
+        return (
+            "overdue",
+            ServiceStatusAction(
+                kind=ServiceStatusActionKind.pay_invoices,
+                label="Pay invoices",
+                message=(
+                    f"Payment overdue — pay {_money(amount, resp.currency)} to avoid "
+                    "suspension."
+                    if amount is not None
+                    else "Payment overdue — pay now to avoid suspension."
+                ),
+                amount=amount,
+                currency=resp.currency,
+            ),
+        )
+    return "ok", None
+
+
+def _unavailable_service_action(
+    service_name: str,
+    lock_reasons: frozenset[EnforcementReason],
+    resp: ServiceStatusResponse,
+    *,
+    access_block_reason: str | None,
+) -> tuple[str, ServiceStatusAction]:
+    if access_block_reason and not access_block_reason.startswith(
+        "subscription_status_"
+    ):
+        return (
+            "suspended",
+            _contact_support_action(
+                f"{service_name} has an account-level hold — payment alone will not "
+                "restore it. Contact support.",
+                resp.currency,
+            ),
+        )
+    if len(lock_reasons) != 1:
+        reason = "multiple_holds" if lock_reasons else "suspended"
+        detail = (
+            f"{service_name} has more than one active hold — payment alone will not "
+            "restore it. Contact support."
+            if lock_reasons
+            else f"{service_name} is unavailable — contact support to resolve it."
+        )
+        return reason, _contact_support_action(detail, resp.currency)
+
+    lock_reason = next(iter(lock_reasons))
+    if lock_reason == EnforcementReason.overdue:
+        amount = _positive_amount(resp.outstanding)
+        if amount is not None:
+            return (
+                "overdue",
+                ServiceStatusAction(
+                    kind=ServiceStatusActionKind.pay_invoices,
+                    label="Pay invoices",
+                    message=(
+                        f"{service_name} is suspended — pay "
+                        f"{_money(amount, resp.currency)} to restore it."
+                    ),
+                    amount=amount,
+                    currency=resp.currency,
+                    restores_service=True,
+                ),
+            )
+    elif lock_reason == EnforcementReason.prepaid:
+        amount = _prepaid_shortfall(resp)
+        if amount is not None and amount > 0:
+            return (
+                "low_balance",
+                ServiceStatusAction(
+                    kind=ServiceStatusActionKind.top_up,
+                    label="Top up",
+                    message=(
+                        f"{service_name} is suspended — top up "
+                        f"{_money(amount, resp.currency)} to restore it."
+                    ),
+                    amount=amount,
+                    currency=resp.currency,
+                    restores_service=True,
+                ),
+            )
+    elif lock_reason == EnforcementReason.fup:
+        return (
+            "fair_usage",
+            ServiceStatusAction(
+                kind=ServiceStatusActionKind.view_usage,
+                label="View usage",
+                message=(
+                    f"{service_name} is limited by its fair-use policy — review "
+                    "usage options."
+                ),
+                currency=resp.currency,
+            ),
+        )
+
+    nonfinancial_reasons = {
+        EnforcementReason.admin: "administrative_hold",
+        EnforcementReason.customer_hold: "customer_hold",
+        EnforcementReason.fraud: "fraud_review",
+        EnforcementReason.system: "system_hold",
+    }
+    reason = nonfinancial_reasons.get(lock_reason, "suspended")
+    return (
+        reason,
+        _contact_support_action(
+            f"{service_name} is suspended for a reason payment cannot clear — "
+            "contact support.",
+            resp.currency,
+        ),
+    )
+
+
+def _primary_action(
+    services: list[ServiceStatusItem], currency: str
+) -> ServiceStatusAction | None:
+    unavailable = [
+        item.action
+        for item in services
+        if item.status in _UNAVAILABLE_STATUS_VALUES
+        if item.action is not None
+    ]
+    if unavailable:
+        kinds = {action.kind for action in unavailable}
+        if len(kinds) > 1:
+            return _contact_support_action(
+                "Your services have different active holds — payment alone may not "
+                "restore them. Contact support.",
+                currency,
+            )
+        action = unavailable[0]
+        if len(unavailable) == 1:
+            return action
+        if action.kind == ServiceStatusActionKind.contact_support:
+            return _contact_support_action(
+                f"{len(unavailable)} services need support before they can be restored.",
+                currency,
+            )
+        if action.kind == ServiceStatusActionKind.pay_invoices and action.amount:
+            message = (
+                f"{len(unavailable)} services are suspended — pay "
+                f"{_money(action.amount, currency)} to restore them."
+            )
+        elif action.kind == ServiceStatusActionKind.top_up and action.amount:
+            message = (
+                f"{len(unavailable)} services are suspended — top up "
+                f"{_money(action.amount, currency)} to restore them."
+            )
+        else:
+            message = f"{len(unavailable)} services need attention — {action.message}"
+        return action.model_copy(
+            update={
+                "message": message,
+                "restores_service": all(
+                    candidate.restores_service for candidate in unavailable
+                ),
+            }
+        )
+
+    for item in services:
+        if item.usable and item.action is not None:
+            return item.action
+    return None
+
+
+def _contact_support_action(message: str, currency: str) -> ServiceStatusAction:
+    return ServiceStatusAction(
+        kind=ServiceStatusActionKind.contact_support,
+        label="Contact support",
+        message=message,
+        currency=currency,
+    )
+
+
+def _prepaid_shortfall(resp: ServiceStatusResponse) -> Decimal | None:
+    if resp.balance is None or resp.min_balance is None:
+        return None
+    return max(resp.min_balance - resp.balance, Decimal("0.00"))
+
+
+def _positive_amount(amount: Decimal | None) -> Decimal | None:
+    if amount is None or amount <= 0:
+        return None
+    return amount
+
+
+def _money(amount: Decimal, currency: str) -> str:
+    return f"{currency} {amount:,.2f}"
 
 
 def _service_expires_at(

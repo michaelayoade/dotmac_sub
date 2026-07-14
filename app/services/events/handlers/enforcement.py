@@ -27,6 +27,22 @@ from app.services.radius_access_state import (
 
 logger = logging.getLogger(__name__)
 
+HANDLED_EVENT_TYPES = frozenset(
+    {
+        EventType.subscription_suspended,
+        EventType.subscription_canceled,
+        EventType.subscription_expired,
+        EventType.subscription_activated,
+        EventType.subscription_resumed,
+        EventType.subscription_upgraded,
+        EventType.subscription_downgraded,
+        EventType.subscriber_throttled,
+        EventType.usage_exhausted,
+        EventType.payment_received,
+        EventType.invoice_overdue,
+    }
+)
+
 
 def _reject_reason_from_event_payload(payload: dict) -> str:
     raw = str((payload or {}).get("reason") or "").strip().lower()
@@ -56,6 +72,8 @@ class EnforcementHandler:
             self._handle_subscription_speed_change(db, event)
         elif event.event_type == EventType.subscriber_throttled:
             self._handle_account_throttle(db, event)
+        elif event.event_type == EventType.subscriber_unthrottled:
+            self._handle_account_unthrottle(db, event)
         elif event.event_type == EventType.usage_exhausted:
             self._handle_usage_exhausted(db, event)
         elif event.event_type == EventType.payment_received:
@@ -366,6 +384,42 @@ class EnforcementHandler:
         except Exception as exc:
             logger.error(
                 "Failed to disconnect sessions for account %s: %s",
+                account_id,
+                exc,
+            )
+
+    def _handle_account_unthrottle(self, db: Session, event: Event) -> None:
+        """Push the restored profile to RADIUS as promptly as the throttle landed.
+
+        The throttle enqueued a refresh and the release did not, so a customer who
+        paid stayed rate-limited until the next scheduled sweep. Mirror it.
+
+        Sessions are refreshed so the new (faster) profile applies to the live
+        session rather than only to the next reconnect.
+        """
+        account_id = event.account_id or event.payload.get("account_id")
+        if not account_id:
+            logger.debug("Skipping unthrottle enforcement: event missing account_id")
+            return
+        try:
+            from app.tasks.radius_population import refresh_radius_from_subs
+
+            refresh_radius_from_subs.delay()
+        except Exception:
+            logger.warning(
+                "Failed to enqueue radius refresh after unthrottle for account %s",
+                account_id,
+                exc_info=True,
+            )
+        refresh_enabled = (
+            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
+        )
+        try:
+            if refresh_enabled:
+                disconnect_account_sessions(db, str(account_id), reason="unthrottle")
+        except Exception as exc:
+            logger.error(
+                "Failed to refresh sessions after unthrottle for account %s: %s",
                 account_id,
                 exc,
             )

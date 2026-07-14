@@ -55,11 +55,10 @@
         <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ card.label }}</h3>
         <span class="text-xs text-slate-400">{{ card.total }} total</span>
       </div>
-      <div class="mt-4 grid grid-cols-2 gap-2 text-sm">
+      <div class="mt-4 grid grid-cols-3 gap-2 text-sm">
         <div><span class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{{ card.up }}</span><div class="text-xs text-slate-400">up</div></div>
         <div><span class="text-2xl font-bold text-rose-600 dark:text-rose-400">{{ card.down }}</span><div class="text-xs text-slate-400">down</div></div>
         <div><span class="text-2xl font-bold text-amber-600 dark:text-amber-400">{{ card.degraded }}</span><div class="text-xs text-slate-400">degraded</div></div>
-        <div><span class="text-2xl font-bold text-slate-400">{{ card.unmonitored }}</span><div class="text-xs text-slate-400">unmonitored</div></div>
       </div>
     </div>
     {% endfor %}

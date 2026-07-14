@@ -237,6 +237,59 @@ def _postgres_activity_snapshot(db: Session) -> dict[str, object]:
     }
 
 
+def publish_database_pressure_snapshot(
+    service: ServiceStatus, *, now: datetime | None = None
+) -> bool:
+    """Publish bounded PostgreSQL pressure state for scrape-time export."""
+    from app.services.observability import StateObservation, publish_state_snapshot
+
+    details = service.details if isinstance(service.details, dict) else {}
+    observations = [
+        StateObservation(
+            signal="probe_success",
+            scope="postgres",
+            value=1.0 if service.status in {"up", "degraded"} else 0.0,
+        )
+    ]
+    for signal in (
+        "total_connections",
+        "active_connections",
+        "idle_connections",
+        "idle_in_transaction",
+        "idle_in_transaction_over_60s",
+        "max_idle_in_transaction_seconds",
+        "waiting_on_lock",
+        "max_connections",
+        "connection_utilization_pct",
+    ):
+        value = details.get(signal)
+        if isinstance(value, (int, float)):
+            observations.append(
+                StateObservation(signal=signal, scope="postgres", value=float(value))
+            )
+    if isinstance(service.response_ms, (int, float)):
+        observations.append(
+            StateObservation(
+                signal="response_ms",
+                scope="postgres",
+                value=float(service.response_ms),
+            )
+        )
+    status = (
+        "ok"
+        if service.status == "up"
+        else "degraded"
+        if service.status == "degraded"
+        else "error"
+    )
+    return publish_state_snapshot(
+        "database_pressure",
+        observations,
+        status=status,
+        now=now,
+    )
+
+
 def _check_redis(db: Session) -> ServiceStatus:
     """Check Redis via the centralized client with circuit breaker."""
     from app.services.redis_client import get_circuit_state, get_redis

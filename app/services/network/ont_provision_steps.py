@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
+from app.services.genieacs_client import GenieACSDeliveryCode
 from app.services.genieacs_service import genieacs_service
 from app.services.network._common import NasTarget
 from app.services.network.config_pack_resolution import (
@@ -77,23 +78,43 @@ _TR069_TASK_READY_POLL_INTERVAL_SEC = (
 )
 _TR069_BINDING_READBACK_RETRY_DELAY_SEC = 2.0
 
-_QUEUED_ACS_DELIVERY_MARKERS = (
-    "setparametervalues queued but connection request failed",
-    "setparametervalues task timed out",
-)
+_QUEUED_ACS_DELIVERY_CODES = frozenset(code.value for code in GenieACSDeliveryCode)
 
 
-def _is_queued_acs_delivery(message: object) -> bool:
-    normalized = str(message or "").casefold()
-    return any(marker in normalized for marker in _QUEUED_ACS_DELIVERY_MARKERS)
+def _is_queued_acs_delivery_code(value: object) -> bool:
+    return str(value or "") in _QUEUED_ACS_DELIVERY_CODES
 
 
 def _result_is_queued_acs_delivery(result: object) -> bool:
     data = getattr(result, "data", None)
-    if isinstance(data, dict) and data.get("delivery_status") == "queued":
+    if isinstance(data, dict) and (
+        data.get("delivery_status") == "queued"
+        or _is_queued_acs_delivery_code(data.get("delivery_code"))
+    ):
         return True
-    return bool(getattr(result, "waiting", False)) or _is_queued_acs_delivery(
-        getattr(result, "message", "")
+    return bool(getattr(result, "waiting", False)) or _is_queued_acs_delivery_code(
+        getattr(result, "error_code", None)
+    )
+
+
+def _action_step(name: str, result: object) -> dict[str, object]:
+    """Preserve machine-readable delivery state while serializing an action."""
+    payload: dict[str, object] = {
+        "step": name,
+        "success": bool(getattr(result, "success", False)),
+        "message": str(getattr(result, "message", "")),
+    }
+    error_code = getattr(result, "error_code", None)
+    if error_code:
+        payload["error_code"] = str(error_code)
+    if _result_is_queued_acs_delivery(result):
+        payload["waiting"] = True
+    return payload
+
+
+def _step_is_queued_acs_delivery(step: dict[str, object]) -> bool:
+    return bool(step.get("waiting")) or _is_queued_acs_delivery_code(
+        step.get("error_code")
     )
 
 
@@ -794,14 +815,8 @@ def _provision_wan_service_instances(
         needs_input.append(f"Unsupported WAN mode in desired_config: {wan_mode}")
         return steps, needs_input, hard_failures
 
-    steps.append(
-        {
-            "step": "provision_wan_desired_config",
-            "success": result.success,
-            "message": result.message,
-        }
-    )
-    if not result.success:
+    steps.append(_action_step("provision_wan_desired_config", result))
+    if not result.success and not _result_is_queued_acs_delivery(result):
         hard_failures.append(f"provision_wan_desired_config: {result.message}")
     return steps, needs_input, hard_failures
 
@@ -856,14 +871,9 @@ def apply_saved_service_config(
         success = bool(getattr(result, "success", False))
         message = str(getattr(result, "message", ""))
         waiting = not success and _result_is_queued_acs_delivery(result)
-        steps.append(
-            {
-                "step": name,
-                "success": success,
-                "waiting": waiting,
-                "message": message,
-            }
-        )
+        step = _action_step(name, result)
+        step["waiting"] = waiting
+        steps.append(step)
         if not success:
             detail = f"{name}: {message}"
             if waiting:
@@ -898,16 +908,12 @@ def apply_saved_service_config(
             )
         )
         for step in wan_instance_steps:
-            if not step.get("success") and _is_queued_acs_delivery(step.get("message")):
+            if not step.get("success") and _step_is_queued_acs_delivery(step):
                 step["waiting"] = True
                 pending_deliveries.append(f"{step.get('step')}: {step.get('message')}")
             steps.append(step)
         needs_input.extend(wan_instance_needs)
-        hard_failures.extend(
-            failure
-            for failure in wan_instance_failures
-            if not _is_queued_acs_delivery(failure)
-        )
+        hard_failures.extend(wan_instance_failures)
         logger.info(
             "ONT %s: Provisioned %d WAN desired-config steps",
             ont.serial_number,
@@ -1441,6 +1447,21 @@ def apply_authorization_baseline(
     from app.services.network.ont_status import set_provisioning_status
 
     t0 = time.monotonic()
+    phase_started = t0
+    phase_timings: list[dict[str, Any]] = []
+
+    def _record_phase(name: str, **details: Any) -> None:
+        nonlocal phase_started
+        now = time.monotonic()
+        phase_timings.append(
+            {
+                "phase": name,
+                "duration_ms": int((now - phase_started) * 1000),
+                **details,
+            }
+        )
+        phase_started = now
+
     try:
         ont = db.get(OntUnit, ont_id)
     except Exception:
@@ -1453,6 +1474,7 @@ def apply_authorization_baseline(
         ont,
         effective_config=effective_config,
     )
+    _record_phase("config_pack_resolution", success=config_pack_result.success)
     baseline_domain_outcomes: dict[str, dict[str, Any]] = {}
     _set_domain_outcome(
         baseline_domain_outcomes,
@@ -1472,6 +1494,7 @@ def apply_authorization_baseline(
             data={
                 "config_pack_resolution": config_pack_result.data,
                 "domain_outcomes": baseline_domain_outcomes,
+                "phase_timings": phase_timings,
             },
         )
         if not dry_run:
@@ -1486,6 +1509,10 @@ def apply_authorization_baseline(
             ont_id,
             ont=ont,
             effective_config=effective_config,
+        )
+        _record_phase(
+            "prerequisite_validation",
+            success=bool(preflight.get("ready_to_provision", preflight.get("ready"))),
         )
         if not bool(preflight.get("ready_to_provision", preflight.get("ready"))):
             failed_checks = [
@@ -1506,6 +1533,7 @@ def apply_authorization_baseline(
                     "domain_outcomes": baseline_domain_outcomes,
                     "checks": preflight.get("checks", []),
                     "failed_checks": failed_checks,
+                    "phase_timings": phase_timings,
                 },
             )
             set_provisioning_status(ont, OntProvisioningStatus.failed, strict=False)
@@ -1517,12 +1545,19 @@ def apply_authorization_baseline(
         db.flush()
         _commit_without_expiring(db)
 
+    _record_phase("pre_provision_state")
+    phase_started = time.monotonic()
     result = provision_with_reconciliation(
         db,
         ont_id,
         dry_run=dry_run,
         allow_low_optical_margin=allow_low_optical_margin,
         effective_config=effective_config,
+    )
+    _record_phase(
+        "olt_provisioning",
+        success=result.success,
+        subphases=(result.data or {}).get("phase_timings", []),
     )
     baseline_result = StepResult(
         "authorization_baseline",
@@ -1535,6 +1570,7 @@ def apply_authorization_baseline(
         data={
             **(result.data or {}),
             "config_pack_resolution": config_pack_result.data,
+            "phase_timings": phase_timings,
         },
     )
     baseline_domain_outcomes.update(
@@ -1556,6 +1592,7 @@ def apply_authorization_baseline(
     }
 
     if not dry_run and baseline_result.success:
+        phase_started = time.monotonic()
         try:
             from app.services.network._resolve import reconcile_ont_tr069_device
 
@@ -1595,6 +1632,7 @@ def apply_authorization_baseline(
                     **(baseline_result.data or {}),
                     "post_authorization_acs_link": link_result.data,
                 }
+            _record_phase("post_authorization_acs_link", success=link_result.success)
         except Exception as exc:
             logger.warning(
                 "Post-authorization ACS reconciliation failed for ONT %s: %s",
@@ -1610,6 +1648,7 @@ def apply_authorization_baseline(
                 critical=False,
             )
             _record_step(db, ont, "post_authorization_acs_link", link_result)
+            _record_phase("post_authorization_acs_link", success=False)
 
     if not dry_run:
         final_status = OntProvisioningStatus.failed
@@ -1628,6 +1667,12 @@ def apply_authorization_baseline(
         )
         db.flush()
 
+    _record_phase("finalize_baseline_state", success=baseline_result.success)
+    baseline_result.duration_ms = int((time.monotonic() - t0) * 1000)
+    baseline_result.data = {
+        **(baseline_result.data or {}),
+        "phase_timings": phase_timings,
+    }
     return baseline_result
 
 
@@ -1667,6 +1712,20 @@ def provision_with_reconciliation(
     from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
     t0 = time.monotonic()
+    phase_started = t0
+    phase_timings: list[dict[str, Any]] = []
+
+    def _record_phase(name: str, **details: Any) -> None:
+        nonlocal phase_started
+        now = time.monotonic()
+        phase_timings.append(
+            {
+                "phase": name,
+                "duration_ms": int((now - phase_started) * 1000),
+                **details,
+            }
+        )
+        phase_started = now
 
     # Get context
     ctx, err = resolve_olt_context(db, ont_id)
@@ -1759,6 +1818,7 @@ def provision_with_reconciliation(
     created_port_indices: list[int] = []
     domain_outcomes: dict[str, dict[str, Any]] = {}
     command_timings: list[dict[str, Any]] = []
+    _record_phase("prepare")
 
     def _run_olt_command(name: str, command: Callable[[], Any]) -> Any:
         command_started = time.monotonic()
@@ -1796,6 +1856,7 @@ def provision_with_reconciliation(
             ),
         )
         if not result.success:
+            _record_phase("internet_l2", success=False)
             ms = int((time.monotonic() - t0) * 1000)
             step_result = StepResult(
                 "provision",
@@ -1809,7 +1870,10 @@ def provision_with_reconciliation(
                             "message": f"Internet service port failed: {result.message}",
                         }
                     },
-                    {"command_timings": command_timings},
+                    {
+                        "command_timings": command_timings,
+                        "phase_timings": phase_timings,
+                    },
                 ),
             )
             _record_step(db, ctx.ont, "provision", step_result)
@@ -1877,6 +1941,7 @@ def provision_with_reconciliation(
             "succeeded",
             "No internet L2 apply required for this provisioning run.",
         )
+    _record_phase("internet_l2", success=True)
 
     # 2. Clear any stale WAN config before applying new configuration (best-effort)
     # Huawei OLTs retain ipconfig/internet-config/wan-config after deauthorization or from
@@ -1918,6 +1983,7 @@ def provision_with_reconciliation(
             ctx.olt.name,
             stale_cleared,
         )
+    _record_phase("stale_wan_cleanup")
 
     # 3. Execute batched management config (mgmt port, IPHOST, internet-config, wan-config, TR-069)
     # mgmt_vlan is only legitimately absent in pure bridge mode. For any routed/NAT
@@ -2182,6 +2248,7 @@ def provision_with_reconciliation(
             "succeeded",
             "No OMCI WAN apply required for this provisioning run.",
         )
+    _record_phase("management_and_omci_apply")
 
     readback_port_indices: list[int] = []
     service_ports_result = None
@@ -2231,6 +2298,10 @@ def provision_with_reconciliation(
             "retryable_failure",
             f"Service-port readback failed: {service_ports_result.message}",
         )
+    _record_phase(
+        "service_port_readback",
+        success=bool(service_ports_result and service_ports_result.success),
+    )
 
     expected_tr069_profile = values.get("tr069_olt_profile_id")
     readback_tr069_profile_id: int | None = None
@@ -2423,6 +2494,14 @@ def provision_with_reconciliation(
             return step_result
         steps_completed.append(f"tr069_profile_{readback_tr069_profile_id}_verified")
 
+    _record_phase(
+        "tr069_binding_readback",
+        success=(
+            expected_tr069_profile is None
+            or readback_tr069_profile_id == expected_tr069_profile_int
+        ),
+    )
+
     if "olt_or_omci_readback_verify" not in domain_outcomes:
         _set_domain_outcome(
             domain_outcomes,
@@ -2445,6 +2524,7 @@ def provision_with_reconciliation(
                 "readback_service_port_indices": readback_port_indices,
                 "readback_tr069_profile_id": readback_tr069_profile_id,
                 "command_timings": command_timings,
+                "phase_timings": phase_timings,
             },
         ),
     )

@@ -20,7 +20,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.enforcement_lock import EnforcementReason
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.collections import (
     BillingEnforcementRunRequest,
@@ -33,6 +33,11 @@ from app.schemas.collections import (
     DunningRunResponse,
 )
 from app.services import enforcement_window, settings_spec
+from app.services.access_resolution import (
+    PrepaidFundingDecision,
+    resolve_prepaid_available_balance,
+    resolve_prepaid_funding,
+)
 from app.services.billing.invoice_classification import collectible_ar_invoice_filter
 from app.services.billing_prepaid_overlap_repair import (
     apply_prepaid_overlap_hold,
@@ -89,16 +94,7 @@ def _resolve_prepaid_available_balance(db: Session, account_id: str) -> Decimal:
     adjustments, and legacy mirrored transactions. Internal repair artifacts are
     excluded before this balance is calculated.
     """
-    from app.services.customer_financial_ledger import list_customer_financial_events
-
-    balances_by_currency: dict[str, Decimal] = {}
-    for event in list_customer_financial_events(db, account_id, currency=None):
-        currency = event.currency or "NGN"
-        balances_by_currency[currency] = (
-            balances_by_currency.get(currency, Decimal("0.00")) + event.signed_amount
-        )
-    balances = list(balances_by_currency.values())
-    return min(balances) if balances else Decimal("0.00")
+    return resolve_prepaid_available_balance(db, account_id)
 
 
 def get_available_balance(db: Session, account_id: str) -> Decimal:
@@ -381,7 +377,14 @@ def _suspend_account(
     """
     from app.services.account_lifecycle import suspend_subscription
 
-    account = db.get(Subscriber, coerce_uuid(account_id))
+    # Every automatic financial suspend converges here.  Lock the account so a
+    # concurrent payment restore and this check-and-suspend sequence serialize
+    # on the same row.
+    account = db.execute(
+        select(Subscriber)
+        .where(Subscriber.id == coerce_uuid(account_id))
+        .with_for_update()
+    ).scalar_one_or_none()
     if not account:
         logger.warning("Cannot suspend account %s: account not found", account_id)
         return False
@@ -397,6 +400,75 @@ def _suspend_account(
             account_id,
         )
         return False
+
+    if reason in {EnforcementReason.overdue, EnforcementReason.prepaid}:
+        profile = resolve_billing_profile(db, account)
+        if not profile.automation_safe:
+            logger.warning(
+                "Financial suspension blocked for account %s by billing profile: "
+                "reason=%s source=%s invalid_reason=%s account=%s "
+                "subscription_modes=%s",
+                account_id,
+                reason.value,
+                profile.source,
+                profile.invalid_reason,
+                profile.account_mode.value if profile.account_mode else None,
+                sorted(mode.value for mode in profile.subscription_modes),
+            )
+            return False
+
+        if reason == EnforcementReason.overdue and not has_overdue_balance(
+            db, account_id
+        ):
+            logger.info(
+                "Overdue suspension skipped for account %s: balance cleared",
+                account_id,
+            )
+            return False
+
+        if reason == EnforcementReason.prepaid:
+            if profile.effective_mode != BillingMode.prepaid:
+                logger.warning(
+                    "Prepaid suspension blocked for non-prepaid account %s",
+                    account_id,
+                )
+                return False
+            funding = resolve_prepaid_funding(db, account)
+            if funding.funded:
+                logger.info(
+                    "Prepaid suspension skipped for account %s: available "
+                    "balance %s >= required balance %s",
+                    account_id,
+                    funding.available_balance,
+                    funding.required_balance,
+                )
+                return False
+
+        shield = _dunning_shield_reason(db, account.id)
+        if shield:
+            logger.info(
+                "%s suspension skipped for account %s: %s",
+                reason.value,
+                account_id,
+                shield,
+            )
+            return False
+
+        from app.services.billing_enforcement_guards import (
+            billing_enforcement_health,
+        )
+
+        health = billing_enforcement_health(db)
+        if not health.ok:
+            logger.warning(
+                "%s suspension blocked for account %s by billing enforcement "
+                "health gate: reasons=%s details=%s",
+                reason.value,
+                account_id,
+                ",".join(health.reasons),
+                health.details,
+            )
+            return False
 
     query = (
         db.query(Subscription)
@@ -445,6 +517,7 @@ def _restore_account(
     account_id: str,
     trigger: str = "payment",
     resolved_by: str | None = None,
+    reason: EnforcementReason | None = None,
 ) -> int:
     """Restore account subscriptions via enforcement lock resolution.
 
@@ -467,7 +540,7 @@ def _restore_account(
     resolved_by_str = resolved_by or f"{trigger}:{account_id}"
     now = datetime.now(UTC)
 
-    subscriptions = (
+    subscriptions_query = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == account.id)
         .filter(
@@ -475,8 +548,18 @@ def _restore_account(
                 (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
             )
         )
-        .all()
     )
+    if reason is not None:
+        subscriptions_query = (
+            subscriptions_query.join(
+                EnforcementLock,
+                EnforcementLock.subscription_id == Subscription.id,
+            )
+            .filter(EnforcementLock.reason == reason)
+            .filter(EnforcementLock.is_active.is_(True))
+            .distinct()
+        )
+    subscriptions = subscriptions_query.all()
     restored_count = 0
     for sub in subscriptions:
         if sub.end_at and sub.end_at <= now:
@@ -487,6 +570,7 @@ def _restore_account(
                 str(sub.id),
                 trigger=trigger,
                 resolved_by=resolved_by_str,
+                reason=reason,
             )
             if restored:
                 restored_count += 1
@@ -575,22 +659,20 @@ def _throttle_account(db: Session, account_id: str) -> tuple[bool, int]:
         return True, 0
 
     throttled_count = 0
-    original_profiles = {}  # Track original profiles for logging
     for cred in credentials:
-        # Track original profile for audit/logging purposes
+        # PERSIST the profile we are about to replace. The throttle is a temporary
+        # override, so the value it overrides has to survive it — previously this
+        # was only written to a log line, which meant a customer who paid could
+        # never get their speed back.
+        #
+        # Only capture on the FIRST throttle: re-throttling an already-throttled
+        # credential must not overwrite the real profile with the throttle profile.
         if cred.radius_profile_id and str(cred.radius_profile_id) != str(
             throttle_profile_id
         ):
-            original_profiles[str(cred.id)] = str(cred.radius_profile_id)
+            cred.pre_throttle_radius_profile_id = cred.radius_profile_id
         cred.radius_profile_id = throttle_profile.id
         throttled_count += 1
-
-    # Log original profiles for debugging (can be used for manual recovery if needed)
-    if original_profiles:
-        logger.info(
-            f"Throttled credentials for account {account_id}, "
-            f"original profiles: {original_profiles}"
-        )
 
     # Emit throttle event
     emit_event(
@@ -641,7 +723,18 @@ def _restore_throttle(db: Session, account_id: str) -> int:
 
     restored_count = 0
     for cred in credentials:
-        # Get default profile from subscription's offer
+        if cred.pre_throttle_radius_profile_id is not None:
+            # Give back exactly what we took. This is the only path that can
+            # honour an admin credential-level override, which the offer-profile
+            # guess below silently discards.
+            cred.radius_profile_id = cred.pre_throttle_radius_profile_id
+            cred.pre_throttle_radius_profile_id = None
+            restored_count += 1
+            continue
+
+        # LEGACY cohort only: credentials throttled before the pre-throttle
+        # profile was persisted have nothing to give back, so fall back to the
+        # offer's profile. This is a guess, and it is why the column exists.
         subscription = (
             db.query(Subscription)
             .filter(Subscription.subscriber_id == coerce_uuid(account_id))
@@ -653,7 +746,6 @@ def _restore_throttle(db: Session, account_id: str) -> int:
             .first()
         )
         if subscription and subscription.offer:
-            # Get the offer's RADIUS profile
             from app.models.catalog import OfferRadiusProfile
 
             offer_profile = (
@@ -661,10 +753,7 @@ def _restore_throttle(db: Session, account_id: str) -> int:
                 .filter(OfferRadiusProfile.offer_id == subscription.offer_id)
                 .first()
             )
-            if offer_profile:
-                cred.radius_profile_id = offer_profile.profile_id
-            else:
-                cred.radius_profile_id = None
+            cred.radius_profile_id = offer_profile.profile_id if offer_profile else None
         else:
             cred.radius_profile_id = None
         restored_count += 1
@@ -672,6 +761,19 @@ def _restore_throttle(db: Session, account_id: str) -> int:
     if restored_count:
         logger.info(
             f"Restored {restored_count} throttled credentials for account {account_id}"
+        )
+        # The throttle emits ``subscriber_throttled``, which enqueues a RADIUS
+        # refresh. The un-throttle emitted nothing, so the customer's speed came
+        # back only on the next scheduled sweep — the throttle landed in seconds
+        # and the release took up to 15 minutes. Emit the mirror event.
+        emit_event(
+            db,
+            EventType.subscriber_unthrottled,
+            {
+                "account_id": str(account_id),
+                "credentials_restored": restored_count,
+            },
+            account_id=coerce_uuid(account_id),
         )
 
     return restored_count
@@ -894,17 +996,14 @@ def _prepaid_balance_gate_skip_reason(db: Session, account: Subscriber) -> str |
     if not _account_has_prepaid_service(db, account):
         return None
 
-    from app.services.service_status import _prepaid_threshold
-
-    threshold = _prepaid_threshold(db, account)
-    balance = _resolve_prepaid_available_balance(db, str(account.id))
-    if balance >= threshold:
+    funding = resolve_prepaid_funding(db, account)
+    if funding.funded:
         logger.info(
             "Dunning enforcement skipped for prepaid account %s: "
             "available balance %s >= threshold %s",
             account.id,
-            balance,
-            threshold,
+            funding.available_balance,
+            funding.required_balance,
         )
         return "prepaid_balance_available"
     return None
@@ -1930,6 +2029,35 @@ def _clear_prepaid_dunning_flags(db: Session, account_id: str) -> None:
     ):
         account.prepaid_low_balance_at = None
         account.prepaid_deactivation_at = None
+        # Sessions use autoflush=False; make the cleared timers visible to any
+        # later query in the caller's transaction before returning.
+        db.flush()
+
+
+def _restore_prepaid_if_funded(
+    db: Session,
+    account: Subscriber,
+    funding: PrepaidFundingDecision,
+    *,
+    resolved_by: str,
+) -> int:
+    """Resolve only prepaid locks after the canonical funding decision passes."""
+    if not funding.funded:
+        logger.info(
+            "Prepaid restore skipped for account %s: available balance %s < "
+            "required balance %s",
+            account.id,
+            funding.available_balance,
+            funding.required_balance,
+        )
+        return 0
+    return _restore_account(
+        db,
+        str(account.id),
+        trigger="top_up",
+        resolved_by=resolved_by,
+        reason=EnforcementReason.prepaid,
+    )
 
 
 def restore_account_services(
@@ -1937,15 +2065,78 @@ def restore_account_services(
     account_id: str,
     invoice_id: str | None = None,
 ) -> int:
-    """Restore account/subscriptions and resolve dunning cases after payment."""
-    restored = _restore_account(db, account_id)
-    DunningWorkflow.resolve_cases_for_account(
-        db,
-        account_id,
-        invoice_id=invoice_id,
-        commit=False,
-    )
-    _clear_prepaid_dunning_flags(db, account_id)
+    """Reconcile financial locks after a payment or balance change.
+
+    ``overdue`` and ``prepaid`` are independent enforcement reasons and use
+    independent, named gates.  Invoice debt must be cleared before an overdue
+    lock/case is resolved.  Prepaid access must meet the same available-balance
+    threshold used by the suspension sweep before a prepaid lock or timer is
+    cleared.  No caller can turn the mere existence of a payment into access.
+    """
+    account = db.execute(
+        select(Subscriber)
+        .where(Subscriber.id == coerce_uuid(account_id))
+        .with_for_update()
+    ).scalar_one_or_none()
+    if account is None:
+        logger.warning("Cannot restore account %s: account not found", account_id)
+        return 0
+    if account.status == SubscriberStatus.canceled:
+        logger.info("Account %s is canceled, skipping restore", account_id)
+        return 0
+
+    restored = 0
+    if not has_overdue_balance(db, account_id):
+        restored += _restore_account(
+            db,
+            account_id,
+            trigger="payment",
+            resolved_by=f"payment:{account_id}",
+            reason=EnforcementReason.overdue,
+        )
+        DunningWorkflow.resolve_cases_for_account(
+            db,
+            account_id,
+            invoice_id=invoice_id,
+            commit=False,
+        )
+        # Lift the collections throttle. resolve_cases_for_account marks the case
+        # resolved but never un-throttled, and DunningWorkflow.run only revisits
+        # OPEN cases — so a customer who paid in full was left rate-limited
+        # forever, with radius_population re-applying the throttle on every sweep.
+        # The debt is gone, so the bandwidth penalty for it must be gone too.
+        _restore_throttle(db, account_id)
+    else:
+        logger.info(
+            "Overdue restore skipped for account %s: overdue balance remains",
+            account_id,
+        )
+
+    profile = resolve_billing_profile(db, account)
+    if profile.automation_safe and profile.effective_mode == BillingMode.prepaid:
+        funding = resolve_prepaid_funding(db, account)
+        restored += _restore_prepaid_if_funded(
+            db,
+            account,
+            funding,
+            resolved_by=f"prepaid_funding:{account_id}",
+        )
+        if funding.funded:
+            _clear_prepaid_dunning_flags(db, account_id)
+    elif profile.is_valid and profile.effective_mode != BillingMode.prepaid:
+        # Billing-mode migrations may leave stale prepaid timer projections.
+        # They are not meaningful once the canonical profile is non-prepaid.
+        _clear_prepaid_dunning_flags(db, account_id)
+    elif profile.effective_mode == BillingMode.prepaid:
+        logger.warning(
+            "Prepaid restore blocked for account %s by billing profile: "
+            "source=%s invalid_reason=%s account=%s subscription_modes=%s",
+            account_id,
+            profile.source,
+            profile.invalid_reason,
+            profile.account_mode.value if profile.account_mode else None,
+            sorted(mode.value for mode in profile.subscription_modes),
+        )
     return restored
 
 

@@ -3,7 +3,7 @@
 from urllib.parse import quote_plus
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -66,34 +66,29 @@ def network_devices_consolidated(
     request: Request,
     tab: str = "core",
     search: str | None = None,
-    page: int = 1,
-    per_page: int = 50,
+    page: int = Query(default=1, ge=1),
+    olt_page: int = Query(default=1, ge=1),
+    ont_page: int = Query(default=1, ge=1),
+    cpe_page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     """Consolidated view of all network devices - core, OLTs, ONTs/CPE."""
+    selected_tab = tab if tab in {"core", "olts", "onts"} else "core"
+    per_page_options = [25, 50, 100, 200]
+    selected_per_page = per_page if per_page in per_page_options else 50
     page_data = web_network_core_devices_service.consolidated_page_data(
-        tab,
+        selected_tab,
         db,
         search,
+        page=page,
+        olt_page=olt_page,
+        ont_page=ont_page,
+        cpe_page=cpe_page,
+        per_page=selected_per_page,
     )
-    core_per_page_options = [25, 50, 100, 200]
-    selected_per_page = per_page if per_page in core_per_page_options else 50
-    all_core_devices = list(page_data.get("core_devices") or [])
-    total_core = len(all_core_devices)
-    total_pages = max(1, (total_core + selected_per_page - 1) // selected_per_page)
-    current_page = max(1, min(page, total_pages))
-    start_idx = (current_page - 1) * selected_per_page
-    end_idx = start_idx + selected_per_page
-    page_data["core_devices"] = all_core_devices[start_idx:end_idx]
-    page_data["core_per_page_options"] = core_per_page_options
-    page_data["core_pagination"] = {
-        "page": current_page,
-        "per_page": selected_per_page,
-        "total": total_core,
-        "total_pages": total_pages,
-        "has_prev": current_page > 1,
-        "has_next": current_page < total_pages,
-    }
+    page_data["tab"] = selected_tab
+    page_data["per_page_options"] = per_page_options
     context = _base_context(request, db, active_page="network-devices")
     context.update(page_data)
     return templates.TemplateResponse(

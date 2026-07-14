@@ -188,14 +188,40 @@ def execute_ensure_nas_vlan(
             status="failed", detail="IP address is required in step config."
         )
 
+    operation_id: str | None = None
     try:
         from app.models.catalog import NasDevice
+        from app.models.network_operation import (
+            NetworkOperationTargetType,
+            NetworkOperationType,
+        )
+        from app.services.network_operations import network_operations
 
         nas = db.get(NasDevice, nas_device_id)
         if not nas:
             return ProvisioningResult(
                 status="failed", detail=f"NAS device {nas_device_id} not found."
             )
+
+        operation = network_operations.start(
+            db,
+            NetworkOperationType.nas_vlan_provision,
+            NetworkOperationTargetType.nas,
+            str(nas.id),
+            correlation_key=f"nas-vlan:{nas.id}:{int(vlan_id)}",
+            input_payload={
+                "vlan_id": int(vlan_id),
+                "parent_interface": parent_interface,
+                "ip_address": ip_address,
+                "pppoe_service_name": config.get("pppoe_service_name"),
+                "subscription_id": context.get("subscription_id"),
+            },
+            parent_id=context.get("parent_operation_id"),
+            initiated_by=str(context.get("initiated_by") or "provisioning-workflow"),
+        )
+        operation_id = str(operation.id)
+        network_operations.mark_running(db, str(operation.id))
+        db.commit()
 
         from app.services.nas._mikrotik_vlan import provision_vlan_full
 
@@ -208,7 +234,18 @@ def execute_ensure_nas_vlan(
             pppoe_default_profile=config.get("pppoe_default_profile", "default"),
         )
 
-        if result.success:
+        operation_payload = {
+            "nas_device_id": str(nas.id),
+            "vlan_id": int(vlan_id),
+            "verified": result.verified,
+            "pending_readback": result.pending_readback,
+            "details": result.details,
+        }
+        if result.success and result.verified:
+            network_operations.mark_succeeded(
+                db, str(operation.id), output_payload=operation_payload
+            )
+            db.commit()
             return ProvisioningResult(
                 status="ok",
                 detail=result.message,
@@ -216,11 +253,42 @@ def execute_ensure_nas_vlan(
                     "nas_vlan_provisioned": True,
                     "vlan_id": vlan_id,
                     "nas_device_id": nas_device_id,
+                    "operation_id": str(operation.id),
+                    "verified": True,
                 },
             )
+        if result.pending_readback:
+            network_operations.mark_waiting(db, str(operation.id), result.message)
+        else:
+            network_operations.mark_failed(
+                db,
+                str(operation.id),
+                result.message,
+                output_payload=operation_payload,
+            )
+        db.commit()
         return ProvisioningResult(status="failed", detail=result.message)
     except Exception as exc:
         logger.error("NAS VLAN provisioning failed: %s", exc)
+        if operation_id:
+            try:
+                from app.models.network_operation import NetworkOperationStatus
+                from app.services.network_operations import network_operations
+
+                db.rollback()
+                operation = network_operations.get(db, operation_id)
+                if operation.status in {
+                    NetworkOperationStatus.pending,
+                    NetworkOperationStatus.running,
+                    NetworkOperationStatus.waiting,
+                }:
+                    network_operations.mark_failed(db, operation_id, str(exc))
+                    db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception(
+                    "Failed to persist NAS VLAN operation failure: %s", operation_id
+                )
         return ProvisioningResult(
             status="failed", detail=f"NAS VLAN provisioning failed: {exc}"
         )

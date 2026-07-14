@@ -39,6 +39,7 @@ from app.services.network.reconcile import (
     OntDesiredState,
     OntObservedState,
     Plan,
+    Tr181WanParameterPaths,
     compute_plan,
 )
 
@@ -94,6 +95,21 @@ def _desired(**overrides) -> OntDesiredState:
     )
     defaults.update(overrides)
     return OntDesiredState(**defaults)
+
+
+def _tr181_wan_paths() -> Tr181WanParameterPaths:
+    return Tr181WanParameterPaths(
+        ip_enable="Device.IP.Interface.1.Enable",
+        dhcp_enable="Device.DHCPv4.Client.1.Enable",
+        ip_address="Device.IP.Interface.1.IPv4Address.1.IPAddress",
+        subnet_mask="Device.IP.Interface.1.IPv4Address.1.SubnetMask",
+        gateway="Device.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
+        dns_primary="Device.DNS.Client.Server.1.DNSServer",
+        dns_secondary="Device.DNS.Client.Server.2.DNSServer",
+        nat_enable="Device.NAT.InterfaceSetting.1.Enable",
+        vlan_enable="Device.Ethernet.VLANTermination.1.Enable",
+        vlan_id="Device.Ethernet.VLANTermination.1.VLANID",
+    )
 
 
 def _olt_observed(**overrides) -> OltObservedFields:
@@ -311,6 +327,71 @@ def test_static_wan_action_carries_addressing_intent():
     assert action.mode == "static"
     assert action.ip_address == "198.51.100.10"
     assert action.gateway == "198.51.100.9"
+
+
+def test_static_wan_nat_or_dns_drift_replans_device_write():
+    desired = _desired(
+        wan_mode="static",
+        nat_enabled=False,
+        wan_static_ip="160.119.127.194",
+        wan_static_subnet="255.255.255.248",
+        wan_static_gateway="160.119.127.193",
+        wan_static_dns="1.1.1.1,8.8.8.8",
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_observed_wan_ip_enable=True,
+            acs_observed_wan_addressing_type="Static",
+            acs_observed_wan_vlan=203,
+            acs_observed_nat_enabled=True,
+            acs_observed_wan_ip_address="160.119.127.194",
+            acs_observed_wan_subnet_mask="255.255.255.248",
+            acs_observed_wan_gateway="160.119.127.193",
+            acs_observed_wan_dns_servers="1.1.1.1,8.8.8.8",
+        ),
+    )
+
+    assert any(
+        isinstance(item, AcsSetWanIp)
+        for item in compute_plan(desired, observed, "sweep").actions
+    )
+
+
+def test_tr181_static_missing_projected_dns_remains_drift():
+    desired = _desired(
+        wan_mode="static",
+        nat_enabled=False,
+        wan_static_ip="160.119.127.194",
+        wan_static_subnet="255.255.255.248",
+        wan_static_gateway="160.119.127.193",
+        wan_static_dns="1.1.1.1,8.8.8.8",
+        tr069_data_model_root="Device",
+        tr181_wan_paths=_tr181_wan_paths(),
+    )
+    observed = _synced_observed(desired)
+    observed = dataclasses.replace(
+        observed,
+        acs=dataclasses.replace(
+            observed.acs,
+            acs_data_model_root="Device",
+            acs_observed_wan_ip_enable=True,
+            acs_observed_wan_addressing_type="Static",
+            acs_observed_wan_vlan=203,
+            acs_observed_nat_enabled=False,
+            acs_observed_wan_ip_address="160.119.127.194",
+            acs_observed_wan_subnet_mask="255.255.255.248",
+            acs_observed_wan_gateway="160.119.127.193",
+            acs_observed_wan_dns_servers=None,
+        ),
+    )
+
+    assert any(
+        isinstance(item, AcsSetWanIp)
+        for item in compute_plan(desired, observed, "sweep").actions
+    )
 
 
 # ── Fresh authorization (TR-069 WAN path) ───────────────────────────────────
@@ -708,6 +789,65 @@ def test_present_cr_credentials_skip_management_server_push():
     desired = _desired()
     plan = compute_plan(desired, _synced_observed(desired), "sweep")
     assert AcsSetManagementServer not in _types(plan)
+
+
+def test_acs_endpoint_drift_plans_verified_management_server_update():
+    desired = _desired(
+        acs_url="https://new-acs.example.net/cwmp",
+        acs_username="cwmp-user",
+        acs_password_ref="encrypted-cwmp-password",
+    )
+    observed = dataclasses.replace(
+        _synced_observed(desired),
+        acs=dataclasses.replace(
+            _synced_observed(desired).acs,
+            acs_observed_url="https://old-acs.example.net/cwmp",
+            acs_observed_username="old-user",
+            acs_observed_password_set=True,
+        ),
+    )
+
+    plan = compute_plan(desired, observed, "sweep")
+
+    action = next(a for a in plan.actions if isinstance(a, AcsSetManagementServer))
+    assert action.acs_url == "https://new-acs.example.net/cwmp"
+    assert action.acs_username == "cwmp-user"
+    assert action.acs_password_ref == "encrypted-cwmp-password"
+    assert any(d.field == "acs_management_server" for d in plan.drifts)
+
+
+def test_explicit_acs_password_rotation_forces_one_write_only_push():
+    desired = _desired(
+        acs_url="https://acs.example.net/cwmp",
+        acs_username="cwmp-user",
+        acs_password_ref="rotated-password",
+    )
+    observed = dataclasses.replace(
+        _synced_observed(desired),
+        acs=dataclasses.replace(
+            _synced_observed(desired).acs,
+            acs_observed_url=desired.acs_url,
+            acs_observed_username=desired.acs_username,
+            acs_observed_password_set=True,
+        ),
+    )
+
+    apply_phase = compute_plan(
+        desired,
+        observed,
+        "sweep",
+        proposed_fields=frozenset({"acs_password_ref"}),
+    )
+    verify_phase = compute_plan(
+        desired,
+        observed,
+        "sweep",
+        proposed_fields=frozenset({"acs_password_ref"}),
+        force_proposed_writes=False,
+    )
+
+    assert AcsSetManagementServer in _types(apply_phase)
+    assert AcsSetManagementServer not in _types(verify_phase)
 
 
 # ── Plan determinism ────────────────────────────────────────────────────────

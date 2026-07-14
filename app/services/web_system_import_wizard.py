@@ -17,7 +17,7 @@ from typing import Any
 from uuid import UUID
 from xml.etree import ElementTree as ET  # nosec
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
@@ -93,7 +93,8 @@ class PaymentImportRow(BaseModel):
     currency: str = "NGN"
     status: PaymentStatus = PaymentStatus.succeeded
     memo: str | None = None
-    external_id: str | None = None
+    external_id: str = Field(min_length=1, max_length=255)
+    invoice_number: str | None = None
 
 
 class NasDeviceImportRow(BaseModel):
@@ -179,6 +180,7 @@ ENTITY_CONFIG: dict[str, dict[str, Any]] = {
             "status",
             "memo",
             "external_id",
+            "invoice_number",
         ],
     },
     "nas_devices": {
@@ -437,6 +439,18 @@ def _validate_rows(
 def _persist_row(
     db: Session, module: str, parsed_row: Any, *, source_name: str | None = None
 ) -> Any:
+    from app.services.financial_imports import (
+        FINANCIAL_IMPORT_MODULES,
+        persist_import_row,
+    )
+
+    if module in FINANCIAL_IMPORT_MODULES:
+        return persist_import_row(
+            db,
+            module,
+            parsed_row,
+            source_name=source_name or "import",
+        )
     if module == "subscribers":
         obj = Subscriber(
             first_name=parsed_row.first_name,
@@ -445,54 +459,6 @@ def _persist_row(
             phone=parsed_row.phone,
             status=parsed_row.status,
             is_active=parsed_row.is_active,
-        )
-        db.add(obj)
-        return obj
-    if module == "subscriptions":
-        obj = Subscription(
-            subscriber_id=parsed_row.subscriber_id,
-            offer_id=parsed_row.offer_id,
-            status=parsed_row.status,
-            billing_mode=parsed_row.billing_mode or BillingMode.prepaid,
-            start_at=parsed_row.start_at,
-            end_at=parsed_row.end_at,
-            next_billing_at=parsed_row.next_billing_at,
-            canceled_at=parsed_row.canceled_at,
-            cancel_reason=parsed_row.cancel_reason,
-        )
-        db.add(obj)
-        return obj
-    if module == "invoices":
-        obj = Invoice(
-            account_id=parsed_row.account_id,
-            invoice_number=parsed_row.invoice_number,
-            status=parsed_row.status,
-            currency=parsed_row.currency,
-            subtotal=parsed_row.subtotal,
-            tax_total=parsed_row.tax_total,
-            total=parsed_row.total,
-            balance_due=parsed_row.balance_due,
-            memo=parsed_row.memo,
-            metadata_={
-                "imported_via": "system_import_wizard",
-                "source_name": source_name or "import",
-                **(
-                    {"billing_mode": parsed_row.billing_mode.value}
-                    if parsed_row.billing_mode
-                    else {}
-                ),
-            },
-        )
-        db.add(obj)
-        return obj
-    if module == "payments":
-        obj = Payment(
-            account_id=parsed_row.account_id,
-            amount=parsed_row.amount,
-            currency=parsed_row.currency,
-            status=parsed_row.status,
-            memo=parsed_row.memo,
-            external_id=parsed_row.external_id,
         )
         db.add(obj)
         return obj
@@ -661,6 +627,13 @@ def execute_import(
     file_bytes: bytes | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+    if module in FINANCIAL_IMPORT_MODULES and not dry_run:
+        raise ValueError(
+            "Financial and subscription imports require a durable dry run. "
+            "Apply the validated run from Import Runs."
+        )
     parsed = parse_payload(
         data_format=data_format,
         raw_text=raw_text,
@@ -816,6 +789,14 @@ def rollback_import(
         raise ValueError("Import record not found")
 
     entry = history[entry_idx]
+    from app.services.financial_imports import FINANCIAL_IMPORT_MODULES
+
+    if str(entry.get("module") or "") in FINANCIAL_IMPORT_MODULES:
+        raise ValueError(
+            "Posted financial and subscription imports cannot be raw-deleted. "
+            "Use invoice void/write-off, payment reversal/refund, or subscription "
+            "lifecycle commands so compensating records remain auditable."
+        )
     if bool(entry.get("dry_run")):
         raise ValueError("Dry-run imports cannot be rolled back")
     if entry.get("rolled_back_at"):
@@ -845,6 +826,45 @@ def rollback_import(
 
     deleted_rows = 0
     missing_rows = 0
+
+    # PASS 1 — undo the money, through its owner.
+    #
+    # This must run BEFORE any invoice row is deleted: an invoice still carrying a
+    # payment allocation cannot be deleted, and clearing that allocation is exactly
+    # what the owner does. It also cannot be a db.delete(): imported payments now
+    # have a LedgerEntry and usually a PaymentAllocation beneath them (they became
+    # real payments when the import was routed through Payments.create), and
+    # neither child FK carries an ondelete. A hard delete would either raise
+    # IntegrityError — leaving the batch half-rolled-back and unrecoverable — or
+    # orphan a live ledger credit while the invoice it settled stayed paid with
+    # balance_due = 0.
+    for record in created_records:
+        if not isinstance(record, dict):
+            continue
+        if str(record.get("module") or entry.get("module") or "") != "payments":
+            continue
+        raw_payment_id = str(record.get("id") or "").strip()
+        if not raw_payment_id:
+            missing_rows += 1
+            continue
+        try:
+            payment_id = UUID(raw_payment_id)
+        except ValueError:
+            missing_rows += 1
+            continue
+        if db.get(Payment, payment_id) is None:
+            missing_rows += 1
+            continue
+
+        from app.services import billing as billing_service
+
+        # Soft-deletes the payment, drops its allocations and ledger credits
+        # together, and recomputes every invoice it had settled — so the invoice
+        # goes back to unpaid instead of staying paid with no money behind it.
+        billing_service.payments.delete(db, str(payment_id))
+        deleted_rows += 1
+
+    # PASS 2 — everything else.
     for record in created_records:
         if not isinstance(record, dict):
             continue
@@ -867,6 +887,11 @@ def rollback_import(
         if obj is None:
             missing_rows += 1
             continue
+
+        # Already undone through the payment owner in pass 1.
+        if module == "payments":
+            continue
+
         db.delete(obj)
         deleted_rows += 1
 

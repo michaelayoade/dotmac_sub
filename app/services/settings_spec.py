@@ -723,6 +723,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.usage,
+        key="radius_accounting_source_stale_seconds",
+        env_var="RADIUS_ACCOUNTING_SOURCE_STALE_SECONDS",
+        value_type=SettingValueType.integer,
+        default=3600,
+        min_value=300,
+    ),
+    SettingSpec(
+        domain=SettingDomain.usage,
         key="radius_session_reap_enabled",
         env_var="RADIUS_SESSION_REAP_ENABLED",
         value_type=SettingValueType.boolean,
@@ -3510,6 +3518,23 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="pending",
         allowed={"pending", "sent", "failed"},
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="campaign_processing_enabled",
+        env_var="CAMPAIGN_PROCESSING_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Scheduled campaign processing",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="campaign_processing_interval_seconds",
+        env_var="CAMPAIGN_PROCESSING_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=30,
+        label="Campaign processing interval (seconds)",
     ),
     SettingSpec(
         domain=SettingDomain.comms,

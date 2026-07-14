@@ -605,7 +605,14 @@ def get_pop_site(db: Session, pop_site_id: str) -> PopSite | None:
     return db.scalars(select(PopSite).where(PopSite.id == pop_site_id)).first()
 
 
-def list_page_data(db: Session, status: str | None) -> dict[str, object]:
+def list_page_data(
+    db: Session,
+    status: str | None,
+    *,
+    search: str | None = None,
+    page: int = 1,
+    per_page: int = 25,
+) -> dict[str, object]:
     """Return list payload for POP site index."""
     stmt = select(PopSite).order_by(PopSite.name)
     status_filter = (status or "all").strip().lower()
@@ -613,16 +620,44 @@ def list_page_data(db: Session, status: str | None) -> dict[str, object]:
         stmt = stmt.where(PopSite.is_active.is_(True))
     elif status_filter == "inactive":
         stmt = stmt.where(PopSite.is_active.is_(False))
-    pop_sites = db.scalars(stmt.limit(100)).all()
-    all_sites = db.scalars(select(PopSite)).all()
+
+    search_filter = (search or "").strip()
+    if search_filter:
+        pattern = f"%{search_filter}%"
+        stmt = stmt.where(
+            PopSite.name.ilike(pattern)
+            | PopSite.code.ilike(pattern)
+            | PopSite.city.ilike(pattern)
+            | PopSite.region.ilike(pattern)
+        )
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    pop_sites = db.scalars(stmt.offset((page - 1) * per_page).limit(per_page)).all()
+
+    stats_row = db.execute(
+        select(
+            func.count(PopSite.id),
+            func.count(PopSite.id).filter(PopSite.is_active.is_(True)),
+            func.count(PopSite.id).filter(PopSite.is_active.is_(False)),
+        )
+    ).one()
     return {
         "pop_sites": pop_sites,
         "stats": {
-            "total": len(all_sites),
-            "active": sum(1 for p in all_sites if p.is_active),
-            "inactive": sum(1 for p in all_sites if not p.is_active),
+            "total": stats_row[0],
+            "active": stats_row[1],
+            "inactive": stats_row[2],
         },
         "status_filter": status_filter,
+        "search": search_filter,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+        },
     }
 
 

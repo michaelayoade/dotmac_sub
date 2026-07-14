@@ -4,6 +4,7 @@ import uuid
 
 from starlette.requests import Request
 
+from app.models.notification import Notification, NotificationStatus
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
     InboxChannelType,
@@ -336,19 +337,11 @@ def test_admin_template_create_and_reply_uses_template(db_session, monkeypatch):
     conversation = _conversation(db_session)
     conversation.channel_type = InboxChannelType.email.value
     conversation.contact_address = "ada@example.com"
-    sent: dict[str, object] = {}
-    from app.services import team_inbox_outbound
     from app.services import web_admin as web_admin_service
 
     monkeypatch.setattr(
         web_admin_service, "get_actor_id", lambda request: str(actor_id)
     )
-    monkeypatch.setattr(
-        team_inbox_outbound.email_service,
-        "send_email",
-        lambda *args, **kwargs: sent.update(kwargs) or True,
-    )
-
     create_response = inbox_web.team_inbox_template_create(
         conversation.id,
         name="Outage update",
@@ -370,9 +363,12 @@ def test_admin_template_create_and_reply_uses_template(db_session, monkeypatch):
     )
 
     message = db_session.query(InboxMessage).one()
+    notification = db_session.query(Notification).one()
     assert create_response.status_code == 303
     assert reply_response.status_code == 303
-    assert sent["subject"] == "Re: Outage update"
+    assert notification.status == NotificationStatus.queued
+    assert notification.subject == "Re: Outage update"
+    assert message.notification_id == notification.id
     assert message.metadata_["template_id"] == str(template.id)
     assert "We are still working on this." in message.body
 

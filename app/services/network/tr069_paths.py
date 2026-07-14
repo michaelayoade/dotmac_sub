@@ -77,6 +77,8 @@ _TR181_PATHS: dict[str, str] = {
     "wan.status": "IP.Interface.{i}.Status",
     "wan.uptime": "PPP.Interface.{i}.Uptime",
     "wan.dns_servers": "DNS.Client.Server.1.DNSServer",
+    "wan.dns_primary": "DNS.Client.Server.1.DNSServer",
+    "wan.dns_secondary": "DNS.Client.Server.2.DNSServer",
     "wan.gateway": "Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
     "wan.dhcp_ip": "DHCPv4.Client.{i}.IPAddress",
     # ── WAN PPP Control (TR-181) ────────────────────────────────────────
@@ -98,6 +100,7 @@ _TR181_PATHS: dict[str, str] = {
     # ── DHCPv4 Client ───────────────────────────────────────────────────
     "wan.dhcp.enable": "DHCPv4.Client.{i}.Enable",
     "wan.dhcp.interface": "DHCPv4.Client.{i}.Interface",
+    "wan.nat.enable": "NAT.InterfaceSetting.{i}.Enable",
     # ── WAN IPv6 ────────────────────────────────────────────────────────
     "wan.ipv6_enable": "IP.Interface.{i}.IPv6Enable",
     "wan.dhcpv6_enable": "DHCPv6.Client.{i}.Enable",
@@ -385,6 +388,7 @@ class Tr069PathResolver:
         db: Session | None = None,
         vendor: str | None = None,
         model: str | None = None,
+        firmware: str | None = None,
     ) -> str | None:
         """Check the vendor capability DB for a device-specific path override."""
         if db is None or not vendor or not model:
@@ -396,7 +400,7 @@ class Tr069PathResolver:
             )
 
             capability = VendorCapabilities.resolve_capability(
-                db, vendor=vendor, model=model
+                db, vendor=vendor, model=model, firmware=firmware
             )
             if capability is None:
                 return None
@@ -430,6 +434,7 @@ class Tr069PathResolver:
         db: Session | None = None,
         vendor: str | None = None,
         model: str | None = None,
+        firmware: str | None = None,
         instance_index: int = 1,
     ) -> str:
         """Return the full TR-069 CWMP path for a canonical parameter name.
@@ -452,7 +457,11 @@ class Tr069PathResolver:
 
         # 1. Try vendor-specific override
         override = self._resolve_vendor_override(
-            canonical_name, db=db, vendor=vendor, model=model
+            canonical_name,
+            db=db,
+            vendor=vendor,
+            model=model,
+            firmware=firmware,
         )
         if override:
             suffix = override.replace("{i}", str(instance_index))
@@ -484,6 +493,7 @@ class Tr069PathResolver:
         db: Session | None = None,
         vendor: str | None = None,
         model: str | None = None,
+        firmware: str | None = None,
         instance_index: int = 1,
     ) -> dict[str, str]:
         """Resolve multiple canonical names. Returns {canonical_name: full_path}."""
@@ -494,6 +504,7 @@ class Tr069PathResolver:
                 db=db,
                 vendor=vendor,
                 model=model,
+                firmware=firmware,
                 instance_index=instance_index,
             )
             for name in canonical_names
@@ -507,6 +518,7 @@ class Tr069PathResolver:
         db: Session | None = None,
         vendor: str | None = None,
         model: str | None = None,
+        firmware: str | None = None,
         instance_index: int = 1,
     ) -> dict[str, Any]:
         """Resolve canonical names and pair with values.
@@ -525,6 +537,7 @@ class Tr069PathResolver:
                 db=db,
                 vendor=vendor,
                 model=model,
+                firmware=firmware,
                 instance_index=instance_index,
             )
             result[path] = value

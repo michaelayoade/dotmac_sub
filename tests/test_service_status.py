@@ -18,7 +18,10 @@ from app.models.billing import (
     ServiceEntitlementStatus,
 )
 from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate
+from app.schemas.service_status import ServiceStatusActionKind
 from app.services import billing as billing_service
 from app.services.service_status import build_service_status
 
@@ -32,6 +35,18 @@ def _n(dt):
 def _activate(db, subscription, mode):
     subscription.status = SubscriptionStatus.active
     subscription.billing_mode = mode
+    db.commit()
+
+
+def _add_lock(db, subscriber, subscription, reason):
+    db.add(
+        EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=reason,
+            source=f"test:{reason.value}",
+        )
+    )
     db.commit()
 
 
@@ -80,6 +95,11 @@ def test_postpaid_overdue_invoice_flags_dunning(
     assert resp.outstanding == Decimal("5000.00")
     assert resp.oldest_overdue_due_at is not None
     assert resp.services[0].reason == "overdue"
+    assert resp.services[0].action is not None
+    assert resp.services[0].action.kind == ServiceStatusActionKind.pay_invoices
+    assert resp.services[0].action.amount == Decimal("5000.00")
+    assert resp.services[0].action.restores_service is False
+    assert resp.primary_action == resp.services[0].action
 
 
 def test_prepaid_healthy_balance_is_ok_no_expiry(
@@ -140,6 +160,10 @@ def test_prepaid_insufficient_wallet_without_paid_coverage_is_low_balance(
     assert resp.min_balance == Decimal("17500.00")
     assert resp.low_balance is True
     assert resp.services[0].reason == "low_balance"
+    assert resp.services[0].action is not None
+    assert resp.services[0].action.kind == ServiceStatusActionKind.top_up
+    assert resp.services[0].action.amount == Decimal("16957.00")
+    assert resp.services[0].action.restores_service is False
 
 
 def test_prepaid_low_wallet_with_paid_current_period_is_ok(
@@ -334,3 +358,102 @@ def test_ended_subscriptions_are_excluded(db_session, subscriber_account, subscr
     resp = build_service_status(db_session, str(subscriber_account.id))
 
     assert resp.services == []
+
+
+def test_overdue_lock_offers_exact_payment_that_restores_service(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscriber_account.status = SubscriberStatus.active
+    subscription.status = SubscriptionStatus.suspended
+    subscription.billing_mode = BillingMode.postpaid
+    billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber_account.id,
+            status=InvoiceStatus.issued,
+            total=Decimal("6500.00"),
+            balance_due=Decimal("6500.00"),
+            issued_at=datetime.now(UTC) - timedelta(days=30),
+            due_at=datetime.now(UTC) - timedelta(days=10),
+        ),
+    )
+    _add_lock(
+        db_session,
+        subscriber_account,
+        subscription,
+        EnforcementReason.overdue,
+    )
+
+    resp = build_service_status(db_session, str(subscriber_account.id))
+
+    action = resp.services[0].action
+    assert resp.services[0].reason == "overdue"
+    assert action is not None
+    assert action.kind == ServiceStatusActionKind.pay_invoices
+    assert action.amount == Decimal("6500.00")
+    assert action.restores_service is True
+    assert "NGN 6,500.00" in action.message
+    assert resp.primary_action == action
+    payload = resp.model_dump(mode="json")
+    assert payload["primary_action"]["kind"] == "pay_invoices"
+    assert payload["primary_action"]["amount"] == "6500.00"
+    assert payload["primary_action"]["restores_service"] is True
+
+
+def test_manual_suspension_never_claims_payment_will_restore_service(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscriber_account.status = SubscriberStatus.active
+    subscription.status = SubscriptionStatus.suspended
+    subscription.billing_mode = BillingMode.postpaid
+    _add_lock(
+        db_session,
+        subscriber_account,
+        subscription,
+        EnforcementReason.admin,
+    )
+
+    resp = build_service_status(db_session, str(subscriber_account.id))
+
+    action = resp.services[0].action
+    assert resp.services[0].reason == "administrative_hold"
+    assert action is not None
+    assert action.kind == ServiceStatusActionKind.contact_support
+    assert action.amount is None
+    assert action.restores_service is False
+    assert "payment cannot clear" in action.message
+    assert resp.primary_action == action
+
+
+def test_multiple_holds_do_not_offer_partial_payment_as_restoration(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscriber_account.status = SubscriberStatus.active
+    subscription.status = SubscriptionStatus.suspended
+    subscription.billing_mode = BillingMode.postpaid
+    billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber_account.id,
+            status=InvoiceStatus.overdue,
+            total=Decimal("8000.00"),
+            balance_due=Decimal("8000.00"),
+            issued_at=datetime.now(UTC) - timedelta(days=30),
+            due_at=datetime.now(UTC) - timedelta(days=10),
+        ),
+    )
+    for reason in (EnforcementReason.overdue, EnforcementReason.admin):
+        _add_lock(db_session, subscriber_account, subscription, reason)
+
+    resp = build_service_status(db_session, str(subscriber_account.id))
+
+    action = resp.services[0].action
+    assert resp.services[0].reason == "multiple_holds"
+    assert action is not None
+    assert action.kind == ServiceStatusActionKind.contact_support
+    assert action.amount is None
+    assert action.restores_service is False
+    assert "payment alone will not restore" in action.message

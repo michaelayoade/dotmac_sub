@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_response, get_db
 from app.schemas.billing import (
     BankAccountCreate,
     BankAccountRead,
@@ -27,6 +27,7 @@ from app.schemas.billing import (
     CreditNoteLineRead,
     CreditNoteLineUpdate,
     CreditNoteRead,
+    CreditNoteSyncRead,
     CreditNoteUpdate,
     InvoiceBulkActionResponse,
     InvoiceBulkVoidRequest,
@@ -63,6 +64,7 @@ from app.schemas.billing import (
     PaymentProviderRead,
     PaymentProviderUpdate,
     PaymentRead,
+    PaymentSyncRead,
     PaymentUpdate,
     PaymentVerifyRequest,
     PaymentVerifyResponse,
@@ -78,6 +80,7 @@ from app.services import billing_automation as billing_automation_service
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services.auth_dependencies import require_permission, require_user_auth
 from app.services.customer_context import require_customer_account_id
+from app.services.sync_feeds import SYNC_FEED_MAX_PAGE_SIZE
 
 router = APIRouter()
 
@@ -147,14 +150,17 @@ def sync_invoices(
     db: Session = Depends(get_db),
 ):
     """Lightweight, deterministic invoice feed for accounting synchronization."""
-    return billing_service.invoices.sync_list_response(
+    return finish_read_response(
         db,
-        account_id=account_id,
-        status=status,
-        is_active=is_active,
-        updated_since=updated_since,
-        limit=limit,
-        offset=offset,
+        billing_service.invoices.sync_list_response(
+            db,
+            account_id=account_id,
+            status=status,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
     )
 
 
@@ -165,7 +171,7 @@ def sync_invoices(
     dependencies=[Depends(require_permission("billing:invoice:read"))],
 )
 def get_invoice(invoice_id: str, db: Session = Depends(get_db)):
-    return billing_service.invoices.get(db, invoice_id)
+    return finish_read_response(db, billing_service.invoices.get(db, invoice_id))
 
 
 @router.get(
@@ -191,16 +197,19 @@ def list_invoices(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.invoices.list_response(
+    return finish_read_response(
         db,
-        account_id,
-        status,
-        is_active,
-        order_by,
-        order_dir,
-        limit=limit,
-        offset=offset,
-        updated_since=updated_since,
+        billing_service.invoices.list_response(
+            db,
+            account_id,
+            status,
+            is_active,
+            order_by,
+            order_dir,
+            limit=limit,
+            offset=offset,
+            updated_since=updated_since,
+        ),
     )
 
 
@@ -281,8 +290,11 @@ def list_billing_runs(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.billing_runs.list_response(
-        db, status, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        billing_service.billing_runs.list_response(
+            db, status, order_by, order_dir, limit, offset
+        ),
     )
 
 
@@ -293,7 +305,7 @@ def list_billing_runs(
     dependencies=[Depends(require_permission("billing:batch:read"))],
 )
 def get_billing_run(run_id: str, db: Session = Depends(get_db)):
-    return billing_service.billing_runs.get(db, run_id)
+    return finish_read_response(db, billing_service.billing_runs.get(db, run_id))
 
 
 @router.delete(
@@ -321,13 +333,49 @@ def create_credit_note(payload: CreditNoteCreate, db: Session = Depends(get_db))
 
 
 @router.get(
+    "/credit-notes/sync",
+    response_model=ListResponse[CreditNoteSyncRead],
+    tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:credit_note:read"))],
+)
+def sync_credit_notes(
+    account_id: str | None = None,
+    status: str | None = None,
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Inclusive credit-note updated_at watermark for ERP sync.",
+    ),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.credit_notes.sync_list_response(
+            db,
+            account_id=account_id,
+            status=status,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+@router.get(
     "/credit-notes/{credit_note_id}",
     response_model=CreditNoteRead,
     tags=["credit-notes"],
     dependencies=[Depends(require_permission("billing:credit_note:read"))],
 )
 def get_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
-    return billing_service.credit_notes.get(db, credit_note_id)
+    return finish_read_response(
+        db, billing_service.credit_notes.get(db, credit_note_id)
+    )
 
 
 @router.get(
@@ -354,17 +402,20 @@ def list_credit_notes(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.credit_notes.list_response(
+    return finish_read_response(
         db,
-        account_id,
-        invoice_id,
-        status,
-        is_active,
-        order_by,
-        order_dir,
-        limit=limit,
-        offset=offset,
-        updated_since=updated_since,
+        billing_service.credit_notes.list_response(
+            db,
+            account_id,
+            invoice_id,
+            status,
+            is_active,
+            order_by,
+            order_dir,
+            limit=limit,
+            offset=offset,
+            updated_since=updated_since,
+        ),
     )
 
 
@@ -493,6 +544,33 @@ def create_payment_channel(
     payload: PaymentChannelCreate, db: Session = Depends(get_db)
 ):
     return billing_service.payment_channels.create(db, payload)
+
+
+@router.get(
+    "/payment-channels/sync",
+    response_model=ListResponse[PaymentChannelRead],
+    tags=["payment-channels"],
+    dependencies=[Depends(require_permission("billing:channel:read"))],
+)
+def sync_payment_channels(
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(default=None),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.payment_channels.sync_list_response(
+            db,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
 @router.get(
@@ -653,8 +731,11 @@ def list_payment_allocations(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.payment_allocations.list_response(
-        db, payment_id, invoice_id, order_by, order_dir, limit, offset
+    return finish_read_response(
+        db,
+        billing_service.payment_allocations.list_response(
+            db, payment_id, invoice_id, order_by, order_dir, limit, offset
+        ),
     )
 
 
@@ -1184,6 +1265,40 @@ def create_payment(payload: PaymentCreate, db: Session = Depends(get_db)):
     return billing_service.payments.create(db, payload)
 
 
+@router.get(
+    "/payments/sync",
+    response_model=ListResponse[PaymentSyncRead],
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:read"))],
+)
+def sync_payments(
+    account_id: str | None = None,
+    status: str | None = None,
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(
+        default=None,
+        description="Inclusive payment updated_at watermark for ERP sync.",
+    ),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.payments.sync_list_response(
+            db,
+            account_id=account_id,
+            status=status,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
 # --- Customer-initiated online payment (hosted checkout) ------------------
 # Self-scoped to the authenticated subscriber; intentionally NOT gated by a
 # billing:* permission so a customer can pay their own invoice from the mobile
@@ -1322,7 +1437,7 @@ def verify_payment(
     dependencies=[Depends(require_permission("billing:payment:read"))],
 )
 def get_payment(payment_id: str, db: Session = Depends(get_db)):
-    return billing_service.payments.get(db, payment_id)
+    return finish_read_response(db, billing_service.payments.get(db, payment_id))
 
 
 @router.get(
@@ -1349,17 +1464,20 @@ def list_payments(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.payments.list_response(
+    return finish_read_response(
         db,
-        account_id,
-        invoice_id,
-        status,
-        is_active,
-        order_by,
-        order_dir,
-        limit=limit,
-        offset=offset,
-        updated_since=updated_since,
+        billing_service.payments.list_response(
+            db,
+            account_id,
+            invoice_id,
+            status,
+            is_active,
+            order_by,
+            order_dir,
+            limit=limit,
+            offset=offset,
+            updated_since=updated_since,
+        ),
     )
 
 
@@ -1426,7 +1544,7 @@ def create_ledger_entry(payload: LedgerEntryCreate, db: Session = Depends(get_db
     dependencies=[Depends(require_permission("billing:ledger:read"))],
 )
 def get_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
-    return billing_service.ledger_entries.get(db, entry_id)
+    return finish_read_response(db, billing_service.ledger_entries.get(db, entry_id))
 
 
 @router.get(
@@ -1446,16 +1564,19 @@ def list_ledger_entries(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.ledger_entries.list_response(
+    return finish_read_response(
         db,
-        account_id,
-        entry_type,
-        source,
-        is_active,
-        order_by,
-        order_dir,
-        limit,
-        offset,
+        billing_service.ledger_entries.list_response(
+            db,
+            account_id,
+            entry_type,
+            source,
+            is_active,
+            order_by,
+            order_dir,
+            limit,
+            offset,
+        ),
     )
 
 
@@ -1471,14 +1592,10 @@ def reverse_ledger_entry(
     return billing_service.ledger_entries.reverse(db, entry_id, memo)
 
 
-@router.delete(
-    "/ledger-entries/{entry_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["ledger-entries"],
-    dependencies=[Depends(require_permission("billing:ledger:write"))],
-)
-def delete_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
-    billing_service.ledger_entries.delete(db, entry_id)
+# DELETE /ledger-entries/{entry_id} is deliberately absent. The ledger is
+# append-only: deleting an entry silently moved the account balance with no
+# record of why. Undo a posted entry by reversing it —
+# POST /ledger-entries/{entry_id}/reverse.
 
 
 # --- Tax Rates ---
@@ -1493,6 +1610,33 @@ def delete_ledger_entry(entry_id: str, db: Session = Depends(get_db)):
 )
 def create_tax_rate(payload: TaxRateCreate, db: Session = Depends(get_db)):
     return billing_service.tax_rates.create(db, payload)
+
+
+@router.get(
+    "/tax-rates/sync",
+    response_model=ListResponse[TaxRateRead],
+    tags=["tax-rates"],
+    dependencies=[Depends(require_permission("billing:tax:read"))],
+)
+def sync_tax_rates(
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(default=None),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.tax_rates.sync_list_response(
+            db,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
 
 
 @router.get(
@@ -1550,6 +1694,35 @@ def delete_tax_rate(rate_id: str, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/billing-accounts/sync",
+    response_model=ListResponse[BillingAccountRead],
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:read"))],
+)
+def sync_billing_accounts(
+    reseller_id: str | None = None,
+    is_active: bool | None = None,
+    updated_since: datetime | None = Query(default=None),
+    limit: int = Query(
+        default=SYNC_FEED_MAX_PAGE_SIZE, ge=1, le=SYNC_FEED_MAX_PAGE_SIZE
+    ),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.billing_accounts.sync_list_response(
+            db,
+            reseller_id=reseller_id,
+            is_active=is_active,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+@router.get(
     "/billing-accounts",
     response_model=ListResponse[BillingAccountRead],
     tags=["billing-accounts"],
@@ -1573,11 +1746,14 @@ def list_billing_accounts(
         limit=limit,
         offset=offset,
     )
-    return ListResponse[BillingAccountRead](
-        items=[BillingAccountRead.model_validate(i) for i in items],
-        count=len(items),
-        limit=limit,
-        offset=offset,
+    return finish_read_response(
+        db,
+        ListResponse[BillingAccountRead](
+            items=[BillingAccountRead.model_validate(i) for i in items],
+            count=len(items),
+            limit=limit,
+            offset=offset,
+        ),
     )
 
 
@@ -1601,7 +1777,9 @@ def create_billing_account(
     dependencies=[Depends(require_permission("billing_account:read"))],
 )
 def get_billing_account(billing_account_id: str, db: Session = Depends(get_db)):
-    return billing_service.billing_accounts.get(db, billing_account_id)
+    return finish_read_response(
+        db, billing_service.billing_accounts.get(db, billing_account_id)
+    )
 
 
 @router.patch(
@@ -1632,13 +1810,16 @@ def get_billing_account_statement(
     payments_offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return billing_service.billing_accounts.statement(
+    return finish_read_response(
         db,
-        billing_account_id,
-        subscribers_limit=subscribers_limit,
-        subscribers_offset=subscribers_offset,
-        payments_limit=payments_limit,
-        payments_offset=payments_offset,
+        billing_service.billing_accounts.statement(
+            db,
+            billing_account_id,
+            subscribers_limit=subscribers_limit,
+            subscribers_offset=subscribers_offset,
+            payments_limit=payments_limit,
+            payments_offset=payments_offset,
+        ),
     )
 
 

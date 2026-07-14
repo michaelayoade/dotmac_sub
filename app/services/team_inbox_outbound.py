@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import html
-import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
@@ -20,10 +20,13 @@ from app.models.team_inbox import (
     InboxMessageDirection,
     InboxTeamRole,
 )
-from app.services import email as email_service
 from app.services import team_inbox_realtime, team_inbox_routing, team_outbound
+from app.services.communication_intents import (
+    CommunicationClass,
+    CommunicationIntent,
+    submit,
+)
 from app.services.customer_identity_normalization import normalize_phone_identifier
-from app.services.integrations.connectors import whatsapp as whatsapp_connector
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 T = TypeVar("T")
@@ -159,43 +162,104 @@ def _plain_text_reply(payload: InboxReplyPayload) -> str:
     return html.unescape(" ".join(text.split())).strip()
 
 
-def _provider_metadata(result: dict[str, Any]) -> dict[str, Any]:
-    provider_message_id = _provider_message_id(result)
-    metadata = {
-        "provider": result.get("provider"),
-        "sent": result.get("sent"),
-        "status_code": result.get("status_code"),
-        "message": result.get("message"),
-        "provider_message_id": provider_message_id,
-    }
-    response = result.get("response")
-    if response is not None:
-        metadata["response"] = str(response)[:500]
-    return {key: value for key, value in metadata.items() if value is not None}
+def _queue_outbox_reply(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    payload: InboxReplyPayload,
+    channel: NotificationChannel,
+    recipient: str,
+    subject: str | None,
+    body: str,
+    now: datetime | None = None,
+    from_address: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> InboxReplyResult:
+    intent_metadata = dict(payload.metadata or {})
+    intent_metadata.update(metadata or {})
+    intent_metadata.update(
+        {
+            "source": "team_inbox_reply",
+            "conversation_id": str(conversation.id),
+            "body_html": payload.body_html,
+            "body_text": payload.body_text,
+            "sent_by_person_id": str(payload.sent_by_person_id)
+            if payload.sent_by_person_id
+            else None,
+        }
+    )
+    result = submit(
+        db,
+        CommunicationIntent(
+            subscriber_id=conversation.subscriber_id,
+            event_type="team_inbox.reply",
+            category="service",
+            communication_class=CommunicationClass.transactional,
+            subject=subject,
+            body=body,
+            channels=(channel,),
+            include_reseller=False,
+            persist_policy_suppressions=False,
+            subscriber_recipients={channel: recipient},
+            metadata=intent_metadata,
+        ),
+    )
+    notification = next(
+        (item for item in result.queued if item.status == NotificationStatus.queued),
+        None,
+    )
+    if notification is None:
+        return InboxReplyResult(
+            kind="suppressed",
+            conversation_id=str(conversation.id),
+            to_email=recipient,
+            reason=", ".join(result.suppressed)
+            or "Communication policy suppressed reply",
+        )
 
-
-def _provider_message_id(result: dict[str, Any]) -> str | None:
-    for key in ("provider_message_id", "message_id", "id"):
-        value = str(result.get(key) or "").strip()
-        if value:
-            return value
-    raw_response = result.get("response")
-    if isinstance(raw_response, str):
-        try:
-            response = json.loads(raw_response)
-        except json.JSONDecodeError:
-            return None
-    else:
-        response = raw_response
-    if not isinstance(response, dict):
-        return None
-    messages = response.get("messages")
-    if isinstance(messages, list) and messages:
-        first = messages[0]
-        if isinstance(first, dict):
-            value = str(first.get("id") or "").strip()
-            return value or None
-    return None
+    queued_at = now or datetime.now(UTC)
+    message = InboxMessage(
+        conversation_id=conversation.id,
+        notification_id=notification.id,
+        channel_type=channel.value,
+        direction=InboxMessageDirection.outbound.value,
+        subject=subject,
+        body=body
+        if channel == NotificationChannel.whatsapp
+        else payload.body_html or body,
+        external_thread_id=conversation.external_thread_id,
+        from_address=from_address,
+        to_addresses=[recipient],
+        cc_addresses=[],
+        metadata_={**intent_metadata, "delivery_status": "queued"},
+    )
+    db.add(message)
+    conversation.last_message_at = queued_at
+    db.flush()
+    team_inbox_realtime.publish_conversation_event(
+        str(conversation.id),
+        event_type=team_inbox_realtime.EventType.MESSAGE_NEW,
+        payload=team_inbox_realtime.message_event_payload(
+            conversation_id=str(conversation.id),
+            message_id=str(message.id),
+            body=message.body,
+            direction=message.direction,
+            channel_type=message.channel_type,
+            created_at=message.created_at,
+            author_name="Support",
+            extra={
+                "sender_type": "agent",
+                "from_customer": False,
+                "delivery_status": "queued",
+            },
+        ),
+    )
+    return InboxReplyResult(
+        kind="queued",
+        conversation_id=str(conversation.id),
+        message_id=str(message.id),
+        to_email=recipient,
+    )
 
 
 def _send_whatsapp_reply(
@@ -228,99 +292,20 @@ def _send_whatsapp_reply(
         str(template_spec.get("name") or "").strip() if template_spec else ""
     )
     use_template = bool(template_spec and template_name)
-    if use_template:
-        raw_variables = template_spec.get("variables") if template_spec else None
-        result = whatsapp_connector.send_template_message(
-            db,
-            recipient=recipient,
-            template_name=template_name,
-            language=str(template_spec.get("language") or "").strip() or None
-            if template_spec
-            else None,
-            variables=raw_variables if isinstance(raw_variables, dict) else None,
-            dry_run=False,
-        )
-    else:
-        result = whatsapp_connector.send_text_message(
-            db,
-            recipient=recipient,
-            body=body_text,
-        )
-    if not bool(result.get("ok")):
-        failed_message_id = None
-        if record_failure:
-            failed_message_id = _record_failed_outbound(
-                db,
-                conversation=conversation,
-                payload=payload,
-                channel_type=InboxChannelType.whatsapp.value,
-                to_addresses=[recipient],
-                reason="WhatsApp provider rejected the template"
-                if use_template
-                else "WhatsApp provider rejected the reply",
-                provider_result=_provider_metadata(result),
-                now=now,
-            )
-        return InboxReplyResult(
-            kind="send_failed",
-            conversation_id=str(conversation.id),
-            message_id=failed_message_id,
-            to_email=recipient,
-            reason="WhatsApp provider rejected the template"
-            if use_template
-            else "WhatsApp provider rejected the reply",
-        )
-
-    sent_at = now or datetime.now(UTC)
-    metadata = payload_metadata
-    provider_message_id = _provider_message_id(result)
-    metadata.update(
-        {
-            "source": "team_inbox_reply",
-            "channel_type": InboxChannelType.whatsapp.value,
-            "message_kind": "template" if use_template else "text",
-            "sent_by_person_id": str(payload.sent_by_person_id)
-            if payload.sent_by_person_id
-            else None,
-            "provider_result": _provider_metadata(result),
-        }
-    )
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=InboxChannelType.whatsapp.value,
-        direction=InboxMessageDirection.outbound.value,
+    return _queue_outbox_reply(
+        db,
+        conversation=conversation,
+        payload=payload,
+        channel=NotificationChannel.whatsapp,
+        recipient=recipient,
         subject=None,
         body=body_text if not use_template else f"[WhatsApp template: {template_name}]",
-        external_message_id=provider_message_id,
-        external_thread_id=conversation.external_thread_id,
-        from_address=None,
-        to_addresses=[recipient],
-        cc_addresses=[],
-        sent_at=sent_at,
-        metadata_=metadata,
-    )
-    db.add(message)
-    conversation.last_message_at = sent_at
-    db.flush()
-    team_inbox_realtime.publish_conversation_event(
-        str(conversation.id),
-        event_type=team_inbox_realtime.EventType.MESSAGE_NEW,
-        payload=team_inbox_realtime.message_event_payload(
-            conversation_id=str(conversation.id),
-            message_id=str(message.id),
-            body=message.body,
-            direction=message.direction,
-            channel_type=message.channel_type,
-            created_at=message.created_at,
-            author_name="Support",
-            extra={"sender_type": "agent", "from_customer": False},
-        ),
-    )
-    return InboxReplyResult(
-        kind="sent",
-        conversation_id=str(conversation.id),
-        message_id=str(message.id),
-        to_email=recipient,
+        now=now,
+        metadata={
+            "channel_type": InboxChannelType.whatsapp.value,
+            "message_kind": "template" if use_template else "text",
+            "whatsapp_template": template_spec if use_template else None,
+        },
     )
 
 
@@ -389,98 +374,32 @@ def send_inbox_reply(
     )
     config = sender.config
     subject = _reply_subject(conversation, payload.subject)
-    sent = email_service.send_email(
+    result = _queue_outbox_reply(
         db,
-        to_email=to_email,
+        conversation=conversation,
+        payload=payload,
+        channel=NotificationChannel.email,
+        recipient=to_email,
         subject=subject,
-        body_html=body_html,
-        body_text=payload.body_text,
-        sender_key=sender.sender_key,
-        activity=sender.activity,
-    )
-    if not sent:
-        failed_message_id = None
-        if record_failure:
-            failed_message_id = _record_failed_outbound(
-                db,
-                conversation=conversation,
-                payload=payload,
-                channel_type=InboxChannelType.email.value,
-                to_addresses=[to_email],
-                from_address=config.get("from_email"),
-                subject=subject,
-                reason="Email provider rejected the reply",
-                metadata={
-                    "service_team_id": sender.service_team_id,
-                    "sender_key": config.get("sender_key") or sender.sender_key,
-                    "activity": sender.activity,
-                },
-                now=now,
-            )
-        return InboxReplyResult(
-            kind="send_failed",
-            conversation_id=str(conversation.id),
-            message_id=failed_message_id,
-            service_team_id=sender.service_team_id,
-            sender_key=config.get("sender_key") or sender.sender_key,
-            activity=sender.activity,
-            from_address=config.get("from_email"),
-            to_email=to_email,
-            reason="Email provider rejected the reply",
-        )
-
-    sent_at = now or datetime.now(UTC)
-    metadata = dict(payload.metadata or {})
-    metadata.update(
-        {
-            "source": "team_inbox_reply",
+        body=payload.body_text or _plain_text_reply(payload),
+        now=now,
+        from_address=config.get("from_email"),
+        metadata={
             "service_team_id": sender.service_team_id,
             "sender_key": config.get("sender_key") or sender.sender_key,
             "activity": sender.activity,
-            "sent_by_person_id": str(payload.sent_by_person_id)
-            if payload.sent_by_person_id
-            else None,
-        }
-    )
-    message = InboxMessage(
-        conversation_id=conversation.id,
-        channel_type=InboxChannelType.email.value,
-        direction=InboxMessageDirection.outbound.value,
-        subject=subject,
-        body=body_html,
-        external_thread_id=conversation.external_thread_id,
-        from_address=config.get("from_email"),
-        to_addresses=[to_email],
-        cc_addresses=[],
-        sent_at=sent_at,
-        metadata_=metadata,
-    )
-    db.add(message)
-    conversation.last_message_at = sent_at
-    db.flush()
-    team_inbox_realtime.publish_conversation_event(
-        str(conversation.id),
-        event_type=team_inbox_realtime.EventType.MESSAGE_NEW,
-        payload=team_inbox_realtime.message_event_payload(
-            conversation_id=str(conversation.id),
-            message_id=str(message.id),
-            body=message.body,
-            direction=message.direction,
-            channel_type=message.channel_type,
-            created_at=message.created_at,
-            author_name="Support",
-            extra={"sender_type": "agent", "from_customer": False},
-        ),
+        },
     )
     return InboxReplyResult(
-        kind="sent",
-        conversation_id=str(conversation.id),
-        message_id=str(message.id),
+        kind=result.kind,
+        conversation_id=result.conversation_id,
+        message_id=result.message_id,
         service_team_id=sender.service_team_id,
         sender_key=config.get("sender_key") or sender.sender_key,
         activity=sender.activity,
         from_address=config.get("from_email"),
         to_email=to_email,
+        reason=result.reason,
     )
 
 
@@ -625,7 +544,7 @@ def retry_outbound_message(
     metadata["retry_count"] = retry_count
     metadata["last_retry_at"] = (now or datetime.now(UTC)).isoformat()
     metadata["last_retry_result"] = result.kind
-    if result.kind == "sent":
+    if result.kind in {"sent", "queued"}:
         metadata["delivery_status"] = "retried"
         metadata["retried_message_id"] = result.message_id
     message.metadata_ = metadata

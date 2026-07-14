@@ -6,7 +6,7 @@
 {% block content %}
 {{ ambient_background("slate", "blue") }}
 
-<div id="network-devices-content" class="relative space-y-8" x-data="{ activeTab: '{{ tab | default('core') }}' }">
+<div id="network-devices-content" class="relative space-y-8">
     {# Page Header #}
     <div>
         <a href="/admin/network" class="inline-flex items-center gap-1 text-sm font-medium text-slate-600 transition-colors hover:text-slate-900 dark:text-slate-300 dark:hover:text-white">
@@ -38,15 +38,18 @@
                        placeholder="Search by name, serial, IP, vendor, model..."
                        class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
             </div>
-            <input type="hidden" name="tab" x-model="activeTab" value="{{ tab | default('core') }}">
+            <input type="hidden" name="tab" value="{{ tab }}">
             <input type="hidden" name="page" value="1">
+            <input type="hidden" name="olt_page" value="1">
+            <input type="hidden" name="ont_page" value="1">
+            <input type="hidden" name="cpe_page" value="1">
             <div>
-                <label for="core-per-page" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Rows per page</label>
-                <select id="core-per-page"
+                <label for="devices-per-page" class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Rows per page</label>
+                <select id="devices-per-page"
                         name="per_page"
                         onchange="this.form.submit()"
                         class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    {% for option in core_per_page_options %}
+                    {% for option in per_page_options %}
                     <option value="{{ option }}" {% if core_pagination.per_page == option %}selected{% endif %}>{{ option }}</option>
                     {% endfor %}
                 </select>
@@ -57,7 +60,7 @@
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.6-4.4a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
                     Search
                 </button>
-                <a href="/admin/network/network-devices?tab={{ tab | default('core') }}"
+                <a href="/admin/network/network-devices?tab={{ tab }}"
                    class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                     Clear
                 </a>
@@ -67,7 +70,7 @@
 
     <div class="flex items-center justify-end">
         <button type="button"
-                hx-get="/admin/network/network-devices?tab={{ tab | default('core') }}&page={{ core_pagination.page }}&per_page={{ core_pagination.per_page }}{% if search %}&search={{ search }}{% endif %}"
+                hx-get="{{ request.url }}"
                 hx-target="#network-devices-content"
                 hx-select="#network-devices-content"
                 hx-swap="outerHTML"
@@ -78,32 +81,30 @@
     </div>
 
     {# Tab Navigation #}
-    <nav class="flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 50ms;">
-        <button @click="activeTab = 'core'"
-                :class="activeTab === 'core' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
-                class="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all">
+    <nav class="flex gap-1 overflow-x-auto rounded-lg bg-slate-100 p-1 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 50ms;">
+        <a href="{{ request.url.include_query_params(tab='core', page=1, olt_page=1, ont_page=1, cpe_page=1) }}"
+                class="flex items-center gap-2 whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium transition-all {% if tab == 'core' %}bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
             Core Network
             <span class="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-600 dark:text-slate-300">{{ stats.core_total }}</span>
-        </button>
-        <button @click="activeTab = 'olts'"
-                :class="activeTab === 'olts' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
-                class="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all">
+        </a>
+        <a href="{{ request.url.include_query_params(tab='olts', page=1, olt_page=1, ont_page=1, cpe_page=1) }}"
+                class="flex items-center gap-2 whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium transition-all {% if tab == 'olts' %}bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
             OLTs
             <span class="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-600 dark:bg-violet-500/20 dark:text-violet-400">{{ stats.olt_total }}</span>
-        </button>
-        <button @click="activeTab = 'onts'"
-                :class="activeTab === 'onts' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'"
-                class="flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all">
+        </a>
+        <a href="{{ request.url.include_query_params(tab='onts', page=1, olt_page=1, ont_page=1, cpe_page=1) }}"
+                class="flex items-center gap-2 whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium transition-all {% if tab == 'onts' %}bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white{% else %}text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white{% endif %}">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
             ONTs / CPE
             <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:bg-blue-500/20 dark:text-blue-400">{{ stats.ont_total }}</span>
-        </button>
+        </a>
     </nav>
 
     {# ==================== CORE NETWORK TAB ==================== #}
-    <div x-show="activeTab === 'core'" x-cloak class="space-y-6">
+    {% if tab == 'core' %}
+    <div class="space-y-6">
         {# Stats #}
         <div class="grid gap-4 sm:grid-cols-3 lg:grid-cols-6 animate-fade-in-up">
             <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -145,14 +146,14 @@
             <div class="w-full">
                 <table class="w-full table-fixed">
                     <colgroup>
-                        <col class="w-[19%]">
-                        <col class="w-[9%]">
-                        <col class="w-[10%]">
-                        <col class="w-[10%]">
-                        <col class="w-[13%]">
-                        <col class="w-[12%]">
-                        <col class="w-[10%]">
+                        <col class="w-[26%]">
                         <col class="w-[8%]">
+                        <col class="w-[9%]">
+                        <col class="w-[9%]">
+                        <col class="w-[12%]">
+                        <col class="w-[11%]">
+                        <col class="w-[9%]">
+                        <col class="w-[7%]">
                         <col class="w-[4%]">
                         <col class="w-[5%]">
                     </colgroup>
@@ -174,15 +175,15 @@
                         {% for device in core_devices %}
                         <tr class="group transition-all hover:bg-slate-50 dark:hover:bg-slate-700/50">
                             <td class="px-3 py-4">
-                                <div class="flex min-w-0 items-center gap-2">
+                                <div class="flex min-w-0 max-w-full items-center gap-2">
                                     <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700">
                                         <svg class="h-4 w-4 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
                                     </div>
-                                    <div class="min-w-0">
+                                    <div class="min-w-0 flex-1 overflow-hidden">
                                         {% set device_pop_name = device.pop_site.name if device.pop_site is defined and device.pop_site else 'Unassigned' %}
                                         <a href="{{ device.detail_url if device.detail_url is defined and device.detail_url else '/admin/network/core-devices/' ~ device.id }}"
                                            title="{{ device.name }} · POP: {{ device_pop_name }}"
-                                           class="block truncate text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
+                                           class="block max-w-full truncate text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
                                         {% if device.hostname %}
                                         <p class="truncate text-xs text-slate-500 dark:text-slate-400">{{ device.hostname }}</p>
                                         {% endif %}
@@ -272,14 +273,14 @@
                 </p>
                 <div class="flex items-center gap-2">
                     {% if core_pagination.has_prev %}
-                    <a href="/admin/network/network-devices?tab=core&page={{ core_pagination.page - 1 }}&per_page={{ core_pagination.per_page }}{% if search %}&search={{ search }}{% endif %}"
+                    <a href="{{ request.url.include_query_params(page=core_pagination.page - 1, per_page=core_pagination.per_page) }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
                     {% if core_pagination.has_next %}
-                    <a href="/admin/network/network-devices?tab=core&page={{ core_pagination.page + 1 }}&per_page={{ core_pagination.per_page }}{% if search %}&search={{ search }}{% endif %}"
+                    <a href="{{ request.url.include_query_params(page=core_pagination.page + 1, per_page=core_pagination.per_page) }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
@@ -290,9 +291,11 @@
             {% endif %}
         </div>
     </div>
+    {% endif %}
 
     {# ==================== OLTs TAB ==================== #}
-    <div x-show="activeTab === 'olts'" x-cloak class="space-y-6">
+    {% if tab == 'olts' %}
+    <div class="space-y-6">
         {# Stats #}
         <div class="grid gap-4 sm:grid-cols-2 animate-fade-in-up">
             {{ stats_card("Total OLTs", stats.olt_total, icon=icon_server(), color="violet", color2="purple") }}
@@ -356,7 +359,6 @@
                                     'up': ('bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400','bg-green-500'),
                                     'degraded': ('bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400','bg-amber-500'),
                                     'down': ('bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400','bg-red-500'),
-                                    'unmonitored': ('bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300','bg-slate-400'),
                                     'unknown': ('bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400','bg-slate-300')
                                 } %}
                                 {% set cls = opmap.get(opst, opmap['unknown']) %}
@@ -386,11 +388,29 @@
                     </tbody>
                 </table>
             </div>
+            {% if olt_pagination.total_pages > 1 %}
+            <div class="flex items-center justify-between border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Showing {{ olts|length }} of {{ olt_pagination.total }} OLTs
+                    (page {{ olt_pagination.page }} of {{ olt_pagination.total_pages }})
+                </p>
+                <div class="flex items-center gap-2">
+                    {% if olt_pagination.has_prev %}
+                    <a href="{{ request.url.include_query_params(olt_page=olt_pagination.page - 1, per_page=olt_pagination.per_page) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Previous</a>
+                    {% endif %}
+                    {% if olt_pagination.has_next %}
+                    <a href="{{ request.url.include_query_params(olt_page=olt_pagination.page + 1, per_page=olt_pagination.per_page) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
+    {% endif %}
 
     {# ==================== ONTs / CPE TAB ==================== #}
-    <div x-show="activeTab === 'onts'" x-cloak class="space-y-6">
+    {% if tab == 'onts' %}
+    <div class="space-y-6">
         {# Stats #}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up">
             {{ stats_card("Total ONTs", stats.ont_total, icon=icon_cpu(), color="blue", color2="indigo") }}
@@ -451,7 +471,6 @@
                                 {% set opmap = {
                                     'up': ('bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400','bg-green-500'),
                                     'down': ('bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400','bg-red-500'),
-                                    'unmonitored': ('bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300','bg-slate-400'),
                                     'unknown': ('bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400','bg-slate-300')
                                 } %}
                                 {% set cls = opmap.get(opst, opmap['unknown']) %}
@@ -481,6 +500,22 @@
                     </tbody>
                 </table>
             </div>
+            {% if ont_pagination.total_pages > 1 %}
+            <div class="flex items-center justify-between border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Showing {{ onts|length }} of {{ ont_pagination.total }} ONTs
+                    (page {{ ont_pagination.page }} of {{ ont_pagination.total_pages }})
+                </p>
+                <div class="flex items-center gap-2">
+                    {% if ont_pagination.has_prev %}
+                    <a href="{{ request.url.include_query_params(ont_page=ont_pagination.page - 1, per_page=ont_pagination.per_page) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Previous</a>
+                    {% endif %}
+                    {% if ont_pagination.has_next %}
+                    <a href="{{ request.url.include_query_params(ont_page=ont_pagination.page + 1, per_page=ont_pagination.per_page) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         {# CPEs Table #}
@@ -543,8 +578,25 @@
                     </tbody>
                 </table>
             </div>
+            {% if cpe_pagination.total_pages > 1 %}
+            <div class="flex items-center justify-between border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                    Showing {{ cpes|length }} of {{ cpe_pagination.total }} CPEs
+                    (page {{ cpe_pagination.page }} of {{ cpe_pagination.total_pages }})
+                </p>
+                <div class="flex items-center gap-2">
+                    {% if cpe_pagination.has_prev %}
+                    <a href="{{ request.url.include_query_params(cpe_page=cpe_pagination.page - 1, per_page=cpe_pagination.per_page) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Previous</a>
+                    {% endif %}
+                    {% if cpe_pagination.has_next %}
+                    <a href="{{ request.url.include_query_params(cpe_page=cpe_pagination.page + 1, per_page=cpe_pagination.per_page) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
+    {% endif %}
 </div>
 
 {{ animation_styles() }}

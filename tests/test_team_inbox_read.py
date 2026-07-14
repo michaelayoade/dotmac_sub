@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import support as support_api
+from app.models.notification import Notification
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.team_inbox import (
     InboxConversation,
@@ -19,7 +20,7 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
-from app.services import team_inbox_outbound, team_inbox_read
+from app.services import team_inbox_read
 from app.web.admin import inbox as admin_inbox
 
 
@@ -302,15 +303,9 @@ def test_admin_inbox_detail_renders_timeline(db_session, monkeypatch):
     assert context["timeline"].messages[0].body == "Down"
 
 
-def test_admin_inbox_detail_reply_sends_message(db_session, monkeypatch):
+def test_admin_inbox_detail_reply_queues_message(db_session):
     support = _team(db_session, "Support")
     conversation = _conversation(db_session, support, subject="Router offline")
-    sent: dict[str, object] = {}
-    monkeypatch.setattr(
-        team_inbox_outbound.email_service,
-        "send_email",
-        lambda *args, **kwargs: sent.update(kwargs) or True,
-    )
     db_session.commit()
 
     response = admin_inbox.team_inbox_reply(
@@ -322,7 +317,8 @@ def test_admin_inbox_detail_reply_sends_message(db_session, monkeypatch):
 
     assert response.status_code == 303
     assert f"/admin/inbox/{conversation.id}" in response.headers["location"]
-    assert sent["to_email"] == "customer@example.com"
+    notification = db_session.query(Notification).one()
+    assert notification.recipient == "customer@example.com"
     timeline = team_inbox_read.get_conversation_timeline(db_session, conversation.id)
     assert timeline is not None
     assert timeline.messages[-1].body == "<p>We are checking this now.</p>"

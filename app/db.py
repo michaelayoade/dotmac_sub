@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -9,6 +9,8 @@ from app.config import settings
 
 if TYPE_CHECKING:
     from app.services.unit_of_work import UnitOfWork
+
+T = TypeVar("T")
 
 
 class Base(DeclarativeBase):
@@ -63,6 +65,29 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def finish_read_transaction(db: Session) -> None:
+    """Release a Postgres read transaction after all response data is materialized."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    if not db.in_transaction() or db.in_nested_transaction():
+        return
+    if db.new or db.dirty or db.deleted:
+        return
+    original_expire_on_commit = db.expire_on_commit
+    db.expire_on_commit = False
+    try:
+        db.commit()
+    finally:
+        db.expire_on_commit = original_expire_on_commit
+
+
+def finish_read_response(db: Session, value: T) -> T:
+    """Return an already-materialized read response after releasing its DB transaction."""
+    finish_read_transaction(db)
+    return value
 
 
 @contextmanager

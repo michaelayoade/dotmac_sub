@@ -40,6 +40,7 @@ What the planner doesn't do
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .actions import (
@@ -105,6 +106,7 @@ class Plan:
 # confined to these, the plan is scoped to the matching ACS writes so unrelated
 # OLT drift doesn't block the action.
 _WIFI_ONLY_FIELDS = frozenset({"wifi_ssid", "wifi_password_ref"})
+_ACS_ENDPOINT_FIELDS = frozenset({"acs_url", "acs_username", "acs_password_ref"})
 
 
 def _is_wifi_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
@@ -478,6 +480,7 @@ def _plan_acs_side(
                     subnet_mask=desired.wan_static_subnet,
                     gateway=desired.wan_static_gateway,
                     dns_servers=desired.wan_static_dns,
+                    tr181_paths=desired.tr181_wan_paths,
                 )
             )
             drifts.append(
@@ -614,13 +617,33 @@ def _plan_acs_side(
     # ManagementServer (CR creds + inform interval) — last in the ACS
     # sequence. Critical for the next reconcile's NBI calls to deliver
     # synchronously.
-    if _management_server_differs(desired, observed):
+    force_endpoint_write = bool(proposed_fields & _ACS_ENDPOINT_FIELDS) and (
+        force_proposed_writes
+    )
+    if force_endpoint_write or _management_server_differs(desired, observed):
         actions.append(
             AcsSetManagementServer(
                 device_id=device_id,
                 cr_username=desired.cr_username or "admin",
                 cr_password_ref=desired.cr_password_ref or "",
                 inform_interval_sec=desired.periodic_inform_interval_sec,
+                data_model_root=(
+                    observed.acs.acs_data_model_root
+                    or desired.tr069_data_model_root
+                    or "InternetGatewayDevice"
+                ),
+                acs_url=desired.acs_url,
+                acs_username=desired.acs_username,
+                acs_password_ref=desired.acs_password_ref,
+            )
+        )
+        drifts.append(
+            Drift(
+                field="acs_management_server",
+                surface="acs",
+                desired="configured",
+                observed="diverged",
+                repairable=True,
             )
         )
 
@@ -728,25 +751,46 @@ def _wan_ppp_differs(desired: OntDesiredState, observed: OntObservedState) -> bo
 def _wan_ip_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     acs = observed.acs
     expected_type = "DHCP" if desired.wan_mode == "dhcp" else "Static"
-    if acs.acs_observed_wan_ip_enable is False:
+    strict = (
+        desired.tr181_wan_paths is not None
+        and (acs.acs_data_model_root or desired.tr069_data_model_root) == "Device"
+    )
+
+    def differs(observed_value, desired_value) -> bool:
+        return (
+            observed_value != desired_value
+            if strict
+            else _observed_differs(observed_value, desired_value)
+        )
+
+    if differs(acs.acs_observed_wan_ip_enable, True):
         return True
-    if _observed_differs(acs.acs_observed_wan_addressing_type, expected_type):
+    if differs(acs.acs_observed_wan_addressing_type, expected_type):
+        return True
+    if differs(acs.acs_observed_wan_vlan, desired.wan_vlan):
+        return True
+    if differs(acs.acs_observed_nat_enabled, desired.nat_enabled):
         return True
     if desired.wan_mode == "static":
         return any(
             (
-                _observed_differs(
-                    acs.acs_observed_wan_ip_address, desired.wan_static_ip
-                ),
-                _observed_differs(
-                    acs.acs_observed_wan_subnet_mask, desired.wan_static_subnet
-                ),
-                _observed_differs(
-                    acs.acs_observed_wan_gateway, desired.wan_static_gateway
+                differs(acs.acs_observed_wan_ip_address, desired.wan_static_ip),
+                differs(acs.acs_observed_wan_subnet_mask, desired.wan_static_subnet),
+                differs(acs.acs_observed_wan_gateway, desired.wan_static_gateway),
+                differs(
+                    _normalise_dns_servers(acs.acs_observed_wan_dns_servers),
+                    _normalise_dns_servers(desired.wan_static_dns),
                 ),
             )
         )
     return False
+
+
+def _normalise_dns_servers(value: str | None) -> str | None:
+    if value is None:
+        return None
+    servers = [item for item in re.split(r"[\s,]+", value) if item]
+    return ",".join(servers) or None
 
 
 def _ipv6_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
@@ -864,6 +908,12 @@ def _management_server_differs(
     desired: OntDesiredState, observed: OntObservedState
 ) -> bool:
     acs = observed.acs
+    if desired.acs_url and acs.acs_observed_url != desired.acs_url:
+        return True
+    if desired.acs_url and acs.acs_observed_username != (desired.acs_username or ""):
+        return True
+    if desired.acs_password_ref and not acs.acs_observed_password_set:
+        return True
     if (
         acs.acs_observed_periodic_inform_interval_sec
         != desired.periodic_inform_interval_sec

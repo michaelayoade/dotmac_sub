@@ -249,6 +249,7 @@ from app.models.gis import (  # noqa: F401
     GeoLocationType,
     ServiceBuilding,
 )
+from app.models.idempotency import IdempotencyKey  # noqa: F401
 from app.models.imports import (  # noqa: F401
     ImportRowStatus,
     ImportRun,
@@ -419,6 +420,8 @@ from app.models.notification import (  # noqa: F401
     AlertNotificationLog,
     AlertNotificationPolicy,
     AlertNotificationPolicyStep,
+    CommunicationIntentRecord,
+    CommunicationSuppression,
     DeliveryStatus,
     Notification,
     NotificationChannel,
@@ -594,6 +597,7 @@ from app.models.sales import (  # noqa: F401
     SalesOrderStatus,
 )
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
+from app.models.sequence import DocumentSequence  # noqa: F401
 from app.models.service_extension import (  # noqa: F401
     ServiceExtension,
     ServiceExtensionEntry,
@@ -745,6 +749,8 @@ from app.models.vas import (  # noqa: F401
     VasEntryType,
     VasPartyType,
     VasRateCard,
+    VasRefundRequest,
+    VasRefundStatus,
     VasService,
     VasServiceVariation,
     VasTopupIntent,

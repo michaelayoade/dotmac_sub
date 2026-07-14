@@ -18,6 +18,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, or_, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,11 @@ ADVISORY_LOCK_KEY = 0x72_48_6C
 # Stop. Default 3x a typical 5-minute interim interval.
 DEFAULT_STALE_SESSION_SECONDS = 900
 
+# RFC 2865 string attributes have a 253-octet payload. Treat an external
+# radacct schema with a smaller NAS-Port-Id column as unhealthy: PostgreSQL
+# rejects the entire accounting row when a vendor sends a longer interface ID.
+MIN_NASPORTID_CAPACITY = 253
+
 _vm_writer = None
 
 
@@ -42,6 +48,23 @@ def _writer():
 
         _vm_writer = VictoriaMetricsWriter()
     return _vm_writer
+
+
+def _radacct_schema_signals(conn) -> dict[str, int]:
+    """Return whether radacct can persist any valid NAS-Port-Id value."""
+    columns = {
+        column["name"]: column for column in sa_inspect(conn).get_columns("radacct")
+    }
+    column = columns.get("nasportid")
+    if column is None:
+        return {"radacct_schema_ok": 0, "radacct_nasportid_capacity": 0}
+    length = getattr(column["type"], "length", None)
+    # TEXT and equivalent unbounded types report no length.
+    capacity = MIN_NASPORTID_CAPACITY if length is None else int(length)
+    return {
+        "radacct_schema_ok": int(capacity >= MIN_NASPORTID_CAPACITY),
+        "radacct_nasportid_capacity": capacity,
+    }
 
 
 def _radacct_signals(
@@ -64,6 +87,8 @@ def _radacct_signals(
     if not configs:
         return {
             "radacct_read_ok": 0,
+            "radacct_schema_ok": 0,
+            "radacct_nasportid_capacity": 0,
             "open_sessions": 0,
             "stale_open_sessions": 0,
             "acct_freshness_seconds": None,
@@ -74,10 +99,17 @@ def _radacct_signals(
     stale_open = 0
     newest_update: datetime | None = None
     read_ok = 1
+    schema_ok = 1
+    nasportid_capacity = MIN_NASPORTID_CAPACITY
     for config in configs:
         try:
             engine = _get_external_engine(config["db_url"])
             with engine.connect() as conn:
+                schema = _radacct_schema_signals(conn)
+                schema_ok = min(schema_ok, schema["radacct_schema_ok"])
+                nasportid_capacity = min(
+                    nasportid_capacity, schema["radacct_nasportid_capacity"]
+                )
                 total, newest = conn.execute(
                     select(
                         func.count(),
@@ -104,6 +136,7 @@ def _radacct_signals(
                 "radius_health_radacct_read_failed source=%s", config.get("name")
             )
             read_ok = 0
+            schema_ok = 0
             continue
         open_sessions += int(total or 0)
         stale_open += int(stale or 0)
@@ -118,6 +151,8 @@ def _radacct_signals(
         freshness = max(0.0, (now - newest_update).total_seconds())
     return {
         "radacct_read_ok": read_ok,
+        "radacct_schema_ok": schema_ok,
+        "radacct_nasportid_capacity": nasportid_capacity,
         "open_sessions": open_sessions,
         "stale_open_sessions": stale_open,
         "acct_freshness_seconds": freshness,
@@ -127,9 +162,10 @@ def _radacct_signals(
 def _enforcement_signals(db: Session) -> dict[str, int]:
     """Session-vs-billing drift, from the reconciled live-session view.
 
-    ``suspended_with_session``: subscriptions the billing side suspended or
-    blocked that still hold a live RADIUS session — enforcement is not
-    landing on the NAS. ``paid_active_without_session``: ACTIVE
+    ``blocked_access_*``: sessions, distinct subscriptions, and distinct
+    customer accounts whose shared access resolver says should be blocked.
+    Multiple sessions for one service must not be reported as multiple
+    customers. ``paid_active_without_session``: ACTIVE
     subscriptions with a RADIUS login and no live session — a trend metric,
     not an alert (a powered-off router is legitimate).
     """
@@ -144,26 +180,29 @@ def _enforcement_signals(db: Session) -> dict[str, int]:
         db.execute(select(func.count()).select_from(RadiusActiveSession)).scalar() or 0
     )
 
-    suspended_with_session = int(
-        db.execute(
-            select(func.count())
-            .select_from(RadiusActiveSession)
-            .join(
-                Subscription,
-                Subscription.id == RadiusActiveSession.subscription_id,
-            )
-            .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
-            .where(
-                or_(
-                    Subscription.status.in_(
-                        (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
-                    ),
-                    Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES),
-                )
-            )
-        ).scalar()
-        or 0
+    blocked_predicate = or_(
+        Subscription.status.in_(
+            (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
+        ),
+        Subscriber.status.in_(RADIUS_BLOCKING_SUBSCRIBER_STATUSES),
     )
+    blocked_sessions, blocked_subscriptions, blocked_accounts = db.execute(
+        select(
+            func.count(RadiusActiveSession.id),
+            func.count(func.distinct(RadiusActiveSession.subscription_id)),
+            func.count(func.distinct(Subscription.subscriber_id)),
+        )
+        .select_from(RadiusActiveSession)
+        .join(
+            Subscription,
+            Subscription.id == RadiusActiveSession.subscription_id,
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(blocked_predicate)
+    ).one()
+    blocked_sessions = int(blocked_sessions or 0)
+    blocked_subscriptions = int(blocked_subscriptions or 0)
+    blocked_accounts = int(blocked_accounts or 0)
 
     session_logins = select(RadiusActiveSession.username)
     paid_without_session = int(
@@ -185,7 +224,11 @@ def _enforcement_signals(db: Session) -> dict[str, int]:
 
     return {
         "active_sessions": active_sessions,
-        "suspended_with_session": suspended_with_session,
+        # Compatibility key now carries its documented unit: subscriptions.
+        "suspended_with_session": blocked_subscriptions,
+        "blocked_access_sessions": blocked_sessions,
+        "blocked_access_subscriptions": blocked_subscriptions,
+        "blocked_access_accounts": blocked_accounts,
         "paid_active_without_session": paid_without_session,
     }
 
@@ -223,8 +266,15 @@ def push_radius_metrics(health: dict, *, now: datetime | None = None) -> dict[st
         "radius_acct_freshness_seconds": health.get("acct_freshness_seconds"),
         "radius_active_sessions": health.get("active_sessions"),
         "radius_suspended_with_active_session": health.get("suspended_with_session"),
+        "radius_blocked_access_active_sessions": health.get("blocked_access_sessions"),
+        "radius_blocked_access_active_subscriptions": health.get(
+            "blocked_access_subscriptions"
+        ),
+        "radius_blocked_access_active_accounts": health.get("blocked_access_accounts"),
         "radius_paid_active_without_session": health.get("paid_active_without_session"),
         "radius_radacct_read_ok": health.get("radacct_read_ok"),
+        "radius_radacct_schema_ok": health.get("radacct_schema_ok"),
+        "radius_radacct_nasportid_capacity": health.get("radacct_nasportid_capacity"),
         "radius_auth_rtt_ms": health.get("auth_rtt_ms"),
         "radius_probe_ok": (
             health.get("probe_ok") if health.get("probe_configured") else None

@@ -1,11 +1,10 @@
 #!/usr/bin/env python
-"""Reconcile stale subscriber-level block drift (dry-run first).
+"""Reconcile safe subscriber-level status drift (dry-run first).
 
-Cohort: subscribers ``status='blocked'`` whose subscriptions are ALL active —
-denormalization drift that walls the customer at the BNG despite an active
-service (see app/services/account_status_reconcile.py). Re-derives the account
-status from its subscriptions, then rebuilds RADIUS once and CoA-kicks the
-affected sessions. Mixed-status accounts are deliberately NOT touched.
+Cohort: subscribers ``status='new'`` or ``status='blocked'`` whose subscriptions
+are ALL active. Re-derives the account status from its subscriptions, then
+rebuilds RADIUS once and CoA-kicks affected sessions. Mixed-status accounts are
+deliberately NOT touched.
 
 NO ledger / money writes.
 
@@ -53,7 +52,7 @@ def main() -> int:
         "--account-ids",
         default=None,
         help="Comma-separated subscriber UUIDs — a TARGETED sample instead of the "
-        "first-N cohort. Still filtered by eligibility (blocked + all-active); "
+        "first-N cohort. Still filtered by eligibility (new/blocked + all-active); "
         "ineligible ones are reported as skipped with a reason and never mutated. "
         "Takes precedence over --limit.",
     )
@@ -84,9 +83,11 @@ def main() -> int:
     args = parser.parse_args()
 
     # Collect targeted ids from both flags (precedence over --limit).
-    account_ids = [a.strip() for a in (args.account_ids or "").split(",") if a.strip()]
-    account_ids += [a.strip() for a in args.account_id if a.strip()]
-    account_ids = account_ids or None
+    requested_account_ids = [
+        a.strip() for a in (args.account_ids or "").split(",") if a.strip()
+    ]
+    requested_account_ids += [a.strip() for a in args.account_id if a.strip()]
+    account_ids = requested_account_ids or None
     if account_ids and args.limit is not None:
         print("NOTE: --limit is ignored because --account-ids/--account-id was given.")
 
@@ -110,7 +111,7 @@ def main() -> int:
             "radius_refreshed": summary.radius_refreshed,
             "sessions_kicked": summary.sessions_kicked,
         }
-        print("=== blocked-but-all-active subscriber drift ===")
+        print("=== safe all-active subscriber status drift ===")
         print(json.dumps(report, indent=2, sort_keys=True))
 
         if summary.skipped:

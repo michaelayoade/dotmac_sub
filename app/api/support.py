@@ -391,6 +391,11 @@ def reply_to_inbox_conversation(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=result.reason,
         )
+    if result.kind == "suppressed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=result.reason,
+        )
 
     return InboxConversationReplyRead(
         conversation_id=UUID(result.conversation_id),

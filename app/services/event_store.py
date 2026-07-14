@@ -96,17 +96,31 @@ def mark_retry_started(db: Session, record: EventStore) -> None:
 
 
 def failed_handler_names(record: EventStore) -> set[str]:
-    attempts = getattr(record, "handler_attempts", None) or []
-    names = {
-        attempt.handler_name
-        for attempt in attempts
-        if getattr(attempt, "status", None) == "failed"
-    }
-    if names:
-        return names
-    if record.failed_handlers:
+    # ``failed_handlers`` is the current attempt's authoritative manifest.
+    # Historical attempt rows intentionally retain earlier failures for audit;
+    # consulting them first would re-run handlers that already recovered.
+    if record.failed_handlers is not None:
         return {failure["handler"] for failure in record.failed_handlers}
-    return set()
+
+    attempts = getattr(record, "handler_attempts", None) or []
+    latest_by_handler: dict[str, EventHandlerAttempt] = {}
+    for attempt in attempts:
+        previous = latest_by_handler.get(attempt.handler_name)
+        attempt_key = (
+            int(getattr(attempt, "retry_count", 0) or 0),
+            getattr(attempt, "attempted_at", datetime.min.replace(tzinfo=UTC)),
+        )
+        previous_key = (
+            int(getattr(previous, "retry_count", 0) or 0),
+            getattr(previous, "attempted_at", datetime.min.replace(tzinfo=UTC)),
+        )
+        if previous is None or attempt_key >= previous_key:
+            latest_by_handler[attempt.handler_name] = attempt
+    return {
+        name
+        for name, attempt in latest_by_handler.items()
+        if getattr(attempt, "status", None) in {"failed", "blocked"}
+    }
 
 
 def list_retryable_failed_events(

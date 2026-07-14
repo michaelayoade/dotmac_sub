@@ -74,6 +74,78 @@ def test_create_single_service_port_accepts_verified_duplicate(monkeypatch) -> N
     assert "already exists" in message
 
 
+def test_create_single_service_port_retries_lagging_conflict_readback(
+    monkeypatch,
+) -> None:
+    output = (
+        "Failure: The service virtual port has existed already. "
+        "Conflicted service virtual port index: 123"
+    )
+    _patch_successful_shell(monkeypatch, output)
+    reads = iter(
+        [
+            (True, "not found yet", None),
+            (True, "found", _matching_port()),
+        ]
+    )
+    monkeypatch.setattr(
+        service_ports,
+        "get_service_port_by_index",
+        lambda _olt, _index: next(reads),
+    )
+    monkeypatch.setattr(
+        service_ports,
+        "get_service_ports_for_ont",
+        lambda *_args: (True, "none yet", []),
+    )
+    sleeps = []
+    monkeypatch.setattr(service_ports.time, "sleep", sleeps.append)
+
+    ok, message, assigned_index = service_ports.create_single_service_port(
+        SimpleNamespace(id="olt-a", name="OLT-A"),
+        "0/1/7",
+        5,
+        1,
+        203,
+    )
+
+    assert ok is True
+    assert assigned_index == 123
+    assert "already exists" in message
+    assert sleeps == [service_ports._SERVICE_PORT_VERIFY_DELAY_SEC]
+
+
+def test_create_single_service_port_uses_per_pon_conflict_readback(
+    monkeypatch,
+) -> None:
+    output = (
+        "Failure: The service virtual port has existed already. "
+        "Conflicted service virtual port index: 123"
+    )
+    _patch_successful_shell(monkeypatch, output)
+    monkeypatch.setattr(
+        service_ports,
+        "get_service_port_by_index",
+        lambda _olt, _index: (True, "global index not found", None),
+    )
+    monkeypatch.setattr(
+        service_ports,
+        "get_service_ports_for_ont",
+        lambda *_args: (True, "found on PON", [_matching_port()]),
+    )
+
+    ok, _message, assigned_index = service_ports.create_single_service_port(
+        SimpleNamespace(id="olt-a", name="OLT-A"),
+        "0/1/7",
+        5,
+        1,
+        203,
+    )
+
+    assert ok is True
+    assert assigned_index == 123
+
+
 def test_create_single_service_port_rejects_mismatched_duplicate(monkeypatch) -> None:
     output = (
         "Failure: The service virtual port has existed already. "

@@ -202,6 +202,49 @@ def test_replay_reprocesses_and_marks_replayed(db_session):
         result = replay_payment_webhook_dead_letter(db_session, str(row.id))
 
     assert result.status == PaymentWebhookDeadLetterStatus.replayed
+    assert result.retry_count == 1
+    assert _dead_letters(db_session, "paystack") == []
+
+
+def test_replay_failure_remains_health_visible_and_records_real_error(db_session):
+    payload = {
+        "event": "charge.success",
+        "data": {
+            "id": "2",
+            "reference": "failed-replay",
+            "amount": 100000,
+            "currency": "NGN",
+            "metadata": {},
+        },
+    }
+    row = PaymentWebhookDeadLetter(
+        provider_type="paystack",
+        event_type="charge.success",
+        external_id="2",
+        idempotency_key="paystack-failed-replay",
+        payload=payload,
+        status=PaymentWebhookDeadLetterStatus.failed,
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    with (
+        patch(
+            "app.services.api_billing_webhooks.billing_service.payment_providers.get_by_type",
+            return_value=MagicMock(id="00000000-0000-0000-0000-000000000001"),
+        ),
+        patch(
+            "app.services.api_billing_webhooks.billing_service.payment_provider_events.ingest",
+            side_effect=RuntimeError("replay write failed"),
+        ),
+        pytest.raises(RuntimeError, match="replay write failed"),
+    ):
+        replay_payment_webhook_dead_letter(db_session, str(row.id))
+
+    db_session.refresh(row)
+    assert row.status == PaymentWebhookDeadLetterStatus.failed
+    assert row.retry_count == 1
+    assert row.error == "replay write failed"
 
 
 def test_replay_missing_row_404(db_session):

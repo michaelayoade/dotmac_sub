@@ -352,11 +352,27 @@ def create_push(
         # operator believes is in flight.
         push.status = RouterConfigPushStatus.failed
         push.completed_at = datetime.now(UTC)
+        from app.models.network_operation import NetworkOperationStatus
+        from app.services.network_operations import network_operations
+
+        active_statuses = {
+            NetworkOperationStatus.pending,
+            NetworkOperationStatus.running,
+            NetworkOperationStatus.waiting,
+        }
         for result in push.results:
             result.status = RouterPushResultStatus.failed
             result.error_message = (
                 f"Config push could not be queued: {dispatch.error or 'enqueue failed'}"
             )
+            if result.operation_id:
+                operation = network_operations.get(db, str(result.operation_id))
+                if operation.status in active_statuses:
+                    network_operations.mark_failed(
+                        db, str(result.operation_id), result.error_message
+                    )
+        if push.operation_id:
+            network_operations.update_parent_status(db, str(push.operation_id))
         db.commit()
         raise HTTPException(
             status_code=502,

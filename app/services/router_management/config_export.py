@@ -14,6 +14,7 @@ is intentionally ``!ssh``. Keeping the two planes separate is deliberate.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -21,12 +22,43 @@ import paramiko
 from paramiko.ssh_exception import AuthenticationException
 
 from app.config import settings
+from app.models.router_management import Router
 
 logger = logging.getLogger(__name__)
 
 
 class RouterConfigExportError(RuntimeError):
     """Raised when the SSH config export fails or returns no config."""
+
+
+def _export_to_text(data: object) -> str:
+    if isinstance(data, str):
+        return data
+    if isinstance(data, list):
+        return "\n".join(
+            item if isinstance(item, str) else json.dumps(item) for item in data
+        )
+    if isinstance(data, dict):
+        return json.dumps(data)
+    return str(data)
+
+
+def fetch_config_export(router: Router) -> str:
+    """Fetch a non-empty RouterOS export through the configured transport."""
+    if settings.router_config_export_via_ssh:
+        return export_config_via_ssh(router)
+
+    from app.services.router_management.connection import RouterConnectionService
+
+    data = RouterConnectionService.execute(router, "POST", "/export")
+    text = _export_to_text(data)
+    if not text.strip():
+        name = getattr(router, "name", "router")
+        raise RouterConfigExportError(
+            f"Router {name} returned an empty config export; the REST API "
+            "identity may be missing the sensitive policy"
+        )
+    return text
 
 
 def _install_host_key_policy(client: paramiko.SSHClient) -> None:
@@ -89,7 +121,7 @@ def _resolve_ssh_password() -> str:
 
 
 def export_config_via_ssh(
-    router,
+    router: Router,
     *,
     username: str | None = None,
     port: int | None = None,
@@ -121,29 +153,49 @@ def export_config_via_ssh(
             "ROUTER_CONFIG_SSH_PASSWORD"
         )
 
-    base_kwargs = dict(
-        hostname=router.management_ip,
-        port=port,
-        username=username,
-        timeout=timeout,
-        banner_timeout=timeout,
-        auth_timeout=timeout,
-        look_for_keys=False,
-        allow_agent=False,
-    )
     client = paramiko.SSHClient()
     _install_host_key_policy(client)
     try:
         try:
-            client.connect(  # type: ignore[call-arg]
-                **base_kwargs,
-                **({"pkey": pkey} if pkey is not None else {"password": password}),
-            )
+            if pkey is not None:
+                client.connect(  # type: ignore[call-arg]
+                    hostname=router.management_ip,
+                    port=port,
+                    username=username,
+                    timeout=timeout,
+                    banner_timeout=timeout,
+                    auth_timeout=timeout,
+                    look_for_keys=False,
+                    allow_agent=False,
+                    pkey=pkey,
+                )
+            else:
+                client.connect(  # type: ignore[call-arg]
+                    hostname=router.management_ip,
+                    port=port,
+                    username=username,
+                    timeout=timeout,
+                    banner_timeout=timeout,
+                    auth_timeout=timeout,
+                    look_for_keys=False,
+                    allow_agent=False,
+                    password=password,
+                )
         except AuthenticationException:
             # Key rejected — fall back to the password if one is configured.
             if pkey is None or not password:
                 raise
-            client.connect(**base_kwargs, password=password)  # type: ignore[call-arg]
+            client.connect(  # type: ignore[call-arg]
+                hostname=router.management_ip,
+                port=port,
+                username=username,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+                look_for_keys=False,
+                allow_agent=False,
+                password=password,
+            )
         # Fixed, non-interpolated command (no user input) — not a shell.
         _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)  # nosec B601
         out = stdout.read().decode("utf-8", "replace")

@@ -11,9 +11,31 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+
+class ServiceStatusActionKind(StrEnum):
+    """Semantic customer action; clients only map it to their own route."""
+
+    top_up = "top_up"
+    pay_invoices = "pay_invoices"
+    view_usage = "view_usage"
+    contact_support = "contact_support"
+
+
+class ServiceStatusAction(BaseModel):
+    """Server-owned action hint derived from access and financial policy."""
+
+    kind: ServiceStatusActionKind
+    label: str
+    message: str
+    amount: Decimal | None = None
+    currency: str = "NGN"
+    # True only when completing this action clears every known access hold.
+    restores_service: bool = False
 
 
 class ServiceStatusItem(BaseModel):
@@ -30,8 +52,11 @@ class ServiceStatusItem(BaseModel):
     expires_at: datetime | None = None
     # Next billing event. Informational — NOT an expiry.
     next_charge_at: datetime | None = None
-    # ok | low_balance | overdue | needs_payment | stopped | ended
+    # ok | low_balance | overdue | fair_usage | administrative_hold |
+    # customer_hold | fraud_review | system_hold | multiple_holds | suspended |
+    # stopped | ended
     reason: str
+    action: ServiceStatusAction | None = None
 
 
 class ServiceStatusResponse(BaseModel):
@@ -54,3 +79,6 @@ class ServiceStatusResponse(BaseModel):
     in_dunning: bool = False
 
     services: list[ServiceStatusItem] = Field(default_factory=list)
+    # One account-level action for compact surfaces such as the mobile
+    # dashboard. It prioritizes unavailable services over preventative nudges.
+    primary_action: ServiceStatusAction | None = None

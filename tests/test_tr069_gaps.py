@@ -770,12 +770,12 @@ class TestAutoLinkOnts:
             search=ont.serial_number,
         )
 
-        # The live snapshot source was retired: the list renders from the
-        # persisted inventory columns (native poller writes them).
+        # The live snapshot source was retired: the list resolves persisted
+        # native OLT/ACS evidence and marks absent evidence as derived offline.
         signal_data = page_data["signal_data"][str(ont.id)]
         assert signal_data["acs_last_inform_at"] == stale_last_seen.replace(tzinfo=None)
         assert signal_data["last_seen_at"] == stale_last_seen.replace(tzinfo=None)
-        assert signal_data["status_source"] == "inventory"
+        assert signal_data["status_source"] == "derived"
         assert signal_data["status_display"] == "Offline"
 
     def test_ont_index_template_renders_zabbix_last_seen_column(self) -> None:
@@ -2156,7 +2156,7 @@ class TestAcsPropagation:
 
         assert called["olt"] is olt
 
-    def test_queue_acs_propagation_includes_tr098_and_tr181_paths(
+    def test_queue_acs_propagation_delegates_to_tracked_reconciliation(
         self, db_session
     ) -> None:
         from app.models.network import OLTDevice, OntUnit
@@ -2182,27 +2182,18 @@ class TestAcsPropagation:
         db_session.add(ont)
         db_session.commit()
 
-        fake_client = MagicMock()
-
+        expected = {
+            "attempted": 1,
+            "queued": 1,
+            "duplicates": 0,
+            "errors": 0,
+            "operation_id": "operation-1",
+        }
         with patch(
-            "app.services.network._resolve.resolve_genieacs_with_reason",
-            return_value=((fake_client, "device-1"), "resolved_via_olt_acs"),
-        ):
+            "app.services.network.ont_reconcile_queue.queue_olt_acs_reconciliation",
+            return_value=expected,
+        ) as queue_reconciliation:
             stats = _queue_acs_propagation(db_session, olt)
 
-        assert stats["attempted"] == 1
-        assert stats["propagated"] == 1
-        fake_client.set_parameter_values.assert_called_once()
-        sent_params = fake_client.set_parameter_values.call_args.args[1]
-        assert (
-            sent_params["Device.ManagementServer.URL"] == "http://acs.example.com/cwmp"
-        )
-        assert (
-            sent_params["InternetGatewayDevice.ManagementServer.URL"]
-            == "http://acs.example.com/cwmp"
-        )
-        assert sent_params["Device.ManagementServer.Username"] == "cwmp-user"
-        assert (
-            sent_params["InternetGatewayDevice.ManagementServer.Username"]
-            == "cwmp-user"
-        )
+        assert stats == expected
+        queue_reconciliation.assert_called_once_with(db_session, olt)

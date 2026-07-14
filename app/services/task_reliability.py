@@ -131,6 +131,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.billing.check_billing_switch": _c("billing", SWEEP, IDEMP, HEALTH),
     "app.tasks.billing.mark_invoices_overdue": _c("billing", SWEEP, IDEMP, HEALTH),
+    "app.tasks.billing.refresh_billing_health_snapshot": _c(
+        "billing",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only single-flight snapshot producer; the next beat run repairs "
+        "a missing or stale snapshot.",
+    ),
     "app.tasks.billing.run_billing_notifications": _c(
         "billing", STATE, GUARDED, STATUS
     ),
@@ -153,6 +161,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Builds recipients and sends due campaigns through native inbox channels; "
         "recipient rows gate repeat sends.",
+    ),
+    "app.tasks.campaigns.process_due_campaign_steps": _c(
+        "campaigns",
+        SWEEP,
+        PER_ITEM,
+        STATUS,
+        "Materializes and sends the next due step of a nurture sequence; a step "
+        "that already has recipient rows is never materialized twice.",
     ),
     "app.tasks.campaigns.send_campaign_batch": _c(
         "campaigns",
@@ -322,6 +338,23 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
         "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.ont_reconcile.reconcile_huawei_ont": _c(
+        "network",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "Durable parent/child network operations expose failure and gate duplicate "
+        "dispatch; failed convergence is retried by a new reconcile operation.",
+    ),
+    "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.ont_runtime_status.refresh_huawei_olt_status": _c(
+        "network", AUTORETRY, IDEMP, STATUS
+    ),
+    "app.tasks.ont_runtime_status.refresh_single_ont_status": _c(
+        "network", STATE, STATEFUL, STATUS
     ),
     "app.tasks.ont_signal_observations.record_ont_observations": _c(
         "network", SWEEP, IDEMP, HEALTH
@@ -529,6 +562,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.vas.run_vas_requery": _c("vas", STATE, GUARDED, STATUS),
     "app.tasks.vas.run_vas_review_requery": _c("vas", STATE, GUARDED, STATUS),
+    "app.tasks.vas.reconcile_refund_requests": _c(
+        "vas",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Observation-only after submit; never blindly repeats a gateway refund.",
+    ),
     "app.tasks.vas.run_wallet_auto_deduct": _c(
         "vas", STATE, GUARDED, STATUS, "Money-moving; provider state must gate retry."
     ),
@@ -556,6 +596,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "router_sync.capture_scheduled_snapshots": _c("router", SWEEP, IDEMP, HEALTH),
     "router_sync.cleanup_idle_tunnels": _c("router", SWEEP, IDEMP, LOG),
     "router_sync.execute_config_push": _c("router", STATE, STATEFUL, STATUS),
+    "router_sync.reconcile_config_push_readback": _c("router", SWEEP, IDEMP, STATUS),
+    "router_sync.reconcile_nas_vlan_readback": _c("router", SWEEP, IDEMP, STATUS),
     "router_sync.sync_all_interfaces": _c("router", SWEEP, IDEMP, HEALTH),
     "router_sync.sync_all_system_info": _c("router", SWEEP, IDEMP, HEALTH),
 }

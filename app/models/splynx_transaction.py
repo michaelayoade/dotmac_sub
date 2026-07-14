@@ -18,7 +18,7 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Index, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +27,14 @@ from app.db import Base
 
 class SplynxBillingTransaction(Base):
     __tablename__ = "splynx_billing_transactions"
+    __table_args__ = (
+        Index(
+            "ix_splynx_billing_transactions_subscriber_deleted_date",
+            "subscriber_id",
+            "deleted",
+            "transaction_date",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

@@ -367,16 +367,51 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         invoice.tax_total = tax_total
         invoice.total = round_money(subtotal + tax_total)
 
-    paid_amount = (
-        db.query(func.coalesce(func.sum(PaymentAllocation.amount), 0))
+    # A partially-refunded payment still paid for most of this invoice.
+    #
+    # This used to count ONLY ``succeeded``, so a payment that had been partially
+    # refunded contributed ZERO: refunding NGN 500 of a NGN 50,000 payment dropped
+    # the invoice's paid amount from 50,000 to 0, reverted it to fully unpaid, and
+    # sent a customer who had paid into overdue and dunning over a NGN 500 refund.
+    #
+    # Count it net of what was given back. The refund is applied PROPORTIONALLY
+    # across the payment's allocations, which is the only rule that stays correct
+    # when one payment settles several invoices — the refund cannot be attributed
+    # to any single one of them.
+    #
+    # A FULLY refunded payment needs no special case: process_refund deactivates
+    # its allocations, so it drops out on the is_active filter above.
+    allocation_rows = (
+        db.query(
+            PaymentAllocation.amount,
+            Payment.amount.label("payment_amount"),
+            Payment.refunded_amount,
+            Payment.status,
+        )
         .join(Payment, Payment.id == PaymentAllocation.payment_id)
         .filter(PaymentAllocation.invoice_id == invoice.id)
         .filter(PaymentAllocation.is_active.is_(True))
         .filter(Payment.is_active.is_(True))
-        .filter(Payment.status == PaymentStatus.succeeded)
-        .scalar()
+        .filter(
+            Payment.status.in_(
+                [PaymentStatus.succeeded, PaymentStatus.partially_refunded]
+            )
+        )
+        .all()
     )
-    paid_amount = round_money(to_decimal(paid_amount))
+    paid_amount = Decimal("0.00")
+    for row in allocation_rows:
+        allocated = to_decimal(row.amount)
+        if row.status != PaymentStatus.partially_refunded:
+            paid_amount += allocated
+            continue
+        gross = to_decimal(row.payment_amount)
+        refunded = to_decimal(row.refunded_amount)
+        if gross <= 0:
+            continue
+        net_share = allocated * (gross - refunded) / gross
+        paid_amount += net_share
+    paid_amount = round_money(paid_amount)
     credit_amount = (
         db.query(func.coalesce(func.sum(CreditNoteApplication.amount), 0))
         .filter(CreditNoteApplication.invoice_id == invoice.id)

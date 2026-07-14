@@ -64,8 +64,9 @@
         <h2 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Diagnostic Tools</h2>
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <button type="button"
-                    hx-get="/admin/network/onts/{{ ont.id }}/refresh-status"
+                    hx-post="/admin/network/onts/{{ ont.id }}/refresh"
                     hx-swap="none"
+                    hx-disabled-elt="this"
                     data-refresh-status-action
                     class="flex items-center gap-3 rounded-lg border border-slate-200 bg-white p-4 text-left transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700/50">
                 <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-100 dark:bg-cyan-900/30">

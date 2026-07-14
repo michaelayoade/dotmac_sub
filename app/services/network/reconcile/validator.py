@@ -140,11 +140,19 @@ def _check_mode_contradictions(target: OntDesiredState) -> Validation:
                 False,
                 "wan_mode=static requires IP address, subnet mask, and gateway",
             )
-        if target.tr069_data_model_root == "Device":
-            return Validation(
-                False,
-                "TR-181 static WAN is unsupported until model-specific gateway and DNS paths are mapped",
-            )
+        if target.wan_static_ip_is_public is True and target.nat_enabled:
+            return Validation(False, "public static WAN requires nat_enabled=False")
+        if target.wan_static_ip_is_public is False and not target.nat_enabled:
+            return Validation(False, "private static WAN requires nat_enabled=True")
+    if (
+        target.wan_mode in {"dhcp", "static"}
+        and target.tr069_data_model_root == "Device"
+        and target.tr181_wan_paths is None
+    ):
+        return Validation(
+            False,
+            "TR-181 routed WAN requires a supported vendor/model parameter map",
+        )
     return Validation(True)
 
 

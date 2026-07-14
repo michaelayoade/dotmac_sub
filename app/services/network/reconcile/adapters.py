@@ -29,6 +29,7 @@ no production code path calls it yet.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import uuid
 from datetime import UTC, datetime
@@ -39,14 +40,18 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
 from app.models.ont_observation import OntObservation
+from app.services.network.acs_resolution import resolve_acs_for_ont
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.serial_utils import parse_ont_id_on_olt
+from app.services.network.tr069_paths import Tr069PathError, tr069_path_resolver
+from app.services.network.vendor_capabilities import VendorCapabilities
 
 from .state import (
     AcsObservedFields,
     OltObservedFields,
     OntDesiredState,
     OntObservedState,
+    Tr181WanParameterPaths,
 )
 
 _FSP_RE = re.compile(r"^\d+/\d+/\d+$")
@@ -81,6 +86,12 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
     # the ONU operating mode (``routing``/``bridging``). Either being "bridge"
     # or "bridging" means the reconciler treats the WAN as bridged.
     wan_mode = _normalise_wan_mode(values.get("wan_mode"), values.get("onu_mode"))
+    acs_resolution = resolve_acs_for_ont(db, ont)
+    acs_server = acs_resolution.server
+    tr181_wan_paths = _resolve_tr181_wan_paths(db, ont, wan_mode, values)
+    tr069_data_model_root = getattr(ont, "tr069_data_model", None) or (
+        "Device" if tr181_wan_paths is not None else None
+    )
 
     return OntDesiredState(
         ont_unit_id=str(ont.id),
@@ -107,11 +118,12 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         # iphost_priority.resolve_management_iphost_priority and is plan-time.
         mgmt_iphost_priority=2,
         tr069_profile_id=int(values.get("tr069_olt_profile_id") or 0),
-        acs_server_id=str(ont.tr069_acs_server_id) if ont.tr069_acs_server_id else None,
+        acs_server_id=acs_resolution.server_id,
         cr_username=values.get("cr_username"),
         cr_password_ref=values.get("cr_password"),
-        # DEFAULT: interval not carried; fleet standard is 300s.
-        periodic_inform_interval_sec=300,
+        periodic_inform_interval_sec=int(
+            getattr(acs_server, "periodic_inform_interval", None) or 300
+        ),
         wan_mode=wan_mode,
         wan_vlan=_int_or_none(values.get("wan_vlan")),
         wan_gem_index=_int_or_none(values.get("wan_gem_index")),
@@ -126,9 +138,7 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         wan_internet_config_ip_index=_int_or_none(
             values.get("internet_config_ip_index")
         ),
-        # DEFAULT: nat/ipv6/dhcp explicit toggles aren't on every ONT today;
-        # routed mode implies NAT+DHCP on (fleet convention from feedback_ont_setup_defaults).
-        nat_enabled=wan_mode != "bridge",
+        nat_enabled=_resolve_nat_enabled(wan_mode, values),
         ipv6_enabled=str(values.get("ip_protocol") or "ipv4").lower() == "dual_stack",
         dhcp_enabled=_bool_or_default(values.get("lan_dhcp_enabled"), default=True),
         dhcp_pool_min=values.get("lan_dhcp_start") or "192.168.100.2",
@@ -150,12 +160,94 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         subscriber_external_id=ont.external_id,
         wan_uprate_kbps=None,
         wan_downrate_kbps=None,
-        tr069_data_model_root=getattr(ont, "tr069_data_model", None),
+        tr069_data_model_root=tr069_data_model_root,
         wan_static_ip=values.get("wan_static_ip"),
         wan_static_subnet=values.get("wan_static_subnet"),
         wan_static_gateway=values.get("wan_static_gateway"),
         wan_static_dns=values.get("wan_static_dns"),
+        wan_static_ip_is_public=_static_ip_is_public(values.get("wan_static_ip")),
+        tr181_wan_paths=tr181_wan_paths,
+        acs_url=getattr(acs_server, "cwmp_url", None),
+        acs_username=getattr(acs_server, "cwmp_username", None),
+        acs_password_ref=getattr(acs_server, "cwmp_password", None),
     )
+
+
+def _resolve_nat_enabled(wan_mode: str, values: dict[str, Any]) -> bool:
+    if wan_mode == "bridge":
+        return False
+    explicit = values.get("nat_enabled")
+    if explicit is not None:
+        return _bool_or_default(explicit, default=True)
+    return True
+
+
+def _static_ip_is_public(value: object) -> bool | None:
+    try:
+        address = ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return None
+    return address.is_global if isinstance(address, ipaddress.IPv4Address) else None
+
+
+def _resolve_tr181_wan_paths(
+    db: Session,
+    ont: OntUnit,
+    wan_mode: str,
+    values: dict[str, Any],
+) -> Tr181WanParameterPaths | None:
+    if wan_mode not in {"dhcp", "static"}:
+        return None
+    vendor = str(getattr(ont, "vendor", "") or "").strip()
+    model = str(getattr(ont, "model", "") or "").strip()
+    firmware = str(
+        getattr(ont, "firmware_version", None)
+        or getattr(ont, "software_version", None)
+        or ""
+    ).strip()
+    if not vendor or not model:
+        return None
+    capability = VendorCapabilities.resolve_capability(
+        db,
+        vendor=vendor,
+        model=model,
+        firmware=firmware or None,
+    )
+    explicit_root = getattr(ont, "tr069_data_model", None)
+    if explicit_root not in (None, "Device"):
+        return None
+    if capability is None or capability.tr069_root != "Device":
+        return None
+
+    instance_index = int(values.get("wan_instance_index") or 1)
+    canonical = {
+        "ip_enable": "wan.ip.enable",
+        "dhcp_enable": "wan.dhcp.enable",
+        "ip_address": "wan.ip.static_address",
+        "subnet_mask": "wan.ip.static_subnet",
+        "gateway": "wan.gateway",
+        "dns_primary": "wan.dns_primary",
+        "dns_secondary": "wan.dns_secondary",
+        "nat_enable": "wan.nat.enable",
+        "vlan_enable": "wan.vlan.enable",
+        "vlan_id": "wan.vlan.id",
+    }
+    try:
+        resolved = {
+            field: tr069_path_resolver.resolve(
+                "Device",
+                name,
+                db=db,
+                vendor=vendor,
+                model=model,
+                firmware=firmware or None,
+                instance_index=instance_index,
+            )
+            for field, name in canonical.items()
+        }
+    except Tr069PathError:
+        return None
+    return Tr181WanParameterPaths(**resolved)
 
 
 def apply_proposed_change(ont: OntUnit, target: OntDesiredState) -> None:
@@ -279,11 +371,17 @@ def observed_from_ont_observation(
             acs_observed_wan_ip_address=obs.acs_observed_wan_ip_address,
             acs_observed_wan_subnet_mask=obs.acs_observed_wan_subnet_mask,
             acs_observed_wan_gateway=obs.acs_observed_wan_gateway,
+            acs_observed_wan_dns_servers=obs.acs_observed_wan_dns_servers,
             acs_observed_dhcpv6_enabled=obs.acs_observed_dhcpv6_enabled,
             acs_observed_dhcpv6_request_prefixes=(
                 obs.acs_observed_dhcpv6_request_prefixes
             ),
             acs_observed_ra_enabled=obs.acs_observed_ra_enabled,
+            # ManagementServer endpoint fields are read live on every pass;
+            # the current observation schema does not persist credentials.
+            acs_observed_url=None,
+            acs_observed_username=None,
+            acs_observed_password_set=None,
         ),
     )
 
@@ -355,6 +453,7 @@ def upsert_ont_observation(
     row.acs_observed_wan_ip_address = observed.acs.acs_observed_wan_ip_address
     row.acs_observed_wan_subnet_mask = observed.acs.acs_observed_wan_subnet_mask
     row.acs_observed_wan_gateway = observed.acs.acs_observed_wan_gateway
+    row.acs_observed_wan_dns_servers = observed.acs.acs_observed_wan_dns_servers
     row.acs_observed_dhcpv6_enabled = observed.acs.acs_observed_dhcpv6_enabled
     row.acs_observed_dhcpv6_request_prefixes = (
         observed.acs.acs_observed_dhcpv6_request_prefixes

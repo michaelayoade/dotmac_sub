@@ -152,6 +152,7 @@ def record_bulk_payment(
     collection_account_id: str | None = None,
 ) -> UUID:
     """Record a bulk payment + auto-allocate FIFO. Returns the Payment.id."""
+    from app.models.billing import PaymentStatus
     from app.schemas.billing import PaymentCreate
 
     try:
@@ -170,6 +171,16 @@ def record_bulk_payment(
         if collection_account_id
         else None,
         allocations=None,
+        # An admin recording a received bank transfer is confirmed cash. Omitting
+        # the status fell back to the ``default_payment_status`` setting, whose
+        # default is "pending" — and a pending payment is half-applied: the
+        # allocation and the ledger credit are written regardless of status (and
+        # the surplus credits BillingAccount.balance, immediately spendable), but
+        # _recalculate_invoice_totals counts only succeeded payments.
+        #
+        # So the reseller's transfer credited their balance while EVERY member
+        # invoice stayed unpaid. Say what this is instead of inheriting a setting.
+        status=PaymentStatus.succeeded,
     )
     payment = billing_service.payments.create(db, payload)
     return payment.id

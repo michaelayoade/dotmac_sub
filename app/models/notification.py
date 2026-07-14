@@ -39,6 +39,67 @@ class NotificationStatus(enum.Enum):
     canceled = "canceled"
 
 
+class CommunicationIntentRecord(Base):
+    """Durable reason and policy context behind one or more deliveries."""
+
+    __tablename__ = "communication_intents"
+    __table_args__ = (
+        Index("ix_communication_intents_subscriber", "subscriber_id", "created_at"),
+        Index("ix_communication_intents_status", "status", "created_at"),
+        Index(
+            "uq_communication_intents_dedupe_key",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text("dedupe_key IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    communication_class: Mapped[str] = mapped_column(String(40), nullable=False)
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("notification_templates.id")
+    )
+    template_code: Mapped[str | None] = mapped_column(String(120))
+    subject: Mapped[str | None] = mapped_column(String(200))
+    body: Mapped[str | None] = mapped_column(Text)
+    channels: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    include_reseller: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
+    suppression_reasons: Mapped[list] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON()), default=dict, nullable=False
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+    subscriber = relationship("Subscriber")
+    template = relationship("NotificationTemplate")
+    notifications = relationship("Notification", back_populates="communication_intent")
+
+
 class DeliveryStatus(enum.Enum):
     accepted = "accepted"
     delivered = "delivered"
@@ -97,6 +158,13 @@ class Notification(Base):
         ForeignKey("subscribers.id", ondelete="SET NULL"),
         index=True,
     )
+    communication_intent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("communication_intents.id", ondelete="SET NULL"),
+        index=True,
+    )
+    audience_type: Mapped[str | None] = mapped_column(String(40))
+    audience_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     channel: Mapped[NotificationChannel] = mapped_column(
         Enum(NotificationChannel), nullable=False
     )
@@ -105,6 +173,9 @@ class Notification(Base):
     recipient: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str | None] = mapped_column(String(200))
     body: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata", MutableDict.as_mutable(JSON()), default=dict, nullable=False
+    )
     status: Mapped[NotificationStatus] = mapped_column(
         Enum(NotificationStatus), default=NotificationStatus.queued
     )
@@ -126,6 +197,9 @@ class Notification(Base):
     template = relationship("NotificationTemplate", back_populates="notifications")
     deliveries = relationship("NotificationDelivery", back_populates="notification")
     subscriber = relationship("Subscriber")
+    communication_intent = relationship(
+        "CommunicationIntentRecord", back_populates="notifications"
+    )
 
 
 class NotificationDelivery(Base):
@@ -334,3 +408,87 @@ class AlertNotificationPolicyStep(Base):
     policy = relationship("AlertNotificationPolicy", back_populates="steps")
     template = relationship("NotificationTemplate")
     rotation = relationship("OnCallRotation", back_populates="policy_steps")
+
+
+class SuppressionScope(enum.Enum):
+    """What a suppression blocks.
+
+    The distinction is the whole point. An unsubscribe is a refusal of
+    *marketing*; it is not permission to stop sending someone their invoice,
+    their outage notice, or their credentials. Conflating the two is how a
+    consent ledger turns into a billing incident.
+
+    ``marketing`` — blocks marketing only. This is what "unsubscribe" means.
+    ``all``       — blocks everything, transactional included. Reserved for
+                    addresses we must not send to at all: hard bounces, spam
+                    complaints, and legal erasure requests. Never set by a
+                    customer clicking unsubscribe.
+    """
+
+    marketing = "marketing"
+    all = "all"
+
+
+class SuppressionReason(enum.Enum):
+    unsubscribe = "unsubscribe"
+    bounce = "bounce"
+    complaint = "complaint"
+    manual = "manual"
+    erasure = "erasure"
+
+
+class CommunicationSuppression(Base):
+    """Platform-wide 'do not contact' ledger — the single source of truth for
+    whether we may send to an address on a channel.
+
+    Campaigns, transactional notifications, imports and every other sender ask
+    the same question of the same table (``communication_eligibility.may_send``).
+    Before this, marketing eligibility was decided inside the campaign segment
+    filter, which meant a customer could unsubscribe and still be reachable by
+    any other path -- and that the answer differed depending on who was asking.
+    """
+
+    __tablename__ = "communication_suppressions"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel", "address", name="uq_communication_suppressions_channel_address"
+        ),
+        Index("ix_communication_suppressions_channel", "channel"),
+        Index("ix_communication_suppressions_address", "address"),
+        Index("ix_communication_suppressions_subscriber_id", "subscriber_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    channel: Mapped[NotificationChannel] = mapped_column(
+        Enum(NotificationChannel, native_enum=False), nullable=False
+    )
+    #: Normalised recipient (lower-cased email, digits-only phone). The raw form
+    #: is kept in ``raw_address`` so a suppression is auditable back to what the
+    #: customer actually clicked.
+    address: Mapped[str] = mapped_column(String(320), nullable=False)
+    raw_address: Mapped[str | None] = mapped_column(String(320))
+    #: Best-effort link. An address is not always resolvable to a subscriber
+    #: (imports, forwarded mail), and the ledger is keyed on the ADDRESS -- the
+    #: thing the transport actually sends to -- not on the person.
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
+    )
+    scope: Mapped[SuppressionScope] = mapped_column(
+        Enum(SuppressionScope, native_enum=False),
+        nullable=False,
+        default=SuppressionScope.marketing,
+    )
+    reason: Mapped[SuppressionReason] = mapped_column(
+        Enum(SuppressionReason, native_enum=False),
+        nullable=False,
+        default=SuppressionReason.unsubscribe,
+    )
+    #: Free-text provenance: the bounce code, the campaign that carried the
+    #: unsubscribe link, the operator who set it by hand.
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_by: Mapped[str | None] = mapped_column(String(120))

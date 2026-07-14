@@ -909,7 +909,7 @@ def reports_inbox_escalation_reply(
         ),
     )
 
-    if result.kind != "sent":
+    if result.kind not in {"sent", "queued"}:
         return RedirectResponse(
             _inbox_escalation_return_url(
                 next,
@@ -925,7 +925,11 @@ def reports_inbox_escalation_reply(
         _inbox_escalation_return_url(
             next,
             status="success",
-            message=f"Reply sent from {sender}.",
+            message=(
+                f"Reply queued from {sender}."
+                if result.kind == "queued"
+                else f"Reply sent from {sender}."
+            ),
         ),
         status_code=303,
     )

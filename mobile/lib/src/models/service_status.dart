@@ -11,6 +11,7 @@ class ServiceStatus {
     required this.lowBalance,
     required this.inDunning,
     required this.services,
+    this.primaryAction,
     this.balance,
     this.minBalance,
     this.graceUntil,
@@ -35,12 +36,28 @@ class ServiceStatus {
   final bool inDunning;
 
   final List<ServiceStatusItem> services;
+  final ServiceStatusAction? primaryAction;
 
   bool get isPrepaid => billingMode == 'prepaid';
 
-  /// An active service is heading for a cut and the customer can prevent it by
-  /// paying: prepaid low balance, or postpaid overdue. Drives the renew banner.
-  bool get needsRenewal => services.any((s) => s.usable && s.actionable);
+  /// An active service is heading for a cut and the server says a financial
+  /// action can prevent it. The client never derives this from subscription
+  /// status or invoice rows.
+  bool get needsRenewal =>
+      services.any((s) => s.usable && (s.action?.isFinancial ?? false));
+
+  ServiceStatusItem? forSubscription(String subscriptionId) {
+    for (final service in services) {
+      if (service.subscriptionId == subscriptionId) return service;
+    }
+    return null;
+  }
+
+  List<ServiceStatusItem> get unavailableServices => services
+      .where((s) =>
+          !s.usable &&
+          const {'blocked', 'suspended', 'stopped'}.contains(s.status))
+      .toList(growable: false);
 
   factory ServiceStatus.fromJson(Map<String, dynamic> json) {
     final list = (json['services'] as List?) ?? const [];
@@ -59,6 +76,10 @@ class ServiceStatus {
           .whereType<Map>()
           .map((e) => ServiceStatusItem.fromJson(e.cast<String, dynamic>()))
           .toList(),
+      primaryAction: json['primary_action'] is Map
+          ? ServiceStatusAction.fromJson(
+              (json['primary_action'] as Map).cast<String, dynamic>())
+          : null,
     );
   }
 }
@@ -73,6 +94,7 @@ class ServiceStatusItem {
     this.offerName,
     this.expiresAt,
     this.nextChargeAt,
+    this.action,
   });
 
   final String subscriptionId;
@@ -83,11 +105,11 @@ class ServiceStatusItem {
   final DateTime? expiresAt;
   final DateTime? nextChargeAt;
 
-  /// ok | low_balance | overdue | needs_payment | stopped | ended
+  /// Server-owned service reason; clients do not infer actions from this text.
   final String reason;
+  final ServiceStatusAction? action;
 
-  /// A running service the customer can keep alive by paying now.
-  bool get actionable => reason == 'low_balance' || reason == 'overdue';
+  bool get actionable => action != null;
 
   factory ServiceStatusItem.fromJson(Map<String, dynamic> json) =>
       ServiceStatusItem(
@@ -99,6 +121,43 @@ class ServiceStatusItem {
         expiresAt: _toDate(json['expires_at']),
         nextChargeAt: _toDate(json['next_charge_at']),
         reason: json['reason'] as String? ?? 'ok',
+        action: json['action'] is Map
+            ? ServiceStatusAction.fromJson(
+                (json['action'] as Map).cast<String, dynamic>())
+            : null,
+      );
+}
+
+class ServiceStatusAction {
+  ServiceStatusAction({
+    required this.kind,
+    required this.label,
+    required this.message,
+    required this.currency,
+    required this.restoresService,
+    this.amount,
+  });
+
+  /// top_up | pay_invoices | view_usage | contact_support
+  final String kind;
+  final String label;
+  final String message;
+  final double? amount;
+  final String currency;
+
+  /// True only when the server has proven this action clears every known hold.
+  final bool restoresService;
+
+  bool get isFinancial => kind == 'top_up' || kind == 'pay_invoices';
+
+  factory ServiceStatusAction.fromJson(Map<String, dynamic> json) =>
+      ServiceStatusAction(
+        kind: json['kind'] as String? ?? 'contact_support',
+        label: json['label'] as String? ?? 'Contact support',
+        message: json['message'] as String? ?? 'Contact support for help.',
+        amount: _toDouble(json['amount']),
+        currency: json['currency'] as String? ?? 'NGN',
+        restoresService: json['restores_service'] as bool? ?? false,
       );
 }
 

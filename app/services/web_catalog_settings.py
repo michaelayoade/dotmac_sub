@@ -10,7 +10,7 @@ import csv
 import logging
 from decimal import Decimal
 from io import StringIO
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -47,6 +47,7 @@ from app.schemas.catalog import (
     UsageAllowanceUpdate,
 )
 from app.services import catalog as catalog_service
+from app.services import catalog_billing_governance
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -855,27 +856,51 @@ def _add_on_payload(values: dict[str, object]) -> dict[str, object]:
     }
 
 
-def create_add_on_from_form(db: Session, *, form) -> None:
+def create_add_on_from_form(
+    db: Session,
+    *,
+    form,
+    actor_id: str | None = None,
+) -> None:
     """Validate and create an add-on with submitted prices."""
     values = parse_add_on_form(form)
+    submitted_prices = cast(list[dict[str, str]], values["prices"])
+    price_types = [price["price_type"] for price in submitted_prices]
+    if len(price_types) != len(set(price_types)):
+        raise ValueError("Only one active add-on price is allowed per price type")
     payload = AddOnCreate.model_validate(_add_on_payload(values))
     created = catalog_service.add_ons.create(db=db, payload=payload)
     create_addon_prices(
         db,
         str(created.id),
         values["prices"],  # type: ignore[arg-type]
+        actor_id=actor_id,
     )
 
 
-def update_add_on_from_form(db: Session, *, addon_id: str, form) -> None:
+def update_add_on_from_form(
+    db: Session,
+    *,
+    addon_id: str,
+    form,
+    actor_id: str | None = None,
+) -> None:
     """Validate and update an add-on with submitted prices."""
     values = parse_add_on_form(form, include_price_ids=True)
+    sync_addon_prices(
+        db,
+        addon_id,
+        values["prices"],  # type: ignore[arg-type]
+        actor_id=actor_id,
+        validate_only=True,
+    )
     payload = AddOnUpdate.model_validate(_add_on_payload(values))
     catalog_service.add_ons.update(db=db, add_on_id=addon_id, payload=payload)
     sync_addon_prices(
         db,
         addon_id,
         values["prices"],  # type: ignore[arg-type]
+        actor_id=actor_id,
     )
 
 
@@ -1162,8 +1187,13 @@ def create_addon_prices(
     db: Session,
     add_on_id: str,
     prices: list[dict[str, str]],
+    *,
+    actor_id: str | None = None,
 ) -> None:
     """Create prices for a newly-created add-on."""
+    price_types = [price["price_type"] for price in prices]
+    if len(price_types) != len(set(price_types)):
+        raise ValueError("Only one active add-on price is allowed per price type")
     addon_uuid = coerce_uuid(add_on_id)
     for price in prices:
         price_payload = AddOnPriceCreate(
@@ -1177,13 +1207,21 @@ def create_addon_prices(
             unit=PriceUnit(price["unit"]) if price["unit"] else None,
             description=price["description"] or None,
         )
-        catalog_service.add_on_prices.create(db=db, payload=price_payload)
+        catalog_service.add_on_prices.create(
+            db=db,
+            payload=price_payload,
+            actor_id=actor_id,
+            actor_type="user",
+        )
 
 
 def sync_addon_prices(
     db: Session,
     addon_id: str,
     prices: list[dict[str, str]],
+    *,
+    actor_id: str | None = None,
+    validate_only: bool = False,
 ) -> None:
     """Reconcile submitted add-on prices against the existing set.
 
@@ -1200,11 +1238,56 @@ def sync_addon_prices(
     )
     existing_ids = {str(p.id) for p in existing_prices}
     submitted_ids = {p["id"] for p in prices if p.get("id")}
+    submitted_types = [price["price_type"] for price in prices]
+    if len(submitted_types) != len(set(submitted_types)):
+        raise ValueError("Only one active add-on price is allowed per price type")
+
+    # Validate the complete financial mutation before the first service method
+    # commits, so a blocked live-price edit cannot leave a partially-updated
+    # add-on form behind.
+    for existing in existing_prices:
+        if str(existing.id) not in submitted_ids:
+            catalog_billing_governance.assert_add_on_price_update_safe(
+                db,
+                existing,
+                {"is_active": False},
+            )
+    by_id = {str(existing.id): existing for existing in existing_prices}
+    for price in prices:
+        existing = by_id.get(str(price.get("id") or ""))
+        if existing is None:
+            continue
+        candidate = {
+            "price_type": PriceType(price["price_type"]),
+            "amount": Decimal(price["amount"]),
+            "currency": price["currency"] or "NGN",
+            "billing_cycle": BillingCycle(price["billing_cycle"])
+            if price["billing_cycle"]
+            else None,
+            "unit": PriceUnit(price["unit"]) if price["unit"] else None,
+        }
+        changes = catalog_billing_governance.billing_field_changes(
+            existing,
+            candidate,
+        )
+        catalog_billing_governance.assert_add_on_price_update_safe(
+            db,
+            existing,
+            changes,
+        )
+
+    if validate_only:
+        return
 
     # Delete removed prices
     for price in existing_prices:
         if str(price.id) not in submitted_ids:
-            catalog_service.add_on_prices.delete(db=db, price_id=str(price.id))
+            catalog_service.add_on_prices.delete(
+                db=db,
+                price_id=str(price.id),
+                actor_id=actor_id,
+                actor_type="user",
+            )
 
     # Update or create prices
     for price in prices:
@@ -1222,6 +1305,8 @@ def sync_addon_prices(
                     unit=PriceUnit(price["unit"]) if price["unit"] else None,
                     description=price["description"] or None,
                 ),
+                actor_id=actor_id,
+                actor_type="user",
             )
         else:
             catalog_service.add_on_prices.create(
@@ -1237,4 +1322,6 @@ def sync_addon_prices(
                     unit=PriceUnit(price["unit"]) if price["unit"] else None,
                     description=price["description"] or None,
                 ),
+                actor_id=actor_id,
+                actor_type="user",
             )

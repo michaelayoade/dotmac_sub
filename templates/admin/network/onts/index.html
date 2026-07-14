@@ -6,7 +6,7 @@
 {% block content %}
 <div id="ont-fleet-page" class="relative space-y-4" x-data='{
     view: "{{ filters.view or 'list' }}",
-    filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.authorization != 'authorized' or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %},
+    filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.authorization != 'all' or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %},
     searchLoading: false,
     searchError: false
 }'>
@@ -165,7 +165,7 @@
                 </button>
 
                 {# Clear filters #}
-                {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.authorization != 'authorized' or filters.signal_quality or filters.search or filters.vendor %}
+                {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.authorization != 'all' or filters.signal_quality or filters.search or filters.vendor %}
                     <a href="/admin/network/onts?view={{ filters.view or 'list' }}" class="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50 min-h-[44px]">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     Clear
@@ -204,9 +204,9 @@
                 {# Authorization status #}
                 <select name="authorization" onchange="this.form.submit()"
                         class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
+                    <option value="all" {% if filters.authorization == 'all' %}selected{% endif %}>All Authorization</option>
                     <option value="authorized" {% if filters.authorization == 'authorized' %}selected{% endif %}>Authorized Only</option>
                     <option value="unauthorized" {% if filters.authorization == 'unauthorized' %}selected{% endif %}>Unauthorized/Pending</option>
-                    <option value="all" {% if filters.authorization == 'all' %}selected{% endif %}>All Authorization</option>
                 </select>
 
                 {# Sort controls #}
@@ -362,7 +362,7 @@
                                         {% endfor %}
                                     </select>
                                     {% endif %}
-                                    <button type="submit" :disabled="submitting" onclick="return confirm('Authorize ONT {{ entry.serial_number }} on {{ entry.olt_name }} {{ entry.fsp }}? Existing stale OLT registration will be cleaned up automatically if needed.')" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-emerald-700 hover:shadow-md focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2" :class="submitting && 'opacity-75 cursor-wait'">
+                                    <button type="submit" :disabled="submitting" data-confirm="Authorize ONT {{ entry.serial_number }} on {{ entry.olt_name }} {{ entry.fsp }}? Existing stale OLT registration will be cleaned up automatically if needed." data-confirm-variant="warning" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-emerald-700 hover:shadow-md focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2" :class="submitting && 'opacity-75 cursor-wait'">
                                         {# Spinner - shown when submitting #}
                                         <svg x-show="submitting" x-cloak class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
                                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -381,7 +381,7 @@
                                 {% elif entry.resolution_reason == 'disappeared' %}
                                 <form method="POST" action="/admin/network/unconfigured-onts/{{ entry.id }}/restore" class="inline" x-data="{ submitting: false }" @submit="submitting = true">
                                     {% include "components/forms/csrf_input.html" %}
-                                    <button type="submit" :disabled="submitting" onclick="return confirm('Restore ONT {{ entry.serial_number }} to active state?')" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition-colors dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300" :class="submitting ? 'opacity-75 cursor-wait' : 'hover:bg-amber-100'">
+                                    <button type="submit" :disabled="submitting" data-confirm="Restore ONT {{ entry.serial_number }} to active state?" data-confirm-variant="warning" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition-colors dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300" :class="submitting ? 'opacity-75 cursor-wait' : 'hover:bg-amber-100'">
                                         <svg x-show="submitting" x-cloak class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
                                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
@@ -619,14 +619,14 @@
                 </p>
                 <div class="flex items-center gap-2">
                     {% if pagination.has_prev %}
-                    <a href="/admin/network/onts?view=list&page={{ pagination.page - 1 }}&per_page={{ pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&authorization={{ filters.authorization }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    <a href="{{ request.url.include_query_params(view='list', page=pagination.page - 1, per_page=pagination.per_page) }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
                     {% if pagination.has_next %}
-                    <a href="/admin/network/onts?view=list&page={{ pagination.page + 1 }}&per_page={{ pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&authorization={{ filters.authorization }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    <a href="{{ request.url.include_query_params(view='list', page=pagination.page + 1, per_page=pagination.per_page) }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
@@ -802,14 +802,14 @@
                 </p>
                 <div class="flex items-center gap-2">
                     {% if diagnostics_pagination.has_prev %}
-                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page - 1 }}&per_page={{ diagnostics_pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&authorization={{ filters.authorization }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
+                    <a href="{{ request.url.include_query_params(view='diagnostics', page=diagnostics_pagination.page - 1, per_page=diagnostics_pagination.per_page, order_by='signal', order_dir='asc') }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
                     {% if diagnostics_pagination.has_next %}
-                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page + 1 }}&per_page={{ diagnostics_pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&authorization={{ filters.authorization }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
+                    <a href="{{ request.url.include_query_params(view='diagnostics', page=diagnostics_pagination.page + 1, per_page=diagnostics_pagination.per_page, order_by='signal', order_dir='asc') }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>

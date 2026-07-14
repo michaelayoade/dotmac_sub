@@ -1,7 +1,10 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.notification import NotificationChannel, SuppressionScope
 from app.schemas.common import ListResponse
 from app.schemas.notification import (
     AlertNotificationLogRead,
@@ -11,6 +14,9 @@ from app.schemas.notification import (
     AlertNotificationPolicyStepRead,
     AlertNotificationPolicyStepUpdate,
     AlertNotificationPolicyUpdate,
+    CommunicationIntentRead,
+    CommunicationSuppressionCreate,
+    CommunicationSuppressionRead,
     NotificationBulkCreateRequest,
     NotificationBulkCreateResponse,
     NotificationCreate,
@@ -31,7 +37,9 @@ from app.schemas.notification import (
     OnCallRotationRead,
     OnCallRotationUpdate,
 )
+from app.services import communication_eligibility, communication_intents
 from app.services import notification as notification_service
+from app.services.response import list_response
 
 router = APIRouter()
 
@@ -115,6 +123,77 @@ def create_notifications_bulk(
 ):
     response = notification_service.notifications.bulk_create_response(db, payload)
     return NotificationBulkCreateResponse(**response)
+
+
+@router.get(
+    "/communication-intents",
+    response_model=ListResponse[CommunicationIntentRead],
+    tags=["notifications"],
+)
+def list_communication_intents(
+    subscriber_id: UUID | None = None,
+    status_value: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    items = communication_intents.list_intents(
+        db,
+        subscriber_id=subscriber_id,
+        status=status_value,
+        limit=limit,
+        offset=offset,
+    )
+    return list_response(items, limit, offset)
+
+
+@router.get(
+    "/communication-suppressions",
+    response_model=ListResponse[CommunicationSuppressionRead],
+    tags=["notifications"],
+)
+def list_communication_suppressions(
+    subscriber_id: UUID | None = None,
+    channel: NotificationChannel | None = None,
+    scope: SuppressionScope | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    items = communication_eligibility.list_suppressions(
+        db,
+        subscriber_id=subscriber_id,
+        channel=channel,
+        scope=scope,
+        limit=limit,
+        offset=offset,
+    )
+    return list_response(items, limit, offset)
+
+
+@router.post(
+    "/communication-suppressions",
+    response_model=CommunicationSuppressionRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["notifications"],
+)
+def create_communication_suppression(
+    payload: CommunicationSuppressionCreate,
+    db: Session = Depends(get_db),
+):
+    return communication_eligibility.suppress_committed(db, **payload.model_dump())
+
+
+@router.delete(
+    "/communication-suppressions/{suppression_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["notifications"],
+)
+def deactivate_communication_suppression(
+    suppression_id: UUID,
+    db: Session = Depends(get_db),
+):
+    communication_eligibility.unsuppress_by_id_committed(db, suppression_id)
 
 
 @router.post(

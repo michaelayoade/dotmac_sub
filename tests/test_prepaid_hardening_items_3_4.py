@@ -11,11 +11,28 @@ two can't disagree for a drifted/mixed account.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import CreditNote, Invoice, LedgerEntry, LedgerEntryType
-from app.models.catalog import BillingMode, SubscriptionStatus
-from app.services.catalog.subscriptions import _generate_proration_invoice
+from app.models.billing import (
+    CreditNote,
+    Invoice,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
+from app.models.catalog import (
+    AccessType,
+    BillingCycle,
+    BillingMode,
+    CatalogOffer,
+    OfferPrice,
+    PriceBasis,
+    PriceType,
+    ServiceType,
+    SubscriptionStatus,
+)
+from app.services.prepaid_plan_changes import prepare_immediate_prepaid_plan_change
 from app.services.service_status import build_service_status
 
 
@@ -35,18 +52,59 @@ def _debits(db, account):
 # --- Item 3 --------------------------------------------------------------
 
 
+def _prepare_upgrade(db, subscription, account, *, billing_mode: BillingMode):
+    subscription.billing_mode = billing_mode
+    subscription.next_billing_at = datetime.now(UTC) + timedelta(days=30)
+    target = CatalogOffer(
+        name="Plan Change Target",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        billing_cycle=BillingCycle.monthly,
+        billing_mode=billing_mode,
+        is_active=True,
+    )
+    db.add(target)
+    db.flush()
+    db.add(
+        OfferPrice(
+            offer_id=target.id,
+            price_type=PriceType.recurring,
+            amount=Decimal("500.00"),
+            currency="NGN",
+            billing_cycle=BillingCycle.monthly,
+            is_active=True,
+        )
+    )
+    if billing_mode == BillingMode.prepaid:
+        db.add(
+            LedgerEntry(
+                account_id=account.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("1000.00"),
+                currency="NGN",
+                memo="Wallet top-up",
+            )
+        )
+    db.commit()
+    return prepare_immediate_prepaid_plan_change(
+        db,
+        subscription,
+        target,
+        old_offer_name="Old Plan",
+        operation_key=f"hardening-{billing_mode.value}-{subscription.id}",
+    )
+
+
 def test_prepaid_upgrade_draws_down_wallet_not_invoice(
     db_session, subscription, subscriber_account
 ):
-    subscription.billing_mode = BillingMode.prepaid
-    db_session.commit()
-
-    _generate_proration_invoice(
+    prepared = _prepare_upgrade(
         db_session,
         subscription,
-        {"net_amount": Decimal("500.00"), "days_remaining": 10},
-        "Old Plan",
-        "New Plan",
+        subscriber_account,
+        billing_mode=BillingMode.prepaid,
     )
     db_session.flush()
 
@@ -54,22 +112,19 @@ def test_prepaid_upgrade_draws_down_wallet_not_invoice(
     assert _invoices(db_session, subscriber_account) == []
     debits = _debits(db_session, subscriber_account)
     assert len(debits) == 1
-    assert debits[0].amount == Decimal("500.00")
+    assert debits[0].amount > Decimal("0.00")
+    assert prepared.ledger_entry == debits[0]
 
 
 def test_prepaid_upgrade_makes_no_credit_note(
     db_session, subscription, subscriber_account
 ):
     # An upgrade (net > 0) is a pure wallet drawdown — never a credit note.
-    subscription.billing_mode = BillingMode.prepaid
-    db_session.commit()
-
-    _generate_proration_invoice(
+    _prepare_upgrade(
         db_session,
         subscription,
-        {"net_amount": Decimal("500.00"), "days_remaining": 10},
-        "Old Plan",
-        "New Plan",
+        subscriber_account,
+        billing_mode=BillingMode.prepaid,
     )
     db_session.flush()
 
@@ -84,20 +139,17 @@ def test_prepaid_upgrade_makes_no_credit_note(
 def test_postpaid_plan_change_generates_nothing_here(
     db_session, subscription, subscriber_account
 ):
-    subscription.billing_mode = BillingMode.postpaid
-    db_session.commit()
-
-    _generate_proration_invoice(
+    prepared = _prepare_upgrade(
         db_session,
         subscription,
-        {"net_amount": Decimal("500.00"), "days_remaining": 10},
-        "Old Plan",
-        "New Plan",
+        subscriber_account,
+        billing_mode=BillingMode.postpaid,
     )
     db_session.flush()
 
     assert _invoices(db_session, subscriber_account) == []
     assert _debits(db_session, subscriber_account) == []
+    assert prepared.ledger_entry is None
 
 
 # --- Item 4 --------------------------------------------------------------

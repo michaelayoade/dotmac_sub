@@ -480,19 +480,31 @@ def _resolve_olt_adapter(db: Session, ont: OntUnit) -> Any:
 
 
 def _resolve_acs_client(db: Session, ont: OntUnit) -> Any:
-    """Production path: build a GenieACS client from the ONT's ACS binding."""
-    # Prefer the OntUnit's explicit ACS server FK. If absent, fall back to a
-    # default URL — most fleet ONTs share a single GenieACS instance.
-    from app.models.tr069 import Tr069AcsServer
-    from app.services.genieacs_client import GenieACSClient
+    """Build the client from observed linkage, then desired ACS policy.
 
-    if ont.tr069_acs_server_id:
-        server = db.execute(
-            select(Tr069AcsServer).where(Tr069AcsServer.id == ont.tr069_acs_server_id)
-        ).scalar_one_or_none()
-        if server is not None:
-            return GenieACSClient(base_url=server.base_url)
-    return GenieACSClient(base_url="http://localhost:7557")
+    During an ACS migration the ONT still informs to the previously linked
+    server. That server must deliver the ManagementServer URL change; the link
+    is moved to desired authority only after successful readback.
+    """
+    from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+    from app.services.genieacs_client import create_genieacs_client
+    from app.services.network.acs_resolution import resolve_acs_for_ont
+
+    linked = db.scalars(
+        select(Tr069CpeDevice)
+        .where(Tr069CpeDevice.ont_unit_id == ont.id)
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .limit(1)
+    ).first()
+    if linked is not None:
+        observed_server = db.get(Tr069AcsServer, linked.acs_server_id)
+        if observed_server is not None and observed_server.base_url:
+            return create_genieacs_client(observed_server.base_url)
+
+    resolution = resolve_acs_for_ont(db, ont)
+    if resolution.server is None:
+        raise RuntimeError(f"ONT {ont.id} has no active ACS assignment")
+    return create_genieacs_client(resolution.server.base_url)
 
 
 def _read_observed_parallel(

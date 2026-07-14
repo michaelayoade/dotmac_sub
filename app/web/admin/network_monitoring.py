@@ -67,6 +67,9 @@ def topology_gaps_page(
 def device_status_worklist_page(
     request: Request,
     reason: str | None = None,
+    search: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """Inventory-hygiene queue: devices whose admin status conflicts with what
@@ -75,7 +78,13 @@ def device_status_worklist_page(
     from app.services.device_operational_status import mismatch_worklist
 
     context = _base_context(request, db, active_page="monitoring")
-    context["worklist"] = mismatch_worklist(db, reason=reason)
+    context["worklist"] = mismatch_worklist(
+        db,
+        reason=reason,
+        search=search,
+        page=page,
+        per_page=per_page,
+    )
     return templates.TemplateResponse(
         "admin/network/device_status_worklist.html", context
     )
@@ -628,6 +637,8 @@ def monitoring_page(
     request: Request,
     q: str | None = None,
     refresh: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     force_refresh = (refresh or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -641,6 +652,8 @@ def monitoring_page(
         format_duration=_format_duration,
         format_bps=_format_bps,
         query=q,
+        page=page,
+        per_page=per_page,
     )
     context = _base_context(request, db, active_page="monitoring")
     context.update(page_data)
@@ -692,12 +705,16 @@ def alarms_page(
     request: Request,
     severity: str | None = None,
     status: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     page_data = web_network_monitoring_service.alarms_page_data(
         db,
         severity=severity,
         status=status,
+        page=page,
+        per_page=per_page,
     )
     context = _base_context(request, db, active_page="monitoring")
     context.update(page_data)

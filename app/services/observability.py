@@ -43,7 +43,10 @@ class StateObservation:
 
 
 _STATE_SNAPSHOT_SPECS = {
+    "billing_health": {"max_observations": 64, "ttl_seconds": 7 * 86_400},
     "credentials": {"max_observations": 500, "ttl_seconds": 7 * 86_400},
+    "database_pressure": {"max_observations": 16, "ttl_seconds": 86_400},
+    "nas_lifecycle": {"max_observations": 32, "ttl_seconds": 7 * 86_400},
 }
 _STATE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _STATE_STATUSES = frozenset({"ok", "degraded", "error"})

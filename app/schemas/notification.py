@@ -4,13 +4,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.models.network_monitoring import AlertSeverity, AlertStatus
 from app.models.notification import (
     DeliveryStatus,
     NotificationChannel,
     NotificationStatus,
+    SuppressionReason,
+    SuppressionScope,
 )
 
 
@@ -47,14 +49,26 @@ class NotificationTemplateRead(NotificationTemplateBase):
 
 
 class NotificationBase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     template_id: UUID | None = None
     subscriber_id: UUID | None = None
+    communication_intent_id: UUID | None = None
+    audience_type: str | None = Field(default=None, max_length=40)
+    audience_id: UUID | None = None
     channel: NotificationChannel
     event_type: str | None = Field(default=None, max_length=120)
     category: str | None = Field(default=None, max_length=40)
     recipient: str = Field(min_length=1, max_length=255)
     subject: str | None = Field(default=None, max_length=200)
     body: str | None = None
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        # ORM models also inherit SQLAlchemy's ``metadata`` schema object, so
+        # prefer the mapped attribute before accepting the public JSON key.
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     status: NotificationStatus = NotificationStatus.queued
     send_at: datetime | None = None
     sent_at: datetime | None = None
@@ -68,14 +82,24 @@ class NotificationCreate(NotificationBase):
 
 
 class NotificationUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     template_id: UUID | None = None
     subscriber_id: UUID | None = None
+    communication_intent_id: UUID | None = None
+    audience_type: str | None = Field(default=None, max_length=40)
+    audience_id: UUID | None = None
     channel: NotificationChannel | None = None
     event_type: str | None = Field(default=None, max_length=120)
     category: str | None = Field(default=None, max_length=40)
     recipient: str | None = Field(default=None, max_length=255)
     subject: str | None = Field(default=None, max_length=200)
     body: str | None = None
+    metadata_: dict[str, Any] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
+    )
     status: NotificationStatus | None = None
     send_at: datetime | None = None
     sent_at: datetime | None = None
@@ -90,6 +114,72 @@ class NotificationRead(NotificationBase):
     id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+class CustomerInboxNotificationRead(NotificationRead):
+    """A notification plus the signed-in customer's server-owned read state."""
+
+    is_read: bool = False
+
+
+class CustomerNotificationReadRequest(BaseModel):
+    """Mark selected notifications, or the customer's entire visible inbox."""
+
+    notification_ids: list[UUID] = Field(default_factory=list, max_length=500)
+    all_visible: bool = False
+
+
+class CustomerNotificationReadResponse(BaseModel):
+    marked: int = Field(ge=0)
+
+
+class CommunicationIntentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    subscriber_id: UUID | None
+    event_type: str
+    category: str
+    communication_class: str
+    template_id: UUID | None
+    template_code: str | None
+    subject: str | None
+    body: str | None
+    channels: list[str]
+    include_reseller: bool
+    status: str
+    suppression_reasons: list[str]
+    dedupe_key: str | None
+    scheduled_for: datetime | None
+    metadata_: dict[str, Any] = Field(serialization_alias="metadata")
+    processed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CommunicationSuppressionCreate(BaseModel):
+    subscriber_id: UUID | None = None
+    channel: NotificationChannel
+    address: str = Field(min_length=1, max_length=320)
+    scope: SuppressionScope = SuppressionScope.marketing
+    reason: SuppressionReason = SuppressionReason.unsubscribe
+    note: str | None = None
+    created_by: str | None = Field(default=None, max_length=120)
+
+
+class CommunicationSuppressionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    subscriber_id: UUID | None
+    channel: NotificationChannel
+    address: str
+    raw_address: str | None
+    scope: SuppressionScope
+    reason: SuppressionReason
+    note: str | None
+    created_at: datetime
+    created_by: str | None
 
 
 class NotificationBulkCreateRequest(BaseModel):

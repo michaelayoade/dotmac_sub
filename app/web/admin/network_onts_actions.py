@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
@@ -85,10 +85,12 @@ def _action_json_response(
     status_code: int | None = None,
     detail: str | None = None,
     hx_refresh: bool = False,
+    operation_id: str | None = None,
+    status_url: str | None = None,
 ) -> JSONResponse:
     """Return a consistent JSON contract for ONT action requests."""
-    toast_type = "success" if success else ("info" if waiting else "error")
-    phase = "succeeded" if success else ("waiting" if waiting else "failed")
+    toast_type = "info" if waiting else ("success" if success else "error")
+    phase = "waiting" if waiting else ("succeeded" if success else "failed")
     log_network_action_result(
         request=request,
         resource_type="ont",
@@ -101,18 +103,23 @@ def _action_json_response(
     headers = _toast_headers(message, toast_type)
     if hx_refresh:
         headers["HX-Refresh"] = "true"
-    return JSONResponse(
-        {
-            "success": success or waiting,
-            "message": message,
+    payload = {
+        "success": success or waiting,
+        "message": message,
+        "phase": phase,
+        "waiting": waiting,
+        "operation": {
+            "action": action,
             "phase": phase,
-            "waiting": waiting,
-            "operation": {
-                "action": action,
-                "phase": phase,
-                "detail": detail or message,
-            },
+            "detail": detail or message,
         },
+    }
+    if operation_id:
+        payload["operation_id"] = operation_id
+    if status_url:
+        payload["status_url"] = status_url
+    return JSONResponse(
+        payload,
         status_code=status_code
         if status_code is not None
         else (200 if success else (202 if waiting else 400)),
@@ -405,20 +412,26 @@ def ont_reauthorize(
 def ont_refresh(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Force status refresh for ONT via GenieACS."""
+    """Queue an OLT/TR-069 status refresh for an ONT."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied  # type: ignore[return-value]
-    result = web_network_ont_actions_service.execute_refresh(
-        db, ont_id, request=request
+    result = web_network_ont_actions_service.queue_refresh(db, ont_id, request=request)
+    status_url = (
+        f"/admin/network/onts/{ont_id}/refresh-status"
+        f"?operation_id={result.operation_id}"
+        if result.operation_id
+        else None
     )
     return _action_json_response(
-        success=result.success,
+        success=result.success and not result.waiting,
         message=result.message,
         action="Refresh ONT",
         request=request,
         ont_id=ont_id,
         waiting=result.waiting,
+        operation_id=result.operation_id,
+        status_url=status_url,
     )
 
 
@@ -2008,15 +2021,13 @@ def ont_tr069_status_modal(
     dependencies=[Depends(require_permission("network:ont:read"))],
 )
 def ont_refresh_status_get(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
+    request: Request,
+    ont_id: str,
+    operation_id: str = Query(min_length=1),
+    db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Refresh ONT status from OLT and TR-069 (GET for HTMX compatibility)."""
-    result = web_network_ont_actions_service.execute_refresh(
-        db, ont_id, request=request
+    """Return read-only progress for a queued ONT status refresh."""
+    result = web_network_ont_actions_service.refresh_operation_status(
+        db, ont_id, operation_id
     )
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        headers=_toast_headers(
-            result.message, "success" if result.success else "error"
-        ),
-    )
+    return JSONResponse(result)

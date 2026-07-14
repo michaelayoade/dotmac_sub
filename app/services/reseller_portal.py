@@ -32,11 +32,13 @@ from app.models.subscriber import (
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services.account_lifecycle import (
+    apply_requested_account_status,
+    clear_account_lifecycle_override,
     compute_account_status,
+    disable_subscription,
     get_active_locks,
-    resolve_all_locks,
-    restore_subscription,
     suspend_subscription,
+    transition_subscription_status,
 )
 from app.services.common import coerce_uuid
 from app.services.session_store import (
@@ -1432,13 +1434,18 @@ def update_customer_account_status(
                 # could not reactivate (resolved_count == 0) — the split-brain
                 # this fixes. active/pending → suspended; an already-down
                 # blocked/stopped keeps its status but gains the missing lock.
+                # emit=True (the default): the subscription_suspended event is what
+                # actually ENFORCES the suspension — it blocks the credential in
+                # RADIUS and disconnects the live session. With emit=False this
+                # path created the lock and flipped the status while the customer
+                # kept browsing until the next populate() sweep. The lock is not
+                # the enforcement; the event is.
                 suspend_subscription(
                     db,
                     str(subscription.id),
                     reason=EnforcementReason.admin,
                     source=source,
                     notes="Deactivated from reseller portal.",
-                    emit=False,
                 )
                 changed += 1
             else:
@@ -1446,6 +1453,12 @@ def update_customer_account_status(
         db.flush()
         compute_account_status(db, str(account.id))
     elif normalized_action == "restore":
+        clear_account_lifecycle_override(
+            db,
+            str(account.id),
+            reason="Restored from reseller portal.",
+            source=source,
+        )
         restorable_statuses = {
             SubscriptionStatus.suspended,
             SubscriptionStatus.blocked,
@@ -1455,21 +1468,14 @@ def update_customer_account_status(
             if subscription.status not in restorable_statuses:
                 skipped += 1
                 continue
-            before = subscription.status
-            restored = restore_subscription(
+            if transition_subscription_status(
                 db,
                 str(subscription.id),
-                trigger="admin",
-                resolved_by=source,
-                reason=EnforcementReason.admin,
-                notes="Restored from reseller portal.",
-            )
-            if restored:
+                SubscriptionStatus.active,
+                reason="Restored from reseller portal.",
+                source=source,
+            ):
                 changed += 1
-                continue
-            if not get_active_locks(db, subscription_id=str(subscription.id)):
-                subscription.status = SubscriptionStatus.active
-                changed += 1 if before != subscription.status else 0
             else:
                 skipped += 1
         db.flush()
@@ -1486,37 +1492,30 @@ def update_customer_account_status(
             if subscription.status in terminal_statuses:
                 skipped += 1
                 continue
-            resolve_all_locks(db, subscription, source)
-            subscription.status = SubscriptionStatus.disabled
-            changed += 1
+            if disable_subscription(
+                db,
+                str(subscription.id),
+                reason="Disabled from reseller portal.",
+                source=source,
+            ):
+                changed += 1
         db.flush()
-        # Forward fix: terminal service owns no service IPs (idempotent, guarded).
-        try:
-            from app.services.ip_lifecycle import (
-                release_service_ips_for_subscription,
-            )
-
-            for subscription in subscriptions:
-                if subscription.status == SubscriptionStatus.disabled:
-                    release_service_ips_for_subscription(db, subscription)
-        except Exception:
-            logger.warning(
-                "service-IP release on reseller disable failed for account %s",
-                account.id,
-                exc_info=True,
-            )
         compute_account_status(db, str(account.id))
 
     if not subscriptions:
         if normalized_action == "deactivate":
-            account.status = SubscriberStatus.blocked
-            account.is_active = True
+            target_status = SubscriberStatus.blocked
         elif normalized_action == "restore":
-            account.status = SubscriberStatus.active
-            account.is_active = True
+            target_status = SubscriberStatus.active
         else:
-            account.status = SubscriberStatus.disabled
-            account.is_active = False
+            target_status = SubscriberStatus.disabled
+        apply_requested_account_status(
+            db,
+            str(account.id),
+            target_status,
+            reason=f"{normalized_action.title()} from reseller portal.",
+            source=source,
+        )
         changed = 1
         db.flush()
 

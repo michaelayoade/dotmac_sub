@@ -276,34 +276,28 @@ def ranking(db: Session, tier: str, window_key: str, *, limit: int = 100) -> dic
 _STATE_UP = "up"
 _STATE_DOWN = "down"
 _STATE_DEGRADED = "degraded"
-_STATE_UNMONITORED = "unmonitored"
-# Worst-first ordering for the BTS site roll-up: confirmed-bad outranks
-# confirmed-up, which outranks "no trustworthy signal".
+# Worst-first ordering for the BTS site roll-up.
 _STATE_ORDER = {
     _STATE_DOWN: 4,
     _STATE_DEGRADED: 3,
     _STATE_UP: 2,
-    _STATE_UNMONITORED: 1,
 }
 
 # Operational status (the one reader) -> wallboard card bucket. A wallboard
-# only needs the coarse bucket; maintenance / unknown / unmonitored all collapse
-# to "unmonitored" (not-actively-bad, not-confirmed-up) — the device page keeps
-# the precise state. This is the one-reader rollout (issue #458).
+# only needs the coarse bucket. Retry gaps remain binary and non-alarming in the
+# shared reader; maintenance/unknown fall back to down on this live wallboard.
 _OP_TO_CARD = {
     "up": _STATE_UP,
     "degraded": _STATE_DEGRADED,
     "down": _STATE_DOWN,
-    "unmonitored": _STATE_UNMONITORED,
-    "maintenance": _STATE_UNMONITORED,
-    "unknown": _STATE_UNMONITORED,
+    "maintenance": _STATE_DOWN,
+    "unknown": _STATE_DOWN,
 }
 
 
 def _device_state(status, live_status: str | None, *, warm_stale: bool) -> str:
     """Coarse wallboard bucket for a device, via the shared operational-status
-    reader — so the wallboard and the Network Devices page agree, and blind
-    spots count as ``unmonitored`` rather than false ``down``/``unknown``."""
+    reader so the wallboard and Network Devices page agree."""
     from types import SimpleNamespace
 
     from app.services.device_operational_status import derive_operational_status
@@ -312,7 +306,7 @@ def _device_state(status, live_status: str | None, *, warm_stale: bool) -> str:
         SimpleNamespace(status=status, live_status=live_status),
         warm_stale=warm_stale,
     )
-    return _OP_TO_CARD.get(op.status, _STATE_UNMONITORED)
+    return _OP_TO_CARD.get(op.status, _STATE_DOWN)
 
 
 def _empty_card(tier: str, label: str) -> dict:
@@ -322,7 +316,6 @@ def _empty_card(tier: str, label: str) -> dict:
         _STATE_UP: 0,
         _STATE_DEGRADED: 0,
         _STATE_DOWN: 0,
-        _STATE_UNMONITORED: 0,
         "total": 0,
     }
 
@@ -333,14 +326,7 @@ def _bump(card: dict, state: str) -> None:
 
 
 def wallboard(db: Session) -> dict:
-    """Live up/down/degraded/unmonitored counts per tier from warmed caches.
-
-    Buckets come from the shared operational-status reader (one reader, issue
-    #458) so the wallboard agrees with the Network Devices page and a device
-    with no/stale live signal counts as ``unmonitored``, not a false
-    ``down``/``unknown``. Reads only the warmed ``live_status`` cache and
-    ONT-online ratios — no live fan-out on the request path.
-    """
+    """Live up/down/degraded counts per tier from warmed caches."""
     devices = (
         db.query(
             NetworkDevice.id,
@@ -386,11 +372,10 @@ def _pon_wallboard_card(db: Session) -> dict:
     """PON tier card from current ONT-online ratio per active port: a port is
     up if all ONTs online, down if all offline, degraded if partial, unknown if
     it has no ONTs."""
-    from app.models.network import OntUnit, OnuOnlineStatus, PonPort
+    from app.models.network import OntUnit, PonPort
+    from app.services.network.ont_status import effective_ont_online_clause
 
-    online_count = func.count(
-        case((OntUnit.olt_status == OnuOnlineStatus.online, OntUnit.id))
-    )
+    online_count = func.count(case((effective_ont_online_clause(), OntUnit.id)))
     rows = (
         db.query(
             PonPort.id,
@@ -408,7 +393,7 @@ def _pon_wallboard_card(db: Session) -> dict:
         total = int(total or 0)
         online = int(online or 0)
         if total == 0:
-            state = _STATE_UNMONITORED  # PON port with no ONTs — nothing to observe
+            state = _STATE_DOWN
         elif online == total:
             state = _STATE_UP
         elif online == 0:

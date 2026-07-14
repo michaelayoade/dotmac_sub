@@ -3,11 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-import pytest
-from fastapi import HTTPException
-
 from app.api import support as support_api
+from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.subscription_engine import SettingValueType
 from app.models.team_inbox import (
     InboxConversation,
@@ -22,6 +21,7 @@ from app.schemas.team_inbox import InboxConversationReplyRequest
 from app.services import email as email_service
 from app.services import team_inbox_outbound, team_outbound
 from app.services.domain_settings import notification_settings
+from app.tasks import notifications as notification_tasks
 
 
 def _smtp_sender(db_session, key: str, *, from_email: str) -> None:
@@ -31,7 +31,7 @@ def _smtp_sender(db_session, key: str, *, from_email: str) -> None:
         host=f"smtp.{key}.local",
         port=587,
         username=f"{key}-user",
-        password=f"{key}-pass",
+        password=f"bao://notifications/smtp_sender_{key}#password",
         from_email=from_email,
         from_name=key.title(),
         use_tls=True,
@@ -101,15 +101,6 @@ def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
     _activity_sender(db_session, "support_ticket", "support")
     team = _team(db_session, "Support", ServiceTeamType.support.value)
     conversation = _conversation(db_session, team)
-    sent: dict[str, object] = {}
-
-    def _fake_send_email(*args, **kwargs):
-        sent.update(kwargs)
-        return True
-
-    monkeypatch.setattr(
-        team_inbox_outbound.email_service, "send_email", _fake_send_email
-    )
     db_session.commit()
 
     result = team_inbox_outbound.send_inbox_reply(
@@ -125,36 +116,24 @@ def test_send_inbox_reply_uses_owner_team_sender(db_session, monkeypatch):
     db_session.commit()
 
     message = db_session.query(InboxMessage).one()
-    assert result.kind == "sent"
+    notification = db_session.query(Notification).one()
+    assert result.kind == "queued"
     assert result.sender_key == "support"
     assert result.activity == "support_ticket"
     assert result.from_address == "support@dotmac.io"
-    assert sent["to_email"] == "customer@example.com"
-    assert sent["subject"] == "Re: Router offline"
-    assert sent["activity"] == "support_ticket"
+    assert notification.recipient == "customer@example.com"
+    assert notification.subject == "Re: Router offline"
+    assert notification.metadata_["activity"] == "support_ticket"
     assert message.direction == InboxMessageDirection.outbound.value
     assert message.from_address == "support@dotmac.io"
     assert message.to_addresses == ["customer@example.com"]
     assert message.metadata_["sender_key"] == "support"
+    assert message.notification_id == notification.id
+    assert message.metadata_["delivery_status"] == "queued"
 
 
 def test_send_inbox_reply_sends_whatsapp_text(db_session, monkeypatch):
     conversation = _whatsapp_conversation(db_session)
-    sent: dict[str, object] = {}
-    monkeypatch.setattr(
-        team_inbox_outbound.whatsapp_connector,
-        "send_text_message",
-        lambda *args, **kwargs: (
-            sent.update(kwargs)
-            or {
-                "ok": True,
-                "provider": "meta_cloud_api",
-                "sent": True,
-                "status_code": 200,
-                "response": '{"messages":[{"id":"wamid.outbound"}]}',
-            }
-        ),
-    )
     db_session.commit()
 
     result = team_inbox_outbound.send_inbox_reply(
@@ -169,39 +148,24 @@ def test_send_inbox_reply_sends_whatsapp_text(db_session, monkeypatch):
     db_session.commit()
 
     message = db_session.query(InboxMessage).one()
-    assert result.kind == "sent"
+    notification = db_session.query(Notification).one()
+    intent = db_session.query(CommunicationIntentRecord).one()
+    assert result.kind == "queued"
     assert result.to_email == "+2348035550114"
-    assert sent["recipient"] == "+2348035550114"
-    assert sent["body"] == "We are checking this."
+    assert notification.recipient == "+2348035550114"
+    assert notification.body == "We are checking this."
+    assert intent.subscriber_id is None
     assert message.channel_type == "whatsapp"
     assert message.direction == InboxMessageDirection.outbound.value
     assert message.body == "We are checking this."
-    assert message.external_message_id == "wamid.outbound"
+    assert message.external_message_id is None
     assert message.to_addresses == ["+2348035550114"]
-    assert message.metadata_["provider_result"]["provider"] == "meta_cloud_api"
-    assert (
-        message.metadata_["provider_result"]["provider_message_id"] == "wamid.outbound"
-    )
+    assert message.metadata_["delivery_status"] == "queued"
     assert conversation.last_message_at == datetime(2026, 7, 10, 8, 5)
 
 
 def test_send_inbox_reply_sends_whatsapp_template(db_session, monkeypatch):
     conversation = _whatsapp_conversation(db_session)
-    sent: dict[str, object] = {}
-    monkeypatch.setattr(
-        team_inbox_outbound.whatsapp_connector,
-        "send_template_message",
-        lambda *args, **kwargs: (
-            sent.update(kwargs)
-            or {
-                "ok": True,
-                "provider": "meta_cloud_api",
-                "sent": True,
-                "status_code": 200,
-                "response": '{"messages":[{"id":"wamid.template"}]}',
-            }
-        ),
-    )
     db_session.commit()
 
     result = team_inbox_outbound.send_inbox_reply(
@@ -223,31 +187,25 @@ def test_send_inbox_reply_sends_whatsapp_template(db_session, monkeypatch):
     db_session.commit()
 
     message = db_session.query(InboxMessage).one()
-    assert result.kind == "sent"
-    assert sent["recipient"] == "+2348035550114"
-    assert sent["template_name"] == "service_update"
-    assert sent["language"] == "en"
-    assert sent["variables"] == {"1": "Ada"}
-    assert sent["dry_run"] is False
+    notification = db_session.query(Notification).one()
+    assert result.kind == "queued"
+    assert notification.metadata_["whatsapp_template"]["name"] == "service_update"
+    assert notification.metadata_["whatsapp_template"]["language"] == "en"
+    assert notification.metadata_["whatsapp_template"]["variables"] == {"1": "Ada"}
     assert message.body == "[WhatsApp template: service_update]"
     assert message.metadata_["message_kind"] == "template"
-    assert message.external_message_id == "wamid.template"
+    assert message.external_message_id is None
 
 
-def test_send_inbox_reply_does_not_store_whatsapp_message_on_provider_failure(
+def test_send_inbox_reply_does_not_call_whatsapp_provider_inline(
     db_session, monkeypatch
 ):
     conversation = _whatsapp_conversation(db_session)
+    calls: list[object] = []
     monkeypatch.setattr(
-        team_inbox_outbound.whatsapp_connector,
+        notification_tasks.whatsapp_service,
         "send_text_message",
-        lambda *args, **kwargs: {
-            "ok": False,
-            "provider": "meta_cloud_api",
-            "sent": True,
-            "status_code": 400,
-            "response": "bad recipient",
-        },
+        lambda *args, **kwargs: calls.append(kwargs) or {"ok": True},
     )
     db_session.commit()
 
@@ -259,12 +217,12 @@ def test_send_inbox_reply_does_not_store_whatsapp_message_on_provider_failure(
         ),
     )
 
-    assert result.kind == "send_failed"
-    assert result.reason == "WhatsApp provider rejected the reply"
-    assert db_session.query(InboxMessage).count() == 0
+    assert result.kind == "queued"
+    assert calls == []
+    assert db_session.query(InboxMessage).count() == 1
 
 
-def test_send_inbox_reply_can_record_failed_message_for_retry(db_session, monkeypatch):
+def test_failed_outbox_message_can_be_manually_requeued(db_session, monkeypatch):
     conversation = _whatsapp_conversation(db_session)
     attempts: list[dict[str, object]] = []
 
@@ -287,13 +245,11 @@ def test_send_inbox_reply_can_record_failed_message_for_retry(db_session, monkey
         }
 
     monkeypatch.setattr(
-        team_inbox_outbound.whatsapp_connector,
-        "send_text_message",
-        _fake_send,
+        notification_tasks.whatsapp_service, "send_text_message", _fake_send
     )
     db_session.commit()
 
-    failed = team_inbox_outbound.send_inbox_reply(
+    queued = team_inbox_outbound.send_inbox_reply(
         db_session,
         conversation=conversation,
         payload=team_inbox_outbound.InboxReplyPayload(
@@ -301,16 +257,17 @@ def test_send_inbox_reply_can_record_failed_message_for_retry(db_session, monkey
         ),
         record_failure=True,
     )
-    failed_message = db_session.get(InboxMessage, failed.message_id)
+    notification_tasks._deliver_notification_queue_stats(db_session)
+    failed_message = db_session.get(InboxMessage, queued.message_id)
     retried = team_inbox_outbound.retry_outbound_message(
         db_session,
         message=failed_message,
     )
 
-    assert failed.kind == "send_failed"
+    assert queued.kind == "queued"
     assert failed_message.metadata_["delivery_status"] == "retried"
     assert failed_message.metadata_["retry_count"] == 1
-    assert retried.kind == "sent"
+    assert retried.kind == "queued"
     assert db_session.query(InboxMessage).count() == 2
 
 
@@ -329,6 +286,36 @@ def test_send_inbox_reply_requires_whatsapp_recipient(db_session):
     assert result.reason == "Conversation has no WhatsApp reply recipient"
 
 
+def test_linked_disabled_subscriber_reply_is_suppressed(db_session):
+    subscriber = Subscriber(
+        first_name="Disabled",
+        last_name="Customer",
+        email="disabled-inbox@example.com",
+        status=SubscriberStatus.disabled,
+        is_active=False,
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    conversation = InboxConversation(
+        subscriber_id=subscriber.id,
+        channel_type="email",
+        contact_address=subscriber.email,
+        status=InboxConversationStatus.open.value,
+    )
+    db_session.add(conversation)
+    db_session.flush()
+
+    result = team_inbox_outbound.send_inbox_reply(
+        db_session,
+        conversation=conversation,
+        payload=team_inbox_outbound.InboxReplyPayload(body_html="<p>Hello.</p>"),
+    )
+
+    assert result.kind == "suppressed"
+    assert db_session.query(Notification).count() == 0
+    assert db_session.query(InboxMessage).count() == 0
+
+
 def test_send_inbox_reply_uses_field_service_sender_for_field_team(
     db_session, monkeypatch
 ):
@@ -336,12 +323,6 @@ def test_send_inbox_reply_uses_field_service_sender_for_field_team(
     _activity_sender(db_session, "field_service", "field")
     team = _team(db_session, "Field Service", ServiceTeamType.field_service.value)
     conversation = _conversation(db_session, team)
-    sent: dict[str, object] = {}
-    monkeypatch.setattr(
-        team_inbox_outbound.email_service,
-        "send_email",
-        lambda *args, **kwargs: sent.update(kwargs) or True,
-    )
     db_session.commit()
 
     result = team_inbox_outbound.send_inbox_reply(
@@ -353,35 +334,28 @@ def test_send_inbox_reply_uses_field_service_sender_for_field_team(
         ),
     )
 
-    assert result.kind == "sent"
+    notification = db_session.query(Notification).one()
+    assert result.kind == "queued"
     assert result.activity == "field_service"
     assert result.from_address == "field@dotmac.io"
-    assert sent["to_email"] == "site-contact@example.com"
-    assert sent["activity"] == "field_service"
+    assert notification.recipient == "site-contact@example.com"
+    assert notification.metadata_["activity"] == "field_service"
 
 
-def test_reply_api_returns_502_and_does_not_store_message_on_send_failure(
-    db_session, monkeypatch
-):
+def test_reply_api_queues_before_provider_delivery(db_session, monkeypatch):
     team = _team(db_session, "Support", ServiceTeamType.support.value)
     conversation = _conversation(db_session, team)
-    monkeypatch.setattr(
-        team_inbox_outbound.email_service,
-        "send_email",
-        lambda *_, **__: False,
-    )
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        support_api.reply_to_inbox_conversation(
-            conversation.id,
-            InboxConversationReplyRequest(body_html="<p>No route.</p>"),
-            auth={"principal_id": str(uuid4())},
-            db=db_session,
-        )
+    result = support_api.reply_to_inbox_conversation(
+        conversation.id,
+        InboxConversationReplyRequest(body_html="<p>No route.</p>"),
+        auth={"principal_id": str(uuid4())},
+        db=db_session,
+    )
 
-    assert exc.value.status_code == 502
-    assert db_session.query(InboxMessage).count() == 0
+    assert result.kind == "queued"
+    assert db_session.query(InboxMessage).count() == 1
 
 
 def test_team_metadata_sender_key_overrides_reply_activity(db_session, monkeypatch):
@@ -396,12 +370,6 @@ def test_team_metadata_sender_key_overrides_reply_activity(db_session, monkeypat
     db_session.add(team)
     db_session.flush()
     conversation = _conversation(db_session, team)
-    sent: dict[str, object] = {}
-    monkeypatch.setattr(
-        team_inbox_outbound.email_service,
-        "send_email",
-        lambda *args, **kwargs: sent.update(kwargs) or True,
-    )
     db_session.commit()
 
     result = team_inbox_outbound.send_inbox_reply(
@@ -410,10 +378,11 @@ def test_team_metadata_sender_key_overrides_reply_activity(db_session, monkeypat
         payload=team_inbox_outbound.InboxReplyPayload(body_html="<p>VIP reply.</p>"),
     )
 
-    assert result.kind == "sent"
+    notification = db_session.query(Notification).one()
+    assert result.kind == "queued"
     assert result.sender_key == "vip_support"
     assert result.from_address == "vip@dotmac.io"
-    assert sent["sender_key"] == "vip_support"
+    assert notification.metadata_["sender_key"] == "vip_support"
 
 
 def test_owner_route_sender_metadata_overrides_team_sender(db_session, monkeypatch):
@@ -450,12 +419,6 @@ def test_owner_route_sender_metadata_overrides_team_sender(db_session, monkeypat
             },
         )
     )
-    sent: dict[str, object] = {}
-    monkeypatch.setattr(
-        team_inbox_outbound.email_service,
-        "send_email",
-        lambda *args, **kwargs: sent.update(kwargs) or True,
-    )
     db_session.commit()
 
     result = team_inbox_outbound.send_inbox_reply(
@@ -464,8 +427,9 @@ def test_owner_route_sender_metadata_overrides_team_sender(db_session, monkeypat
         payload=team_inbox_outbound.InboxReplyPayload(body_html="<p>Reply.</p>"),
     )
 
-    assert result.kind == "sent"
+    notification = db_session.query(Notification).one()
+    assert result.kind == "queued"
     assert result.sender_key == "route_support"
     assert result.activity == "support_ticket"
     assert result.from_address == "help@dotmac.io"
-    assert sent["sender_key"] == "route_support"
+    assert notification.metadata_["sender_key"] == "route_support"

@@ -542,6 +542,13 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.vas.run_vas_review_requery",
                 "schedule": timedelta(hours=24),
             }
+        # In-flight refunds remain money-moving obligations even when new VAS
+        # activity is disabled, so their backstop must never share the feature
+        # gate used by catalog and purchase work.
+        schedule["vas_refund_reconcile"] = {
+            "task": "app.tasks.vas.reconcile_refund_requests",
+            "schedule": timedelta(minutes=5),
+        }
         credential_rotation_enabled = _effective_bool(
             session,
             SettingDomain.auth,
@@ -748,9 +755,9 @@ def build_beat_schedule() -> dict:
         )
         # Daily status-backstop reconcilers (SP-8): the event path normally
         # clears these, but the sweeps are the catch-up for lost events.
-        # account_status: auto-repair subscribers stuck `blocked` while all subs
-        # are active (walled-gardened despite active service) — the all-active
-        # filter is a robust guard, pure service-state, so apply mode is safe.
+        # account_status: auto-repair subscribers stuck `new`/`blocked` while
+        # all subs are active. The all-active filter is a robust guard, pure
+        # service-state, so apply mode is safe.
         account_status_reconcile_enabled = _effective_bool(
             session,
             SettingDomain.billing,
@@ -1006,6 +1013,15 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.billing.check_billing_switch",
             enabled=True,
             interval_seconds=3600,
+        )
+        # Heavy cohort health is produced out of band. Prometheus scrapes only
+        # the bounded Redis snapshot and never walks customer financial rows.
+        _sync_scheduled_task(
+            session,
+            name="billing_health_snapshot",
+            task_name="app.tasks.billing.refresh_billing_health_snapshot",
+            enabled=True,
+            interval_seconds=900,
         )
         cutover_audit_enabled = _effective_bool(
             session,
@@ -1359,6 +1375,37 @@ def build_beat_schedule() -> dict:
             enabled=notification_queue_enabled,
             interval_seconds=notification_queue_interval_seconds,
         )
+        campaign_processing_enabled = _effective_bool(
+            session,
+            SettingDomain.comms,
+            "campaign_processing_enabled",
+            "CAMPAIGN_PROCESSING_ENABLED",
+            False,
+        )
+        campaign_processing_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.comms,
+                "campaign_processing_interval_seconds",
+                "CAMPAIGN_PROCESSING_INTERVAL_SECONDS",
+                60,
+            ),
+            30,
+        )
+        _sync_scheduled_task(
+            session,
+            name="campaign_due_runner",
+            task_name="app.tasks.campaigns.process_due_campaigns",
+            enabled=campaign_processing_enabled,
+            interval_seconds=campaign_processing_interval_seconds,
+        )
+        _sync_scheduled_task(
+            session,
+            name="campaign_sequence_runner",
+            task_name="app.tasks.campaigns.process_due_campaign_steps",
+            enabled=campaign_processing_enabled,
+            interval_seconds=campaign_processing_interval_seconds,
+        )
         operational_escalation_delivery_enabled = _effective_bool(
             session,
             SettingDomain.notification,
@@ -1626,6 +1673,19 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(ont_reconcile_seconds, 300),
         )
+        ont_status_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "huawei_ont_status_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="huawei_ont_status",
+            task_name="app.tasks.ont_runtime_status.dispatch_huawei_ont_status",
+            enabled=True,
+            interval_seconds=max(ont_status_seconds, 120),
+        )
         # RADIUS health: accounting freshness + enforcement drift from the
         # external radacct DB and the reconciled live-session view. Customer
         # experience often fails here before any router goes down.
@@ -1733,6 +1793,20 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.uisp_control.reconcile_uisp_config_readback",
             enabled=True,
             interval_seconds=max(topology_uisp_minutes * 60, 300),
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_config_readback",
+            task_name="router_sync.reconcile_config_push_readback",
+            enabled=True,
+            interval_seconds=300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="mikrotik_nas_vlan_readback",
+            task_name="router_sync.reconcile_nas_vlan_readback",
+            enabled=True,
+            interval_seconds=300,
         )
         # UFiber ONU -> subscriber link: net-new, auth-safe association pass.
         # Router-mode UF-Wifi ONUs carry the customer router MAC as their own

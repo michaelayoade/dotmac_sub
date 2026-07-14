@@ -22,6 +22,7 @@ from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import settings_spec
+from app.services.network.ont_status import resolve_effective_ont_status
 from app.services.network.signal_thresholds import (
     classify_signal,
     get_signal_thresholds,
@@ -246,16 +247,17 @@ def build_network_map_context(db: Session) -> dict:
     ont_offline = 0
     ont_warning = 0
     warn_threshold, crit_threshold = get_signal_thresholds(db)
-    # The live ONT status/signal source (Zabbix) was retired with the native
-    # monitoring cutover: every ONT reads offline with empty signal values on
-    # the map, matching the unconfigured behaviour.
     for ont in ont_units:
-        status = "offline"
-        ont_offline += 1
+        effective_status = resolve_effective_ont_status(ont)
+        status = effective_status.status.value
+        if effective_status.is_online:
+            ont_online += 1
+        else:
+            ont_offline += 1
         if ont.gps_longitude is None or ont.gps_latitude is None:
             continue
-        olt_rx_dbm = None
-        onu_rx_dbm = None
+        olt_rx_dbm = ont.olt_rx_signal_dbm
+        onu_rx_dbm = ont.onu_rx_signal_dbm
         signal_quality = classify_signal(
             olt_rx_dbm,
             warn_threshold=warn_threshold,

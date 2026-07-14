@@ -1,14 +1,16 @@
 name: Mobile CI
 
-# Runs on every PR so the `Mobile CI` gate job always reports a status (a
-# required check that never reports would deadlock a PR). The expensive Flutter
-# and iOS jobs stay scoped to mobile changes via the `changes` filter below, so
-# backend-only PRs still don't pay for a Flutter/iOS run.
+# Runs on every PR *and every merge_group* so the `Mobile CI` gate job always
+# reports a status (a required check that never reports would deadlock a PR --
+# and, in a merge queue, would stall the queue behind it indefinitely). The
+# expensive Flutter and iOS jobs stay scoped to mobile changes via the `changes`
+# filter below, so backend-only PRs still don't pay for a Flutter/iOS run.
 on:
   push:
     branches: [main, develop, dev]
   pull_request:
     branches: [main]
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +29,11 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # merge_group carries no PR context, so paths-filter cannot infer a
+          # base and would classify every path as unchanged — silently skipping
+          # Flutter on a mobile PR as it merges. Point it at the queued base.
+          # Empty on every other event, which restores the default inference.
+          base: ${{ github.event.merge_group.base_ref }}
           filters: |
             mobile:
               - 'mobile/**'
@@ -67,10 +74,16 @@ jobs:
         run: |
           if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
             base="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
+            base="${{ github.event.merge_group.base_sha }}"
           else
             base="${{ github.event.before }}"
           fi
-          files=$(cd .. && git diff --name-only "$base"...HEAD -- 'mobile/**/*.dart' 2>/dev/null | sed 's|^mobile/||')
+          # An unresolved base used to swallow its own error into an empty file
+          # list, reporting "nothing to check" — a format gate that passes by
+          # failing. Refuse to run instead.
+          if [ -z "$base" ]; then echo "Could not resolve a diff base."; exit 1; fi
+          files=$(cd .. && git diff --name-only "$base"...HEAD -- 'mobile/**/*.dart' | sed 's|^mobile/||')
           if [ -z "$files" ]; then echo "No changed Dart files to format-check."; exit 0; fi
           echo "Format-checking:"; echo "$files"
           echo "$files" | xargs dart format --output=none --set-exit-if-changed
@@ -110,10 +123,13 @@ jobs:
         run: |
           if [ -n "${{ github.event.pull_request.base.sha }}" ]; then
             base="${{ github.event.pull_request.base.sha }}"
+          elif [ -n "${{ github.event.merge_group.base_sha }}" ]; then
+            base="${{ github.event.merge_group.base_sha }}"
           else
             base="${{ github.event.before }}"
           fi
-          files=$(cd .. && git diff --name-only "$base"...HEAD -- 'field_mobile/**/*.dart' 2>/dev/null | sed 's|^field_mobile/||')
+          if [ -z "$base" ]; then echo "Could not resolve a diff base."; exit 1; fi
+          files=$(cd .. && git diff --name-only "$base"...HEAD -- 'field_mobile/**/*.dart' | sed 's|^field_mobile/||')
           if [ -z "$files" ]; then echo "No changed Dart files to format-check."; exit 0; fi
           echo "Format-checking:"; echo "$files"
           echo "$files" | xargs dart format --output=none --set-exit-if-changed

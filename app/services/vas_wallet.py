@@ -162,6 +162,7 @@ def _write_entry(
     reference: str | None = None,
     payment_id=None,
     memo: str | None = None,
+    commit: bool = True,
 ) -> VasWalletEntry:
     if amount <= 0:
         raise HTTPException(
@@ -182,8 +183,15 @@ def _write_entry(
         memo=memo,
     )
     db.add(entry)
-    db.commit()
-    db.refresh(entry)
+    # ``commit=False`` puts this entry in the SAME transaction as whatever it
+    # funds. pay_bill needs that: committing the debit on its own opened a window
+    # where a process death destroyed the customer's money with no payment to
+    # show for it.
+    if commit:
+        db.commit()
+        db.refresh(entry)
+    else:
+        db.flush()
     return entry
 
 
@@ -196,6 +204,7 @@ def credit_wallet(
     reference: str | None = None,
     payment_id=None,
     memo: str | None = None,
+    commit: bool = True,
 ) -> VasWalletEntry:
     return _write_entry(
         db,
@@ -206,6 +215,7 @@ def credit_wallet(
         reference=reference,
         payment_id=payment_id,
         memo=memo,
+        commit=commit,
     )
 
 
@@ -218,6 +228,7 @@ def debit_wallet(
     reference: str | None = None,
     payment_id=None,
     memo: str | None = None,
+    commit: bool = True,
 ) -> VasWalletEntry:
     """Debit under an owner lock — insufficient funds is a 400, never negative."""
     _lock_wallet_owner(db, wallet)
@@ -239,6 +250,7 @@ def debit_wallet(
         reference=reference,
         payment_id=payment_id,
         memo=memo,
+        commit=commit,
     )
 
 
@@ -570,52 +582,59 @@ def pay_bill(
             },
         )
 
+    # The debit and the payment it funds are ONE atomic unit.
+    #
+    # The debit used to commit on its own (_write_entry committed), and only THEN
+    # was Payments.create called. A process death in that window destroyed the
+    # customer's wallet money with no payment to show for it, and nothing could
+    # recover it: the compensating credit only ever ran for a raised Exception,
+    # never for a crash. Money must not be able to exist in a state where it has
+    # left the wallet and reached nothing.
+    #
+    # A SAVEPOINT, not the whole transaction, so the money block is undone without
+    # discarding anything the caller had already done.
     try:
-        entry = debit_wallet(
-            db,
-            wallet,
-            amount=amount,
-            category=VasEntryCategory.bill_payment,
-            memo="DotMac bill payment from wallet",
-        )
-    except Exception:
-        # Insufficient funds (or any debit failure) must release the key so the
-        # customer can retry once they top up.
-        if reservation is not None:
-            db.delete(reservation)
-            db.commit()
-        raise
-    try:
-        payment = Payments.create(
-            db,
-            PaymentCreate(
-                account_id=wallet.subscriber_id,
+        with db.begin_nested():
+            entry = debit_wallet(
+                db,
+                wallet,
                 amount=amount,
-                external_id=f"vaswallet-{entry.id}",
-                memo="Paid from wallet",
-            ),
-            auto_allocate=True,
-        )
-    except Exception:
-        # Roll the debit back symmetrically — the customer must never lose
-        # wallet money to a failed bill payment.
-        credit_wallet(
-            db,
-            wallet,
-            amount=amount,
-            category=VasEntryCategory.adjustment,
-            reference=f"reversal-{entry.id}",
-            memo="Reversal: bill payment failed",
-        )
+                category=VasEntryCategory.bill_payment,
+                memo="DotMac bill payment from wallet",
+                commit=False,
+            )
+            payment = Payments.create(
+                db,
+                PaymentCreate(
+                    account_id=wallet.subscriber_id,
+                    amount=amount,
+                    external_id=f"vaswallet-{entry.id}",
+                    memo="Paid from wallet",
+                ),
+                auto_allocate=True,
+                commit=False,
+            )
+            entry.payment_id = payment.id
+            if reservation is not None:
+                reservation.ref_id = str(payment.id)
+                db.add(reservation)
+        db.commit()
+    except BaseException:
+        # The savepoint has already rolled the debit back, so the reversal cannot
+        # be forgotten — there is no compensating credit entry to write, and none
+        # to miss. BaseException, not Exception: a process death must not be able
+        # to leave the debit standing, and that is the exact case the old
+        # compensating credit could never cover.
+        #
+        # Release the key so the customer can retry (e.g. after topping up on an
+        # insufficient balance). If even that fails, the replay path already
+        # recognises a key reserved but never linked to a payment and drops it.
         if reservation is not None:
-            db.delete(reservation)
-            db.commit()
+            stale = db.get(IdempotencyKey, reservation.id)
+            if stale is not None:
+                db.delete(stale)
+                db.commit()
         raise
-    entry.payment_id = payment.id
-    if reservation is not None:
-        reservation.ref_id = str(payment.id)
-        db.add(reservation)
-    db.commit()
     return {
         "payment_id": str(payment.id),
         "amount": amount,

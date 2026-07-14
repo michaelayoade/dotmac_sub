@@ -19,9 +19,25 @@ import pytest
 from app.services.genieacs_client import GenieACSError
 from app.services.network.reconcile import (
     OntDesiredState,
+    Tr181WanParameterPaths,
     read_acs_state,
     read_olt_state,
 )
+
+
+def _tr181_wan_paths() -> Tr181WanParameterPaths:
+    return Tr181WanParameterPaths(
+        ip_enable="Device.IP.Interface.1.Enable",
+        dhcp_enable="Device.DHCPv4.Client.1.Enable",
+        ip_address="Device.IP.Interface.1.IPv4Address.1.IPAddress",
+        subnet_mask="Device.IP.Interface.1.IPv4Address.1.SubnetMask",
+        gateway="Device.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
+        dns_primary="Device.DNS.Client.Server.1.DNSServer",
+        dns_secondary="Device.DNS.Client.Server.2.DNSServer",
+        nat_enable="Device.NAT.InterfaceSetting.1.Enable",
+        vlan_enable="Device.Ethernet.VLANTermination.1.Enable",
+        vlan_id="Device.Ethernet.VLANTermination.1.VLANID",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -731,6 +747,9 @@ def _device_doc(*, serial: str = "HWTC8535819A", overrides=None) -> dict:
         "InternetGatewayDevice": {
             "DeviceInfo": {"SoftwareVersion": _leaf("V5R019C10S100")},
             "ManagementServer": {
+                "URL": _leaf("https://acs.example.net/cwmp"),
+                "Username": _leaf("cwmp-user"),
+                "Password": _leaf("configured"),
                 "PeriodicInformInterval": _leaf("300"),
                 "ConnectionRequestUsername": _leaf("admin"),
                 "ConnectionRequestPassword": _leaf("admin"),
@@ -818,6 +837,9 @@ def test_acs_reader_parses_a_full_device_document():
     assert obs.acs_observed_cr_username == "admin"
     assert obs.acs_observed_cr_username_set is True
     assert obs.acs_observed_cr_password_set is True
+    assert obs.acs_observed_url == "https://acs.example.net/cwmp"
+    assert obs.acs_observed_username == "cwmp-user"
+    assert obs.acs_observed_password_set is True
     assert obs.acs_observed_wan_wcd_index == 1
     assert obs.acs_observed_wan_instance_index == 1
     assert obs.acs_observed_wan_ppp_locations == ((1, 1),)
@@ -944,6 +966,63 @@ def test_acs_reader_uses_tr181_root_when_present():
     # No TR-098 → all WAN/LAN/WiFi fields None
     assert result.observed.acs_observed_pppoe_username is None
     assert result.observed.acs_observed_ssid is None
+
+
+def test_acs_reader_parses_model_resolved_tr181_static_wan():
+    doc = {
+        "_id": "00ABCD-EG8145V5-HWTC1111",
+        "Device": {
+            "IP": {
+                "Interface": {
+                    "1": {
+                        "Enable": _leaf("true"),
+                        "IPv4Address": {
+                            "1": {
+                                "IPAddress": _leaf("160.119.127.194"),
+                                "SubnetMask": _leaf("255.255.255.248"),
+                            }
+                        },
+                    }
+                }
+            },
+            "DHCPv4": {"Client": {"1": {"Enable": _leaf("false")}}},
+            "Routing": {
+                "Router": {
+                    "1": {
+                        "IPv4Forwarding": {
+                            "1": {"GatewayIPAddress": _leaf("160.119.127.193")}
+                        }
+                    }
+                }
+            },
+            "DNS": {
+                "Client": {
+                    "Server": {
+                        "1": {"DNSServer": _leaf("1.1.1.1")},
+                        "2": {"DNSServer": _leaf("8.8.8.8")},
+                    }
+                }
+            },
+            "NAT": {"InterfaceSetting": {"1": {"Enable": _leaf("false")}}},
+            "Ethernet": {
+                "VLANTermination": {
+                    "1": {"Enable": _leaf("true"), "VLANID": _leaf("203")}
+                }
+            },
+        },
+    }
+    desired = _desired(
+        tr069_data_model_root="Device", tr181_wan_paths=_tr181_wan_paths()
+    )
+
+    observed = read_acs_state(_StubGenieAcsClient(devices=[doc]), desired).observed
+
+    assert observed.acs_observed_wan_addressing_type == "Static"
+    assert observed.acs_observed_wan_ip_address == "160.119.127.194"
+    assert observed.acs_observed_wan_gateway == "160.119.127.193"
+    assert observed.acs_observed_wan_dns_servers == "1.1.1.1,8.8.8.8"
+    assert observed.acs_observed_nat_enabled is False
+    assert observed.acs_observed_wan_vlan == 203
 
 
 def test_acs_reader_handles_malformed_timestamps():

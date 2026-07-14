@@ -587,6 +587,7 @@ class TestParentStatusDerivation:
         updated = network_operations.update_parent_status(db_session, str(parent.id))
         assert updated.status == NetworkOperationStatus.failed
         assert updated.completed_at is not None
+        assert updated.error == "test error"
 
     def test_any_pending(self, db_session):
         """Parent is pending when any child is pending (and none running/failed)."""

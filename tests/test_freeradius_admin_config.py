@@ -88,8 +88,25 @@ def test_admin_secret_is_env_ref_not_hardcoded():
 
 def test_compose_fails_fast_when_radius_secrets_are_missing():
     compose = _read("docker-compose.yml")
-    assert "RADIUS_DB_PASS=${RADIUS_DB_PASS:?" in compose
+    assert "FREERADIUS_DB_HOST=${FREERADIUS_DB_HOST:?" in compose
+    assert "FREERADIUS_DB_NAME=${FREERADIUS_DB_NAME:?" in compose
+    assert "FREERADIUS_DB_USER=${FREERADIUS_DB_USER:?" in compose
+    assert "FREERADIUS_DB_PASS=${FREERADIUS_DB_PASS:?" in compose
     assert "ADMIN_RADIUS_SECRET=${ADMIN_RADIUS_SECRET:?" in compose
+
+
+def test_freeradius_sql_uses_dedicated_database_environment():
+    for path in (
+        "config/freeradius/mods-enabled/sql",
+        "config/freeradius/mods-enabled/sql_admin",
+    ):
+        config = _read(path)
+        assert "$ENV{FREERADIUS_DB_HOST}" in config
+        assert "$ENV{FREERADIUS_DB_PORT}" in config
+        assert "$ENV{FREERADIUS_DB_NAME}" in config
+        assert "$ENV{FREERADIUS_DB_USER}" in config
+        assert "$ENV{FREERADIUS_DB_PASS}" in config
+        assert "$ENV{RADIUS_DB_" not in config
 
 
 def test_admin_authorize_loads_password_before_mschap():

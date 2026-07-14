@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.models.network_monitoring import (
     DeviceMetric,
@@ -11,7 +12,37 @@ from app.models.network_monitoring import (
 from app.services import web_network_core_devices_views as core_devices_views
 
 
-def test_consolidated_page_data_does_not_cap_core_devices_before_pagination(
+def test_page_metadata_clamps_stale_pages_and_handles_empty_results():
+    pagination = core_devices_views._page_metadata(7, 99, 3)
+
+    assert pagination == {
+        "page": 3,
+        "per_page": 3,
+        "total": 7,
+        "total_pages": 3,
+        "has_prev": True,
+        "has_next": False,
+    }
+
+    pagination = core_devices_views._page_metadata(0, 4, 25)
+
+    assert pagination["page"] == 1
+    assert pagination["total_pages"] == 1
+
+
+def test_consolidated_template_uses_server_tabs_and_independent_pagination():
+    template = Path("templates/admin/network/network-devices/index.html").read_text()
+
+    assert "activeTab" not in template
+    assert "{% if tab == 'core' %}" in template
+    assert "{% if tab == 'olts' %}" in template
+    assert "{% if tab == 'onts' %}" in template
+    assert "include_query_params(olt_page=" in template
+    assert "include_query_params(ont_page=" in template
+    assert "include_query_params(cpe_page=" in template
+
+
+def test_consolidated_page_data_pages_core_devices_in_the_database(
     db_session,
 ):
     devices = [
@@ -29,10 +60,13 @@ def test_consolidated_page_data_does_not_cap_core_devices_before_pagination(
     db_session.add_all(devices)
     db_session.commit()
 
-    payload = core_devices_views.consolidated_page_data(tab="core", db=db_session)
+    payload = core_devices_views.consolidated_page_data(
+        tab="core", db=db_session, page=99, per_page=50
+    )
 
     names = {device.name for device in payload["core_devices"]}
-    assert len(names) == 205
+    assert len(names) == 5
+    assert payload["core_pagination"]["page"] == 5
     assert "Core Switch 204" in names
     assert payload["stats"]["core_total"] == 205
 

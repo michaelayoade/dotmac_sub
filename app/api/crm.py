@@ -14,6 +14,8 @@ from app.services import crm_api
 
 router = APIRouter(prefix="/crm", tags=["crm-api"])
 
+CRM_MAX_PER_PAGE = 500
+
 
 def _error(
     status_code: int, message: str, errors: dict[str, list[str]] | None = None
@@ -47,33 +49,66 @@ def _query_value(request: Request, name: str) -> str | None:
     return value if value not in ("", None) else None
 
 
-def _pagination(request: Request) -> tuple[int, int, dict[str, Any]]:
+def _pagination(
+    request: Request, *, max_per_page: int = CRM_MAX_PER_PAGE
+) -> tuple[int, int, dict[str, Any]]:
     errors: dict[str, list[str]] = {}
 
-    def parse_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    def parse_int(
+        name: str,
+        default: int,
+        *,
+        min_value: int,
+        max_value: int,
+        aliases: tuple[str, ...] = (),
+    ) -> int:
+        source_name = name
         raw = _query_value(request, name)
+        if raw is None:
+            for alias in aliases:
+                raw = _query_value(request, alias)
+                if raw is not None:
+                    source_name = alias
+                    break
         if raw is None:
             return default
         try:
             value = int(raw)
         except ValueError:
-            errors.setdefault(name, []).append("Must be an integer.")
+            errors.setdefault(source_name, []).append("Must be an integer.")
             return default
         if value < min_value:
-            errors.setdefault(name, []).append(
+            errors.setdefault(source_name, []).append(
                 f"Must be greater than or equal to {min_value}."
             )
         if value > max_value:
-            errors.setdefault(name, []).append(
+            errors.setdefault(source_name, []).append(
                 f"Must be less than or equal to {max_value}."
             )
         return value
 
     page = parse_int("page", 1, min_value=1, max_value=1_000_000)
-    per_page = parse_int("per_page", 100, min_value=1, max_value=500)
+    per_page = parse_int(
+        "per_page",
+        100,
+        min_value=1,
+        max_value=max_per_page,
+        aliases=("limit",),
+    )
     if errors:
         _error(status.HTTP_400_BAD_REQUEST, "Invalid query parameters.", errors)
     return page, per_page, {"page": page, "per_page": per_page}
+
+
+def _finish_read_response(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    bind = db.get_bind()
+    if (
+        bind.dialect.name == "postgresql"
+        and db.in_transaction()
+        and not db.in_nested_transaction()
+    ):
+        db.rollback()
+    return payload
 
 
 def _include_values(request: Request, allowed: set[str]) -> set[str]:
@@ -159,6 +194,7 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
         crm_api.billing_by_subscriber(db, subscribers) if "billing" in includes else {}
     )
     sessions = crm_api.latest_session_by_subscriber(db, subscriber_ids)
+    metadata = crm_api.subscriber_payload_metadata(db, subscribers)
     data = []
     for subscriber in subscribers:
         kwargs: dict[str, Any] = {}
@@ -172,10 +208,11 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
                 subscriber,
                 session=sessions.get(subscriber.id),
                 include_session_state="session_state" in includes,
+                metadata=metadata.get(subscriber.id),
                 **kwargs,
             )
         )
-    return _envelope(data, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
 @router.get("/subscribers/search", dependencies=[Depends(require_crm_bearer)])
@@ -195,19 +232,29 @@ def search_subscribers(
     sessions = crm_api.latest_session_by_subscriber(
         db, [item.id for item in subscribers]
     )
+    metadata = crm_api.subscriber_payload_metadata(db, subscribers)
     data = [
-        crm_api.subscriber_payload(db, subscriber, session=sessions.get(subscriber.id))
+        crm_api.subscriber_payload(
+            db,
+            subscriber,
+            session=sessions.get(subscriber.id),
+            metadata=metadata.get(subscriber.id),
+        )
         for subscriber in subscribers
     ]
-    return _envelope(data, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
 @router.get("/subscribers/online", dependencies=[Depends(require_crm_bearer)])
-def online_subscribers(db: Session = Depends(get_db)) -> dict[str, Any]:
+def online_subscribers(
+    request: Request, db: Session = Depends(get_db)
+) -> dict[str, Any]:
     # Online state is inferred from open, fresh RADIUS accounting sessions.
     # It is not an authoritative real-time device poll; subscribers whose NAS
     # has not sent interim accounting inside ONLINE_FRESH_SECONDS are excluded.
-    return _envelope(crm_api.online_subscribers(db))
+    page, per_page, meta = _pagination(request)
+    data, total = crm_api.online_subscribers(db, page=page, per_page=per_page)
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
 @router.get("/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_bearer)])
@@ -307,8 +354,10 @@ def update_subscriber_status(
 
 
 @router.get("/locations", dependencies=[Depends(require_crm_bearer)])
-def locations(db: Session = Depends(get_db)) -> dict[str, Any]:
-    return _envelope(crm_api.locations(db))
+def locations(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    page, per_page, meta = _pagination(request)
+    data, total = crm_api.locations(db, page=page, per_page=per_page)
+    return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
 @router.get("/billing-risk-source", dependencies=[Depends(require_crm_bearer)])
@@ -317,7 +366,7 @@ def billing_risk_source(
 ) -> dict[str, Any]:
     page, per_page, meta = _pagination(request)
     rows, total = crm_api.billing_risk_rows(db, page=page, per_page=per_page)
-    return _envelope(rows, {**meta, "total": total})
+    return _finish_read_response(db, _envelope(rows, {**meta, "total": total}))
 
 
 @router.post(

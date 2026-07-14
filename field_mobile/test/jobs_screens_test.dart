@@ -1,4 +1,5 @@
 import 'package:dotmac_field/app/theme.dart';
+import 'package:dotmac_field/features/execution/completion_wizard.dart';
 import 'package:dotmac_field/features/jobs/job_chat_screen.dart';
 import 'package:dotmac_field/features/jobs/job_detail_screen.dart';
 import 'package:dotmac_field/features/jobs/job_models.dart';
@@ -234,6 +235,12 @@ void main() {
         'priority': 'high',
       },
       'location': {'source': 'none'},
+      'completion_requirements': {
+        'evidence_required': false,
+        'minimum_photo_count': 0,
+        'customer_signoff_required': false,
+        'signature_unavailable_reason_allowed': false,
+      },
       'customer': {
         'subscriber_id': 'sub-1',
         'name': 'Adaeze Okafor',
@@ -275,11 +282,56 @@ void main() {
     });
 
     expect(detail.customer?.email, 'adaeze@example.com');
+    expect(detail.completionRequirements.evidenceRequired, isFalse);
+    expect(detail.completionRequirements.minimumPhotoCount, 0);
     expect(detail.projectId, 'project-1');
     expect(detail.accessNotes, contains('rack room key'));
     expect(detail.additionalContacts.single.name, 'Facilities Desk');
     expect(detail.openTickets.single.ref, 'TCK-1002');
     expect(detail.recentVisits.single.workType, 'maintenance');
+  });
+
+  test('job detail uses a strict fallback when cached policy is absent', () {
+    final detail = JobDetail.fromJson({
+      'job': {
+        'id': 'wo-1',
+        'title': 'Repair outage',
+        'status': 'in_progress',
+        'work_type': 'repair',
+        'priority': 'high',
+      },
+      'location': {'source': 'none'},
+    });
+
+    expect(detail.completionRequirements.evidenceRequired, isTrue);
+    expect(detail.completionRequirements.minimumPhotoCount, 1);
+    expect(detail.completionRequirements.customerSignoffRequired, isTrue);
+  });
+
+  testWidgets('wizard permits completion when server evidence policy is off', (
+    tester,
+  ) async {
+    const requirements = JobCompletionRequirements(
+      evidenceRequired: false,
+      minimumPhotoCount: 0,
+      customerSignoffRequired: false,
+      signatureUnavailableReasonAllowed: false,
+    );
+    await tester.pumpWidget(
+      _wrap(const CompletionWizard(jobId: 'wo-1', requirements: requirements)),
+    );
+
+    await tester.tap(find.byKey(const Key('wizard-next')));
+    await tester.pump();
+    expect(find.text('Photos: 0 · optional'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('wizard-next')));
+    await tester.pump();
+
+    expect(find.text('Customer sign-off (optional)'), findsOneWidget);
+    final finish = tester.widget<FilledButton>(
+      find.byKey(const Key('wizard-finish')),
+    );
+    expect(finish.onPressed, isNotNull);
   });
 
   test('job chat thread parses field-service messages', () {

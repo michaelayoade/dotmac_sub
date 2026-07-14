@@ -22,7 +22,11 @@ from app.tasks.billing import (
     check_billing_switch_task,
     run_invoice_cycle,
 )
-from app.tasks.campaigns import process_due_campaigns, send_campaign_batch
+from app.tasks.campaigns import (
+    process_due_campaign_steps,
+    process_due_campaigns,
+    send_campaign_batch,
+)
 from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
 from app.tasks.collections import prepaid_balance_sweep, run_dunning
 from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
@@ -95,6 +99,10 @@ from app.tasks.ont_provisioning import (
     queue_bulk_provisioning,
 )
 from app.tasks.ont_reconcile import run_ont_reconcile_sweep
+from app.tasks.ont_runtime_status import (
+    dispatch_huawei_ont_status,
+    refresh_huawei_olt_status,
+)
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
 from app.tasks.payment_reconciliation import reconcile_topups
@@ -117,6 +125,8 @@ from app.tasks.router_sync import (
     capture_scheduled_snapshots,
     cleanup_idle_tunnels,
     execute_config_push,
+    reconcile_config_push_readback,
+    reconcile_nas_vlan_readback,
     sync_all_interfaces,
     sync_all_system_info,
 )
@@ -172,6 +182,7 @@ from app.tasks.usage import (
 )
 from app.tasks.vacation_holds import resume_expired_holds
 from app.tasks.vas import (
+    reconcile_refund_requests,
     run_vas_requery,
     run_vas_review_requery,
     run_wallet_auto_deduct,
@@ -199,12 +210,14 @@ __all__ = [
     "sync_gis_sources",
     "run_batch_geocode_job",
     "run_vas_requery",
+    "reconcile_refund_requests",
     "run_vas_review_requery",
     "run_wallet_auto_deduct",
     "sync_vas_catalog",
     "run_import_job",
     "run_integration_job",
     "process_due_campaigns",
+    "process_due_campaign_steps",
     "send_campaign_batch",
     "expire_stale_insights",
     "generate_invoice_pdf_export",
@@ -304,6 +317,8 @@ __all__ = [
     "check_nas_health",
     "execute_ont_bulk_action",
     "run_ont_reconcile_sweep",
+    "dispatch_huawei_ont_status",
+    "refresh_huawei_olt_status",
     "authorize_ont_task",
     "evaluate_alert_rules",
     "evaluate_infrastructure_alerts",
@@ -321,6 +336,8 @@ __all__ = [
     "capture_scheduled_snapshots",
     "cleanup_idle_tunnels",
     "execute_config_push",
+    "reconcile_config_push_readback",
+    "reconcile_nas_vlan_readback",
     "sync_all_interfaces",
     "sync_all_system_info",
     "run_scheduled_credential_rotation",

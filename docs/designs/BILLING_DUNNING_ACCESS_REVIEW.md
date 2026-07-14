@@ -1,18 +1,23 @@
 # Billing, Dunning, and Access Review
 
-Date: 2026-07-10
+Date: 2026-07-13
 Scope reviewed: `origin/main` billing, collections/dunning, prepaid enforcement,
 subscription changes, schedulers, cleanup/reconciliation, notification guards,
 and catalog permissions risk.
 
 ## Executive Position
 
-The remaining billing risk is not one isolated bug. It is an inconsistency
-between prepaid write paths and their backstop:
+The review originally found an inconsistency between prepaid write paths and
+their backstop. The feature branch now closes the immediate plan-change and
+catalog-governance gaps:
 
-- customer self-service attempts to block unaffordable prepaid actions;
-- admin/API plan changes can still create prepaid wallet drawdowns that push an
-  account negative;
+- customer self-service, admin/API updates, and change requests use one prepaid
+  plan-change decision;
+- the account is locked and the decision is recomputed before the debit/credit
+  and subscription mutation are committed together;
+- plan-change adjustments use a stable idempotency key;
+- billing-critical catalog mutations require `catalog:billing_write`, are
+  audited/observed, and cannot edit live pricing or cadence in place;
 - `prepaid_balance_sweep` is the intended balance/access enforcement backstop,
   but is deliberately feature-gated off by default;
 - dunning has been correctly narrowed toward postpaid AR, so prepaid AR cleanup
@@ -29,13 +34,13 @@ with deterministic scripts.
 | Change | Risk area | Current assessment | Action |
 | --- | --- | --- | --- |
 | `#738` / `ed8629d6` prepaid balance sweep | Prepaid suspension/access | Sound design as a backstop, but default-off. Unsafe if other prepaid paths rely on it. | Keep, but add dry-run/reporting and make enablement an explicit launch gate. |
-| `#741` / `b98fc621` prepaid plan-change drawdown | Admin/API prepaid upgrades | Code explicitly permits admin/API prepaid upgrades to push wallet negative and relies on enforcement. | Patch: shared affordability check plus audited override. |
+| `#741` / `b98fc621` prepaid plan-change drawdown | Admin/API prepaid upgrades | Closed on this branch: all immediate paths lock, recompute, reject insufficient funds/debt, and stage an idempotent adjustment atomically. | No bypass flag. Fund the wallet, post a valid credit/discount, or schedule next-cycle. |
 | `#744` / `345263da` prepaid phantom AR cleanup | Cleanup vs enforcement | Cleanup is necessary, but dangerous if it removes evidence before balance enforcement/correction review. | Keep cleanup behind reconciliation hold/dry-run; reconcile before destructive cleanup. |
 | `#751` / `dc145eb9` prepaid draft settlement/scheduler fixes | Prepaid invoice settlement | Generally supportive: settles drafts on top-up and fixes scheduler/control drift. | Keep; verify scheduled task config in prod. |
 | `cb7c1248` prepaid/postpaid separation | Invoice/dunning separation | Correct strategic direction: prepaid should not run through postpaid AR/dunning by default. | Keep; expand tests around mixed accounts and imported invoices. |
 | clean statement changes | Customer statement trust | Correct direction: hide internal migration/repair artifacts from customer view. | Keep; ensure admin audit remains complete. |
 | scheduled change/expiry guards | Access/comms | Correct direction: canceled scheduled changes and outage-aware expiry suppression. | Keep; add billing notification suppression parity. |
-| catalog permission changes | Governance | Root cause class: subscription operators got catalog mutation power. | Separate permissions and alert on billing-critical catalog edits. |
+| catalog permission changes | Governance | Closed on this branch with `catalog:billing_write`, durable audit, observability/admin alerting, duplicate-price guards, and live mutation guards. | Grant narrowly; use offer versions for pricing/cadence changes. |
 
 ## Current Code Flow
 
@@ -81,44 +86,41 @@ with deterministic scripts.
 - Active cross-mode changes are rejected: prepaid cannot be changed into
   postpaid and vice versa.
 - Mid-cycle prepaid upgrades create a ledger debit instead of an invoice.
-- The current code comment states affordability is not gated there and that an
-  admin change may push the wallet negative.
-
-That is the most important functional gap.
+- Mid-cycle downgrades stage the valid credit note in the same transaction.
+- Scheduled next-cycle changes skip immediate proration because no current-cycle
+  service value is being purchased.
 
 ## Findings
 
-### 1. Prepaid Affordability Is Not A System Invariant
+### 1. Prepaid Affordability Is A System Invariant
 
-Customer self-service and admin/API paths do not enforce the same rule. A
-prepaid customer can be protected in the portal but pushed negative by an admin
-or API plan change.
+Customer self-service, admin/API updates, and approved change requests now
+enforce the same rule through `app.services.prepaid_plan_changes`.
 
 Required invariant:
 
 ```text
 A prepaid customer cannot consume paid service unless they have enough prepaid
-value or an explicit approved override.
+value.
 ```
 
-Fix:
-
-- move affordability calculation into one shared service;
-- use it from customer self-service, admin UI, API, and scheduled plan changes;
-- reject unaffordable prepaid changes by default;
-- require a dedicated override permission for exceptions;
-- record override reason, actor, amount, before/after balance, and subscription.
+There is no generic admin override. Exceptions must be represented by a real
+payment, approved credit/discount, or a scheduled next-cycle change.
 
 ### 2. Prepaid Sweep Is A Backstop But Is Disabled
 
 The sweep being default-off is a reasonable safety posture during cleanup, but
 the rest of the system must not depend on a disabled backstop.
 
-Fix:
+Implemented readiness layer:
 
-- add a dry-run command/report for `prepaid_balance_sweep`;
-- show exact accounts that would be warned, suspended, restored, or skipped;
-- make production enablement a launch decision after reviewing the report;
+- `plan_prepaid_balance_sweep.py` reports the exact warn, suspend, restore,
+  deferred, shielded, health-blocked, invalid, and no-op cohorts;
+- each row includes the canonical balance/threshold, parent-status projection
+  drift, active service/lock counts, and outage/ticket notice suppression;
+- the report and executor consume `prepaid_enforcement_planner`; planning has no
+  timer, notification, service-state, or network side effects;
+- production enablement remains a launch decision after reviewing the report;
 - add billing health alert when billing is live, prepaid accounts are negative,
   and the sweep is disabled.
 
@@ -147,19 +149,20 @@ Fix:
 - apply cleanup in reviewed buckets;
 - keep admin-only audit evidence even when customer statements are cleaned.
 
-### 5. Catalog Governance Is Still Billing-Critical
+### 5. Catalog Governance Is Billing-Critical
 
 The Unlimited Basic daily/monthly incident is a catalog governance failure. A
 catalog cadence or price edit can change future deductions without touching
 billing code.
 
-Fix:
+Implemented:
 
-- separate `subscription:write` from billing-critical catalog permissions;
-- introduce `catalog:price_write` or equivalent for price/frequency changes;
-- audit and alert on changes to amount, billing cycle, billing mode, duration,
-  zero-price status, and recurring price rows;
-- prefer catalog versioning for active plans instead of mutating live pricing.
+- `subscription:write` remains separate from `catalog:billing_write`;
+- amount/currency/cycle/mode/term/tax and active price changes are audited and
+  surfaced through observability/admin alerts;
+- duplicate active recurring prices are rejected;
+- live offer, offer-version, and add-on pricing/cadence mutations are rejected
+  with a version/new-catalog-entry migration instruction.
 
 ### 6. Notification/Dunning Suppression Should Be Consistent
 
@@ -174,31 +177,29 @@ Fix:
 - do not suppress real finance/admin alerts, only customer pressure messages;
 - still show the issue in the operations inbox.
 
-## Stabilization PR Scope
+## Stabilization Status
 
-Implement these before further balance cleanup:
+Complete or verify these before further balance cleanup:
 
-1. Shared prepaid affordability service
+1. Shared prepaid affordability service - implemented
    - input: account, current subscription, requested offer, effective date;
    - output: required debit, available balance, allowed, reason;
-   - shared by customer portal, admin/API, scheduled changes.
+   - shared by customer portal, admin/API, and change-request application;
+   - scheduled next-cycle changes intentionally create no immediate adjustment.
 
-2. Admin/API affordability guard
+2. Admin/API affordability guard - implemented
    - reject unaffordable prepaid upgrade/change by default;
-   - allow override only with explicit permission and reason;
-   - write audit record.
+   - no generic override; fund/credit/discount or schedule the change;
+   - lock, recompute, and commit the adjustment with the subscription.
 
-3. Prepaid sweep dry-run/report
-   - list accounts by action bucket;
-   - include balance, threshold, current status, active subscription count,
-     open infrastructure ticket/outage suppression status, and proposed action.
+3. Prepaid sweep dry-run/report - implemented by
+   `scripts/one_off/plan_prepaid_balance_sweep.py`.
 
 4. Billing health additions
    - negative prepaid wallet count/total;
    - negative prepaid with sweep disabled;
    - prepaid active while below threshold;
    - prepaid low-balance timer armed but not suspended after due window;
-   - admin/API override count.
 
 5. Scheduler/control verification
    - verify prod values for:
@@ -209,7 +210,7 @@ Implement these before further balance cleanup:
      - `collections.billing_notifications_hourly_enabled`;
      - `catalog.scheduled_plan_change_enabled`.
 
-6. Catalog governance guard
+6. Catalog governance guard - implemented
    - restrict billing-critical catalog edits;
    - alert on price/frequency/billing mode edits;
    - log before/after values.
@@ -257,13 +258,8 @@ the customer statement.
 
 ## Recommended Next Step
 
-Open one billing stabilization PR that only changes controls and invariants:
-
-- shared prepaid affordability check;
-- admin/API guard plus audited override;
-- prepaid sweep dry-run/report;
-- negative-prepaid billing health metrics;
-- catalog permission/audit guard for price/frequency changes.
-
-After that PR is green and deployed, run the data review and apply balance
-corrections from reviewed buckets only.
+Keep this branch undeployed until its focused and full suites are green. After
+review and deployment, verify the new permission exists before granting it,
+exercise one test plan change and one catalog-version creation, then continue
+the separately controlled prepaid-enforcement rollout. Account corrections must
+still come from reviewed financial evidence, not from this code deployment.

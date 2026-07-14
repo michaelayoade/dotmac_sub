@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from unittest.mock import patch
 
+from sqlalchemy import text
+
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.event_store import EventHandlerAttempt, EventStatus, EventStore
 from app.models.subscriber import Subscriber
@@ -62,6 +64,24 @@ def test_audit_record_is_discarded_on_rollback(db_session):
     db_session.rollback()
 
     assert db_session.query(AuditEvent).count() == 0
+
+
+def test_audit_stage_is_atomic_with_caller_transaction(db_session):
+    event = audit_service.audit_events.stage(
+        db_session,
+        AuditEventCreate(
+            actor_type=AuditActorType.system,
+            action="credential_cleanup",
+            entity_type="NasDevice",
+            entity_id=str(uuid.uuid4()),
+        ),
+    )
+
+    db_session.flush()
+    assert db_session.get(AuditEvent, event.id) is event
+
+    db_session.rollback()
+    assert db_session.get(AuditEvent, event.id) is None
 
 
 def test_audit_record_in_nested_transaction_waits_for_outer_commit(db_session):
@@ -238,6 +258,44 @@ def test_dispatcher_persists_first_class_handler_attempts(db_session):
     assert len(attempts) == 1
     assert attempts[0].handler_name == "SuccessHandler"
     assert attempts[0].status == "success"
+
+
+def test_dispatcher_contains_handler_database_failures(db_session):
+    from app.services.events.dispatcher import EventDispatcher
+    from app.services.events.types import Event
+
+    handled: list[str] = []
+
+    class ArrangementHandler:
+        def handle(self, db, event):
+            db.execute(text("SELECT * FROM event_handler_table_that_does_not_exist"))
+
+    class NotificationHandler:
+        def handle(self, db, event):
+            db.execute(text("SELECT 1"))
+            handled.append(event.event_type.value)
+
+    dispatcher = EventDispatcher()
+    dispatcher.register_handler(ArrangementHandler())
+    dispatcher.register_handler(NotificationHandler())
+    event = Event(event_type=EventType.payment_received, payload={"amount": 50})
+
+    dispatcher.dispatch(db_session, event)
+
+    stored_event = (
+        db_session.query(EventStore).filter(EventStore.event_id == event.event_id).one()
+    )
+    attempts = {
+        attempt.handler_name: attempt.status
+        for attempt in db_session.query(EventHandlerAttempt)
+        .filter(EventHandlerAttempt.event_store_id == stored_event.id)
+        .all()
+    }
+    assert handled == [EventType.payment_received.value]
+    assert attempts == {
+        "ArrangementHandler": "failed",
+        "NotificationHandler": "success",
+    }
 
 
 def test_retry_event_uses_first_class_handler_attempt_rows_as_source_of_truth(

@@ -4,24 +4,20 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
-from app.models.network_monitoring import DeviceStatus, NetworkDevice, PopSite
+from app.models.network_monitoring import NetworkDevice, PopSite
+from app.models.radius import RadiusClient
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.usage import AccountingStatus, RadiusAccountingSession
-from app.services.events.types import EventType
 from app.services.network.access_path import summarize_subscription_access_path
-from app.services.network.device_state import resolve_device_state
-from app.services.network.events import (
-    decide_device_state_event,
-    decide_outage_event,
-    decide_radius_session_event,
-)
 from app.services.network.identity import identity_for_subscription
-from app.services.network.outage_impact import OutageImpact
 from app.services.network.radius_sessions import (
     active_session_count_for_subscriber,
+    latest_accounting_observation_at,
     latest_open_accounting_session_for_subscription,
     latest_open_accounting_sessions_by_subscription,
     live_framed_ips_by_subscription,
+    live_nas_device_ids_for_subscription,
+    recent_nas_history_by_subscription,
     resolve_subscriber_radius_sessions,
 )
 from app.services.network.sot_relationships import (
@@ -55,15 +51,26 @@ def test_network_sot_relationships_are_ordered():
         "access_path",
         "radius_sessions",
         "device_state",
+        "nas_inventory",
+        "subscription_nas_assignment",
+        "nas_lifecycle",
+        "nas_access_path_evidence",
         "outage_impact",
-        "events",
+        "outage_lifecycle",
     ]
-    assert dependencies_for("outage_impact") == ("access_path", "device_state")
-    assert dependencies_for("events") == (
-        "device_state",
-        "outage_impact",
+    assert dependencies_for("nas_lifecycle") == (
+        "identity",
+        "access_path",
         "radius_sessions",
+        "nas_inventory",
+        "subscription_nas_assignment",
     )
+    assert dependencies_for("nas_access_path_evidence") == (
+        "radius_sessions",
+        "nas_lifecycle",
+    )
+    assert dependencies_for("outage_impact") == ("access_path",)
+    assert dependencies_for("outage_lifecycle") == ("outage_impact",)
 
 
 def test_identity_and_access_path_resolve_subscription_nas_node(
@@ -126,6 +133,59 @@ def test_radius_session_resolution_uses_freshest_session(
     assert active_session_count_for_subscriber(db_session, subscriber.id) == 2
 
 
+def test_live_nas_evidence_can_require_exact_subscription_binding(
+    db_session, subscriber, catalog_offer
+):
+    first_nas, _ = _nas_node(db_session)
+    second_nas = NasDevice(name="NAS-SECOND", management_ip="10.0.0.2")
+    db_session.add(second_nas)
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+    )
+    db_session.add(subscription)
+    db_session.flush()
+    db_session.add_all(
+        [
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=subscription.id,
+                username="bound",
+                acct_session_id="bound-session",
+                nas_device_id=first_nas.id,
+                session_start=datetime.now(UTC),
+            ),
+            RadiusActiveSession(
+                subscriber_id=subscriber.id,
+                subscription_id=None,
+                username="unbound",
+                acct_session_id="unbound-session",
+                nas_device_id=second_nas.id,
+                session_start=datetime.now(UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    assert live_nas_device_ids_for_subscription(
+        db_session,
+        subscription.id,
+        subscription.subscriber_id,
+        allow_unbound=False,
+    ) == (first_nas.id,)
+    assert set(
+        live_nas_device_ids_for_subscription(
+            db_session,
+            subscription.id,
+            subscription.subscriber_id,
+        )
+    ) == {
+        first_nas.id,
+        second_nas.id,
+    }
+
+
 def test_open_accounting_session_helpers_use_newest_non_stop_session(
     db_session, subscriber, catalog_offer
 ):
@@ -176,61 +236,62 @@ def test_open_accounting_session_helpers_use_newest_non_stop_session(
     }
 
 
-def test_device_state_and_event_decision_for_down_transition(db_session):
-    node = NetworkDevice(
-        name="Down Node",
-        status=DeviceStatus.online,
-        is_active=True,
-        ping_enabled=True,
-        mgmt_ip="10.0.0.9",
-        live_status="down",
-        live_status_at=datetime.now(UTC),
+def test_recent_nas_history_prefers_direct_identity_and_falls_back_to_client(
+    db_session, subscriber, catalog_offer, radius_server
+):
+    direct_nas = NasDevice(name="Direct accounting NAS", nas_ip="10.60.0.1")
+    fallback_nas = NasDevice(name="Client-linked NAS", nas_ip="10.60.0.2")
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
     )
-    db_session.add(node)
+    db_session.add_all([direct_nas, fallback_nas, subscription])
+    db_session.flush()
+    client = RadiusClient(
+        server_id=radius_server.id,
+        nas_device_id=fallback_nas.id,
+        client_ip="10.60.0.2",
+        shared_secret_hash="hash",
+        is_active=True,
+    )
+    db_session.add(client)
+    db_session.flush()
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            RadiusAccountingSession(
+                subscription_id=subscription.id,
+                nas_device_id=direct_nas.id,
+                radius_client_id=client.id,
+                session_id="direct-wins",
+                status_type=AccountingStatus.stop,
+                session_start=now - timedelta(hours=2),
+                session_end=now - timedelta(hours=1),
+                last_update_at=now - timedelta(hours=1),
+            ),
+            RadiusAccountingSession(
+                subscription_id=subscription.id,
+                radius_client_id=client.id,
+                session_id="client-fallback",
+                status_type=AccountingStatus.stop,
+                session_start=now - timedelta(minutes=40),
+                session_end=now - timedelta(minutes=30),
+                last_update_at=now - timedelta(minutes=30),
+            ),
+        ]
+    )
     db_session.flush()
 
-    state = resolve_device_state(db_session, node)
-    decision = decide_device_state_event(previous_status="up", current=state)
-
-    assert state.live_status == "down"
-    assert state.source == "topology.live_status"
-    assert decision.should_emit is True
-    assert decision.event_type == EventType.device_offline
-    assert decision.payload["device_id"] == str(node.id)
-
-
-def test_outage_and_radius_event_decisions_are_customer_impact_driven(
-    db_session, subscriber
-):
-    empty_impact = OutageImpact(
-        scope_type="node",
-        scope_id=uuid.uuid4(),
-        affected_count=0,
-        payload={"count": 0},
-    )
-    live_impact = OutageImpact(
-        scope_type="node",
-        scope_id=uuid.uuid4(),
-        affected_count=3,
-        payload={"count": 3},
+    history = recent_nas_history_by_subscription(
+        db_session,
+        [subscription.id],
+        since=now - timedelta(days=1),
     )
 
-    assert (
-        decide_outage_event(
-            impact=empty_impact, alert_type="outage.created"
-        ).should_emit
-        is False
-    )
-    outage_decision = decide_outage_event(
-        impact=live_impact,
-        alert_type="outage.created",
-    )
-    session_decision = decide_radius_session_event(
-        before_online=False,
-        current=resolve_subscriber_radius_sessions(db_session, subscriber.id),
-    )
-
-    assert outage_decision.should_emit is True
-    assert outage_decision.event_type == EventType.network_alert
-    assert session_decision.should_emit is False
-    assert session_decision.reason == "unchanged"
+    assert {target.nas_device_id for target in history[subscription.id].targets} == {
+        direct_nas.id,
+        fallback_nas.id,
+    }
+    assert all(target.session_count == 1 for target in history[subscription.id].targets)
+    assert latest_accounting_observation_at(db_session) == now - timedelta(minutes=30)

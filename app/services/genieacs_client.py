@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from enum import Enum
 from typing import Any, cast
 from urllib.parse import quote
 
@@ -84,13 +85,29 @@ class GenieACSTaskRejectedError(GenieACSError):
     pass
 
 
+class GenieACSDeliveryCode(str, Enum):
+    """Stable machine-readable reasons for accepted but undelivered ACS tasks."""
+
+    queued = "acs_delivery_queued"
+    connection_request_failed = "acs_connection_request_failed"
+    task_timeout = "acs_task_timeout"
+
+
 class GenieACSTaskQueuedError(GenieACSError):
     """Raised when GenieACS accepted a task but has not delivered it yet."""
 
-    def __init__(self, message: str, *, task_id: str = "", reason: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        task_id: str = "",
+        reason: str = "",
+        delivery_code: GenieACSDeliveryCode = GenieACSDeliveryCode.queued,
+    ) -> None:
         super().__init__(message)
         self.task_id = task_id
         self.reason = reason
+        self.delivery_code = delivery_code
 
 
 class GenieACSClient:

@@ -515,16 +515,33 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
         case AcsSetWanIp():
             if action.data_model_root == "Device":
-                if action.mode != "dhcp":
+                paths = action.tr181_paths
+                if paths is None:
                     raise ApplyError(
                         action,
                         ReconcileFailureReason.ACS_WRITE_FAULTED,
-                        "TR-181 static WAN requires model-specific gateway and DNS paths",
+                        "TR-181 WAN requires a resolved vendor/model parameter map",
                     )
                 params = {
-                    f"Device.IP.Interface.{action.instance_index}.Enable": True,
-                    f"Device.DHCPv4.Client.{action.instance_index}.Enable": True,
+                    paths.ip_enable: True,
+                    paths.dhcp_enable: action.mode == "dhcp",
+                    paths.vlan_enable: True,
+                    paths.vlan_id: action.vlan,
+                    paths.nat_enable: action.nat_enabled,
                 }
+                if action.mode == "static":
+                    params.update(
+                        {
+                            paths.ip_address: action.ip_address,
+                            paths.subnet_mask: action.subnet_mask,
+                            paths.gateway: action.gateway,
+                        }
+                    )
+                    dns_primary, dns_secondary = _split_dns_servers(action.dns_servers)
+                    if dns_primary:
+                        params[paths.dns_primary] = dns_primary
+                    if dns_secondary:
+                        params[paths.dns_secondary] = dns_secondary
             else:
                 base = (
                     "InternetGatewayDevice.WANDevice.1."
@@ -566,12 +583,26 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
         case AcsSetManagementServer():
             cr_password = _resolve_or_fail(ctx, action, action.cr_password_ref)
-            params = {
-                "InternetGatewayDevice.ManagementServer.ConnectionRequestUsername": action.cr_username,
-                "InternetGatewayDevice.ManagementServer.ConnectionRequestPassword": cr_password,
-                "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": action.inform_interval_sec,
+            root = f"{action.data_model_root}.ManagementServer"
+            connection_params = {
+                f"{root}.ConnectionRequestUsername": action.cr_username,
+                f"{root}.ConnectionRequestPassword": cr_password,
+                f"{root}.PeriodicInformEnable": True,
+                f"{root}.PeriodicInformInterval": action.inform_interval_sec,
             }
-            _acs_set(action, ctx, params)
+            _acs_set(action, ctx, connection_params)
+            if action.acs_url:
+                acs_password = _resolve_or_fail(
+                    ctx, action, action.acs_password_ref or ""
+                )
+                endpoint_params = {
+                    f"{root}.URL": action.acs_url,
+                    f"{root}.Username": action.acs_username or "",
+                    f"{root}.Password": acs_password,
+                }
+                # Move the endpoint last: changing URL first can sever the
+                # current ACS session before CR credentials are established.
+                _acs_set(action, ctx, endpoint_params)
             return _ok(
                 action,
                 "acs_management_server",
@@ -589,6 +620,13 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _split_dns_servers(value: str | None) -> tuple[str | None, str | None]:
+    servers = [item for item in re.split(r"[\s,]+", value or "") if item]
+    primary = servers[0] if servers else None
+    secondary = servers[1] if len(servers) > 1 else None
+    return primary, secondary
 
 
 def _resolve_or_fail(ctx: ApplyContext, action: Action, ref: str) -> str:

@@ -3,9 +3,10 @@
 <div class="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
     {# Get Status #}
     <button type="button"
-            hx-get="/admin/network/onts/{{ ont.id }}/refresh-status"
+            hx-post="/admin/network/onts/{{ ont.id }}/refresh"
             hx-swap="none"
             hx-indicator="#status-spinner"
+            hx-disabled-elt="this"
             data-refresh-status-action
             class="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
         <svg id="status-spinner" class="htmx-indicator h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -176,6 +177,69 @@
             return xhr.statusText || fallback;
         }
 
+        function responseData(xhr) {
+            if (!xhr) {
+                return {};
+            }
+            try {
+                return JSON.parse(xhr.responseText || '{}');
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function setQuickActionFeedback(message, tone) {
+            var target = document.getElementById('ont-quick-action-feedback');
+            var messageTarget = document.getElementById('ont-quick-action-feedback-message');
+            if (!target) {
+                return;
+            }
+            var classes = {
+                info: 'rounded-lg border border-blue-300 bg-blue-100 px-4 py-3 text-sm font-semibold text-blue-950 shadow-sm dark:border-blue-500/70 dark:bg-blue-900 dark:text-white',
+                success: 'rounded-lg border border-emerald-300 bg-emerald-100 px-4 py-3 text-sm font-semibold text-emerald-950 shadow-sm dark:border-emerald-500/70 dark:bg-emerald-900 dark:text-white',
+                error: 'rounded-lg border border-red-300 bg-red-100 px-4 py-3 text-sm font-semibold text-red-950 shadow-sm dark:border-red-500/70 dark:bg-red-900 dark:text-white'
+            };
+            target.className = classes[tone] || classes.info;
+            if (messageTarget) {
+                messageTarget.textContent = message;
+            }
+            target.classList.remove('hidden');
+        }
+
+        function pollRefresh(statusUrl, attemptsRemaining) {
+            if (!statusUrl || attemptsRemaining <= 0) {
+                setQuickActionFeedback('Refresh is still running. Check Operations for the final result.', 'info');
+                return;
+            }
+            window.setTimeout(function () {
+                fetch(statusUrl, {credentials: 'same-origin'})
+                    .then(function (response) {
+                        return response.json().then(function (data) {
+                            return {ok: response.ok, data: data};
+                        });
+                    })
+                    .then(function (result) {
+                        var data = result.data || {};
+                        var message = data.message || 'Checking ONT status refresh.';
+                        if (!result.ok) {
+                            setQuickActionFeedback(message, 'error');
+                            return;
+                        }
+                        if (!data.done) {
+                            setQuickActionFeedback(message, 'info');
+                            pollRefresh(statusUrl, attemptsRemaining - 1);
+                            return;
+                        }
+                        var tone = data.success ? 'success' : 'error';
+                        setQuickActionFeedback(message, tone);
+                        htmx.trigger(document.body, 'showToast', {message: message, type: tone});
+                    })
+                    .catch(function () {
+                        pollRefresh(statusUrl, attemptsRemaining - 1);
+                    });
+            }, 2000);
+        }
+
         function renderQuickActionFeedback(event) {
             if (!event.detail) {
                 return;
@@ -185,20 +249,17 @@
                 return;
             }
             var target = document.getElementById('ont-quick-action-feedback');
-            var messageTarget = document.getElementById('ont-quick-action-feedback-message');
             if (!target) {
                 return;
             }
             var xhr = event.detail.xhr;
             var ok = xhr && xhr.status >= 200 && xhr.status < 300;
             var message = responseMessage(xhr, actionType);
-            target.className = ok
-                ? 'rounded-lg border border-emerald-300 bg-emerald-100 px-4 py-3 text-sm font-semibold text-emerald-950 shadow-sm dark:border-emerald-500/70 dark:bg-emerald-900 dark:text-white'
-                : 'rounded-lg border border-red-300 bg-red-100 px-4 py-3 text-sm font-semibold text-red-950 shadow-sm dark:border-red-500/70 dark:bg-red-900 dark:text-white';
-            if (messageTarget) {
-                messageTarget.textContent = message;
+            var data = responseData(xhr);
+            setQuickActionFeedback(message, ok && data.waiting ? 'info' : (ok ? 'success' : 'error'));
+            if (ok && actionType === 'refresh-status' && data.status_url) {
+                pollRefresh(data.status_url, 90);
             }
-            target.classList.remove('hidden');
         }
 
         document.addEventListener('htmx:afterRequest', renderQuickActionFeedback);

@@ -115,6 +115,7 @@ class OntObservation(Base):
     acs_observed_wan_ip_address: Mapped[str | None] = mapped_column(String(64))
     acs_observed_wan_subnet_mask: Mapped[str | None] = mapped_column(String(64))
     acs_observed_wan_gateway: Mapped[str | None] = mapped_column(String(64))
+    acs_observed_wan_dns_servers: Mapped[str | None] = mapped_column(String(200))
     acs_observed_dhcpv6_enabled: Mapped[bool | None] = mapped_column(Boolean)
     acs_observed_dhcpv6_request_prefixes: Mapped[bool | None] = mapped_column(Boolean)
     acs_observed_ra_enabled: Mapped[bool | None] = mapped_column(Boolean)

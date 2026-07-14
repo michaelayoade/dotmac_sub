@@ -33,6 +33,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningCase
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionEntry,
@@ -42,6 +43,7 @@ from app.models.service_extension import (
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
+from app.services import crm_api
 
 TOKEN = "crm-test-token"
 
@@ -239,6 +241,212 @@ def test_subscriber_list_embeds_services_billing_and_session_state(
     assert row["billing"]["total_paid"] == 10000.0
     assert row["session_state"] == "online"
     assert row["last_seen"].endswith("Z")
+
+
+def test_subscriber_list_batches_payload_metadata(db_session, crm_auth):
+    offer = _offer(db_session)
+    subscribers = []
+    for _ in range(5):
+        subscriber = _subscriber(db_session)
+        subscriber.account_start_date = None
+        subscription = _subscription(db_session, subscriber, offer)
+        db_session.add_all(
+            [
+                SubscriptionLifecycleEvent(
+                    subscription_id=subscription.id,
+                    to_status=SubscriptionStatus.suspended,
+                    created_at=datetime(2026, 5, 1, tzinfo=UTC),
+                ),
+                SubscriptionLifecycleEvent(
+                    subscription_id=subscription.id,
+                    to_status=SubscriptionStatus.canceled,
+                    created_at=datetime(2026, 6, 1, tzinfo=UTC),
+                ),
+            ]
+        )
+        subscribers.append(subscriber)
+    db_session.commit()
+
+    statements = []
+    engine = db_session.get_bind()
+
+    def count_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        response = _call_route(
+            crm_routes.list_subscribers,
+            _request({"page": "1", "per_page": "5"}),
+            db_session,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    target_ids = {str(subscriber.id) for subscriber in subscribers}
+    target_rows = [row for row in rows if row["id"] in target_ids]
+    assert len(target_rows) == 5
+    assert {row["activated_at"] for row in target_rows} == {"2026-01-01T00:00:00Z"}
+    assert {row["suspended_at"] for row in target_rows} == {"2026-05-01T00:00:00Z"}
+    assert {row["terminated_at"] for row in target_rows} == {"2026-06-01T00:00:00Z"}
+    assert len(statements) <= 10
+
+
+def test_crm_pagination_uses_shared_limit_and_accepts_legacy_alias(crm_auth):
+    assert crm_routes._pagination(_request({"per_page": "500"}))[:2] == (1, 500)
+    assert crm_routes._pagination(_request({"limit": "10"}))[:2] == (1, 10)
+
+    response = _call_route(
+        crm_routes.list_subscribers,
+        _request({"page": "1", "per_page": "501"}),
+        object(),
+    )
+
+    assert response.status_code == 400
+    assert "per_page" in response.json()["detail"]["errors"]
+
+
+def test_locations_uses_short_cache(db_session, crm_auth):
+    crm_api._locations_cache = None
+    subscriber = _subscriber(db_session)
+    db_session.commit()
+
+    statements = []
+    engine = db_session.get_bind()
+
+    def count_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_statement)
+    try:
+        first = _call_route(crm_routes.locations, _request(), db_session)
+        second = _call_route(crm_routes.locations, _request(), db_session)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_statement)
+        crm_api._locations_cache = None
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert any(item["name"] == subscriber.city for item in first.json()["data"])
+    assert len(statements) == 2
+
+
+def test_locations_service_owns_pagination(db_session, monkeypatch):
+    rows = [
+        {"id": "first", "name": "First"},
+        {"id": "second", "name": "Second"},
+    ]
+
+    def page_rows(db, *, page, per_page):
+        start = (page - 1) * per_page
+        return rows[start : start + per_page], len(rows)
+
+    monkeypatch.setattr(crm_api, "locations", page_rows)
+
+    first = _call_route(
+        crm_routes.locations,
+        _request({"page": "1", "per_page": "1"}),
+        db_session,
+    )
+    second = _call_route(
+        crm_routes.locations,
+        _request({"page": "2", "per_page": "1"}),
+        db_session,
+    )
+    final = _call_route(
+        crm_routes.locations,
+        _request({"page": "3", "per_page": "1"}),
+        db_session,
+    )
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "data": [rows[0]],
+        "meta": {"page": 1, "per_page": 1, "total": 2},
+    }
+    assert second.json() == {
+        "data": [rows[1]],
+        "meta": {"page": 2, "per_page": 1, "total": 2},
+    }
+    assert final.json()["data"] == []
+    assert final.json()["meta"] == {"page": 3, "per_page": 1, "total": 2}
+
+
+def test_online_subscribers_paginates_scalar_query_and_uses_latest_session(
+    db_session, crm_auth
+):
+    now = datetime.now(UTC)
+    offer = _offer(db_session)
+    subscribers = [_subscriber(db_session) for _ in range(3)]
+    subscriptions = [
+        _subscription(db_session, subscriber, offer) for subscriber in subscribers
+    ]
+    for index, subscription in enumerate(subscriptions):
+        db_session.add(
+            RadiusAccountingSession(
+                subscription_id=subscription.id,
+                session_id=f"SID-{index}",
+                status_type=AccountingStatus.interim,
+                session_start=now - timedelta(hours=2),
+                last_update_at=now - timedelta(minutes=10 - index),
+            )
+        )
+    latest_seen = now - timedelta(minutes=1)
+    db_session.add(
+        RadiusAccountingSession(
+            subscription_id=subscriptions[0].id,
+            session_id="SID-latest",
+            status_type=AccountingStatus.interim,
+            session_start=now - timedelta(hours=1),
+            last_update_at=latest_seen,
+        )
+    )
+    db_session.commit()
+    latest_subscriber_id = str(subscribers[0].id)
+
+    statements: list[str] = []
+    engine = db_session.get_bind()
+
+    def capture_statement(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture_statement)
+    try:
+        first = _call_route(
+            crm_routes.online_subscribers,
+            _request({"page": "1", "per_page": "2"}),
+            db_session,
+        )
+        second = _call_route(
+            crm_routes.online_subscribers,
+            _request({"page": "2", "per_page": "2"}),
+            db_session,
+        )
+        final = _call_route(
+            crm_routes.online_subscribers,
+            _request({"page": "3", "per_page": "2"}),
+            db_session,
+        )
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_statement)
+
+    assert first.json()["meta"] == {"page": 1, "per_page": 2, "total": 3}
+    assert second.json()["meta"] == {"page": 2, "per_page": 2, "total": 3}
+    assert final.json() == {
+        "data": [],
+        "meta": {"page": 3, "per_page": 2, "total": 3},
+    }
+    rows = [*first.json()["data"], *second.json()["data"]]
+    assert len(rows) == 3
+    assert len({row["id"] for row in rows}) == 3
+    latest_row = next(row for row in rows if row["id"] == latest_subscriber_id)
+    assert latest_row["last_seen"] == crm_api.utc_iso(latest_seen)
+    assert len(statements) == 4
+    assert sum(" LIMIT " in statement.upper() for statement in statements) == 3
+    assert all("FROM invoices" not in statement for statement in statements)
 
 
 def test_invalid_query_parameters_return_400_field_errors(crm_auth):

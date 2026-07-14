@@ -117,14 +117,72 @@ def test_my_notifications_scopes_to_caller(monkeypatch):
         "list_response_for_subscriber",
         fake,
     )
+
+    def fake_apply(db, *, subscriber_id, notifications):
+        captured["read_state_subscriber_id"] = subscriber_id
+        captured["notifications"] = notifications
+        return notifications
+
+    monkeypatch.setattr(
+        me_api.customer_notifications_service,
+        "apply_notification_read_state",
+        fake_apply,
+    )
     me_api.my_notifications(limit=50, offset=0, db=None, principal=principal)
     assert captured["subscriber_id"] == principal["subscriber_id"]
+    assert captured["read_state_subscriber_id"] == principal["subscriber_id"]
+    assert captured["notifications"] == []
 
 
 def test_my_notifications_403_for_non_subscriber():
     with pytest.raises(HTTPException) as exc:
         me_api.my_notifications(
             limit=50, offset=0, db=None, principal=_system_user_principal()
+        )
+    assert exc.value.status_code == 403
+
+
+def test_my_notifications_mark_read_scopes_to_caller(monkeypatch):
+    from app.schemas.notification import CustomerNotificationReadRequest
+
+    principal = _subscriber_principal()
+    notification_id = uuid.uuid4()
+    captured = {}
+
+    def fake_mark(db, *, subscriber_id, notification_ids, all_visible=False) -> int:
+        captured["subscriber_id"] = subscriber_id
+        captured["notification_ids"] = notification_ids
+        captured["all_visible"] = all_visible
+        return 1
+
+    monkeypatch.setattr(
+        me_api.customer_notifications_service,
+        "mark_api_notifications_read",
+        fake_mark,
+    )
+
+    response = me_api.my_notifications_mark_read(
+        CustomerNotificationReadRequest(notification_ids=[notification_id]),
+        db=None,
+        principal=principal,
+    )
+
+    assert response.marked == 1
+    assert captured == {
+        "subscriber_id": principal["subscriber_id"],
+        "notification_ids": [notification_id],
+        "all_visible": False,
+    }
+
+
+def test_my_notifications_mark_read_403_for_non_subscriber():
+    from app.schemas.notification import CustomerNotificationReadRequest
+
+    with pytest.raises(HTTPException) as exc:
+        me_api.my_notifications_mark_read(
+            CustomerNotificationReadRequest(all_visible=True),
+            db=None,
+            principal=_system_user_principal(),
         )
     assert exc.value.status_code == 403
 

@@ -7,7 +7,7 @@ from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import (
     BankAccount,
@@ -68,6 +68,7 @@ from app.services.billing._common import (
     _validate_payment_channel,
     _validate_payment_linkages,
     _validate_payment_provider,
+    lock_account,
 )
 from app.services.common import (
     apply_ordering,
@@ -84,7 +85,9 @@ from app.services.response import ListResponseMixin
 from app.services.service_entitlements import (
     ensure_prepaid_entitlement_for_wallet_debit,
     ensure_prepaid_entitlements_for_paid_invoice,
+    revoke_prepaid_entitlements_for_unpaid_invoice,
 )
+from app.services.sync_feeds import apply_sync_page, sync_page_response
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,15 @@ _ALLOWED_PAYMENT_TRANSITIONS: dict[PaymentStatus, set[PaymentStatus]] = {
         PaymentStatus.refunded,
         PaymentStatus.partially_refunded,
     },
+    # succeeded -> failed is deliberately ABSENT. This table guards ``mark_status``,
+    # which is what provider webhooks drive, and a replayed or out-of-order webhook
+    # must never regress a succeeded payment to failed
+    # (see tests/test_payment_mark_status_guard.py).
+    #
+    # A genuine chargeback or bank reversal is a deliberate domain operation, not a
+    # status flip, and goes through ``Refunds.reverse_payment`` — which has its own
+    # guard and posts the reversing ledger entry. The escape hatch is the domain op,
+    # not a hole in the table.
     PaymentStatus.partially_refunded: {PaymentStatus.refunded},
     PaymentStatus.refunded: set(),
     PaymentStatus.canceled: set(),
@@ -905,6 +917,13 @@ def _finalize_invoice_payment_effects(db: Session, invoice: Invoice) -> None:
             collections_service.restore_account_services(
                 db, str(invoice.account_id), invoice_id=str(invoice.id)
             )
+    else:
+        # The invoice stopped being paid — a refund, a chargeback, or an
+        # allocation moved away. The service it funded has to stop being funded
+        # too. Without this the entitlement stayed active forever and prepaid
+        # funding kept counting it as paid coverage, so a refunded customer kept
+        # the service free for the whole period.
+        revoke_prepaid_entitlements_for_unpaid_invoice(db, invoice)
 
     from app.services.account_lifecycle import compute_account_status
 
@@ -1164,13 +1183,25 @@ class Payments(ListResponseMixin):
         return created
 
     @staticmethod
-    def create(db: Session, payload: PaymentCreate, *, auto_allocate: bool = True):
+    def create(
+        db: Session,
+        payload: PaymentCreate,
+        *,
+        auto_allocate: bool = True,
+        commit: bool = True,
+    ):
         """Create a payment.
 
         When ``auto_allocate`` is False and no explicit allocations are given,
         the payment is NOT spread over open invoices; the full amount is
         recorded as unallocated account credit instead. Default behavior
         (auto-allocate to oldest unpaid invoices) is unchanged.
+
+        ``commit=False`` posts the payment on the caller's transaction and
+        flushes instead of committing, so a caller that is already inside a
+        SAVEPOINT (the bulk import wizard, which isolates each row so one bad
+        row cannot roll back the batch) can still route through this owner
+        rather than hand-rolling a Payment row. The caller owns the commit.
         """
         if payload.amount is not None and payload.amount <= 0:
             raise HTTPException(
@@ -1312,7 +1343,10 @@ class Payments(ListResponseMixin):
             invoice = get_by_id(db, Invoice, invoice_id)
             if invoice:
                 _finalize_invoice_payment_effects(db, invoice)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(payment)
 
         # Emit payment.received event(s)
@@ -1338,7 +1372,8 @@ class Payments(ListResponseMixin):
         # run inline on this session with commit=False. The payment itself is
         # already committed above; commit again so those resolve/restore
         # mutations are durable instead of left pending for the caller to drop.
-        db.commit()
+        if commit:
+            db.commit()
         return payment
 
     @staticmethod
@@ -1596,6 +1631,45 @@ class Payments(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        account_id: str | None,
+        status: str | None,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ):
+        query = db.query(Payment).options(
+            selectinload(
+                Payment.allocations.and_(PaymentAllocation.is_active.is_(True))
+            )
+        )
+        if account_id:
+            query = query.filter(Payment.account_id == account_id)
+        if status:
+            query = query.filter(
+                Payment.status == validate_enum(status, PaymentStatus, "status")
+            )
+        if is_active is None:
+            query = query.filter(Payment.is_active.is_(True))
+        else:
+            query = query.filter(Payment.is_active == is_active)
+        return apply_sync_page(
+            query,
+            Payment,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
+
+    @staticmethod
     def update(db: Session, payment_id: str, payload: PaymentUpdate):
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
@@ -1644,6 +1718,15 @@ class Payments(ListResponseMixin):
             _validate_collection_account(
                 db, str(collection_account_id), data.get("currency", payment.currency)
             )
+        # A status change is a settlement decision, not a field edit. mark_status
+        # owns it: it enforces the legal-transition table, stamps paid_at (a
+        # succeeded payment with a NULL paid_at is invisible to the enforcement
+        # health gate and silently blocks all collections suspensions), resolves
+        # dunning cases, applies prepaid service credit, and emits
+        # payment_received. Blind-setattr here bypassed every one of those and
+        # reopened the production paid_at regression that create() already fixed.
+        requested_status = data.pop("status", None)
+
         for key, value in data.items():
             setattr(payment, key, value)
         invoice_ids = [alloc.invoice_id for alloc in payment.allocations]
@@ -1653,20 +1736,194 @@ class Payments(ListResponseMixin):
                 db.flush()
                 _finalize_invoice_payment_effects(db, invoice)
         db.commit()
+
+        if requested_status is not None:
+            normalized = validate_enum(requested_status, PaymentStatus, "status")
+            if normalized and normalized != payment.status:
+                Payments.mark_status(db, str(payment.id), normalized)
+
+        db.refresh(payment)
+        return payment
+
+    @staticmethod
+    def reallocate(db: Session, payment_id: str, invoice_id: str) -> Payment:
+        """Move a payment's allocation to a different invoice.
+
+        The canonical owner operation for "admin pointed this payment at the
+        wrong invoice". It must be used instead of rewriting ``PaymentAllocation``
+        rows directly: the money's effect is spread across the allocation, the
+        ledger credit, and the *two* invoices' derived totals, and all of them
+        have to move together.
+
+        For each invoice released, the payment ledger credit is deactivated and
+        the invoice is recomputed, so a released invoice cannot keep reading as
+        ``paid`` with no money behind it. The new allocation is then capped at
+        the target's ``balance_due`` — an over-payment becomes account credit
+        rather than an allocation larger than the debt it settles.
+        """
+        payment = get_by_id(db, Payment, payment_id)
+        if not payment:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if not payment.is_active:
+            raise HTTPException(
+                status_code=409, detail="Inactive payment cannot be reallocated"
+            )
+        if payment.status != PaymentStatus.succeeded:
+            raise HTTPException(
+                status_code=409,
+                detail="Only a succeeded payment can be reallocated",
+            )
+        if payment.account_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Consolidated payments require their dedicated allocation "
+                    "workflow and cannot be reallocated here"
+                ),
+            )
+
+        # Account lock first: every subscriber-scoped payment and invoice in
+        # this operation shares that serialization key. Then lock the payment
+        # and target rows so a concurrent edit cannot change either underneath
+        # the release-and-apply sequence.
+        lock_account(db, str(payment.account_id))
+        payment = (
+            db.query(Payment).filter(Payment.id == payment.id).with_for_update().one()
+        )
+        target = (
+            db.query(Invoice).filter(Invoice.id == invoice_id).with_for_update().first()
+        )
+        if not target or not target.is_active:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if str(target.account_id) != str(payment.account_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Invoice belongs to a different account than the payment",
+            )
+        _validate_invoice_currency(target, payment.currency)
+        _assert_invoice_allocatable(target)
+        if target.status == InvoiceStatus.written_off:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot allocate a payment to a written_off invoice",
+            )
+
+        already_on_target = any(
+            allocation.is_active and str(allocation.invoice_id) == str(target.id)
+            for allocation in payment.allocations
+        )
+        if not already_on_target and round_money(
+            to_decimal(target.balance_due or Decimal("0.00"))
+        ) <= Decimal("0.00"):
+            raise HTTPException(status_code=400, detail="Invoice has no balance due")
+
+        released: list[Invoice] = []
+        for allocation in list(payment.allocations):
+            if not allocation.is_active:
+                continue
+            if str(allocation.invoice_id) == str(target.id):
+                # Already where it needs to be; nothing to move.
+                continue
+            previous = get_by_id(db, Invoice, allocation.invoice_id)
+            # Mirror PaymentAllocations.delete: drop the ledger credit with the
+            # allocation, never one without the other.
+            db.query(LedgerEntry).filter(
+                LedgerEntry.payment_id == allocation.payment_id,
+                LedgerEntry.invoice_id == allocation.invoice_id,
+                LedgerEntry.source == LedgerSource.payment,
+            ).update({"is_active": False})
+            allocation.is_active = False
+            if previous is not None:
+                released.append(previous)
+
+        db.flush()
+        for previous in released:
+            _finalize_invoice_payment_effects(db, previous)
+
+        db.flush()
+        db.refresh(target)
+
+        # Only the part of the payment that is not already allocated is free to
+        # move. Without this, re-pointing a payment at the invoice it is already
+        # allocated to would treat the whole amount as surplus and mint credit
+        # the customer never paid.
+        allocated = sum(
+            (
+                round_money(to_decimal(a.amount))
+                for a in payment.allocations
+                if a.is_active
+            ),
+            Decimal("0.00"),
+        )
+        amount = round_money(to_decimal(payment.amount))
+        unallocated = amount - allocated
+        if unallocated <= 0:
+            db.commit()
+            db.refresh(payment)
+            return payment
+
+        payable = round_money(to_decimal(target.balance_due or Decimal("0.00")))
+        applied = min(unallocated, payable) if payable > 0 else Decimal("0.00")
+
+        if applied > 0:
+            _apply_payment_allocation(
+                db,
+                payment,
+                target,
+                applied,
+                memo=f"Reallocated from payment {payment.id}",
+            )
+            db.flush()
+            _finalize_invoice_payment_effects(db, target)
+
+        # Anything the target could not absorb stays with the customer as credit
+        # instead of silently inflating the allocation.
+        _record_unallocated_payment_credit(db, payment, unallocated - applied)
+
+        db.commit()
         db.refresh(payment)
         return payment
 
     @staticmethod
     def delete(db: Session, payment_id: str):
+        """Soft-delete a payment and remove every effect it had.
+
+        A payment's effect is spread across the payment row, its allocations, and
+        the ledger credits those allocations justify. Deactivating only the payment
+        row left the ledger credit ACTIVE and unallocated — so the money kept
+        counting toward the customer's spendable credit even though the payment
+        that created it was gone.
+
+        Allocation and ledger credit drop together, the same way
+        ``PaymentAllocations.delete`` and ``Payments.reallocate`` do it. Never one
+        without the other.
+        """
         payment = get_by_id(db, Payment, payment_id)
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
-        payment.is_active = False
+
+        invoices = [
+            invoice
+            for allocation in payment.allocations
+            if allocation.is_active
+            and (invoice := get_by_id(db, Invoice, allocation.invoice_id))
+        ]
+
+        # Drop every ledger entry this payment posted — the invoice-scoped credits
+        # AND the unallocated surplus credit, which nothing else would ever undo.
+        db.query(LedgerEntry).filter(
+            LedgerEntry.payment_id == payment.id,
+            LedgerEntry.is_active.is_(True),
+        ).update({"is_active": False}, synchronize_session=False)
+
         for allocation in payment.allocations:
-            invoice = get_by_id(db, Invoice, allocation.invoice_id)
-            if invoice:
-                db.flush()
-                _finalize_invoice_payment_effects(db, invoice)
+            allocation.is_active = False
+
+        payment.is_active = False
+        db.flush()
+
+        for invoice in invoices:
+            _finalize_invoice_payment_effects(db, invoice)
         db.commit()
 
     @staticmethod
@@ -1694,6 +1951,25 @@ class Payments(ListResponseMixin):
                 payment_id,
             )
             return payment
+
+        # A refund is a MONEY MOVEMENT, not a status flip. Setting the status alone
+        # posted no refund ledger entry and set no refunded_amount, so the payment
+        # still counted at its FULL value: the cash left the business and the
+        # customer kept a phantom credit for the same amount. The admin Refund
+        # button did exactly this.
+        #
+        # Delegate to the owner op, which posts the ledger entry, records
+        # refunded_amount, releases the allocations with their ledger credits, and
+        # recomputes the invoices. Every caller — admin UI, API, provider webhook —
+        # gets the same, correct effect.
+        if normalized == PaymentStatus.refunded and previous_status in (
+            PaymentStatus.succeeded,
+            PaymentStatus.partially_refunded,
+        ):
+            return Refunds.process_refund(
+                db, str(payment.id), reason="refund via status change"
+            )
+
         payment.status = normalized
         if normalized == PaymentStatus.succeeded:
             payment.paid_at = datetime.now(UTC)
@@ -1965,6 +2241,31 @@ class PaymentChannels(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
+    def list_for_sync(
+        db: Session,
+        *,
+        is_active: bool | None,
+        updated_since: datetime | None,
+        limit: int,
+        offset: int,
+    ):
+        query = db.query(PaymentChannel)
+        if is_active is not None:
+            query = query.filter(PaymentChannel.is_active == is_active)
+        return apply_sync_page(
+            query,
+            PaymentChannel,
+            updated_since=updated_since,
+            limit=limit,
+            offset=offset,
+        ).all()
+
+    @classmethod
+    def sync_list_response(cls, db: Session, **kwargs):
+        items = cls.list_for_sync(db, **kwargs)
+        return sync_page_response(items, limit=kwargs["limit"], offset=kwargs["offset"])
+
+    @staticmethod
     def update(db: Session, channel_id: str, payload: PaymentChannelUpdate):
         channel = get_by_id(db, PaymentChannel, channel_id)
         if not channel:
@@ -2199,9 +2500,23 @@ class Refunds:
         for allocation in payment.allocations:
             invoice = get_by_id(db, Invoice, allocation.invoice_id)
             if invoice:
-                # For full refunds, remove the allocation effect
-                if is_full_refund:
-                    db.delete(allocation)
+                # A full refund removes the allocation's effect. It used to
+                # db.delete() the allocation, which (a) destroyed the audit row,
+                # (b) defeated _find_inactive_payment_allocation, which exists to
+                # reuse a soft-deleted allocation after a reversal, and (c) left
+                # the paired payment ledger CREDIT active and orphaned — money
+                # justified by an allocation that no longer existed.
+                #
+                # Soft-delete the allocation and drop its ledger credit with it,
+                # exactly as PaymentAllocations.delete and Payments.reallocate do.
+                # Never one without the other.
+                if is_full_refund and allocation.is_active:
+                    db.query(LedgerEntry).filter(
+                        LedgerEntry.payment_id == allocation.payment_id,
+                        LedgerEntry.invoice_id == allocation.invoice_id,
+                        LedgerEntry.source == LedgerSource.payment,
+                    ).update({"is_active": False}, synchronize_session=False)
+                    allocation.is_active = False
                 db.flush()
                 _finalize_invoice_payment_effects(db, invoice)
 

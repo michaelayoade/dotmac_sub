@@ -240,8 +240,9 @@ class _DatabasePressureCollector(Collector):
     """Exports SQLAlchemy pool and PostgreSQL session pressure.
 
     This catches the failure mode behind the selfcare 504 incident: long-lived
-    app transactions and pool saturation under API sync/admin traffic. The
-    collector is fail-soft so /metrics remains available even if the DB is sick.
+    app transactions and pool saturation under API sync/admin traffic. Pool
+    counters are process-local; PostgreSQL activity comes from the scheduled
+    infrastructure snapshot so a scrape never waits for a database connection.
     """
 
     def describe(self):  # noqa: ANN201 - prometheus collector protocol
@@ -256,6 +257,18 @@ class _DatabasePressureCollector(Collector):
         yield _gauge_description(
             "sqlalchemy_pool_overflow",
             "Current SQLAlchemy pool overflow connection count",
+        )
+        yield _gauge_description(
+            "postgres_activity_snapshot_available",
+            "1 when a worker-produced PostgreSQL activity snapshot is available",
+        )
+        yield _gauge_description(
+            "postgres_activity_snapshot_age_seconds",
+            "Seconds since the latest PostgreSQL activity snapshot",
+        )
+        yield _gauge_description(
+            "postgres_activity_probe_success",
+            "1 when the latest scheduled PostgreSQL activity probe succeeded",
         )
         yield _gauge_description(
             "postgres_activity_connections",
@@ -306,13 +319,54 @@ class _DatabasePressureCollector(Collector):
             pass
 
         try:
-            from app.services.db_session_adapter import db_session_adapter
-            from app.services.infrastructure_health import _postgres_activity_snapshot
+            from datetime import UTC, datetime
 
-            with db_session_adapter.read_session() as db:
-                activity = _postgres_activity_snapshot(db)
+            from app.services.observability import load_state_snapshot
+
+            snapshot = load_state_snapshot("database_pressure")
         except Exception:
+            snapshot = None
+
+        available = GaugeMetricFamily(
+            "postgres_activity_snapshot_available",
+            "1 when a worker-produced PostgreSQL activity snapshot is available",
+        )
+        available.add_metric([], 1.0 if snapshot else 0.0)
+        yield available
+        if not snapshot:
             return
+
+        observed_at = snapshot.get("observed_at")
+        if observed_at:
+            try:
+                recorded = datetime.fromisoformat(str(observed_at))
+                if recorded.tzinfo is None:
+                    recorded = recorded.replace(tzinfo=UTC)
+                age = GaugeMetricFamily(
+                    "postgres_activity_snapshot_age_seconds",
+                    "Seconds since the latest PostgreSQL activity snapshot",
+                )
+                age.add_metric(
+                    [], max(0.0, (datetime.now(UTC) - recorded).total_seconds())
+                )
+                yield age
+            except ValueError:
+                pass
+
+        activity = {
+            str(item.get("signal")): float(item.get("value"))
+            for item in snapshot.get("observations") or []
+            if isinstance(item, dict)
+            and item.get("scope") == "postgres"
+            and item.get("signal") is not None
+            and isinstance(item.get("value"), (int, float))
+        }
+        probe = GaugeMetricFamily(
+            "postgres_activity_probe_success",
+            "1 when the latest scheduled PostgreSQL activity probe succeeded",
+        )
+        probe.add_metric([], activity.get("probe_success", 0.0))
+        yield probe
 
         connections = GaugeMetricFamily(
             "postgres_activity_connections",
@@ -428,16 +482,24 @@ REGISTRY.register(_IpConsistencyAuditCollector())
 
 
 class _BillingHealthCollector(Collector):
-    """Exports billing liveness/anomaly signals at scrape time.
+    """Exports the latest worker-produced billing-health snapshot.
 
-    Cheap, indexed aggregate queries computed on scrape (no worker needed).
-    Wrapped so a transient DB hiccup yields no metrics rather than breaking the
-    whole /metrics endpoint. See app/services/billing_health.py. Alert on:
+    Scrapes must remain bounded and never reconstruct customer finances. The
+    scheduled producer computes the cohort once and stores a small Redis
+    snapshot; this collector performs one fail-soft cache read. Alert on:
     billing_paid_invoices_with_balance > 0; billing_invoice_scan_ratio low;
-    billing_payment_volume_collapsed == 1.
+    billing_payment_volume_collapsed == 1; billing_health_snapshot_available == 0.
     """
 
     def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "billing_health_snapshot_available",
+            "1 when a worker-produced billing-health snapshot is available",
+        )
+        yield _gauge_description(
+            "billing_health_snapshot_age_seconds",
+            "Seconds since the latest worker-produced billing-health snapshot",
+        )
         yield _gauge_description(
             "billing_paid_invoices_with_balance",
             "Invoices status=paid with non-zero balance_due (AR-integrity defect)",
@@ -504,16 +566,19 @@ class _BillingHealthCollector(Collector):
         )
 
     def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from datetime import UTC, datetime
+
         from prometheus_client.core import GaugeMetricFamily
 
         try:
-            from app.services.billing_health import billing_health_snapshot
-            from app.services.db_session_adapter import db_session_adapter
+            from app.services.billing_health import (
+                BILLING_HEALTH_OBSERVABILITY_DOMAIN,
+            )
+            from app.services.observability import load_state_snapshot
 
-            with db_session_adapter.session() as db:
-                snap = billing_health_snapshot(db)
+            snapshot = load_state_snapshot(BILLING_HEALTH_OBSERVABILITY_DOMAIN)
         except Exception:
-            return
+            snapshot = None
 
         def gauge(name: str, help_text: str, value: float):
             g = GaugeMetricFamily(name, help_text)
@@ -521,68 +586,106 @@ class _BillingHealthCollector(Collector):
             return g
 
         yield gauge(
-            "billing_paid_invoices_with_balance",
-            "Invoices status=paid with non-zero balance_due (AR-integrity defect)",
-            snap.paid_with_balance_count,
+            "billing_health_snapshot_available",
+            "1 when a worker-produced billing-health snapshot is available",
+            1.0 if snapshot else 0.0,
         )
-        yield gauge(
-            "billing_invoice_last_scanned",
-            "subscriptions_scanned of the most recent billing run",
-            snap.last_scanned or 0,
-        )
-        yield gauge(
-            "billing_active_subscriptions",
-            "Active subscriptions (invoice-cycle eligibility denominator)",
-            snap.eligible_active_subs,
-        )
-        if snap.scan_ratio is not None:
-            yield gauge(
+        if not snapshot:
+            return
+
+        observed_at = snapshot.get("observed_at")
+        if observed_at:
+            try:
+                recorded = datetime.fromisoformat(str(observed_at))
+                if recorded.tzinfo is None:
+                    recorded = recorded.replace(tzinfo=UTC)
+                yield gauge(
+                    "billing_health_snapshot_age_seconds",
+                    "Seconds since the latest worker-produced billing-health snapshot",
+                    max(0.0, (datetime.now(UTC) - recorded).total_seconds()),
+                )
+            except ValueError:
+                pass
+
+        observations = {
+            (str(item.get("signal")), str(item.get("scope"))): float(item.get("value"))
+            for item in snapshot.get("observations") or []
+            if isinstance(item, dict)
+            and item.get("signal") is not None
+            and item.get("scope") is not None
+            and isinstance(item.get("value"), (int, float))
+        }
+
+        def value(signal: str, scope: str = "all") -> float | None:
+            return observations.get((signal, scope))
+
+        global_metrics = (
+            (
+                "paid_invoices_with_balance",
+                "billing_paid_invoices_with_balance",
+                "Invoices status=paid with non-zero balance_due (AR-integrity defect)",
+            ),
+            (
+                "invoice_last_scanned",
+                "billing_invoice_last_scanned",
+                "subscriptions_scanned of the most recent billing run",
+            ),
+            (
+                "active_subscriptions",
+                "billing_active_subscriptions",
+                "Active subscriptions (invoice-cycle eligibility denominator)",
+            ),
+            (
+                "invoice_scan_ratio",
                 "billing_invoice_scan_ratio",
                 "last_scanned / active_subscriptions (low = cohort silently skipped)",
-                snap.scan_ratio,
-            )
-        yield gauge(
-            "billing_payments_succeeded_24h",
-            "Succeeded payments in the last 24h",
-            snap.payments_24h,
-        )
-        yield gauge(
-            "billing_payments_succeeded_7d_daily_avg",
-            "Trailing 7-day daily average of succeeded payments (baseline)",
-            snap.payments_7d_daily_avg,
-        )
-        if snap.payment_volume_ratio is not None:
-            yield gauge(
+            ),
+            (
+                "payments_succeeded_24h",
+                "billing_payments_succeeded_24h",
+                "Succeeded payments in the last 24h",
+            ),
+            (
+                "payments_succeeded_7d_daily_avg",
+                "billing_payments_succeeded_7d_daily_avg",
+                "Trailing 7-day daily average of succeeded payments (baseline)",
+            ),
+            (
+                "payment_volume_ratio",
                 "billing_payment_volume_ratio",
                 "last-24h payments / 7-day daily average (collapse = intake broke)",
-                snap.payment_volume_ratio,
-            )
-        yield gauge(
-            "billing_payment_volume_collapsed",
-            "1 if last-24h payment volume collapsed vs the 7-day baseline",
-            1.0 if snap.payment_volume_collapsed else 0.0,
+            ),
+            (
+                "payment_volume_collapsed",
+                "billing_payment_volume_collapsed",
+                "1 if last-24h payment volume collapsed vs the 7-day baseline",
+            ),
+            (
+                "enforcement_covered_but_locked",
+                "billing_enforcement_covered_but_locked",
+                "Accounts under a billing lock whose ledger balance is >= 0 "
+                "(wrongful-suspension drift; should be 0)",
+            ),
+            (
+                "negative_prepaid_balance_accounts",
+                "billing_negative_prepaid_balance_accounts",
+                "Active/collectible prepaid accounts whose wallet balance is below zero",
+            ),
+            (
+                "negative_prepaid_balance_total",
+                "billing_negative_prepaid_balance_total",
+                "Absolute total negative prepaid wallet exposure",
+            ),
+            (
+                "negative_prepaid_sweep_disabled_accounts",
+                "billing_negative_prepaid_sweep_disabled_accounts",
+                "Negative prepaid accounts while the prepaid balance sweep is disabled",
+            ),
         )
-        yield gauge(
-            "billing_enforcement_covered_but_locked",
-            "Accounts under a billing lock whose ledger balance is >= 0 "
-            "(wrongful-suspension drift; should be 0)",
-            snap.covered_but_locked,
-        )
-        yield gauge(
-            "billing_negative_prepaid_balance_accounts",
-            "Active/collectible prepaid accounts whose wallet balance is below zero",
-            snap.negative_prepaid_balance_count,
-        )
-        yield gauge(
-            "billing_negative_prepaid_balance_total",
-            "Absolute total negative prepaid wallet exposure",
-            snap.negative_prepaid_balance_total,
-        )
-        yield gauge(
-            "billing_negative_prepaid_sweep_disabled_accounts",
-            "Negative prepaid accounts while the prepaid balance sweep is disabled",
-            snap.negative_prepaid_with_sweep_disabled_count,
-        )
+        for signal, name, help_text in global_metrics:
+            metric_value = value(signal)
+            if metric_value is not None:
+                yield gauge(name, help_text, metric_value)
 
         # §6.3 per-runner heartbeat freshness (label = task).
         stale = GaugeMetricFamily(
@@ -595,12 +698,11 @@ class _BillingHealthCollector(Collector):
             "Seconds since a critical runner last succeeded",
             labels=["task"],
         )
-        for r in snap.runners:
-            if not r.enabled:
-                continue
-            stale.add_metric([r.task_name], 1.0 if r.stale else 0.0)
-            if r.age_seconds is not None:
-                age.add_metric([r.task_name], max(r.age_seconds, 0.0))
+        for (signal, scope), metric_value in observations.items():
+            if signal == "runner_heartbeat_stale":
+                stale.add_metric([scope], metric_value)
+            elif signal == "runner_heartbeat_age_seconds":
+                age.add_metric([scope], max(metric_value, 0.0))
         yield stale
         yield age
 
@@ -610,11 +712,14 @@ class _BillingHealthCollector(Collector):
             "Active subscriptions that no enabled billing path covers",
             labels=["reason"],
         )
-        unbilled.add_metric(["no_billing_path"], float(snap.unbilled_no_path))
-        unbilled.add_metric(
-            ["terminal_account"], float(snap.active_subs_on_terminal_account)
-        )
-        yield unbilled
+        found_unbilled = False
+        for reason in ("no_billing_path", "terminal_account"):
+            metric_value = value("unbilled_active_subscriptions", reason)
+            if metric_value is not None:
+                unbilled.add_metric([reason], metric_value)
+                found_unbilled = True
+        if found_unbilled:
+            yield unbilled
 
 
 REGISTRY.register(_BillingHealthCollector())

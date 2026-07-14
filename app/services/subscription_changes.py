@@ -376,6 +376,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
         request_id: str,
         *,
         skip_proration_artifacts: bool = False,
+        plan_change_operation_key: str | None = None,
     ) -> SubscriptionChangeRequest:
         """Apply an approved subscription change request.
 
@@ -426,11 +427,18 @@ class SubscriptionChangeRequests(ListResponseMixin):
         from app.schemas.catalog import SubscriptionUpdate
         from app.services import catalog as catalog_service
 
+        # Stage the request state before the shared subscription update. That
+        # update commits the request, subscription mutation, and any prepaid
+        # financial adjustment together, so a crash cannot leave a charged
+        # wallet with an unapplied request (or the reverse).
+        request.status = SubscriptionChangeStatus.applied
+        request.applied_at = datetime.now(UTC)
         catalog_service.subscriptions.update(
             db,
             str(subscription.id),
             SubscriptionUpdate(offer_id=request.requested_offer_id),
             skip_proration_artifacts=skip_proration_artifacts,
+            plan_change_operation_key=plan_change_operation_key or str(request.id),
         )
         subscription = db.get(Subscription, request.subscription_id)
         if subscription is None:
@@ -438,12 +446,16 @@ class SubscriptionChangeRequests(ListResponseMixin):
                 status_code=404, detail="Subscription not found after update"
             )
 
-        now = datetime.now(UTC)
-        request.status = SubscriptionChangeStatus.applied
-        request.applied_at = now
-
-        db.commit()
         db.refresh(request)
+        if request.status != SubscriptionChangeStatus.applied:
+            # The canonical catalog service commits this state atomically with
+            # the subscription and prepaid adjustment. Keep the postcondition
+            # explicit for alternate/test adapters that return without owning
+            # that transaction boundary.
+            request.status = SubscriptionChangeStatus.applied
+            request.applied_at = datetime.now(UTC)
+            db.commit()
+            db.refresh(request)
         try:
             from app.services.enforcement import update_subscription_sessions
             from app.services.radius import reconcile_subscription_connectivity
