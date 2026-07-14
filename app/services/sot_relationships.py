@@ -1229,6 +1229,27 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("service_intent.catalog_policy",),
             ),
             SOTService(
+                name="service_intent.subscription_lifecycle",
+                module="app.services.subscription_lifecycle",
+                owns=(
+                    "subscription lifecycle state projection",
+                    "subscription command eligibility and preview",
+                    "billing and access impact projection",
+                    "subscription command and outcome contracts",
+                ),
+                depends_on=(
+                    "service_intent.catalog_policy",
+                    "financial.access_resolution",
+                    "financial.prepaid_plan_change",
+                    "access.radius_state",
+                ),
+                notes=(
+                    "Execution remains with the established billing, account "
+                    "lifecycle, catalog, and RADIUS owners. UI, API, scheduled, "
+                    "and bulk callers consume this preview before execution."
+                ),
+            ),
+            SOTService(
                 name="service_intent.ont",
                 module="app.services.network.ont_service_intent",
                 owns=("ONT service intent projection",),

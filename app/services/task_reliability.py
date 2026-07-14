@@ -326,6 +326,22 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.olt_firmware.rollback": _c(
+        "network",
+        NONE,
+        NON_IDEMP,
+        LOG,
+        "Device rollback is a non-idempotent operator action and is never retried "
+        "automatically.",
+    ),
+    "app.tasks.olt_firmware.upgrade_with_verification": _c(
+        "network",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "The network operation ledger owns duplicate suppression, progress, and "
+        "terminal failure visibility.",
+    ),
     "app.tasks.ont_bulk.execute_bulk_action": _c("network", ITEMS, PER_ITEM, STATUS),
     "app.tasks.ont_firmware.apply_huawei_ont_firmware": _c(
         "network",
