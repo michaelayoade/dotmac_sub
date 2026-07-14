@@ -110,6 +110,8 @@ DEFAULT_PERMISSIONS = [
     ("subscription:read", "View subscriptions"),
     ("subscription:create", "Create subscriptions"),
     ("subscription:update", "Update subscriptions"),
+    ("subscription:activate", "Activate suspended subscriptions"),
+    ("subscription:suspend", "Suspend subscriptions"),
     ("subscription:cancel", "Cancel subscriptions"),
     # Network - Devices
     ("network:hub:read", "View the network operations hub"),
@@ -354,6 +356,8 @@ ROLE_PERMISSIONS = {
         "billing:dunning:read",
         "billing_account:read",
         "subscription:read",
+        "subscription:activate",
+        "subscription:suspend",
         "support:ticket:read",
         "support:ticket:create",
         "support:ticket:update",
