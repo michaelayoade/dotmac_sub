@@ -246,6 +246,10 @@ DEFAULT_PERMISSIONS = [
     ("billing:write", "Manage all billing data"),
     ("catalog:read", "Read catalog data"),
     ("catalog:write", "Manage catalog data"),
+    (
+        "catalog:billing_write",
+        "Manage billing-critical catalog pricing and cadence",
+    ),
     ("network:read", "Read network inventory and telemetry"),
     ("network:write", "Manage network inventory and telemetry"),
     ("provisioning:read", "Read provisioning data"),

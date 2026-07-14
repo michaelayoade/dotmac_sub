@@ -84,7 +84,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "customer.financial_position",
     )
     assert sot_relationships.dependencies_for("customer.usage_summary") == (
-        "sessions.radius_live_view",
+        "sessions.radius_reconciliation",
+    )
+    assert sot_relationships.dependencies_for("financial.prepaid_plan_change") == (
+        "financial.ledger",
+        "customer.financial_position",
     )
     assert sot_relationships.dependencies_for(
         "communications.notification_service"
@@ -167,6 +171,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("sessions.radius_resolution") == (
         "sessions.radius_reconciliation",
         "network.identity",
+    )
+    assert sot_relationships.dependencies_for(
+        "service_intent.catalog_billing_governance"
+    ) == (
+        "service_intent.catalog_validation",
+        "auth.permission_gate",
+        "observability.recording",
     )
 
 

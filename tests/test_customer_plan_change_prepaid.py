@@ -34,6 +34,7 @@ def _make_offer(
     name: str,
     amount: Decimal,
     plan_family: str | None,
+    currency: str = "NGN",
     billing_mode: BillingMode = BillingMode.prepaid,
     service_type: ServiceType = ServiceType.residential,
     show_on_customer_portal: bool = True,
@@ -60,7 +61,7 @@ def _make_offer(
             offer_id=offer.id,
             price_type=PriceType.recurring,
             amount=amount,
-            currency="NGN",
+            currency=currency,
             billing_cycle=BillingCycle.monthly,
             is_active=True,
         )
@@ -1217,6 +1218,56 @@ def test_admin_prepaid_upgrade_rejects_insufficient_balance(
     )
 
 
+def test_immediate_prepaid_change_rejects_cross_currency_catalog(
+    db_session, subscriber, monkeypatch
+):
+    from app.schemas.catalog import SubscriptionUpdate
+    from app.services import catalog as catalog_service
+
+    current_offer = _make_offer(
+        db_session,
+        name="NGN Plan",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+        currency="NGN",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="USD Plan",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+        currency="USD",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, tzinfo=UTC))
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("500.00"),
+            currency="NGN",
+            memo="Wallet top-up",
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        catalog_service.subscriptions.update(
+            db_session,
+            str(subscription.id),
+            SubscriptionUpdate(offer_id=target_offer.id),
+        )
+
+    assert exc.value.detail["code"] == "catalog_currency_mismatch"
+
+
 def test_admin_prepaid_upgrade_with_balance_writes_wallet_debit(
     db_session, subscriber, monkeypatch
 ):
@@ -1274,6 +1325,72 @@ def test_admin_prepaid_upgrade_with_balance_writes_wallet_debit(
     assert debits[0].amount == Decimal("50.00")
 
 
+def test_prepaid_plan_change_adjustment_is_idempotent_within_transaction(
+    db_session, subscriber, monkeypatch
+):
+    from app.services.prepaid_plan_changes import (
+        prepare_immediate_prepaid_plan_change,
+    )
+
+    current_offer = _make_offer(
+        db_session,
+        name="Idempotent 100",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Idempotent 200",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, 0, 0, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, 0, 0, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, tzinfo=UTC))
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("50.00"),
+            currency="NGN",
+            memo="Wallet top-up",
+        )
+    )
+    db_session.commit()
+
+    first = prepare_immediate_prepaid_plan_change(
+        db_session,
+        subscription,
+        target_offer,
+        old_offer_name=current_offer.name,
+        operation_key="same-request",
+    )
+    second = prepare_immediate_prepaid_plan_change(
+        db_session,
+        subscription,
+        target_offer,
+        old_offer_name=current_offer.name,
+        operation_key="same-request",
+    )
+
+    assert first.ledger_entry is not None
+    assert second.replayed is True
+    assert second.ledger_entry.id == first.ledger_entry.id
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.account_id == subscriber.id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .count()
+        == 1
+    )
+
+
 def _add_overdue_invoice(db_session, subscriber, amount: Decimal) -> None:
     from app.models.billing import Invoice, InvoiceStatus
 
@@ -1289,6 +1406,64 @@ def _add_overdue_invoice(db_session, subscriber, amount: Decimal) -> None:
         )
     )
     db_session.commit()
+
+
+def test_admin_prepaid_change_rejects_overdue_debt_even_with_wallet(
+    db_session, subscriber, monkeypatch
+):
+    from app.schemas.catalog import SubscriptionUpdate
+    from app.services import catalog as catalog_service
+
+    current_offer = _make_offer(
+        db_session,
+        name="Debt Guard 100",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Debt Guard 200",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, tzinfo=UTC))
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("500.00"),
+            currency="NGN",
+            memo="Wallet top-up",
+        )
+    )
+    db_session.commit()
+    _add_overdue_invoice(db_session, subscriber, Decimal("25.00"))
+
+    with pytest.raises(HTTPException) as exc:
+        catalog_service.subscriptions.update(
+            db_session,
+            str(subscription.id),
+            SubscriptionUpdate(offer_id=target_offer.id),
+        )
+
+    db_session.refresh(subscription)
+    assert exc.value.detail["code"] == "collection_blocking_balance"
+    assert subscription.offer_id == current_offer.id
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.account_id == subscriber.id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .count()
+        == 0
+    )
 
 
 def test_plan_change_blocked_when_account_in_arrears(

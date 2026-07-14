@@ -48,19 +48,23 @@ that obscure business behavior.
    warn/suspend/restore plan consumed by both dry-run and execution. It consumes
    the funding decision from `financial.access_resolution`; it does not create
    another balance or threshold rule.
-7. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+7. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
+   affordability decision, and idempotent financial adjustment. It locks the
+   account and recomputes at write time; portal, admin, API, and change-request
+   application paths do not post their own plan-change debit.
+8. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
    Both converge on the account lifecycle writer, which re-checks billing
    profile validity, payment-arrangement/proof/extension shields, and billing
    enforcement health immediately before a financial suspension.
-8. Scheduled billing, collections, and payment-reconciliation services own DB
+9. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-9. `financial.payment_webhooks` owns signature-verified provider-payload
+10. `financial.payment_webhooks` owns signature-verified provider-payload
    projection and inbound dead-letter lifecycle. Replay rebuilds the same
    settlement command as live delivery; `financial.payment_provider_events`
    owns idempotent event processing, delegates the monetary write to the
    payment owner, and must resume an incomplete event rather than treating
    receipt identity as proof that money was posted.
-10. `financial.vas_operations` owns admin VAS mutation transactions and manual
+11. `financial.vas_operations` owns admin VAS mutation transactions and manual
    purchase resolution. `financial.vas_refunds` exclusively owns
    refund-to-source eligibility, the durable request lifecycle, and wallet
    reservation/reversal projection. It commits the request and wallet debit
@@ -307,9 +311,12 @@ Service intent:
 
 1. `service_intent.catalog_policy`: owns catalog policy lookup.
 2. `service_intent.catalog_validation`: owns catalog consistency checks.
-3. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
+3. `service_intent.catalog_billing_governance`: owns billing-critical catalog
+   mutation safety, audit, and operator alerts. Live pricing/cadence is versioned
+   rather than edited in place, and routes require `catalog:billing_write`.
+4. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
    assignment.
-4. `service_intent.ont`: projects configured intent for ONT operations.
+5. `service_intent.ont`: projects provisioning intent to ONT operations.
 
 Rule: catalog policy and subscription owners define commercial intent. Network
 owners project configured intent without a parallel catalog-to-network adapter.

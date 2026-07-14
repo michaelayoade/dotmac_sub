@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi.routing import APIRoute
 
+from app.api import catalog as api_catalog
 from app.api import network_device_groups as api_network_device_groups
 from app.web.admin import admin_hub as admin_system_hub
 from app.web.admin import catalog as admin_catalog
@@ -64,6 +65,30 @@ def test_catalog_routes_require_catalog_permissions():
     assert _route_has_permission(
         admin_catalog.router, "/catalog/offers", "POST", "catalog:write"
     )
+    assert _route_has_permission(
+        admin_catalog.router,
+        "/catalog/offers",
+        "POST",
+        "catalog:billing_write",
+    )
+
+
+def test_billing_catalog_api_mutations_require_narrow_permission():
+    for path, method in (
+        ("/offers", "POST"),
+        ("/offers/{offer_id}", "PATCH"),
+        ("/offer-prices", "POST"),
+        ("/offer-prices/{price_id}", "PATCH"),
+        ("/add-on-prices/{price_id}", "PATCH"),
+        ("/offer-versions", "POST"),
+        ("/offer-version-prices/{price_id}", "PATCH"),
+    ):
+        assert _route_has_permission(
+            api_catalog.router,
+            path,
+            method,
+            "catalog:billing_write",
+        )
 
 
 def test_dashboard_routes_require_any_domain_read_permission():
@@ -108,6 +133,12 @@ def test_catalog_settings_routes_require_catalog_permissions():
         "/catalog/settings/region-zones",
         "POST",
         "catalog:write",
+    )
+    assert _route_has_permission(
+        admin_catalog_settings.router,
+        "/catalog/settings/add-ons",
+        "POST",
+        "catalog:billing_write",
     )
 
 
