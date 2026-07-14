@@ -331,6 +331,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.ont_reconcile.reconcile_huawei_ont": _c(
+        "network",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "Durable parent/child network operations expose failure and gate duplicate "
+        "dispatch; failed convergence is retried by a new reconcile operation.",
+    ),
     "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
