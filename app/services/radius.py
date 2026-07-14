@@ -1254,6 +1254,9 @@ def _external_sync_users(
                 # routes), mirroring the authoritative sweep's captive treatment
                 # so the two writers agree instead of flapping the customer
                 # between the pay-page and fully-offline.
+                # captive requires a usable password: plan.write_password is set
+                # for this mode, so password_row was built above (or we skipped).
+                assert password_row is not None
                 conn.execute(
                     insert(radcheck_table).values(
                         username=username,
@@ -1305,6 +1308,8 @@ def _external_sync_users(
                 created += 1
                 continue
 
+            # active requires a usable password (plan.write_password set above).
+            assert password_row is not None
             conn.execute(
                 insert(radcheck_table).values(
                     username=username,
