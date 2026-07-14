@@ -1685,6 +1685,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     finance_data = _build_common_financials(db, account_ids)
     invoices = finance_data["invoices"]
     payments = finance_data["payments"]
+    invoice_status_presentations = finance_data["invoice_status_presentations"]
     payment_status_presentations = finance_data["payment_status_presentations"]
     balance_due = finance_data["balance_due"]
     financials = finance_data["financials"]
@@ -1846,6 +1847,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "contacts": contacts,
         "invoices": invoices,
         "payments": payments,
+        "invoice_status_presentations": invoice_status_presentations,
         "payment_status_presentations": payment_status_presentations,
         "notifications": notifications,
         "stats": stats,

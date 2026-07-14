@@ -159,6 +159,16 @@ def _normalize_search(search: str | None) -> str | None:
     return normalized or None
 
 
+def _normalize_per_page(per_page: int | str | None) -> int:
+    try:
+        normalized = int(str(per_page or "").strip())
+    except ValueError:
+        return CUSTOMER_LIST_DEFINITION.default_per_page
+    if normalized in CUSTOMER_LIST_DEFINITION.per_page_options:
+        return normalized
+    return CUSTOMER_LIST_DEFINITION.default_per_page
+
+
 def build_customer_list_query(
     *,
     search: str | None,
@@ -169,7 +179,7 @@ def build_customer_list_query(
     sort_by: CustomerListSort = "created_at",
     sort_dir: SortDirection = "desc",
     page: int = 1,
-    per_page: int = 25,
+    per_page: int | str | None = 25,
 ) -> ListQuery:
     """Normalize raw adapter parameters through the customer list contract."""
 
@@ -202,7 +212,7 @@ def build_customer_list_query(
         sort_by=sort_by,
         sort_dir=sort_dir,
         page=page,
-        per_page=per_page,
+        per_page=_normalize_per_page(per_page),
     )
 
 

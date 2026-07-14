@@ -307,7 +307,7 @@ def customers_list(
     sort: Literal["created_at", "name", "status"] = Query("created_at"),
     direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     page: int = Query(1, ge=1),
-    per_page: Literal[10, 25, 50, 100] = Query(25),
+    per_page: str | None = Query("25"),
     db: Session = Depends(get_db),
 ):
     """List all customers with search and filtering."""
