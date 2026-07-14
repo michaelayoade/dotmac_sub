@@ -18,6 +18,8 @@ from app.models.billing import (
     InvoiceLine,
     Payment,
     PaymentAllocation,
+    TaxApplication,
+    TaxRate,
 )
 from app.schemas.billing import (
     CreditNoteSyncRead,
@@ -121,6 +123,9 @@ def test_invoice_sync_feed_is_lightweight_and_watermarked(
 ):
     old = _make_invoice(db_session, subscriber_account.id, _T0)
     current = _make_invoice(db_session, subscriber_account.id, _T0 + timedelta(days=1))
+    vat = TaxRate(name="VAT 7.5%", code="VAT75", rate=Decimal("7.5"))
+    db_session.add(vat)
+    db_session.flush()
     db_session.add(
         InvoiceLine(
             invoice_id=current.id,
@@ -128,6 +133,8 @@ def test_invoice_sync_feed_is_lightweight_and_watermarked(
             quantity=Decimal("1"),
             unit_price=Decimal("100.00"),
             amount=Decimal("100.00"),
+            tax_rate_id=vat.id,
+            tax_application=TaxApplication.inclusive,
         )
     )
     db_session.add(
@@ -156,6 +163,8 @@ def test_invoice_sync_feed_is_lightweight_and_watermarked(
     assert old.id not in {row.id for row in response["items"]}
     payload = InvoiceSyncRead.model_validate(response["items"][0]).model_dump()
     assert payload["lines"][0]["description"] == "Internet service"
+    assert payload["lines"][0]["tax_rate_id"] == vat.id
+    assert payload["lines"][0]["tax_application"] == TaxApplication.inclusive
     assert len(payload["lines"]) == 1
     assert "payment_allocations" not in payload
     assert "billing_period_start" not in payload

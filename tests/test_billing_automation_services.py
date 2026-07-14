@@ -2779,6 +2779,8 @@ class TestCancellationCreditCycle:
             Invoice,
             InvoiceLine,
             InvoiceStatus,
+            TaxApplication,
+            TaxRate,
         )
         from app.models.catalog import (
             BillingCycle,
@@ -2803,6 +2805,12 @@ class TestCancellationCreditCycle:
                 is_active=True,
             )
         )
+        tax_rate = TaxRate(
+            name="Cancellation VAT",
+            code="VAT-CANCEL",
+            rate=Decimal("7.5000"),
+        )
+        db_session.add(tax_rate)
         invoice = Invoice(
             account_id=subscriber_account.id,
             invoice_number="INV-CC-1",
@@ -2819,6 +2827,8 @@ class TestCancellationCreditCycle:
                 quantity=Decimal("1.000"),
                 unit_price=Decimal("70.00"),
                 amount=Decimal("70.00"),
+                tax_rate_id=tax_rate.id,
+                tax_application=TaxApplication.exclusive,
             )
         )
         db_session.commit()
@@ -2831,6 +2841,11 @@ class TestCancellationCreditCycle:
             .first()
         )
         assert credit is not None
+        assert credit.issued_at is not None
+        assert credit.invoice_id == invoice.id
+        assert credit.tax_total > Decimal("0.00")
+        assert credit.lines[0].tax_rate_id == tax_rate.id
+        assert credit.lines[0].tax_application == TaxApplication.exclusive
         # Weekly window: ~3/7 of ₦70 ≈ ₦30. The old offer-cycle (monthly) bug
         # would credit ~3/30 ≈ ₦7.
         assert credit.subtotal > Decimal("20.00")

@@ -6,9 +6,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.models.billing import InvoiceStatus, PaymentStatus
+from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import SubscriptionStatus
 from app.models.network_monitoring import DeviceRole, DeviceStatus, NetworkDevice
+from app.models.payment_proof import WithholdingTaxStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import Ticket, TicketStatus
 from app.schemas.billing import InvoiceRead, PaymentRead
@@ -26,16 +27,41 @@ from app.services.status_presentation import (
     access_session_status_presentation,
     account_status_presentation,
     connection_health_status_presentation,
+    credit_note_status_presentation,
     device_operational_status_presentation,
     invoice_status_presentation,
     outage_status_presentation,
     payment_status_presentation,
     subscription_status_presentation,
     ticket_status_presentation,
+    withholding_tax_status_presentation,
     work_order_status_presentation,
 )
 from app.services.topology.connection_status import ConnectionHealthState
 from app.services.topology.outage import OutageStatus
+
+
+@pytest.mark.parametrize("status", list(WithholdingTaxStatus))
+def test_wht_presentation_covers_authoritative_enum(
+    status: WithholdingTaxStatus,
+) -> None:
+    presentation = withholding_tax_status_presentation(status)
+
+    assert presentation.value == status.value
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
+
+
+@pytest.mark.parametrize("status", list(CreditNoteStatus))
+def test_credit_note_presentation_covers_authoritative_enum(
+    status: CreditNoteStatus,
+) -> None:
+    presentation = credit_note_status_presentation(status)
+
+    assert presentation.value == status.value
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
 
 
 @pytest.mark.parametrize(

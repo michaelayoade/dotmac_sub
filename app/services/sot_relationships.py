@@ -153,7 +153,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "invoice document lifecycle",
                     "invoice status transitions",
-                    "invoice-originated ledger postings",
+                    "invoice adjustment and reversal postings",
                 ),
                 depends_on=("financial.ledger", "financial.billing_accounts"),
             ),
@@ -162,6 +162,53 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.billing.credit_notes",
                 owns=("credit-note lifecycle", "credit-note ledger postings"),
                 depends_on=("financial.ledger", "financial.invoices"),
+            ),
+            SOTService(
+                name="financial.tax_configuration",
+                module="app.services.billing.tax",
+                owns=(
+                    "configurable tax-rate records",
+                    "tax-rate activation lifecycle",
+                ),
+            ),
+            SOTService(
+                name="financial.payment_proofs",
+                module="app.services.payment_proofs",
+                owns=(
+                    "payment-proof review lifecycle",
+                    "proof-backed payment request",
+                    "withholding-tax receivable source records",
+                ),
+                depends_on=("financial.payments",),
+            ),
+            SOTService(
+                name="financial.tax_accounting",
+                module="app.services.tax_accounting",
+                owns=(
+                    "tax report semantics",
+                    "output-tax invoice projection",
+                    "withholding-tax receivable projection",
+                    "tax report period and currency aggregation",
+                    "credit-note tax recognition point",
+                    "withholding-tax lifecycle",
+                    "withholding-tax official timeline",
+                    "net output-tax liability projection",
+                ),
+                depends_on=(
+                    "financial.invoices",
+                    "financial.tax_configuration",
+                    "financial.payment_proofs",
+                ),
+                notes=(
+                    "Issued output tax less issued credit-note tax adjustments is "
+                    "the source-document liability, not cash collected, and "
+                    "currencies remain separate. This owner also enforces legal "
+                    "pending/certified/reclaimed/written-off WHT transitions and an "
+                    "immutable evidence timeline. Dotmac ERP exclusively owns tax "
+                    "account mappings, balanced journals, tax transactions, and "
+                    "financial statements; Sub exports line tax treatment and WHT "
+                    "facts through bounded sync feeds and has no local posting path."
+                ),
             ),
             SOTService(
                 name="financial.vas_wallet",
@@ -332,8 +379,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.services.billing_automation",
             "app.services.collections.*",
             "app.web.admin.billing_*",
+            "app.web.admin.reports",
             "app.web.admin.vas",
             "app.api.billing",
+            "app.services.payment_proofs",
+            "app.services.web_reports_extended",
             "app.tasks.billing",
             "app.tasks.collections",
             "app.tasks.enforcement",
@@ -342,7 +392,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
         rule=(
             "No caller infers access or balances from draft invoices, imported "
-            "legacy fields, or ad hoc sums when ledger/access resolvers exist."
+            "legacy fields, or ad hoc sums when ledger/access resolvers exist. "
+            "Tax reports consume the tax-accounting projection, never label "
+            "issued tax as collected cash, and never add different currencies. "
+            "Tax account mappings and double-entry consequences are written only "
+            "by Dotmac ERP from Sub's bounded source-fact feeds."
         ),
     ),
     DomainSOT(
