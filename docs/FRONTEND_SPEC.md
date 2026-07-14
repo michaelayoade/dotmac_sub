@@ -1,5 +1,10 @@
 # Frontend Developer Specification
 
+> **Authority:** Implementation specification. Information selection, depth,
+> state provenance, and actions are governed by
+> `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`; visual and interaction policy is
+> governed by `docs/PRODUCTION_UI_BRIEF.md`.
+
 > **Stack:** Jinja2 + HTMX + Alpine.js + Tailwind CSS v4
 > **Layout:** Server-rendered templates consuming context dicts from Python web services
 > **No REST API consumed by frontend** — the web service context dict IS the interface contract.
@@ -164,8 +169,8 @@ Import what you need:
 
 | Macro | Parameters | Purpose |
 |-------|-----------|---------|
-| `ambient_background` | `color1, color2, position` | Subtle gradient orb background |
-| `page_header` | `title, subtitle, icon, color, color2, actions, breadcrumbs` | Large page title with gradient icon |
+| `ambient_background` | `color1, color2, position` | Legacy compatibility macro; do not use on new operational pages |
+| `page_header` | `title, subtitle, icon, color, color2, actions, breadcrumbs` | Compact page context with one primary action |
 | `detail_header` | `title, subtitle, icon, color, color2, back_href, status` | Detail page header with back button |
 | `card` | `title, icon, color, color2, actions, padding` | Generic card container |
 | `filter_bar` | (caller block) | Container for search/filter controls |
@@ -186,7 +191,7 @@ Import what you need:
 | `timeline_item` | `title, description, time, color, is_last` | Vertical timeline entry |
 | `connection_status` | `status, label, last_seen` | Online/offline dot indicator |
 | `alert_count_badge` | `count, color` | Count pill, hidden when 0 |
-| `icon_badge` | `icon, color, color2, size` | Small gradient icon container |
+| `icon_badge` | `icon, color, color2, size` | Compact orientation icon; semantic state remains separate |
 | `avatar` | `name, type, size, color` | User avatar with initials |
 | `vendor_badge` | `vendor, size` | Vendor/provider badge |
 
@@ -196,7 +201,7 @@ Import what you need:
 |-------|-----------|---------|
 | `data_table` | `title, icon, color, count, actions` | Table wrapper with header |
 | `table_head` | `columns` | Styled `<thead>` |
-| `table_row` | `color` | `<tr>` with hover gradient |
+| `table_row` | `color` | Stable `<tr>` with restrained hover state |
 | `row_actions` | (caller block) | Action button container in last column |
 | `row_action` | `href, icon, title, color, hx_attrs` | Individual row action button |
 | `empty_state` | `title, message, icon, color, color2, action_label, action_href, colspan` | Empty table state with CTA |

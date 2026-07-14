@@ -1,6 +1,7 @@
 # Design Review Checklist
 
 Use this checklist for UI-heavy changes before merge. It is derived from:
+- `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`
 - `docs/PRODUCTION_UI_BRIEF.md`
 - `docs/FRONTEND_SPEC.md`
 
@@ -15,6 +16,16 @@ Apply the checklist to:
 - dashboard, table, filter, chart, and detail-page changes
 
 If a section does not apply, mark it `N/A` explicitly.
+
+## Information Contract
+
+- [ ] The audience, operational job, and decision supported by the screen are named.
+- [ ] The authoritative read/context owner is identified.
+- [ ] Status, reason, provenance, freshness, and action hints come from backend owners.
+- [ ] The first viewport contains identity, state, impact, urgency, owner, and next action as applicable.
+- [ ] Secondary investigation and audit evidence use progressive disclosure.
+- [ ] Unknown, zero, stale, unavailable, disabled, unauthorized, and not-applicable states remain distinct.
+- [ ] Customer, subscription, financial, access, network/device, outage, and support states are not collapsed into one ambiguous status.
 
 ## Context Bar
 
@@ -40,6 +51,15 @@ If a section does not apply, mark it `N/A` explicitly.
 - [ ] Bulk actions only appear when selection exists.
 - [ ] Controls remain stable during HTMX refreshes.
 
+## Actions
+
+- [ ] There is exactly one page-level primary action.
+- [ ] At most one common row action is visible; additional actions use a consistent menu.
+- [ ] Unauthorized actions are hidden and state-ineligible actions explain why only when useful.
+- [ ] The command owner rechecks permission and eligibility at execution time.
+- [ ] High-impact actions show scope and consequences before confirmation.
+- [ ] Async actions expose an operation/event ID and do not claim a false final state.
+
 ## Work Surface
 
 - [ ] The first viewport supports a real task without excessive scrolling.
@@ -49,6 +69,15 @@ If a section does not apply, mark it `N/A` explicitly.
 - [ ] Row actions are consistent with neighboring modules.
 - [ ] Subscriber-facing surfaces expose both human identity and service identity where needed.
 - [ ] NOC-facing surfaces show impact counts or blast radius before deep drill-down.
+
+## Tables
+
+- [ ] Every visible column supports identity, comparison, decision, action, or evidence.
+- [ ] Default columns are bounded; secondary fields move to detail or an explicit column chooser.
+- [ ] Default sorting reflects urgency or relevant recency.
+- [ ] Filtering, sorting, pagination, totals, and exports preserve tenant and RBAC scope.
+- [ ] KPI drill-downs use the exact filtered cohort that produced the displayed number.
+- [ ] Mobile tables retain identity, state, impact, and next action.
 
 ## Color And State
 
@@ -116,6 +145,7 @@ If a section does not apply, mark it `N/A` explicitly.
 - [ ] New macros reinforce the preferred patterns in the design guide.
 - [ ] Shared components do not encourage oversized decorative layouts by default.
 - [ ] New patterns are documented in `docs/FRONTEND_SPEC.md` when they become standard.
+- [ ] Material new screens or redesigns add or update their page contract.
 
 ## Review Summary
 
@@ -124,4 +154,5 @@ Record the outcome in the PR:
 - Scope reviewed:
 - Screens / templates touched:
 - Checklist exceptions:
+- Information/action contract:
 - Follow-up issues:
