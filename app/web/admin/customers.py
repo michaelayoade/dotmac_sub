@@ -3,6 +3,7 @@
 import json
 import logging
 import uuid
+from collections.abc import Mapping
 from typing import Any, Literal
 
 import anyio
@@ -28,14 +29,14 @@ from app.services import customer_portal
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services import (
+    web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
+)
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services import web_customer_details as web_customer_details_service
 from app.services import web_customer_lists as web_customer_lists_service
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services import web_notifications as web_notifications_service
-from app.services import (
-    web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
-)
 from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
@@ -135,6 +136,15 @@ def _get_actor_id(request: Request) -> str | None:
 
     current_user = get_current_user(request)
     return str(current_user.get("subscriber_id")) if current_user else None
+
+
+def _workflow_changed_count(result: Mapping[str, Any]) -> int:
+    value = result.get("changed") or result.get("count") or 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(value)
+    return 0
 
 
 def _load_tax_rates(db: Session):
@@ -1614,7 +1624,7 @@ def customer_suspend_active_services(
         request=request,
         actor_id=_get_actor_id(request),
     )
-    changed = int(result.get("changed") or result.get("count") or 0)
+    changed = _workflow_changed_count(result)
     return _toast_response(
         request=request,
         redirect_url=redirect_url,
@@ -1663,7 +1673,7 @@ def customer_activate_suspended_services(
         request=request,
         actor_id=_get_actor_id(request),
     )
-    changed = int(result.get("changed") or result.get("count") or 0)
+    changed = _workflow_changed_count(result)
     return _toast_response(
         request=request,
         redirect_url=redirect_url,
