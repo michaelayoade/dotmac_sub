@@ -16,15 +16,6 @@ from app.models.subscriber import Subscriber
 from app.services import crm_api
 
 
-@pytest.fixture(autouse=True)
-def _ensure_sequence_table(db_session):
-    # Invoice-number generation needs document_sequences, whose model isn't
-    # imported before the SQLite test schema is built.
-    from app.models.sequence import DocumentSequence
-
-    DocumentSequence.__table__.create(db_session.get_bind(), checkfirst=True)
-
-
 def _subscriber(db_session) -> Subscriber:
     sub = Subscriber(
         first_name="In",

@@ -216,6 +216,8 @@ def _enable_sqlite_spatial_admin() -> None:
     importlib.reload(geoalchemy_sqlite_admin)
 
 
+# Register the complete model graph before the shared schema fixture calls create_all.
+import app.models  # noqa: F401
 from app.models.catalog import AccessType, PriceBasis, RegionZone, ServiceType
 from app.models.subscriber import Subscriber
 from app.schemas.catalog import (
