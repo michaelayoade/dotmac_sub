@@ -1670,6 +1670,68 @@ def customer_activate_suspended_services(
     )
 
 
+@router.post(
+    "/{customer_type}/{customer_id}/repair-access-state",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_any_permission("customer:write", "subscription:activate"))
+    ],
+)
+def customer_repair_access_state(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: str,
+    db: Session = Depends(get_db),
+):
+    """Repair one customer's account/RADIUS projection when safe to do so."""
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    try:
+        result = web_customer_actions_service.repair_customer_access_state(
+            db, customer_id
+        )
+    except ValueError as exc:
+        db.rollback()
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Access repair skipped",
+            message=str(exc),
+        )
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to repair access state for customer %s", customer_id)
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Access repair failed",
+            message="The repair could not be completed. Check logs before retrying.",
+        )
+
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type="subscriber",
+        entity_id=str(customer_id),
+        actor_id=_get_actor_id(request),
+        metadata={"access_state_repair": result},
+    )
+    db.commit()
+
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=True,
+        title="Access state repaired",
+        message=(
+            "Recomputed account status and refreshed RADIUS for "
+            f"{result.get('active_subscriptions', 0)} active subscription(s)."
+        ),
+    )
+
+
 @router.delete(
     "/person/{customer_id}",
     response_class=HTMLResponse,

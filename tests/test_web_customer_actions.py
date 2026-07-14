@@ -5,6 +5,7 @@ import pytest
 from app.models.auth import UserCredential
 from app.models.billing import TaxRate
 from app.models.catalog import (
+    AccessCredential,
     AccessType,
     BillingMode,
     CatalogOffer,
@@ -14,7 +15,8 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.enforcement_lock import EnforcementReason
+from app.models.collections import DunningCase, DunningCaseStatus
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
 from app.services import web_customer_actions as actions
 from app.services.account_lifecycle import has_active_lock
@@ -119,6 +121,120 @@ def test_update_business_customer_applies_billing_overrides_to_linked_subscriber
     assert refreshed.min_balance == Decimal("75.00")
     assert refreshed.tax_rate_id == tax_rate.id
     assert refreshed.payment_method == "cash"
+
+
+def test_repair_customer_access_state_restores_stale_active_projection(
+    db_session, monkeypatch, subscriber, catalog_offer
+):
+    subscriber.status = SubscriberStatus.blocked
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        access_state="suspended",
+        login="repair-active-1",
+    )
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="repair-active-1",
+        is_active=True,
+    )
+    db_session.add_all([subscription, credential])
+    db_session.commit()
+
+    access_state_calls = []
+    reconcile_calls = []
+    monkeypatch.setattr(
+        actions,
+        "set_subscription_access_state",
+        lambda db, subscription_id, state: access_state_calls.append(
+            (subscription_id, state.value if state else None)
+        )
+        or {
+            "external_rows_written": 1,
+            "external_rows_deleted": 1,
+            "aggregate_state": state.value if state else None,
+        },
+    )
+    monkeypatch.setattr(
+        actions.radius_service,
+        "unblock_external_radius_credentials",
+        lambda db, account_id: 1,
+    )
+    monkeypatch.setattr(
+        actions.radius_service,
+        "reconcile_subscription_connectivity",
+        lambda db, subscription_id: reconcile_calls.append(subscription_id)
+        or {
+            "ok": True,
+            "radius_users_changed": 1,
+            "radius_clients_changed": 0,
+            "external_credentials_synced": 1,
+            "external_nas_synced": 0,
+        },
+    )
+
+    result = actions.repair_customer_access_state(db_session, str(subscriber.id))
+
+    db_session.refresh(subscriber)
+    assert subscriber.status == SubscriberStatus.active
+    assert result["status_before"] == "blocked"
+    assert result["status_after"] == "active"
+    assert result["reject_rows_removed"] == 1
+    assert access_state_calls == [(str(subscription.id), "active")]
+    assert reconcile_calls == [str(subscription.id)]
+
+
+def test_repair_customer_access_state_skips_active_dunning_case(
+    db_session, subscriber, catalog_offer
+):
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        login="repair-dunning-1",
+    )
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="repair-dunning-1",
+        is_active=True,
+    )
+    case = DunningCase(account_id=subscriber.id, status=DunningCaseStatus.open)
+    db_session.add_all([subscription, credential, case])
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="active dunning case"):
+        actions.repair_customer_access_state(db_session, str(subscriber.id))
+
+
+def test_repair_customer_access_state_skips_active_enforcement_lock(
+    db_session, subscriber, catalog_offer
+):
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.active,
+        login="repair-lock-1",
+    )
+    credential = AccessCredential(
+        subscriber_id=subscriber.id,
+        username="repair-lock-1",
+        is_active=True,
+    )
+    db_session.add_all([subscription, credential])
+    db_session.flush()
+    lock = EnforcementLock(
+        subscription_id=subscription.id,
+        subscriber_id=subscriber.id,
+        reason=EnforcementReason.overdue,
+        source="test",
+        is_active=True,
+    )
+    db_session.add(lock)
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="active suspension lock"):
+        actions.repair_customer_access_state(db_session, str(subscriber.id))
 
 
 def test_deactivate_business_customer_suspends_member_subscriptions(db_session):

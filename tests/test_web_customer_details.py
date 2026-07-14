@@ -30,7 +30,13 @@ from app.models.catalog import AccessCredential, ConnectionType, SubscriptionSta
 from app.models.crm_sync_failure import CrmSyncFailure, CrmSyncFailureStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import SubscriberAdditionalRoute
-from app.models.subscriber import Address, Subscriber, SubscriberCategory, UserType
+from app.models.subscriber import (
+    Address,
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+    UserType,
+)
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser, SystemUserType
 from app.services.credential_crypto import encrypt_credential
@@ -272,6 +278,52 @@ def test_person_detail_projects_subscription_status_for_network_access(
     presentation = context["network_access_cards"][0]["status_presentation"]
     assert presentation.value == "suspended"
     assert presentation.tone.value == "warning"
+
+
+def test_customer_detail_enables_access_repair_for_stale_active_projection(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscriber.status = SubscriberStatus.blocked
+    subscription.status = SubscriptionStatus.active
+    subscription.access_state = "suspended"
+    db_session.add(
+        AccessCredential(
+            subscriber_id=subscriber.id,
+            username="repair-detail-1",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["access_repair_state"]["enabled"] is True
+    assert context["access_repair_state"]["needed"] is True
+    assert "Repair needed" in context["access_repair_state"]["reason"]
+
+
+def test_customer_detail_grays_access_repair_when_projection_is_active(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscriber.status = SubscriberStatus.active
+    subscription.status = SubscriptionStatus.active
+    subscription.access_state = "active"
+    db_session.add(
+        AccessCredential(
+            subscriber_id=subscriber.id,
+            username="repair-detail-2",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["access_repair_state"]["enabled"] is False
+    assert context["access_repair_state"]["needed"] is False
+    assert "No repair needed" in context["access_repair_state"]["reason"]
 
 
 def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscriber):
