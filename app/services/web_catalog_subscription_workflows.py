@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 from urllib.parse import quote_plus
 
+from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
@@ -22,6 +24,8 @@ from app.services.subscription_lifecycle import (
     SubscriptionEffectiveTiming,
     SubscriptionLifecycleCommand,
     SubscriptionLifecycleError,
+    SubscriptionLifecycleState,
+    preview_subscription_command,
 )
 from app.services.subscription_lifecycle_commands import execute_subscription_command
 from app.services.subscription_lifecycle_schedules import (
@@ -30,6 +34,60 @@ from app.services.subscription_lifecycle_schedules import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def preview_lifecycle_command_response(
+    db: Session,
+    *,
+    subscription_id: str,
+    kind: SubscriptionCommandKind,
+    actor_id: str | None,
+    reason: str | None = None,
+    target_offer_id: str | None = None,
+    effective_timing: SubscriptionEffectiveTiming = (
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = None,
+) -> tuple[dict[str, object], int]:
+    """Preview one lifecycle command using the same contract as execution."""
+    try:
+        command = SubscriptionLifecycleCommand(
+            subscription_id=subscription_id,
+            kind=kind,
+            source=f"admin:catalog:{actor_id or 'system'}",
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            target_offer_id=target_offer_id,
+            reason=reason,
+        )
+        preview = preview_subscription_command(db, command)
+    except (SubscriptionLifecycleError, ValueError) as exc:
+        missing = "not found" in str(exc).lower()
+        return (
+            {
+                "status": "rejected",
+                "message": str(exc),
+                "error_code": (
+                    "subscription_not_found" if missing else "invalid_lifecycle_command"
+                ),
+            },
+            404 if missing else 422,
+        )
+    return (
+        {
+            "status": "previewed",
+            "expected_head": preview.current.head,
+            "effective_at": preview.effective_at.isoformat(),
+            "eligible": preview.eligible,
+            "eligibility_reasons": list(preview.eligibility_reasons),
+            "requires_confirmation": preview.requires_confirmation,
+            "current": _serialize_lifecycle_state(preview.current.state),
+            "proposed": _serialize_lifecycle_state(preview.proposed),
+            "billing_impact": _json_value(preview.billing_impact),
+            "access_impact": _json_value(preview.access_impact),
+        },
+        200,
+    )
 
 
 def execute_lifecycle_command_response(
@@ -145,6 +203,26 @@ def cancel_lifecycle_schedule_response(
     )
 
 
+def cancel_lifecycle_schedule_redirect(
+    db: Session,
+    *,
+    subscription_id: str,
+    schedule_id: str,
+    actor_id: str | None,
+) -> str:
+    """Cancel one lifecycle schedule and return to its subscription detail."""
+    payload, status_code = cancel_lifecycle_schedule_response(
+        db,
+        subscription_id=subscription_id,
+        schedule_id=schedule_id,
+        actor_id=actor_id,
+    )
+    base = f"/admin/catalog/subscriptions/{subscription_id}"
+    message = str(payload["message"])
+    query_name = "notice" if status_code == 200 else "error"
+    return f"{base}?{query_name}={quote_plus(message)}"
+
+
 def get_subscription_or_none(
     db: Session,
     subscription_id: str,
@@ -189,6 +267,9 @@ def subscription_detail_page_context(
         "activities": build_audit_activities(db, "subscription", str(subscription_id)),
         "offer_options": core.active_offer_options(db),
         "scheduled_plan_change": _scheduled_plan_change_context(db, subscription_id),
+        "scheduled_status_changes": _scheduled_status_change_context(
+            db, subscription_id
+        ),
     }
     context.update(core.subscription_detail_context(db, subscription))
     return context
@@ -213,6 +294,71 @@ def _scheduled_plan_change_context(
         "offer_name": target_offer.name if target_offer else "New plan",
         "effective_date": scheduled.effective_date,
     }
+
+
+def _scheduled_status_change_context(
+    db: Session,
+    subscription_id: str,
+) -> list[dict[str, object]]:
+    from sqlalchemy import select
+
+    from app.models.subscription_lifecycle_schedule import (
+        SubscriptionLifecycleSchedule,
+        SubscriptionLifecycleScheduleStatus,
+    )
+    from app.services.common import coerce_uuid
+
+    schedules = db.scalars(
+        select(SubscriptionLifecycleSchedule)
+        .where(
+            SubscriptionLifecycleSchedule.subscription_id
+            == coerce_uuid(subscription_id)
+        )
+        .where(
+            SubscriptionLifecycleSchedule.status.in_(
+                {
+                    SubscriptionLifecycleScheduleStatus.pending,
+                    SubscriptionLifecycleScheduleStatus.processing,
+                }
+            )
+        )
+        .order_by(SubscriptionLifecycleSchedule.effective_at.asc())
+    ).all()
+    return [
+        {
+            "id": str(schedule.id),
+            "kind": schedule.command_kind,
+            "status": schedule.status.value,
+            "effective_at": schedule.effective_at,
+            "reason": schedule.reason,
+            "cancelable": (
+                schedule.status == SubscriptionLifecycleScheduleStatus.pending
+            ),
+        }
+        for schedule in schedules
+    ]
+
+
+def _serialize_lifecycle_state(
+    state: SubscriptionLifecycleState,
+) -> dict[str, object]:
+    return {
+        "status": state.status,
+        "offer_id": state.offer_id,
+        "offer_name": state.offer_name,
+        "billing_mode": state.billing_mode,
+        "billing_collectible": state.billing_collectible,
+        "mrr_countable": state.mrr_countable,
+        "radius_access_state": state.radius_access_state,
+        "radius_allowed": state.radius_allowed,
+        "radius_blocked": state.radius_blocked,
+        "access_block_reason": state.access_block_reason,
+        "terminal": state.terminal,
+    }
+
+
+def _json_value(value: object) -> object:
+    return jsonable_encoder(value, custom_encoder={Decimal: str})
 
 
 def customer_detail_url_for_subscriber_id(db: Session, subscriber_id: str) -> str:

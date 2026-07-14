@@ -6,9 +6,10 @@
 {% block content %}
 {% set offer_label = subscription.offer.name if subscription.offer else 'Subscription' %}
 {% set status_val = subscription.status.value if subscription.status else 'pending' %}
-{% set can_activate = status_val in ('pending', 'suspended', 'blocked', 'stopped', 'disabled') %}
+{% set can_activate = status_val == 'pending' %}
+{% set can_restore = status_val in ('suspended', 'blocked', 'stopped') %}
 {% set can_suspend = status_val == 'active' %}
-{% set can_cancel = status_val not in ('canceled', 'expired', 'archived') %}
+{% set can_cancel = status_val not in ('canceled', 'expired', 'disabled', 'hidden', 'archived') %}
 {% set can_change_plan = status_val in ('active', 'pending', 'suspended') %}
 {% set subscription_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
 {% set provisioning_router = subscription.provisioning_nas_device %}
@@ -59,29 +60,37 @@
                 <div x-show="open" @click.away="open = false" x-transition x-cloak
                      class="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-slate-200 bg-white py-2 shadow-xl dark:border-slate-700 dark:bg-slate-800">
                     {% if can_activate %}
-                    <button type="button" @click="open = false; runAction('activate')"
+                    <button type="button" @click="open = false; openLifecycle('activate')"
                             class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                        {{ "Resume" if status_val == 'suspended' else "Activate" }}
+                        Activate
+                    </button>
+                    {% endif %}
+                    {% if can_restore %}
+                    <button type="button" @click="open = false; openLifecycle('restore')"
+                            class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Restore
                     </button>
                     {% endif %}
                     {% if can_suspend %}
-                    <button type="button" @click="open = false; runAction('suspend')"
+                    <button type="button" @click="open = false; openLifecycle('suspend')"
                             class="flex w-full items-center gap-2 px-4 py-2 text-sm text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         Suspend
                     </button>
                     {% endif %}
                     {% if can_change_plan %}
-                    <button type="button" @click="open = false; showChangePlanModal = true"
-                            class="flex w-full items-center gap-2 px-4 py-2 text-sm text-violet-600 hover:bg-violet-50 dark:text-violet-400 dark:hover:bg-violet-900/20">
+                    <button type="button" @click="open = false; openLifecycle('change_plan')"
+                            class="flex w-full items-center gap-2 px-4 py-2 text-sm text-primary-600 hover:bg-primary-50 dark:text-primary-400 dark:hover:bg-primary-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
                         Change Plan
                     </button>
                     {% endif %}
                     <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
                     <form method="post" action="/admin/catalog/subscriptions/{{ subscription.id }}/force-reauth"
-                          onsubmit="return confirm('This will disconnect the active PPPoE session. The customer should reconnect automatically, but may be offline briefly.');">
+                          data-confirm="This disconnects the active PPPoE session. The customer should reconnect automatically but may be offline briefly."
+                          data-confirm-variant="warning" data-confirm-label="Disconnect session">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit"
                                 class="flex w-full items-center gap-2 px-4 py-2 text-sm text-sky-600 hover:bg-sky-50 dark:text-sky-400 dark:hover:bg-sky-900/20">
@@ -91,7 +100,7 @@
                     </form>
                     {% if can_cancel %}
                     <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
-                    <button type="button" @click="open = false; runAction('cancel')"
+                    <button type="button" @click="open = false; openLifecycle('cancel')"
                             class="flex w-full items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                         Cancel Subscription
@@ -100,18 +109,22 @@
                 </div>
             </div>
 
-            {# Change Plan Modal #}
-            <div x-show="showChangePlanModal" x-transition.opacity x-cloak
+            {# Canonical lifecycle preview and confirmation modal #}
+            <div x-show="showLifecycleModal" x-transition.opacity x-cloak
                  class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-                 @keydown.escape.window="showChangePlanModal = false">
-                <div @click.outside="showChangePlanModal = false"
-                     class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-                    <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change Plan</h3>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Move this subscription to a different offer.</p>
-                    <div class="mt-4">
+                 @keydown.escape.window="closeLifecycle()">
+                <div @click.outside="closeLifecycle()"
+                     class="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-800"
+                     role="dialog" aria-modal="true" aria-labelledby="lifecycle-modal-title">
+                    <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <h3 id="lifecycle-modal-title" class="text-lg font-semibold text-slate-900 dark:text-white" x-text="actionTitle()"></h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review the service, billing, and access impact before confirming.</p>
+                    </div>
+                    <div class="space-y-4 px-6 py-5">
+                    <div x-show="kind === 'change_plan'" x-cloak>
                         <label for="change-plan-target" class="block text-sm font-medium text-slate-700 dark:text-slate-300">New Plan</label>
-                        <select id="change-plan-target" x-model="targetOfferId" @change="fetchQuote()"
-                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select id="change-plan-target" x-model="targetOfferId" @change="refreshPreview()"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Select a plan</option>
                             {% for offer in offer_options or [] %}
                                 {% if offer.id != (subscription.offer_id | string) %}
@@ -120,36 +133,60 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="mt-4">
-                        <label for="change-plan-timing" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Effective</label>
-                        <select id="change-plan-timing" x-model="effectiveTiming"
-                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="instant">Immediately (with proration)</option>
+                    <div>
+                        <label for="lifecycle-timing" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Effective</label>
+                        <select id="lifecycle-timing" x-model="effectiveTiming" @change="timingChanged()"
+                                class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="immediate">Immediately</option>
                             <option value="next_cycle">At next billing cycle</option>
+                            <option value="scheduled">On a specific date</option>
                         </select>
                     </div>
-                    <div x-show="quoteLoading && effectiveTiming === 'instant'" class="mt-3 text-sm text-slate-500 dark:text-slate-400">Calculating proration…</div>
-                    <div x-show="quote && !quoteLoading && effectiveTiming === 'instant'" x-cloak class="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-900/40">
-                        <p class="font-medium text-slate-800 dark:text-slate-200">Proration preview</p>
-                        <dl class="mt-1 space-y-0.5 text-slate-600 dark:text-slate-300">
-                            <div class="flex justify-between"><dt>Credit for unused time (<span x-text="quote?.days_remaining"></span>/<span x-text="quote?.days_in_cycle"></span> days)</dt><dd x-text="fmtMoney(quote?.current_remaining_value)"></dd></div>
-                            <div class="flex justify-between"><dt>New plan charge (prorated)</dt><dd x-text="fmtMoney(quote?.charge_amount)"></dd></div>
-                            <div class="flex justify-between font-semibold text-slate-900 dark:text-white"><dt>Net now</dt><dd x-text="(quote && quote.net_amount < 0 ? 'credit ' : '') + fmtMoney(quote ? Math.abs(quote.net_amount) : 0)"></dd></div>
-                        </dl>
+                    <div x-show="effectiveTiming === 'scheduled'" x-cloak>
+                        <label for="lifecycle-effective-at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Effective date and time</label>
+                        <input id="lifecycle-effective-at" type="datetime-local" x-model="effectiveAt" @change="refreshPreview()"
+                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
-                    <div x-show="effectiveTiming === 'next_cycle'" x-cloak class="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-800 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300">
-                        The plan swap is deferred to the next billing cycle. No proration is charged now — the new plan price applies from the next cycle.
+                    <div>
+                        <label for="lifecycle-reason" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Reason</label>
+                        <textarea id="lifecycle-reason" x-model="reason" @change="refreshPreview()" rows="2"
+                                  class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                  placeholder="Operational reason for this change"></textarea>
                     </div>
-                    <div x-show="quoteError" x-cloak class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300" x-text="quoteError"></div>
-                    <div class="mt-6 flex items-center justify-end gap-3">
-                        <button type="button" @click="showChangePlanModal = false"
-                                class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">
-                            Cancel
-                        </button>
-                        <button type="button" @click="runChangePlan()" :disabled="!targetOfferId || busy"
-                                class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-50">
-                            <span x-show="!busy">Change Plan</span>
-                            <span x-show="busy">Saving…</span>
+
+                    <div x-show="previewLoading" class="py-6 text-center text-sm text-slate-500 dark:text-slate-400">Loading current service state...</div>
+                    <template x-if="preview && !previewLoading">
+                        <div class="space-y-4">
+                            <div class="grid gap-3 sm:grid-cols-2">
+                                <div class="border-l-4 border-slate-300 bg-slate-50 px-4 py-3 dark:border-slate-600 dark:bg-slate-900/40">
+                                    <p class="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Current state</p>
+                                    <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white" x-text="stateLabel(preview.current)"></p>
+                                </div>
+                                <div class="border-l-4 border-primary-500 bg-primary-50 px-4 py-3 dark:bg-primary-900/20">
+                                    <p class="text-xs font-semibold uppercase text-primary-700 dark:text-primary-300">Proposed state</p>
+                                    <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white" x-text="stateLabel(preview.proposed)"></p>
+                                </div>
+                            </div>
+                            <dl class="divide-y divide-slate-200 border-y border-slate-200 text-sm dark:divide-slate-700 dark:border-slate-700">
+                                <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Effective</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="formatDate(preview.effective_at)"></dd></div>
+                                <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Billing impact</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="humanize(preview.billing_impact.action)"></dd></div>
+                                <div x-show="hasMoneyImpact()" class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Net amount</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="money(preview.billing_impact.net_amount, preview.billing_impact.currency)"></dd></div>
+                                <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Access impact</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="accessLabel()"></dd></div>
+                                <div class="flex justify-between gap-4 py-2"><dt class="text-slate-500 dark:text-slate-400">Session action</dt><dd class="text-right font-medium text-slate-800 dark:text-slate-200" x-text="humanize(preview.access_impact.session_action)"></dd></div>
+                            </dl>
+                            <div x-show="!preview.eligible" class="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+                                <p class="font-semibold">This change is not eligible.</p>
+                                <ul class="mt-1 list-disc pl-5"><template x-for="item in preview.eligibility_reasons" :key="item"><li x-text="humanize(item)"></li></template></ul>
+                            </div>
+                        </div>
+                    </template>
+                    <div x-show="errorMessage" x-cloak class="border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300" x-text="errorMessage"></div>
+                    </div>
+                    <div class="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <button type="button" @click="closeLifecycle()" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Close</button>
+                        <button type="button" @click="executeLifecycle()" :disabled="busy || previewLoading || !preview || !preview.eligible"
+                                class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50">
+                            <span x-text="busy ? 'Applying...' : confirmLabel()"></span>
                         </button>
                     </div>
                 </div>
@@ -161,86 +198,127 @@
         function subscriptionDetailActions() {
             return {
                 busy: false,
-                showChangePlanModal: false,
-                quote: null,
-                quoteLoading: false,
-                quoteError: '',
-                effectiveTiming: 'instant',
-                fmtMoney(v) {
-                    if (v === null || v === undefined) return '-';
-                    return Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                },
-                async fetchQuote() {
-                    this.quote = null;
-                    this.quoteError = '';
-                    if (!this.targetOfferId) return;
-                    this.quoteLoading = true;
-                    try {
-                        const resp = await fetch(`/admin/catalog/subscriptions/${this.subscriptionId}/change-plan-quote?target_offer_id=${encodeURIComponent(this.targetOfferId)}`);
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                        const data = await resp.json();
-                        this.quote = data.quote;
-                    } catch (err) {
-                        this.quoteError = 'Could not compute a proration preview (' + err.message + ') — the change still applies immediately with proration.';
-                    } finally {
-                        this.quoteLoading = false;
-                    }
-                },
+                showLifecycleModal: false,
+                preview: null,
+                previewLoading: false,
+                errorMessage: '',
+                kind: '',
                 targetOfferId: '',
+                effectiveTiming: 'immediate',
+                effectiveAt: '',
+                reason: '',
+                idempotencyKey: '',
+                previewRequestId: 0,
                 subscriptionId: '{{ subscription.id }}',
-                csrfToken: (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '',
-                confirmMessages: {
-                    activate: 'Activate this subscription?',
-                    suspend: 'Suspend this subscription?',
-                    cancel: 'Cancel this subscription? This is destructive.',
+                csrfToken: document.querySelector('meta[name="csrf-token"]')?.content || decodeURIComponent((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || ''),
+                openLifecycle(kind) {
+                    this.previewRequestId += 1;
+                    this.kind = kind;
+                    this.targetOfferId = '';
+                    this.effectiveTiming = 'immediate';
+                    this.effectiveAt = '';
+                    this.reason = '';
+                    this.idempotencyKey = '';
+                    this.preview = null;
+                    this.errorMessage = '';
+                    this.showLifecycleModal = true;
+                    if (kind !== 'change_plan') this.refreshPreview();
                 },
-                async runAction(action) {
-                    if (!confirm(this.confirmMessages[action])) return;
-                    this.busy = true;
+                closeLifecycle() {
+                    if (this.busy) return;
+                    this.previewRequestId += 1;
+                    this.previewLoading = false;
+                    this.showLifecycleModal = false;
+                },
+                timingChanged() {
+                    if (this.effectiveTiming !== 'scheduled') this.effectiveAt = '';
+                    this.refreshPreview();
+                },
+                actionTitle() {
+                    return this.humanize(this.kind || 'subscription change');
+                },
+                confirmLabel() {
+                    return this.effectiveTiming === 'immediate' ? 'Confirm change' : 'Schedule change';
+                },
+                humanize(value) {
+                    return String(value || '').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+                },
+                stateLabel(state) {
+                    if (!state) return '-';
+                    return `${this.humanize(state.status)} - ${state.offer_name || 'No plan'}`;
+                },
+                formatDate(value) {
+                    return value ? new Date(value).toLocaleString() : '-';
+                },
+                money(value, currency) {
+                    const amount = Number(value || 0);
+                    return `${currency || ''} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`.trim();
+                },
+                hasMoneyImpact() {
+                    return this.preview && Number(this.preview.billing_impact.net_amount || 0) !== 0;
+                },
+                accessLabel() {
+                    if (!this.preview) return '-';
+                    const access = this.preview.access_impact;
+                    return `${this.humanize(access.current_state || 'none')} to ${this.humanize(access.proposed_state || 'none')}`;
+                },
+                commandBody() {
+                    const body = new URLSearchParams({
+                        kind: this.kind,
+                        effective_timing: this.effectiveTiming,
+                        reason: this.reason,
+                        _csrf_token: this.csrfToken,
+                    });
+                    if (this.targetOfferId) body.set('target_offer_id', this.targetOfferId);
+                    if (this.effectiveTiming === 'scheduled' && this.effectiveAt) body.set('effective_at', new Date(this.effectiveAt).toISOString());
+                    return body;
+                },
+                async refreshPreview() {
+                    const requestId = ++this.previewRequestId;
+                    this.preview = null;
+                    this.idempotencyKey = '';
+                    this.errorMessage = '';
+                    if (!this.kind || (this.kind === 'change_plan' && !this.targetOfferId)) return;
+                    if (this.effectiveTiming === 'scheduled' && !this.effectiveAt) return;
+                    this.previewLoading = true;
                     try {
-                        const body = new URLSearchParams({
-                            subscription_ids: this.subscriptionId,
-                            _csrf_token: decodeURIComponent(this.csrfToken),
-                        });
-                        const resp = await fetch(`/admin/catalog/subscriptions/bulk/${action}`, {
+                        const resp = await fetch(`/admin/catalog/subscriptions/${this.subscriptionId}/lifecycle/preview`, {
                             method: 'POST',
-                            headers: { 'X-CSRF-Token': decodeURIComponent(this.csrfToken) },
-                            body,
+                            headers: { 'X-CSRF-Token': this.csrfToken },
+                            body: this.commandBody(),
                         });
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                        window.location.reload();
+                        const data = await resp.json();
+                        if (requestId !== this.previewRequestId) return;
+                        if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
+                        this.preview = data;
+                        this.idempotencyKey = window.crypto?.randomUUID?.() || `${Date.now()}-${this.kind}`;
                     } catch (err) {
-                        alert('Action failed: ' + err.message);
-                        this.busy = false;
+                        if (requestId !== this.previewRequestId) return;
+                        this.errorMessage = err.message || 'Could not preview this change.';
+                    } finally {
+                        if (requestId === this.previewRequestId) this.previewLoading = false;
                     }
                 },
-                async runChangePlan() {
-                    if (!this.targetOfferId) return;
-                    const select = document.getElementById('change-plan-target');
-                    const planLabel = select ? select.options[select.selectedIndex].text.trim() : 'the selected plan';
-                    const confirmMsg = this.effectiveTiming === 'next_cycle'
-                        ? `Schedule this subscription to change to "${planLabel}" at the next billing cycle? No charge is applied now.`
-                        : `Change this subscription to "${planLabel}" now? This applies immediately and generates a proration invoice or credit.`;
-                    if (!confirm(confirmMsg)) {
-                        return;
-                    }
+                async executeLifecycle() {
+                    if (!this.preview || !this.preview.eligible) return;
                     this.busy = true;
+                    this.errorMessage = '';
                     try {
-                        const body = new URLSearchParams({
-                            subscription_ids: this.subscriptionId,
-                            target_offer_id: this.targetOfferId,
-                            effective_timing: this.effectiveTiming,
-                            _csrf_token: decodeURIComponent(this.csrfToken),
-                        });
-                        const resp = await fetch('/admin/catalog/subscriptions/bulk/change-plan', {
+                        const body = this.commandBody();
+                        body.set('expected_head', this.preview.expected_head);
+                        const resp = await fetch(`/admin/catalog/subscriptions/${this.subscriptionId}/lifecycle/execute`, {
                             method: 'POST',
-                            headers: { 'X-CSRF-Token': decodeURIComponent(this.csrfToken) },
+                            headers: {
+                                'X-CSRF-Token': this.csrfToken,
+                                'Idempotency-Key': this.idempotencyKey,
+                            },
                             body,
                         });
-                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                        const data = await resp.json();
+                        if (!resp.ok) throw new Error(data.message || `HTTP ${resp.status}`);
                         window.location.reload();
                     } catch (err) {
-                        alert('Plan change failed: ' + err.message);
+                        this.errorMessage = err.message || 'The lifecycle change failed.';
                         this.busy = false;
                     }
                 },
@@ -272,7 +350,7 @@
         </div>
         <form method="post"
               action="/admin/catalog/subscriptions/{{ subscription.id }}/scheduled-change/{{ scheduled_plan_change.id }}/cancel"
-              onsubmit="return confirm('Cancel this scheduled plan change?');">
+              data-confirm="Cancel this scheduled plan change?" data-confirm-variant="warning" data-confirm-label="Cancel change">
             {% include "components/forms/csrf_input.html" %}
             <button type="submit"
                     class="rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-medium text-sky-700 transition hover:bg-sky-100 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900/50">
@@ -281,6 +359,24 @@
         </form>
     </div>
     {% endif %}
+    {% for scheduled in scheduled_status_changes or [] %}
+    <div class="flex flex-wrap items-center justify-between gap-3 border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">
+        <div>
+            <span class="font-medium">Scheduled {{ scheduled.kind | replace('_', ' ') }}:</span>
+            effective {{ scheduled.effective_at.strftime('%b %d, %Y %H:%M') }}
+            <span class="text-amber-700 dark:text-amber-300">({{ scheduled.status }})</span>
+            {% if scheduled.reason %}<span class="block text-xs text-amber-700 dark:text-amber-300">{{ scheduled.reason }}</span>{% endif %}
+        </div>
+        {% if scheduled.cancelable %}
+        <form method="post"
+              action="/admin/catalog/subscriptions/{{ subscription.id }}/lifecycle/schedules/{{ scheduled.id }}/cancel-view"
+              data-confirm="Cancel this scheduled subscription change?" data-confirm-variant="warning" data-confirm-label="Cancel change">
+            {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-800 transition hover:bg-amber-100 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-900/40">Cancel scheduled change</button>
+        </form>
+        {% endif %}
+    </div>
+    {% endfor %}
 
     <div class="grid gap-6 lg:grid-cols-3">
         <div class="lg:col-span-2 space-y-6">

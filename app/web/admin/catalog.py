@@ -788,6 +788,38 @@ def catalog_subscription_update(
 
 
 @router.post(
+    "/subscriptions/{subscription_id}/lifecycle/preview",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def catalog_subscription_preview_lifecycle_command(
+    request: Request,
+    subscription_id: str,
+    kind: SubscriptionCommandKind = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    target_offer_id: str | None = Form(None),
+    reason: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Preview one lifecycle command without mutating subscription state."""
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.preview_lifecycle_command_response(
+            db,
+            subscription_id=subscription_id,
+            kind=kind,
+            actor_id=_get_actor_id(request),
+            reason=reason,
+            target_offer_id=target_offer_id,
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
     "/subscriptions/{subscription_id}/lifecycle/execute",
     dependencies=[Depends(require_permission("catalog:write"))],
 )
@@ -843,6 +875,28 @@ def catalog_subscription_cancel_lifecycle_schedule(
         )
     )
     return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/lifecycle/schedules/{schedule_id}/cancel-view",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_cancel_lifecycle_schedule_view(
+    request: Request,
+    subscription_id: str,
+    schedule_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Cancel a deferred lifecycle command from the subscription detail page."""
+    return RedirectResponse(
+        web_catalog_subscription_workflows_service.cancel_lifecycle_schedule_redirect(
+            db,
+            subscription_id=subscription_id,
+            schedule_id=schedule_id,
+            actor_id=_get_actor_id(request),
+        ),
+        status_code=303,
+    )
 
 
 @router.post(
