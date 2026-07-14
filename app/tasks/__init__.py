@@ -27,7 +27,11 @@ from app.tasks.campaigns import (
     process_due_campaigns,
     send_campaign_batch,
 )
-from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
+from app.tasks.catalog import (
+    apply_due_subscription_changes,
+    apply_due_subscription_status_commands,
+    expire_subscriptions,
+)
 from app.tasks.collections import prepaid_balance_sweep, run_dunning
 from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
 from app.tasks.crm_ticket_pull import (
@@ -236,6 +240,7 @@ __all__ = [
     "reconcile_topups",
     "expire_subscriptions",
     "apply_due_subscription_changes",
+    "apply_due_subscription_status_commands",
     "run_dunning",
     "prepaid_balance_sweep",
     "audit_cutover_balance_invariant_task",

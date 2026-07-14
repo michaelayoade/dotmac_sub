@@ -154,6 +154,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         HEALTH,
         "Applying a scheduled plan change must be idempotent (apply() status guard).",
     ),
+    "app.tasks.catalog.apply_due_subscription_status_commands": _c(
+        "catalog",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "Durable schedule rows own leases, bounded retry, reviewed-head drift "
+        "detection, and deterministic executor idempotency keys.",
+    ),
     "app.tasks.campaigns.process_due_campaigns": _c(
         "campaigns",
         SWEEP,
