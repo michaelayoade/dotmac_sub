@@ -50,7 +50,7 @@ from app.services.billing_statuses import (
     BILLABLE_SUBSCRIBER_STATUS_VALUES,
     BILLABLE_SUBSCRIBER_STATUSES,
 )
-from app.services.customer_financial_position import prepaid_available_balance
+from app.services.customer_financial_position import prepaid_available_balances
 from app.services.job_heartbeat import get_last_result, get_last_success
 
 # Alert thresholds. Conservative defaults; tune via ops experience.
@@ -69,6 +69,11 @@ _CRITICAL_RUNNERS = (
     "app.tasks.billing.mark_invoices_overdue",
     "app.tasks.billing.check_billing_switch",
 )
+
+BILLING_HEALTH_OBSERVABILITY_DOMAIN = "billing_health"
+BILLING_HEALTH_SNAPSHOT_TASK = "app.tasks.billing.refresh_billing_health_snapshot"
+# Stable Postgres advisory-lock key for the single-flight snapshot producer.
+BILLING_HEALTH_SNAPSHOT_LOCK_KEY = 0x62686C74  # "bhlt"
 
 
 @dataclass(frozen=True)
@@ -186,6 +191,113 @@ class BillingHealthSnapshot:
         if self.billing_profile_mixed_count > 0:
             out.append("billing_profile_mixed_modes")
         return out
+
+
+def billing_health_observations(snapshot: BillingHealthSnapshot):  # noqa: ANN201
+    """Convert a health result into bounded, scrape-safe observations."""
+    from app.services.observability import StateObservation
+
+    values: list[tuple[str, str, int | float | Decimal]] = [
+        ("paid_invoices_with_balance", "all", snapshot.paid_with_balance_count),
+        ("invoice_last_scanned", "all", snapshot.last_scanned or 0),
+        ("active_subscriptions", "all", snapshot.eligible_active_subs),
+        ("payments_succeeded_24h", "all", snapshot.payments_24h),
+        (
+            "payments_succeeded_7d_daily_avg",
+            "all",
+            snapshot.payments_7d_daily_avg,
+        ),
+        (
+            "payment_volume_collapsed",
+            "all",
+            1.0 if snapshot.payment_volume_collapsed else 0.0,
+        ),
+        (
+            "enforcement_covered_but_locked",
+            "all",
+            snapshot.covered_but_locked,
+        ),
+        (
+            "negative_prepaid_balance_accounts",
+            "all",
+            snapshot.negative_prepaid_balance_count,
+        ),
+        (
+            "negative_prepaid_balance_total",
+            "all",
+            snapshot.negative_prepaid_balance_total,
+        ),
+        (
+            "negative_prepaid_sweep_disabled_accounts",
+            "all",
+            snapshot.negative_prepaid_with_sweep_disabled_count,
+        ),
+        (
+            "prepaid_balance_sweep_enabled",
+            "all",
+            1.0 if snapshot.prepaid_balance_sweep_enabled else 0.0,
+        ),
+        (
+            "billing_profile_mismatch_accounts",
+            "all",
+            snapshot.billing_profile_mismatch_count,
+        ),
+        (
+            "billing_profile_mixed_accounts",
+            "all",
+            snapshot.billing_profile_mixed_count,
+        ),
+        (
+            "unbilled_active_subscriptions",
+            "no_billing_path",
+            snapshot.unbilled_no_path,
+        ),
+        (
+            "unbilled_active_subscriptions",
+            "terminal_account",
+            snapshot.active_subs_on_terminal_account,
+        ),
+    ]
+    if snapshot.scan_ratio is not None:
+        values.append(("invoice_scan_ratio", "all", snapshot.scan_ratio))
+    if snapshot.payment_volume_ratio is not None:
+        values.append(("payment_volume_ratio", "all", snapshot.payment_volume_ratio))
+    for runner in snapshot.runners:
+        if not runner.enabled:
+            continue
+        values.append(
+            (
+                "runner_heartbeat_stale",
+                runner.task_name,
+                1.0 if runner.stale else 0.0,
+            )
+        )
+        if runner.age_seconds is not None:
+            values.append(
+                (
+                    "runner_heartbeat_age_seconds",
+                    runner.task_name,
+                    max(runner.age_seconds, 0.0),
+                )
+            )
+    return [
+        StateObservation(signal=signal, scope=scope, value=float(value))
+        for signal, scope, value in values
+    ]
+
+
+def publish_billing_health_snapshot(
+    snapshot: BillingHealthSnapshot, *, now: datetime | None = None
+) -> bool:
+    """Publish the latest bounded health snapshot for metrics collectors."""
+    from app.services.observability import publish_state_snapshot
+
+    return publish_state_snapshot(
+        BILLING_HEALTH_OBSERVABILITY_DOMAIN,
+        billing_health_observations(snapshot),
+        status="degraded" if snapshot.anomalies else "ok",
+        now=now,
+    )
 
 
 def paid_with_balance(db: Session) -> tuple[int, Decimal]:
@@ -480,8 +592,9 @@ def negative_prepaid_balance_exposure(db: Session) -> tuple[int, Decimal, bool, 
     )
     count = 0
     total = Decimal("0.00")
+    balances = prepaid_available_balances(db, account_ids)
     for account_id in account_ids:
-        balance = prepaid_available_balance(db, account_id)
+        balance = balances[account_id]
         if balance < Decimal("0.00"):
             count += 1
             total += abs(balance)

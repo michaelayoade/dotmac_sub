@@ -7,13 +7,16 @@ change invoice state.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice
+from app.services.common import coerce_uuid
 from app.services.invoice_collectibility import (
     collection_blocking_balance,
     due_invoice_balance,
@@ -102,6 +105,25 @@ def prepaid_available_balance(db: Session, account_id) -> Decimal:
         )
     balances = list(balances_by_currency.values())
     return min(balances) if balances else Decimal("0.00")
+
+
+def prepaid_available_balances(
+    db: Session, account_ids: Iterable[object]
+) -> dict[UUID, Decimal]:
+    """Resolve canonical prepaid balances for a cohort in bounded queries."""
+    from app.services.customer_financial_ledger import (
+        customer_financial_balances_by_currency,
+    )
+
+    account_uuids = sorted(
+        {coerce_uuid(account_id) for account_id in account_ids}, key=str
+    )
+    balances_by_account = customer_financial_balances_by_currency(db, account_uuids)
+    resolved: dict[UUID, Decimal] = {}
+    for account_uuid in account_uuids:
+        balances = list(balances_by_account[account_uuid].values())
+        resolved[account_uuid] = min(balances) if balances else Decimal("0.00")
+    return resolved
 
 
 def _oldest_due_invoice(invoices: list[Invoice], now: datetime) -> Invoice | None:

@@ -43,6 +43,7 @@ class StateObservation:
 
 
 _STATE_SNAPSHOT_SPECS = {
+    "billing_health": {"max_observations": 64, "ttl_seconds": 7 * 86_400},
     "credentials": {"max_observations": 500, "ttl_seconds": 7 * 86_400},
     "nas_lifecycle": {"max_observations": 32, "ttl_seconds": 7 * 86_400},
 }

@@ -1014,6 +1014,15 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=3600,
         )
+        # Heavy cohort health is produced out of band. Prometheus scrapes only
+        # the bounded Redis snapshot and never walks customer financial rows.
+        _sync_scheduled_task(
+            session,
+            name="billing_health_snapshot",
+            task_name="app.tasks.billing.refresh_billing_health_snapshot",
+            enabled=True,
+            interval_seconds=900,
+        )
         cutover_audit_enabled = _effective_bool(
             session,
             SettingDomain.billing,
