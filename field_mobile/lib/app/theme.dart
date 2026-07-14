@@ -119,8 +119,9 @@ abstract final class AppColors {
       dark(context) ? inkSoftDark : inkSoft;
   static Color border(BuildContext context) =>
       dark(context) ? lineDark : lineLight;
-  static Color softGreen(BuildContext context) =>
-      dark(context) ? Color.lerp(semanticPositive, Colors.black, 0.68)! : greenSoft;
+  static Color softGreen(BuildContext context) => dark(context)
+      ? Color.lerp(semanticPositive, Colors.black, 0.68)!
+      : greenSoft;
   static Color softTeal(BuildContext context) =>
       dark(context) ? Color.lerp(accent, Colors.black, 0.68)! : tealSoft;
 

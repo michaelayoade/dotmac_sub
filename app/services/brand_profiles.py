@@ -246,7 +246,9 @@ def upsert_brand_profile(
             if not _HEX_COLOR.fullmatch(str(value)):
                 raise ValueError(f"{field} must be a 6-digit hex colour")
         if field == "metadata_" and value:
-            semantic_colors = dict(value).get("semantic_colors")
+            if not isinstance(value, dict):
+                raise ValueError("metadata must be an object")
+            semantic_colors = value.get("semantic_colors")
             if semantic_colors is not None:
                 if not isinstance(semantic_colors, dict):
                     raise ValueError("metadata semantic_colors must be an object")
