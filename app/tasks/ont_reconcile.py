@@ -198,6 +198,7 @@ def run_ont_reconcile_sweep(max_onts: int = 25) -> dict[str, Any]:
             db_session_adapter.create_session,
             timeout_sec=45,
             max_onts=bounded,
+            max_duration_sec=720,
         )
         remote_access = _close_expired_remote_access()
         return {
@@ -205,6 +206,7 @@ def run_ont_reconcile_sweep(max_onts: int = 25) -> dict[str, Any]:
             "reconciled": stats.reconciled,
             "succeeded": stats.succeeded,
             "failed": stats.failed,
+            "deferred": stats.deferred,
             "skipped_unreachable": stats.skipped_unreachable,
             "errors": stats.errors,
             "duration_sec": stats.duration_sec,

@@ -31,6 +31,7 @@ def test_promql_label_selector_does_not_overescape_hyphen() -> None:
 
 def test_huawei_command_defaults_accept_user_and_exec_prompts(monkeypatch) -> None:
     channel = _DummyChannel()
+    monkeypatch.setattr("app.services.network.olt_ssh.time.sleep", lambda _: None)
 
     def _fake_read_until_prompt(
         _channel, prompt_regex: str, timeout_sec: float = 8.0
@@ -46,11 +47,12 @@ def test_huawei_command_defaults_accept_user_and_exec_prompts(monkeypatch) -> No
     output = _run_huawei_cmd(channel, "display version")
 
     assert output == "OLT>"
-    assert channel.sent == ["display version\n"]
+    assert "".join(channel.sent) == "display version\n"
 
 
 def test_huawei_command_accepts_brace_optional_prompt(monkeypatch) -> None:
     channel = _DummyChannel()
+    monkeypatch.setattr("app.services.network.olt_ssh.time.sleep", lambda _: None)
     responses = iter(["{ |priority<K> }:", "OLT(config-if-gpon-0/1)#"])
 
     def _fake_read_until_prompt(
@@ -67,10 +69,7 @@ def test_huawei_command_accepts_brace_optional_prompt(monkeypatch) -> None:
     output = _run_huawei_cmd(channel, "ont ipconfig 13 8 ip-index 0 dhcp vlan 201")
 
     assert output == "OLT(config-if-gpon-0/1)#"
-    assert channel.sent == [
-        "ont ipconfig 13 8 ip-index 0 dhcp vlan 201\n",
-        "\n",
-    ]
+    assert "".join(channel.sent) == ("ont ipconfig 13 8 ip-index 0 dhcp vlan 201\n\n")
 
 
 def test_inventory_authorize_route_accepts_force_reauthorize_flag() -> None:

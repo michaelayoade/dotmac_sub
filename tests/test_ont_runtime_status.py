@@ -10,9 +10,13 @@ from app.models.network import (
     OntStatusSource,
     OntUnit,
     OnuOnlineStatus,
+    PollStatus,
 )
 from app.services.network.olt_ssh_ont._common import RegisteredOntEntry
-from app.services.network.ont_runtime_status import refresh_huawei_olt_status
+from app.services.network.ont_runtime_status import (
+    record_olt_poll_failure,
+    refresh_huawei_olt_status,
+)
 from app.services.network.ont_status import resolve_effective_ont_status
 
 NOW = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
@@ -85,6 +89,11 @@ def test_bulk_huawei_refresh_persists_only_matched_observations(
     assert online.olt_status_seen_at == NOW
     assert absent.olt_status == OnuOnlineStatus.online
     assert absent.olt_status_seen_at == NOW - timedelta(hours=1)
+    assert olt.last_poll_at == NOW
+    assert olt.last_poll_status == PollStatus.success
+    assert olt.last_poll_error is None
+    assert olt.consecutive_poll_failures == 0
+    assert olt.last_successful_ssh_at == NOW
 
 
 def test_bulk_huawei_refresh_retries_empty_parse_without_mass_offline(
@@ -111,3 +120,20 @@ def test_bulk_huawei_refresh_retries_empty_parse_without_mass_offline(
 
     assert ont.olt_status == OnuOnlineStatus.online
     assert ont.olt_status_seen_at == NOW
+
+
+def test_olt_poll_failure_telemetry_is_retry_safe(db_session):
+    olt = OLTDevice(
+        name="Huawei failed poll",
+        vendor="Huawei",
+        consecutive_poll_failures=2,
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    record_olt_poll_failure(olt, RuntimeError("summary parse failed"), now=NOW)
+
+    assert olt.last_poll_at == NOW
+    assert olt.last_poll_status == PollStatus.failed
+    assert olt.last_poll_error == "summary parse failed"
+    assert olt.consecutive_poll_failures == 3
