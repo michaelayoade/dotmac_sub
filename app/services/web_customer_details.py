@@ -1572,9 +1572,7 @@ def _build_access_repair_state(
         db.query(func.count(DunningCase.id))
         .filter(DunningCase.account_id == customer.id)
         .filter(
-            DunningCase.status.in_(
-                [DunningCaseStatus.open, DunningCaseStatus.paused]
-            )
+            DunningCase.status.in_([DunningCaseStatus.open, DunningCaseStatus.paused])
         )
         .scalar()
         or 0

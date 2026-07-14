@@ -308,6 +308,7 @@ def test_operator_edit_stages_new_revision_without_verification(
 def test_apply_rejects_stale_operator_revision(db_session, subscriber, catalog_offer):
     subscription = _subscription(db_session, subscriber, catalog_offer)
     cpe = _cpe(db_session, subscriber, subscription)
+    _capability(db_session, cpe, {"management_ip": "/interface/mgmt-ip"})
     intent = stage_intent(
         db_session,
         target_type=UispIntentTargetType.cpe,

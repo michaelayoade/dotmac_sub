@@ -539,6 +539,7 @@ def test_due_status_command_is_superseded_when_reviewed_state_drifted(
             effective_timing=SubscriptionEffectiveTiming.scheduled,
             effective_at=datetime(2026, 7, 15, tzinfo=UTC),
             expected_head=reviewed.head,
+            idempotency_key="cancel-superseded",
         ),
         now=datetime(2026, 7, 14, tzinfo=UTC),
     )
@@ -561,6 +562,7 @@ def test_due_status_command_is_superseded_when_reviewed_state_drifted(
 
 def test_pending_status_schedule_can_be_canceled(db_session, subscriber, catalog_offer):
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
     outcome = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(
@@ -568,6 +570,8 @@ def test_pending_status_schedule_can_be_canceled(db_session, subscriber, catalog
             kind=SubscriptionCommandKind.expire,
             source="admin:test",
             effective_timing=SubscriptionEffectiveTiming.next_cycle,
+            expected_head=reviewed.head,
+            idempotency_key="expire-next-cycle",
         ),
         now=datetime(2026, 7, 14, tzinfo=UTC),
     )
@@ -594,6 +598,7 @@ def test_failed_due_status_command_retries_with_backoff(
     db_session, subscriber, catalog_offer, monkeypatch
 ):
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
     outcome = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(
@@ -602,6 +607,8 @@ def test_failed_due_status_command_retries_with_backoff(
             source="admin:test",
             effective_timing=SubscriptionEffectiveTiming.scheduled,
             effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+            expected_head=reviewed.head,
+            idempotency_key="cancel-retry-backoff",
         ),
         now=datetime(2026, 7, 14, tzinfo=UTC),
     )
@@ -639,6 +646,7 @@ def test_due_status_command_stops_after_max_attempts(
     db_session, subscriber, catalog_offer, monkeypatch
 ):
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
     outcome = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(
@@ -647,6 +655,8 @@ def test_due_status_command_stops_after_max_attempts(
             source="admin:test",
             effective_timing=SubscriptionEffectiveTiming.scheduled,
             effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+            expected_head=reviewed.head,
+            idempotency_key="cancel-max-attempts",
         ),
         now=datetime(2026, 7, 14, tzinfo=UTC),
     )
@@ -681,6 +691,7 @@ def test_due_status_command_stops_after_max_attempts(
 
 def test_expired_processing_lease_is_reclaimed(db_session, subscriber, catalog_offer):
     subscription = _subscription(db_session, subscriber, catalog_offer)
+    reviewed = resolve_subscription_lifecycle(db_session, str(subscription.id))
     outcome = execute_subscription_command(
         db_session,
         SubscriptionLifecycleCommand(
@@ -689,6 +700,8 @@ def test_expired_processing_lease_is_reclaimed(db_session, subscriber, catalog_o
             source="admin:test",
             effective_timing=SubscriptionEffectiveTiming.scheduled,
             effective_at=datetime(2026, 7, 15, tzinfo=UTC),
+            expected_head=reviewed.head,
+            idempotency_key="cancel-lease-reclaim",
         ),
         now=datetime(2026, 7, 14, tzinfo=UTC),
     )

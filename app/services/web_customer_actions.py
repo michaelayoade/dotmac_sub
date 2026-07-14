@@ -259,8 +259,12 @@ def repair_customer_access_state(db: Session, customer_id: str) -> dict[str, Any
             str(subscription.id),
             state,
         )
-        radius_group_rows_written += int(access_result.get("external_rows_written") or 0)
-        radius_group_rows_deleted += int(access_result.get("external_rows_deleted") or 0)
+        radius_group_rows_written += int(
+            access_result.get("external_rows_written") or 0
+        )
+        radius_group_rows_deleted += int(
+            access_result.get("external_rows_deleted") or 0
+        )
         aggregate_state = cast(str | None, access_result.get("aggregate_state"))
 
     reject_rows_removed = radius_service.unblock_external_radius_credentials(
