@@ -272,14 +272,6 @@ def reconcile_ont(
                     drift_after=plan.drifts,
                 )
 
-            # ── Success: commit desired-state mutation + observation ────────
-            if proposed_change:
-                apply_proposed_change(
-                    ont,
-                    target,
-                    changed_fields=proposed_fields,
-                )
-
             # Reset the sweep-unreachable counter on any successful reconcile.
             # Capture the prior value so we can fire a resolution alert when
             # recovering from a previously-alerting unreachable streak.
@@ -299,6 +291,12 @@ def reconcile_ont(
             # against the post-apply state. If actions_applied is empty
             # (drift was zero from the start), there is nothing to verify.
             if not apply_outcome.actions_applied:
+                if proposed_change:
+                    apply_proposed_change(
+                        ont,
+                        target,
+                        changed_fields=proposed_fields,
+                    )
                 return _finalise(
                     db,
                     ont,
@@ -418,6 +416,12 @@ def reconcile_ont(
                     drift_after=verify_plan.drifts,
                 )
 
+            if proposed_change:
+                apply_proposed_change(
+                    ont,
+                    target,
+                    changed_fields=proposed_fields,
+                )
             return _finalise(
                 db,
                 ont,

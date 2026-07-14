@@ -77,6 +77,16 @@ class Tr069WifiParameterPaths:
 
 
 @dataclass(frozen=True)
+class Tr069RemoteAccessParameterPaths:
+    """Resolved model-specific CWMP paths for WAN support access."""
+
+    ssh_enabled: str
+    ssh_port: str
+    telnet_enabled: str
+    telnet_port: str
+
+
+@dataclass(frozen=True)
 class OntDesiredState:
     """What this ONT should be.
 
@@ -170,6 +180,11 @@ class OntDesiredState:
     wifi_channel: int | None = None
     wifi_security_mode: str | None = None
     wifi_paths: Tr069WifiParameterPaths | None = None
+    wan_remote_access_enabled: bool = False
+    wan_remote_access_expires_at: datetime | None = None
+    wan_remote_access_source_cidrs: tuple[str, ...] = ()
+    wan_remote_access_ssh_port: int = 22
+    remote_access_paths: Tr069RemoteAccessParameterPaths | None = None
 
 
 # ── Observed state ──────────────────────────────────────────────────────────
@@ -251,6 +266,10 @@ class AcsObservedFields:
     acs_observed_wifi_channel: int | None = None
     acs_observed_wifi_security_mode: str | None = None
     acs_observed_wifi_instance_index: int | None = None
+    acs_observed_remote_ssh_enabled: bool | None = None
+    acs_observed_remote_ssh_port: int | None = None
+    acs_observed_remote_telnet_enabled: bool | None = None
+    acs_observed_remote_telnet_port: int | None = None
 
 
 @dataclass(frozen=True)

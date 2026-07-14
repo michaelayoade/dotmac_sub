@@ -51,6 +51,7 @@ from .state import (
     OltObservedFields,
     OntDesiredState,
     OntObservedState,
+    Tr069RemoteAccessParameterPaths,
     Tr069WifiParameterPaths,
     Tr181WanParameterPaths,
 )
@@ -92,6 +93,15 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
     tr181_wan_paths = _resolve_tr181_wan_paths(db, ont, wan_mode, values)
     tr069_data_model_root = _resolve_tr069_root(db, ont, tr181_wan_paths)
     wifi_paths = _resolve_wifi_paths(db, ont, tr069_data_model_root)
+    remote_access_paths = _resolve_remote_access_paths(db, ont, tr069_data_model_root)
+    access = dict((ont.desired_config or {}).get("access") or {})
+    remote_expires_at = _datetime_or_none(access.get("wan_remote_expires_at"))
+    remote_requested = _bool_or_default(
+        access.get("wan_remote", values.get("wan_remote_access")), default=False
+    )
+    remote_enabled = remote_requested and (
+        remote_expires_at is not None and remote_expires_at > datetime.now(UTC)
+    )
 
     return OntDesiredState(
         ont_unit_id=str(ont.id),
@@ -174,6 +184,13 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         wifi_channel=_wifi_channel_or_none(values.get("wifi_channel")),
         wifi_security_mode=_str_or_none(values.get("wifi_security_mode")),
         wifi_paths=wifi_paths,
+        wan_remote_access_enabled=remote_enabled,
+        wan_remote_access_expires_at=remote_expires_at,
+        wan_remote_access_source_cidrs=tuple(
+            str(value) for value in access.get("wan_remote_source_cidrs") or ()
+        ),
+        wan_remote_access_ssh_port=22,
+        remote_access_paths=remote_access_paths,
     )
 
 
@@ -326,6 +343,39 @@ def _resolve_wifi_paths(
     return Tr069WifiParameterPaths(**resolved)
 
 
+def _resolve_remote_access_paths(
+    db: Session,
+    ont: OntUnit,
+    root: str,
+) -> Tr069RemoteAccessParameterPaths | None:
+    vendor = _str_or_none(getattr(ont, "vendor", None))
+    model = _str_or_none(getattr(ont, "model", None))
+    firmware = _str_or_none(
+        getattr(ont, "firmware_version", None) or getattr(ont, "software_version", None)
+    )
+    canonical = {
+        "ssh_enabled": "remote_access.ssh_enabled",
+        "ssh_port": "remote_access.ssh_port",
+        "telnet_enabled": "remote_access.telnet_enabled",
+        "telnet_port": "remote_access.telnet_port",
+    }
+    try:
+        resolved = {
+            field: tr069_path_resolver.resolve(
+                root,
+                name,
+                db=db,
+                vendor=vendor,
+                model=model,
+                firmware=firmware,
+            )
+            for field, name in canonical.items()
+        }
+    except Tr069PathError:
+        return None
+    return Tr069RemoteAccessParameterPaths(**resolved)
+
+
 def apply_proposed_change(
     ont: OntUnit,
     target: OntDesiredState,
@@ -359,6 +409,28 @@ def apply_proposed_change(
     ):
         if key in existing_wifi or field in changed_fields:
             _set_desired_value(ont, "wifi", key, value)
+
+    existing_access = dict((ont.desired_config or {}).get("access") or {})
+    access_values: tuple[tuple[str, str, Any], ...] = (
+        ("wan_remote", "wan_remote_access_enabled", target.wan_remote_access_enabled),
+        (
+            "wan_remote_expires_at",
+            "wan_remote_access_expires_at",
+            (
+                target.wan_remote_access_expires_at.isoformat()
+                if target.wan_remote_access_expires_at
+                else None
+            ),
+        ),
+        (
+            "wan_remote_source_cidrs",
+            "wan_remote_access_source_cidrs",
+            list(target.wan_remote_access_source_cidrs),
+        ),
+    )
+    for key, field, value in access_values:
+        if key in existing_access or field in changed_fields:
+            _set_desired_value(ont, "access", key, value)
 
     _set_desired_value(ont, "lan", "dhcp_enabled", target.dhcp_enabled)
     _set_desired_value(ont, "lan", "dhcp_start", target.dhcp_pool_min)
@@ -448,6 +520,10 @@ def observed_from_ont_observation(
             acs_observed_wifi_channel=obs.acs_observed_wifi_channel,
             acs_observed_wifi_security_mode=obs.acs_observed_wifi_security_mode,
             acs_observed_wifi_instance_index=obs.acs_observed_wifi_instance_index,
+            acs_observed_remote_ssh_enabled=(obs.acs_observed_remote_ssh_enabled),
+            acs_observed_remote_ssh_port=obs.acs_observed_remote_ssh_port,
+            acs_observed_remote_telnet_enabled=(obs.acs_observed_remote_telnet_enabled),
+            acs_observed_remote_telnet_port=obs.acs_observed_remote_telnet_port,
             acs_observed_periodic_inform_interval_sec=(
                 obs.acs_observed_periodic_inform_interval_sec
             ),
@@ -536,6 +612,12 @@ def upsert_ont_observation(
     row.acs_observed_wifi_channel = observed.acs.acs_observed_wifi_channel
     row.acs_observed_wifi_security_mode = observed.acs.acs_observed_wifi_security_mode
     row.acs_observed_wifi_instance_index = observed.acs.acs_observed_wifi_instance_index
+    row.acs_observed_remote_ssh_enabled = observed.acs.acs_observed_remote_ssh_enabled
+    row.acs_observed_remote_ssh_port = observed.acs.acs_observed_remote_ssh_port
+    row.acs_observed_remote_telnet_enabled = (
+        observed.acs.acs_observed_remote_telnet_enabled
+    )
+    row.acs_observed_remote_telnet_port = observed.acs.acs_observed_remote_telnet_port
     row.acs_observed_periodic_inform_interval_sec = (
         observed.acs.acs_observed_periodic_inform_interval_sec
     )
@@ -652,6 +734,19 @@ def _wifi_channel_or_none(value: Any) -> int | None:
 def _str_or_none(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _datetime_or_none(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _subnet_mask_from_lan_subnet(raw: Any) -> str:

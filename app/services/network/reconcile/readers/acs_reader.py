@@ -50,6 +50,10 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Channel",
     "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType",
     "InternetGatewayDevice.LANDevice.1.WLANConfiguration",
+    "InternetGatewayDevice.X_HW_UserInterface.SSHEnable",
+    "InternetGatewayDevice.X_HW_UserInterface.SSHPort",
+    "InternetGatewayDevice.X_HW_UserInterface.TelnetEnable",
+    "InternetGatewayDevice.X_HW_UserInterface.TelnetPort",
     # TR-181 (Device) — for any future ONTs on that data model.
     "Device.DeviceInfo.SoftwareVersion",
     "Device.ManagementServer.PeriodicInformInterval",
@@ -71,6 +75,10 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     "Device.WiFi.Radio.1.Channel",
     "Device.WiFi.AccessPoint.1.Security.ModeEnabled",
     "Device.WiFi",
+    "Device.X_HW_UserInterface.SSHEnable",
+    "Device.X_HW_UserInterface.SSHPort",
+    "Device.X_HW_UserInterface.TelnetEnable",
+    "Device.X_HW_UserInterface.TelnetPort",
 )
 
 
@@ -109,6 +117,8 @@ def read_acs_state(
                 desired.wifi_paths.security_mode,
             )
         )
+    if desired.remote_access_paths is not None:
+        projection_paths.extend(vars(desired.remote_access_paths).values())
     projection = ",".join(dict.fromkeys(projection_paths))
 
     try:
@@ -284,6 +294,11 @@ def _parse_device(
     dev_wifi_ssid = _path(dev_root, "WiFi", "SSID", wifi_index)
     dev_wifi_radio = _path(dev_root, "WiFi", "Radio", wifi_index)
     dev_wifi_security = _path(dev_root, "WiFi", "AccessPoint", wifi_index, "Security")
+    remote_paths = desired.remote_access_paths if desired is not None else None
+    remote_root = _first_not_none(
+        _path(igd, "X_HW_UserInterface"),
+        _path(dev_root, "X_HW_UserInterface"),
+    )
 
     return AcsObservedFields(
         acs_present=True,
@@ -351,6 +366,26 @@ def _parse_device(
             )
         ),
         acs_observed_wifi_instance_index=wifi_instance_index,
+        acs_observed_remote_ssh_enabled=(
+            _path_value_bool(device, remote_paths.ssh_enabled)
+            if remote_paths
+            else _value_bool(remote_root, "SSHEnable")
+        ),
+        acs_observed_remote_ssh_port=(
+            _path_value_int(device, remote_paths.ssh_port)
+            if remote_paths
+            else _value_int(remote_root, "SSHPort")
+        ),
+        acs_observed_remote_telnet_enabled=(
+            _path_value_bool(device, remote_paths.telnet_enabled)
+            if remote_paths
+            else _value_bool(remote_root, "TelnetEnable")
+        ),
+        acs_observed_remote_telnet_port=(
+            _path_value_int(device, remote_paths.telnet_port)
+            if remote_paths
+            else _value_int(remote_root, "TelnetPort")
+        ),
         acs_observed_periodic_inform_interval_sec=_first_not_none(
             _value_int(igd_ms, "PeriodicInformInterval"),
             _value_int(dev_ms, "PeriodicInformInterval"),
@@ -456,6 +491,10 @@ def _absent_fields() -> AcsObservedFields:
         acs_observed_wifi_channel=None,
         acs_observed_wifi_security_mode=None,
         acs_observed_wifi_instance_index=None,
+        acs_observed_remote_ssh_enabled=None,
+        acs_observed_remote_ssh_port=None,
+        acs_observed_remote_telnet_enabled=None,
+        acs_observed_remote_telnet_port=None,
         acs_observed_periodic_inform_interval_sec=None,
         acs_observed_cr_username=None,
         acs_observed_cr_username_set=None,

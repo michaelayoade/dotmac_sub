@@ -906,10 +906,19 @@ def test_verification_re_read_marks_out_of_sync_when_drift_remains(
     olt = _StubOltAdapter(present=True)
     acs = _StubAcsClient(device=_synced_acs_device(ont))
 
+    def _must_not_persist_unverified_intent(*args, **kwargs):
+        raise AssertionError("unverified desired state was persisted")
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.apply_proposed_change",
+        _must_not_persist_unverified_intent,
+    )
+
     result = reconcile_ont(
         db_session,
         ont.id,
         mode="bootstrap",
+        proposed_change={"wifi_enabled": False},
         olt_adapter=olt,
         acs_client=acs,
     )

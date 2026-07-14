@@ -137,31 +137,16 @@ class TestWifiConfig:
 class TestToggleWanRemoteAccess:
     """WAN remote access toggle tests."""
 
-    @patch("app.services.network.ont_features._emit_feature_event")
-    @patch("app.services.network.ont_features.get_ont_or_error")
     @patch.dict("os.environ", {"ONT_REMOTE_ACCESS_UPSTREAM_ACL_CIDRS": "10.0.0.0/24"})
-    def test_enables_remote_access(self, mock_get, mock_emit):
-        ont = MagicMock()
-        mock_get.return_value = (ont, None)
+    def test_enables_remote_access_through_one_reconciled_change(self):
+        ont = SimpleNamespace(last_sync_source=None, last_sync_at=None)
         db = MagicMock()
-        result = OntFeatureService.toggle_wan_remote_access(db, "ont-1", enabled=True)
-        assert result.success is True
-        assert ont.desired_config["access"]["wan_remote"] is True
+        captured = {}
 
-    @patch.dict("os.environ", {"ONT_REMOTE_ACCESS_UPSTREAM_ACL_CIDRS": "10.0.0.0/24"})
-    def test_verified_ssh_forces_telnet_off_and_sets_expiry(self):
-        ont = SimpleNamespace(
-            id="ont-1",
-            desired_config={},
-            last_sync_source=None,
-            last_sync_at=None,
-        )
-        db = MagicMock()
-        calls: list[tuple[bool, str]] = []
-
-        def _set_remote(db, ont_id, *, enabled, protocol):
-            calls.append((enabled, protocol))
-            return ActionResult(success=True, message="ok")
+        def _reconcile(db, ont_id, *, proposed_change, mode):
+            captured.update(proposed_change)
+            captured["mode"] = mode
+            return SimpleNamespace(success=True, sync_status="synced", failure=None)
 
         with (
             patch(
@@ -169,12 +154,8 @@ class TestToggleWanRemoteAccess:
                 return_value=(ont, None),
             ),
             patch(
-                "app.services.tr069.resolve_acs_server_for_ont",
-                return_value=object(),
-            ),
-            patch(
-                "app.services.network.ont_action_remote_access.set_wan_remote_access",
-                side_effect=_set_remote,
+                "app.services.network.reconcile.reconcile_ont",
+                side_effect=_reconcile,
             ),
             patch("app.services.network.ont_features._emit_feature_event"),
         ):
@@ -183,11 +164,10 @@ class TestToggleWanRemoteAccess:
             )
 
         assert result.success is True
-        assert calls == [(True, "ssh"), (False, "telnet")]
-        access = ont.desired_config["access"]
-        assert access["wan_remote"] is True
-        assert access["wan_remote_expires_at"]
-        assert access["wan_remote_source_cidrs"] == ["10.0.0.0/24"]
+        assert captured["wan_remote_access_enabled"] is True
+        assert captured["wan_remote_access_expires_at"] is not None
+        assert captured["wan_remote_access_source_cidrs"] == ("10.0.0.0/24",)
+        assert captured["mode"] == "sync"
 
     @patch("app.services.network.ont_features.get_ont_or_error")
     def test_enable_is_refused_without_upstream_acl(self, mock_get):
