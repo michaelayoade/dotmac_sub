@@ -27,6 +27,7 @@ class ActionResult:
     message: str
     data: dict[str, Any] | None = None
     waiting: bool = False
+    error_code: str | None = None
 
 
 def genieacs_error_result(exc: Exception, message_prefix: str) -> ActionResult:
@@ -35,10 +36,13 @@ def genieacs_error_result(exc: Exception, message_prefix: str) -> ActionResult:
 
     waiting = isinstance(exc, GenieACSTaskQueuedError)
     data = None
+    error_code = None
     if waiting:
         queued_exc = cast(GenieACSTaskQueuedError, exc)
+        error_code = queued_exc.delivery_code.value
         data = {
             "delivery_status": "queued",
+            "delivery_code": error_code,
             "task_id": queued_exc.task_id,
             "reason": queued_exc.reason,
         }
@@ -47,6 +51,7 @@ def genieacs_error_result(exc: Exception, message_prefix: str) -> ActionResult:
         message=f"{message_prefix}: {exc}",
         data=data,
         waiting=waiting,
+        error_code=error_code,
     )
 
 
@@ -364,6 +369,7 @@ def set_and_verify(
         GenieACSError: If task times out or verification fails.
     """
     from app.services.genieacs_client import (  # local import avoids cycle
+        GenieACSDeliveryCode,
         GenieACSError,
         GenieACSTaskQueuedError,
     )
@@ -402,6 +408,7 @@ def set_and_verify(
             "or wait for the next Inform.",
             task_id=task_id,
             reason=cr_error,
+            delivery_code=GenieACSDeliveryCode.connection_request_failed,
         )
 
     if not task_id:
@@ -435,6 +442,7 @@ def set_and_verify(
                 f"setParameterValues task timed out: {msg}",
                 task_id=task_id,
                 reason="task_timeout",
+                delivery_code=GenieACSDeliveryCode.task_timeout,
             )
 
     if skip_verification or not expected_values:

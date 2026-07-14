@@ -426,9 +426,11 @@ def test_set_wifi_config_does_not_walk_to_other_ssid_instances_on_timeout(
     assert result.waiting is True
     assert result.data == {
         "delivery_status": "queued",
+        "delivery_code": "acs_delivery_queued",
         "task_id": "spv-task",
         "reason": "HTTP 401",
     }
+    assert result.error_code == "acs_delivery_queued"
     assert attempts == [
         {"InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID": "New"}
     ]

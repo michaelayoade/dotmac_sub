@@ -563,7 +563,10 @@ def test_verified_write_deletes_queued_spv_when_connection_request_never_recover
 def test_verified_write_exposes_structured_queued_delivery() -> None:
     import pytest
 
-    from app.services.genieacs_client import GenieACSTaskQueuedError
+    from app.services.genieacs_client import (
+        GenieACSDeliveryCode,
+        GenieACSTaskQueuedError,
+    )
     from app.services.network.ont_action_common import set_and_verify
 
     class FakeClient:
@@ -582,6 +585,7 @@ def test_verified_write_exposes_structured_queued_delivery() -> None:
 
     assert raised.value.task_id == "spv-task"
     assert raised.value.reason == "HTTP 401"
+    assert raised.value.delivery_code is GenieACSDeliveryCode.connection_request_failed
 
 
 def test_ont_client_resolution_repairs_stale_genieacs_identity(
