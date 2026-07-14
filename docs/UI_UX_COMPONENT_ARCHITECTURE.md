@@ -1,5 +1,13 @@
 # UI/UX Component Architecture & Page Arrangement
 
+> **Status: historical implementation catalog.** This document records legacy
+> macro arrangements and examples; it is not a current page requirement. New
+> work follows `UI_INFORMATION_AND_ACTION_STANDARD.md`,
+> `PRODUCTION_UI_BRIEF.md`, and `FRONTEND_SPEC.md`. In particular, do not copy
+> ambient decorative backgrounds, automatic chart rows, card-within-card
+> layouts, or fixed quick-action panels from these examples without an approved
+> page contract.
+
 ## Macro Import Convention
 
 Every page template imports from one place:

@@ -1,5 +1,7 @@
 # Networking modules — UX-polish & operator-control audit
 
+> **Status: historical audit evidence.** Revalidate unresolved recommendations against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT before implementation.
+
 **Date:** 2026-06-29
 **Method:** 7-agent parallel read-only review across the networking admin surface
 (~33 admin pages, ~50 services): router-management, RADIUS/enforcement,

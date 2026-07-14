@@ -1,5 +1,12 @@
 # Production UI Brief
 
+Status: normative visual and interaction policy.
+
+Information selection, presentation depth, action eligibility, and provenance
+are governed by `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`. If another UI
+plan, audit, comparison, or component example conflicts with these documents,
+the documentation authority order in that standard applies.
+
 This app is an operations console, not a marketing site. The UI should optimize for scan speed, task completion, and safe decision-making under load.
 
 It is specifically an ISP operations console. Pages must support subscriber support, provisioning, NOC monitoring, collections, and field operations without forcing operators to translate between billing and network contexts by memory alone.
@@ -66,9 +73,11 @@ These are implementation rules, not suggestions.
 - A user should see a usable decision layer and at least one actionable work surface without excessive scrolling.
 - On list pages, the table or first rows must be visible on common laptop heights.
 
-5. Decorative treatments are subordinate to data.
-- Large hero treatments are allowed only when they improve orientation and do not push the work surface too far below the fold.
-- Decorative glow, oversized gradients, and motion must not compete with primary data.
+5. Decorative treatments do not compete with operational work.
+- Admin and operations pages do not use hero compositions, decorative gradient orbs, glow fields, or background illustrations.
+- Page sections remain unframed; cards are reserved for individual repeated items, modals, and genuinely framed tools.
+- Cards and compact controls use an 8px maximum corner radius unless an approved component contract records an exception.
+- Motion is limited to state transitions and feedback that preserve layout stability.
 
 6. Partial refreshes must preserve layout stability.
 - HTMX-polled widgets must keep stable height between loading and loaded states.
@@ -222,7 +231,7 @@ Required chart rules:
 ## Visual Direction
 
 - Typography: strong display face for page titles only; use the sans face for dense data views.
-- Surface model: dark shell, brighter content surfaces, clear borders, restrained glow.
+- Surface model: quiet shell, clear content surfaces, visible borders, and no decorative glow.
 - Motion: subtle load-in and hover elevation only; no decorative animation on critical workflows.
 - Icons: support recognition, never replace labels in dense views.
 - Maps, topology lines, and signal graphics should feel utilitarian and legible rather than decorative.

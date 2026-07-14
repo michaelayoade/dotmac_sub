@@ -1,5 +1,7 @@
 # Section 9: Helpdesk & Scheduling
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current support/scheduler SOT.
+
 ## Source: legacy BSS ISP Management Platform
 
 This document captures feature improvements for the DotMac Sub ISP management system based on a comprehensive review of 28 legacy BSS screenshots covering helpdesk ticketing configuration and field scheduling/task management features.

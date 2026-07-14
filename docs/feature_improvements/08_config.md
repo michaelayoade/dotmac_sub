@@ -1,5 +1,7 @@
 # Section 8: System Configuration
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current control-plane SOT.
+
 ## Source: legacy BSS ISP Management Platform
 
 This document catalogs feature improvements for the DotMac Sub ISP management system based on a comprehensive review of 46 legacy BSS configuration screenshots. The screenshots cover: system-level config hub, company information, file management, templates, preferences/security, API settings, customer settings, portal configuration, email/SMTP configuration, log rotation, finance automation, billing settings, payment methods, transaction categories, accounting integration, payment pairing, billing reminders, billing notifications, tax configuration, plan change rules, RADIUS configuration, NetFlow accounting, CPE management, monitoring, MikroTik API, FUP (Fair Usage Policy), NAS types, IPv6, IP network categories, and Huawei OLT board support.

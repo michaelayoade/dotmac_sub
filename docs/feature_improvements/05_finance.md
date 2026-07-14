@@ -1,5 +1,7 @@
 # Section 5: legacy BSS Finance & Billing
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current financial SOT.
+
 ## Source: legacy BSS ISP Management Platform
 
 This document captures feature improvement proposals for DotMac Sub's billing and finance module, derived from a detailed review of 10 legacy BSS Finance screenshots. Each screenshot is analyzed for the features shown, gaps in the current DotMac Sub implementation are identified, and actionable improvements are proposed.

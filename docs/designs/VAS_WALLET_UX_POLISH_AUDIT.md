@@ -1,5 +1,7 @@
 # VAS / wallet / bill-payments (VTU) — UX-polish & operator-control audit
 
+> **Status: historical audit evidence.** Revalidate unresolved recommendations against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT before implementation.
+
 **Date:** 2026-06-29
 **Method:** single-agent read-only review of VAS wallet + purchases (admin + customer
 + mobile), VTPass path.

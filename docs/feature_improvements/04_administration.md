@@ -1,5 +1,7 @@
 # Section 4: legacy BSS Administration
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current control-plane SOT.
+
 ## Source: legacy BSS ISP Management Platform
 
 This document captures feature observations from 42 screenshots of legacy BSS's Administration module and proposes corresponding feature improvements for DotMac Sub. Each screenshot has been reviewed and organized into logical subsections.

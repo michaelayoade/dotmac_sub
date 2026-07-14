@@ -1,5 +1,7 @@
 # SmartOLT Feature Implementation Plan (Revised)
 
+> **Status: historical product research, not an approved implementation plan.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current network SOT.
+
 ## Architecture Decision: Integration Strategy
 
 DotMac Sub already has direct OLT/ONT infrastructure management (models, CRUD, SNMP, GenieACS TR-069). Rather than building a SmartOLT API connector, we **enhance the existing system** with the operational visibility and UX features that SmartOLT provides. Data comes from:

@@ -1,5 +1,7 @@
 # Billing modules — UX-polish & operator-control audit
 
+> **Status: historical audit evidence.** Revalidate unresolved recommendations against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT before implementation.
+
 **Date:** 2026-06-29
 **Method:** 6-agent parallel read-only review across the billing surface
 (~16 admin pages, ~40 services): invoices/ledger/tax, payments/gateways/proofs,

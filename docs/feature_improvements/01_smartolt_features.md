@@ -1,5 +1,7 @@
 # Section 1: SmartOLT Feature Analysis
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current network SOT.
+
 ## Source: SmartOLT Cloud Platform (smartolt.com)
 SmartOLT is a cloud-based OLT management platform used alongside DotMac Sub. These screenshots show features that could be integrated or replicated in DotMac Sub to reduce context-switching between platforms.
 

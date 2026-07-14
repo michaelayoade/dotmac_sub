@@ -1,5 +1,7 @@
 # Catalog & services modules — UX-polish & operator-control audit
 
+> **Status: historical audit evidence.** Revalidate unresolved recommendations against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT before implementation.
+
 **Date:** 2026-06-29
 **Method:** 5-agent parallel read-only review across the catalog/services surface:
 offers/plans/add-ons/pricing-calculator, subscriptions/change-plan/proration/

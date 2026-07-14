@@ -7,6 +7,24 @@ The executable registry is `app/services/sot_relationships.py`. When a domain
 is harmonised, add or update its service boundary there and cover it with tests
 before migrating more callers.
 
+## UI Projection Boundary
+
+The approved cross-Dotmac presentation contract is
+`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`.
+
+1. Domain read/context services own displayed facts, status meaning,
+   provenance, freshness, and business action hints.
+2. Domain command/transition services own action eligibility and execution.
+3. RBAC owns authorization; event/timeline services own official history.
+4. UI page contracts own relevance, ordering, progressive disclosure,
+   responsive depth, and interaction shape.
+5. Routes, templates, HTMX handlers, and mobile clients render the contract and
+   submit commands; they do not derive business state, totals, or eligibility.
+
+Rule: the UI is a projection boundary, not a new business source of truth. Web,
+API, exports, and mobile surfaces may present different depths for their task,
+but equivalent state and actions resolve through the same backend owners.
+
 ## Domain Order
 
 1. `customer_context`
