@@ -23,7 +23,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import SubscriberCategory
 from app.services import customer_portal
 from app.services import network_monitoring as network_monitoring_service
@@ -1599,15 +1598,9 @@ def customer_suspend_active_services(
     db: Session = Depends(get_db),
 ):
     """Suspend all active services attached to a customer row."""
-    active_subscription_ids = [
-        str(row[0])
-        for row in (
-            db.query(Subscription.id)
-            .filter(Subscription.subscriber_id == customer_id)
-            .filter(Subscription.status == SubscriptionStatus.active)
-            .all()
-        )
-    ]
+    active_subscription_ids = web_customer_actions_service.list_active_subscription_ids(
+        db, customer_id
+    )
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
     if not active_subscription_ids:
         return _toast_response(
@@ -1648,15 +1641,9 @@ def customer_activate_suspended_services(
     db: Session = Depends(get_db),
 ):
     """Activate all suspended services attached to a customer row."""
-    suspended_subscription_ids = [
-        str(row[0])
-        for row in (
-            db.query(Subscription.id)
-            .filter(Subscription.subscriber_id == customer_id)
-            .filter(Subscription.status == SubscriptionStatus.suspended)
-            .all()
-        )
-    ]
+    suspended_subscription_ids = (
+        web_customer_actions_service.list_suspended_subscription_ids(db, customer_id)
+    )
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
     if not suspended_subscription_ids:
         return _toast_response(

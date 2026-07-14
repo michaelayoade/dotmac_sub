@@ -146,6 +146,26 @@ def resolve_business_customer_id(db: Session, customer_id: str) -> str:
     return customer_id
 
 
+def list_active_subscription_ids(db: Session, customer_id: str) -> list[str]:
+    """Return active subscription ids attached to a customer."""
+    rows = db.execute(
+        select(Subscription.id)
+        .where(Subscription.subscriber_id == customer_id)
+        .where(Subscription.status == SubscriptionStatus.active)
+    ).all()
+    return [str(row[0]) for row in rows]
+
+
+def list_suspended_subscription_ids(db: Session, customer_id: str) -> list[str]:
+    """Return suspended subscription ids attached to a customer."""
+    rows = db.execute(
+        select(Subscription.id)
+        .where(Subscription.subscriber_id == customer_id)
+        .where(Subscription.status == SubscriptionStatus.suspended)
+    ).all()
+    return [str(row[0]) for row in rows]
+
+
 def save_primary_address_coordinates(
     db: Session,
     *,
