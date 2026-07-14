@@ -3704,7 +3704,7 @@ class OntFirmwareImage(Base):
 
 
 class OntConfigSnapshot(Base):
-    """Point-in-time TR-069 running configuration snapshot for an ONT."""
+    """Immutable point-in-time configuration evidence for an ONT."""
 
     __tablename__ = "ont_config_snapshots"
 
@@ -3717,12 +3717,17 @@ class OntConfigSnapshot(Base):
         nullable=False,
         index=True,
     )
-    source: Mapped[str] = mapped_column(String(60), nullable=False, default="tr069")
+    source: Mapped[str] = mapped_column(String(60), nullable=False, default="composite")
     label: Mapped[str | None] = mapped_column(String(255))
     device_info: Mapped[dict | None] = mapped_column(JSON)
     wan: Mapped[dict | None] = mapped_column(JSON)
     optical: Mapped[dict | None] = mapped_column(JSON)
     wifi: Mapped[dict | None] = mapped_column(JSON)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    effective_config: Mapped[dict | None] = mapped_column(JSON)
+    observed_state: Mapped[dict | None] = mapped_column(JSON)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+    payload_checksum: Mapped[str | None] = mapped_column(String(64))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

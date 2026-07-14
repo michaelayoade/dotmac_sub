@@ -157,6 +157,37 @@ def test_ont_config_evidence_reports_drift_and_unknown_when_evidence_differs(
     assert checks["Line profile"]["status"] == "unknown"
 
 
+def test_ont_config_evidence_rejects_tampered_snapshot(db_session, monkeypatch):
+    ont = OntUnit(serial_number="TAMPERED-ONT-001", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    snapshot = OntConfigSnapshot(
+        ont_unit_id=ont.id,
+        schema_version=2,
+        source="tr069",
+        wifi={"SSID": "CustomerNet"},
+        payload_checksum="0" * 64,
+    )
+    db_session.add(snapshot)
+    db_session.flush()
+    monkeypatch.setattr(
+        config_evidence,
+        "resolve_effective_ont_config",
+        lambda *_args, **_kwargs: {
+            "values": {"wifi_ssid": "CustomerNet", "wan_mode": None}
+        },
+    )
+
+    evidence = config_evidence.build_ont_config_evidence(db_session, ont.id)
+
+    assert evidence["status"] == "drift"
+    sources = {source["label"]: source for source in evidence["sources"]}
+    assert sources["ONT config snapshot"]["status"] == "drift"
+    checks = {check["label"]: check for check in evidence["drift_checks"]}
+    assert checks["Snapshot integrity"]["status"] == "drift"
+    assert checks["WiFi SSID"]["status"] == "unknown"
+
+
 def test_olt_config_evidence_summarizes_backups_imports_and_bundle_drift(db_session):
     olt = OLTDevice(name="OLT Evidence")
     offer = CatalogOffer(
