@@ -970,6 +970,38 @@ def catalog_subscription_resume_vacation_hold(
 
 
 @router.post(
+    "/subscriptions/bulk/lifecycle/preview",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def subscription_bulk_lifecycle_preview(
+    request: Request,
+    subscription_ids: str = Form(...),
+    kind: SubscriptionCommandKind = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    target_offer_id: str | None = Form(None),
+    reason: str | None = Form(None),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Preview a subscription lifecycle batch without mutating any item."""
+    payload, status_code = (
+        web_catalog_subscription_workflows_service.preview_bulk_lifecycle_response(
+            db,
+            subscription_ids=subscription_ids,
+            kind=kind,
+            actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            target_offer_id=target_offer_id,
+            reason=reason,
+        )
+    )
+    return JSONResponse(payload, status_code=status_code)
+
+
+@router.post(
     "/subscriptions/bulk/activate",
     dependencies=[
         Depends(require_any_permission("catalog:write", "subscription:activate"))
@@ -978,6 +1010,13 @@ def catalog_subscription_resume_vacation_hold(
 def subscription_bulk_activate(
     request: Request,
     subscription_ids: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk activate subscriptions."""
@@ -987,6 +1026,44 @@ def subscription_bulk_activate(
             subscription_ids=subscription_ids,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+@router.post(
+    "/subscriptions/bulk/restore",
+    dependencies=[
+        Depends(require_any_permission("catalog:write", "subscription:activate"))
+    ],
+)
+def subscription_bulk_restore(
+    request: Request,
+    subscription_ids: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Bulk restore subscriptions through canonical lifecycle commands."""
+    return JSONResponse(
+        web_catalog_subscription_workflows_service.bulk_restore_response(
+            db,
+            subscription_ids=subscription_ids,
+            actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
         )
     )
 
@@ -1000,6 +1077,13 @@ def subscription_bulk_activate(
 def subscription_bulk_suspend(
     request: Request,
     subscription_ids: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk suspend subscriptions."""
@@ -1009,6 +1093,11 @@ def subscription_bulk_suspend(
             subscription_ids=subscription_ids,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
         )
     )
 
@@ -1020,6 +1109,13 @@ def subscription_bulk_suspend(
 def subscription_bulk_cancel(
     request: Request,
     subscription_ids: str = Form(...),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk cancel subscriptions."""
@@ -1029,6 +1125,11 @@ def subscription_bulk_cancel(
             subscription_ids=subscription_ids,
             request=request,
             actor_id=_get_actor_id(request),
+            effective_timing=effective_timing,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
         )
     )
 
@@ -1060,14 +1161,18 @@ def subscription_bulk_change_plan(
     request: Request,
     subscription_ids: str = Form(...),
     target_offer_id: str = Form(...),
-    effective_timing: str = Form("instant"),
-    include_suspended: bool = Form(False),
+    effective_timing: SubscriptionEffectiveTiming = Form(
+        SubscriptionEffectiveTiming.immediate
+    ),
+    effective_at: datetime | None = Form(None),
+    reason: str | None = Form(None),
+    reviewed_heads: str | None = Form(None),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk change plan/offer for subscriptions.
 
-    ``effective_timing`` is ``instant`` (default, swap now with proration) or
-    ``next_cycle`` (schedule the swap for each sub's next billing date).
+    ``effective_timing`` follows the canonical lifecycle timing contract.
     """
     return JSONResponse(
         web_catalog_subscription_workflows_service.bulk_change_plan_response(
@@ -1077,7 +1182,10 @@ def subscription_bulk_change_plan(
             request=request,
             actor_id=_get_actor_id(request),
             effective_timing=effective_timing,
-            include_suspended=include_suspended,
+            effective_at=effective_at,
+            reason=reason,
+            reviewed_heads=reviewed_heads,
+            idempotency_key=idempotency_key,
         )
     )
 

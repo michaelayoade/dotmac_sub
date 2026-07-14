@@ -1676,10 +1676,9 @@ def customer_activate_suspended_services(
             message="This customer has no suspended services to activate.",
         )
 
-    result = web_catalog_subscription_workflows_service.bulk_activate_response(
+    result = web_catalog_subscription_workflows_service.bulk_restore_response(
         db,
         subscription_ids=",".join(suspended_subscription_ids),
-        request=request,
         actor_id=_get_actor_id(request),
     )
     changed = _workflow_changed_count(result)
