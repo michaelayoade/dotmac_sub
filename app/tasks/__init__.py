@@ -27,7 +27,11 @@ from app.tasks.campaigns import (
     process_due_campaigns,
     send_campaign_batch,
 )
-from app.tasks.catalog import apply_due_subscription_changes, expire_subscriptions
+from app.tasks.catalog import (
+    apply_due_subscription_changes,
+    apply_due_subscription_status_commands,
+    expire_subscriptions,
+)
 from app.tasks.collections import prepaid_balance_sweep, run_dunning
 from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
 from app.tasks.crm_ticket_pull import (
@@ -84,6 +88,7 @@ from app.tasks.network_operations import cleanup_old_operations
 from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
+from app.tasks.olt_firmware import rollback_firmware_task, upgrade_firmware_task
 from app.tasks.olt_health_retry import (
     retry_failed_olt_connections,
     retry_single_olt,
@@ -235,6 +240,7 @@ __all__ = [
     "reconcile_topups",
     "expire_subscriptions",
     "apply_due_subscription_changes",
+    "apply_due_subscription_status_commands",
     "run_dunning",
     "prepaid_balance_sweep",
     "audit_cutover_balance_invariant_task",
@@ -275,6 +281,8 @@ __all__ = [
     "aggregate_bandwidth_to_metrics",
     "trim_bandwidth_stream",
     "backup_all_olts",
+    "rollback_firmware_task",
+    "upgrade_firmware_task",
     "run_olt_mac_harvest",
     "dispatch_operational_escalation_deliveries",
     "retry_failed_olt_connections",

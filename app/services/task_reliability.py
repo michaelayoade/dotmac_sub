@@ -154,6 +154,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         HEALTH,
         "Applying a scheduled plan change must be idempotent (apply() status guard).",
     ),
+    "app.tasks.catalog.apply_due_subscription_status_commands": _c(
+        "catalog",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "Durable schedule rows own leases, bounded retry, reviewed-head drift "
+        "detection, and deterministic executor idempotency keys.",
+    ),
     "app.tasks.campaigns.process_due_campaigns": _c(
         "campaigns",
         SWEEP,
@@ -325,6 +333,22 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": _c(
         "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.olt_firmware.rollback": _c(
+        "network",
+        MANUAL,
+        NON_IDEMP,
+        LOG,
+        "Physical standby-image rollback is not automatically retried; an operator "
+        "must inspect device state before redrive.",
+    ),
+    "app.tasks.olt_firmware.upgrade_with_verification": _c(
+        "network",
+        STATE,
+        STATEFUL,
+        STATUS,
+        "The network operation ledger and task idempotency key guard duplicate "
+        "delivery; verified version readback is persisted on the operation.",
     ),
     "app.tasks.ont_bulk.execute_bulk_action": _c("network", ITEMS, PER_ITEM, STATUS),
     "app.tasks.ont_firmware.apply_huawei_ont_firmware": _c(
