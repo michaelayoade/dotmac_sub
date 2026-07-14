@@ -13,6 +13,8 @@ from app.services.uisp_write_adapter import (
     UispConfigurationWriteAdapter,
     UispPostWriteReadbackError,
     UispWriteUnsupported,
+    capability_profile,
+    require_apply_ready,
 )
 
 
@@ -161,6 +163,61 @@ def test_readback_only_never_invokes_put(db_session, subscriber, catalog_offer):
     assert result.verified is True
     assert result.write_accepted is False
     assert client.put_payloads == []
+
+
+def test_capability_profile_exposes_exact_mapped_fields(
+    db_session, subscriber, catalog_offer
+):
+    intent = _intent(
+        db_session,
+        subscriber,
+        catalog_offer,
+        {"name": "radio", "wifi": {"ssid": "Customer"}},
+    )
+
+    profile = capability_profile(db_session, intent)
+
+    assert profile.transport == "onu"
+    assert profile.writable_fields == (
+        "name",
+        "remote_access.enabled",
+        "wifi.password_ref",
+        "wifi.ssid",
+    )
+    assert profile.requested_fields == ("name", "wifi.ssid")
+    assert profile.unsupported_fields == ()
+    assert profile.apply_ready is True
+
+
+def test_capability_preflight_rejects_unmapped_field(
+    db_session, subscriber, catalog_offer
+):
+    intent = _intent(
+        db_session,
+        subscriber,
+        catalog_offer,
+        {"firmware_version": "9.0.0"},
+    )
+
+    with pytest.raises(UispWriteUnsupported, match="firmware_version"):
+        require_apply_ready(db_session, intent)
+
+
+def test_legacy_unknown_nested_field_is_visible_to_preflight_and_cleanup(
+    db_session, subscriber, catalog_offer
+):
+    intent = _intent(
+        db_session,
+        subscriber,
+        catalog_offer,
+        {"name": "radio"},
+    )
+    intent.desired_state = {"name": "radio", "remote_access": {"port": 22}}
+
+    profile = capability_profile(db_session, intent)
+
+    assert profile.requested_fields == ("name", "remote_access.port")
+    assert profile.unsupported_fields == ("remote_access.port",)
 
 
 def test_redaction_covers_common_pre_shared_key_names():

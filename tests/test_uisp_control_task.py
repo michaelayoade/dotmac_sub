@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import CPEDevice, DeviceType
+from app.models.network import CPEDevice, DeviceType, VendorModelCapability
 from app.models.network_operation import NetworkOperationStatus
 from app.models.uisp_control import (
     UispConfigSnapshot,
@@ -40,7 +40,18 @@ def _records(db_session, subscriber, catalog_offer):
         model="airCube-ISP",
         uisp_device_id="uisp-device-1",
     )
-    db_session.add_all([subscription, cpe])
+    capability = VendorModelCapability(
+        vendor="ubiquiti",
+        model="airCube-ISP",
+        supported_features={
+            "uisp": {
+                "configuration_write": True,
+                "transport": "onu",
+                "fields": {"wifi.ssid": "/wireless/ssid"},
+            }
+        },
+    )
+    db_session.add_all([subscription, cpe, capability])
     db_session.flush()
     intent = stage_intent(
         db_session,
