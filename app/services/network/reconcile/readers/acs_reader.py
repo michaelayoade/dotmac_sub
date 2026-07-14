@@ -54,7 +54,12 @@ _PROJECTION_PATHS: tuple[str, ...] = (
     "Device.ManagementServer.ConnectionRequestUsername",
     "Device.ManagementServer.ConnectionRequestPassword",
     "Device.IP.Interface",
+    "Device.DHCPv4.Client",
     "Device.DHCPv6.Client",
+    "Device.Routing.Router",
+    "Device.DNS.Client.Server",
+    "Device.NAT.InterfaceSetting",
+    "Device.Ethernet.VLANTermination",
     "Device.RouterAdvertisement.InterfaceSettings",
 )
 
@@ -82,7 +87,10 @@ def read_acs_state(
         for the next Inform after pushing OLT-side mgmt config.
     """
     query = _query_for_serial(desired.serial_number)
-    projection = ",".join(_PROJECTION_PATHS)
+    projection_paths = list(_PROJECTION_PATHS)
+    if desired.tr181_wan_paths is not None:
+        projection_paths.extend(vars(desired.tr181_wan_paths).values())
+    projection = ",".join(dict.fromkeys(projection_paths))
 
     try:
         devices = client.list_devices(query=query, projection=projection)
@@ -120,7 +128,7 @@ def read_acs_state(
         )
 
     device = devices[0]
-    observed = _parse_device(device)
+    observed = _parse_device(device, desired)
 
     # Ghost-instance recovery. ACS may have cached ``setParameterValues``
     # writes against a ``WANPPPConnection.<n>`` path that never existed on
@@ -130,7 +138,9 @@ def read_acs_state(
     # resolved but ``ConnectionStatus`` has no reported ``_value``. Force a
     # narrow ``refreshObject`` on the affected WCD and re-parse once.
     if _looks_like_ghost_wan_instance(observed) and hasattr(client, "refresh_object"):
-        observed = _refresh_and_reparse(client, device, observed, query, projection)
+        observed = _refresh_and_reparse(
+            client, device, observed, query, projection, desired
+        )
 
     return ReadResult(
         success=True,
@@ -158,6 +168,7 @@ def _refresh_and_reparse(
     observed: AcsObservedFields,
     query: dict[str, Any],
     projection: str,
+    desired: OntDesiredState,
 ) -> AcsObservedFields:
     """One-shot refresh of the WCD subtree, then re-fetch + re-parse. Any
     failure falls through with the original observation — the planner has
@@ -187,7 +198,7 @@ def _refresh_and_reparse(
         return observed
     if not refreshed:
         return observed
-    return _parse_device(refreshed[0])
+    return _parse_device(refreshed[0], desired)
 
 
 # ── Query / parse helpers ───────────────────────────────────────────────────
@@ -201,7 +212,9 @@ def _query_for_serial(serial_number: str) -> dict[str, Any]:
     return {"_id": {"$regex": f".*-{escaped}$"}}
 
 
-def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
+def _parse_device(
+    device: dict[str, Any], desired: OntDesiredState | None = None
+) -> AcsObservedFields:
     """Map a GenieACS device document to ``AcsObservedFields``.
 
     The document is a nested dict where leaves have a ``_value`` key plus
@@ -220,6 +233,25 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
     _ip_wcd_index, _ip_instance_index, wan_ip = _resolve_wan_ip(wan_root)
     data_model_root = "Device" if dev_root else "InternetGatewayDevice"
     tr181_interface_index = instance_index or 1
+    tr181_paths = (
+        desired.tr181_wan_paths
+        if desired is not None and data_model_root == "Device"
+        else None
+    )
+    tr181_dhcp_enabled = (
+        _path_value_bool(device, tr181_paths.dhcp_enable) if tr181_paths else None
+    )
+    tr181_ip_address = (
+        _path_value(device, tr181_paths.ip_address) if tr181_paths else None
+    )
+    tr181_dns = (
+        _join_dns_servers(
+            _path_value(device, tr181_paths.dns_primary),
+            _path_value(device, tr181_paths.dns_secondary),
+        )
+        if tr181_paths
+        else None
+    )
 
     return AcsObservedFields(
         acs_present=True,
@@ -232,10 +264,24 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
         ),
         acs_observed_pppoe_username=_value(wan_ppp, "Username"),
         acs_observed_pppoe_enable=_value_bool(wan_ppp, "Enable"),
-        acs_observed_wan_vlan=_value_int(wan_ppp, "X_HW_VLAN"),
+        acs_observed_wan_vlan=(
+            _path_value_int(device, tr181_paths.vlan_id)
+            if tr181_paths
+            else _first_not_none(
+                _value_int(wan_ip, "X_HW_VLAN"),
+                _value_int(wan_ppp, "X_HW_VLAN"),
+            )
+        ),
         acs_observed_wan_external_ip=_value(wan_ppp, "ExternalIPAddress"),
         acs_observed_wan_connection_status=_value(wan_ppp, "ConnectionStatus"),
-        acs_observed_nat_enabled=_value_bool(wan_ppp, "NATEnabled"),
+        acs_observed_nat_enabled=(
+            _path_value_bool(device, tr181_paths.nat_enable)
+            if tr181_paths
+            else _first_not_none(
+                _value_bool(wan_ip, "NATEnabled"),
+                _value_bool(wan_ppp, "NATEnabled"),
+            )
+        ),
         acs_observed_dhcp_enabled=_value_bool(
             _path(igd, "LANDevice", "1", "LANHostConfigManagement"),
             "DHCPServerEnable",
@@ -272,11 +318,32 @@ def _parse_device(device: dict[str, Any]) -> AcsObservedFields:
             if data_model_root == "Device"
             else _value_bool(wan_ppp, "X_IPv6Enabled")
         ),
-        acs_observed_wan_ip_enable=_value_bool(wan_ip, "Enable"),
-        acs_observed_wan_addressing_type=_value(wan_ip, "AddressingType"),
-        acs_observed_wan_ip_address=_value(wan_ip, "ExternalIPAddress"),
-        acs_observed_wan_subnet_mask=_value(wan_ip, "SubnetMask"),
-        acs_observed_wan_gateway=_value(wan_ip, "DefaultGateway"),
+        acs_observed_wan_ip_enable=(
+            _path_value_bool(device, tr181_paths.ip_enable)
+            if tr181_paths
+            else _value_bool(wan_ip, "Enable")
+        ),
+        acs_observed_wan_addressing_type=(
+            ("DHCP" if tr181_dhcp_enabled else "Static" if tr181_ip_address else None)
+            if tr181_paths
+            else _value(wan_ip, "AddressingType")
+        ),
+        acs_observed_wan_ip_address=(
+            tr181_ip_address if tr181_paths else _value(wan_ip, "ExternalIPAddress")
+        ),
+        acs_observed_wan_subnet_mask=(
+            _path_value(device, tr181_paths.subnet_mask)
+            if tr181_paths
+            else _value(wan_ip, "SubnetMask")
+        ),
+        acs_observed_wan_gateway=(
+            _path_value(device, tr181_paths.gateway)
+            if tr181_paths
+            else _value(wan_ip, "DefaultGateway")
+        ),
+        acs_observed_wan_dns_servers=(
+            tr181_dns if tr181_paths else _value(wan_ip, "DNSServers")
+        ),
         acs_observed_dhcpv6_enabled=_value_bool(
             _path(dev_root, "DHCPv6", "Client", str(tr181_interface_index)),
             "Enable",
@@ -338,6 +405,7 @@ def _absent_fields() -> AcsObservedFields:
         acs_observed_wan_ip_address=None,
         acs_observed_wan_subnet_mask=None,
         acs_observed_wan_gateway=None,
+        acs_observed_wan_dns_servers=None,
         acs_observed_dhcpv6_enabled=None,
         acs_observed_dhcpv6_request_prefixes=None,
         acs_observed_ra_enabled=None,
@@ -439,6 +507,39 @@ def _path(node: dict[str, Any] | None, *keys: str) -> dict[str, Any] | None:
             return None
         current = current.get(key)
     return current if isinstance(current, dict) else None
+
+
+def _path_value(device: dict[str, Any], full_path: str) -> str | None:
+    keys = tuple(part for part in full_path.split(".") if part)
+    if not keys:
+        return None
+    leaf = _path(device, *keys)
+    if not isinstance(leaf, dict):
+        return None
+    raw = leaf.get("_value")
+    return str(raw) if raw is not None else None
+
+
+def _path_value_bool(device: dict[str, Any], full_path: str) -> bool | None:
+    raw = _path_value(device, full_path)
+    if raw is None:
+        return None
+    return raw.strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _path_value_int(device: dict[str, Any], full_path: str) -> int | None:
+    raw = _path_value(device, full_path)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _join_dns_servers(primary: str | None, secondary: str | None) -> str | None:
+    servers = [server for server in (primary, secondary) if server]
+    return ",".join(servers) or None
 
 
 def _value(node: dict[str, Any] | None, key: str) -> str | None:

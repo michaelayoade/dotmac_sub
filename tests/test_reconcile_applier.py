@@ -40,8 +40,25 @@ from app.services.network.reconcile import (
     OltTr069ServerConfig,
     Plan,
     ReconcileFailureReason,
+    Tr181WanParameterPaths,
     apply_plan,
 )
+
+
+def _tr181_wan_paths() -> Tr181WanParameterPaths:
+    return Tr181WanParameterPaths(
+        ip_enable="Device.IP.Interface.3.Enable",
+        dhcp_enable="Device.DHCPv4.Client.3.Enable",
+        ip_address="Device.IP.Interface.3.IPv4Address.1.IPAddress",
+        subnet_mask="Device.IP.Interface.3.IPv4Address.1.SubnetMask",
+        gateway="Device.Routing.Router.1.IPv4Forwarding.3.GatewayIPAddress",
+        dns_primary="Device.DNS.Client.Server.3.DNSServer",
+        dns_secondary="Device.DNS.Client.Server.4.DNSServer",
+        nat_enable="Device.NAT.InterfaceSetting.3.Enable",
+        vlan_enable="Device.Ethernet.VLANTermination.3.Enable",
+        vlan_id="Device.Ethernet.VLANTermination.3.VLANID",
+    )
+
 
 # ── Stubs ───────────────────────────────────────────────────────────────────
 
@@ -233,6 +250,66 @@ def test_tr098_static_wan_action_writes_routed_nat_addressing():
     assert params[f"{base}.AddressingType"] == "Static"
     assert params[f"{base}.ExternalIPAddress"] == "198.51.100.10"
     assert params[f"{base}.NATEnabled"] is True
+
+
+def test_tr181_private_static_wan_writes_nat_and_full_addressing():
+    acs = _StubAcsClient()
+    paths = _tr181_wan_paths()
+    result = apply_plan(
+        _plan(
+            AcsSetWanIp(
+                device_id="dev",
+                data_model_root="Device",
+                wcd_index=1,
+                instance_index=3,
+                mode="static",
+                vlan=203,
+                nat_enabled=True,
+                ip_address="10.20.30.2",
+                subnet_mask="255.255.255.0",
+                gateway="10.20.30.1",
+                dns_servers="1.1.1.1, 8.8.8.8",
+                tr181_paths=paths,
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    params = acs.calls[0][1][1]
+    assert params[paths.dhcp_enable] is False
+    assert params[paths.nat_enable] is True
+    assert params[paths.vlan_id] == 203
+    assert params[paths.ip_address] == "10.20.30.2"
+    assert params[paths.gateway] == "10.20.30.1"
+    assert params[paths.dns_primary] == "1.1.1.1"
+    assert params[paths.dns_secondary] == "8.8.8.8"
+
+
+def test_tr181_public_static_wan_explicitly_disables_nat():
+    acs = _StubAcsClient()
+    paths = _tr181_wan_paths()
+    result = apply_plan(
+        _plan(
+            AcsSetWanIp(
+                device_id="dev",
+                data_model_root="Device",
+                wcd_index=1,
+                instance_index=3,
+                mode="static",
+                vlan=203,
+                nat_enabled=False,
+                ip_address="160.119.127.194",
+                subnet_mask="255.255.255.248",
+                gateway="160.119.127.193",
+                tr181_paths=paths,
+            )
+        ),
+        _ctx(acs_client=acs),
+    )
+
+    assert result.success is True
+    assert acs.calls[0][1][1][paths.nat_enable] is False
 
 
 def test_acs_delete_object_dispatches_to_client():

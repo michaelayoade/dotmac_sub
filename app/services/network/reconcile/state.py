@@ -50,6 +50,22 @@ ReconcileMode = Literal["sync", "sweep", "bootstrap"]
 
 
 @dataclass(frozen=True)
+class Tr181WanParameterPaths:
+    """Resolved model-specific CWMP paths for one TR-181 WAN instance."""
+
+    ip_enable: str
+    dhcp_enable: str
+    ip_address: str
+    subnet_mask: str
+    gateway: str
+    dns_primary: str
+    dns_secondary: str
+    nat_enable: str
+    vlan_enable: str
+    vlan_id: str
+
+
+@dataclass(frozen=True)
 class OntDesiredState:
     """What this ONT should be.
 
@@ -134,6 +150,8 @@ class OntDesiredState:
     wan_static_subnet: str | None = None
     wan_static_gateway: str | None = None
     wan_static_dns: str | None = None
+    wan_static_ip_is_public: bool | None = None
+    tr181_wan_paths: Tr181WanParameterPaths | None = None
     acs_url: str | None = None
     acs_username: str | None = None
     acs_password_ref: str | None = None
@@ -207,6 +225,7 @@ class AcsObservedFields:
     acs_observed_wan_ip_address: str | None = None
     acs_observed_wan_subnet_mask: str | None = None
     acs_observed_wan_gateway: str | None = None
+    acs_observed_wan_dns_servers: str | None = None
     acs_observed_dhcpv6_enabled: bool | None = None
     acs_observed_dhcpv6_request_prefixes: bool | None = None
     acs_observed_ra_enabled: bool | None = None

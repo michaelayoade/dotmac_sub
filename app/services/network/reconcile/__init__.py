@@ -82,6 +82,7 @@ from .state import (
     ReconcileMode,
     ReconcileResult,
     SyncStatus,
+    Tr181WanParameterPaths,
     WanMode,
     WriteSurface,
 )
@@ -134,6 +135,7 @@ __all__ = (
     "ReconcileResult",
     "SecretResolver",
     "SyncStatus",
+    "Tr181WanParameterPaths",
     "Validation",
     "WanMode",
     "WriteSurface",
