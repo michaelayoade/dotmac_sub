@@ -45,6 +45,7 @@ class NetworkOperationType(enum.Enum):
 
     olt_ont_sync = "olt_ont_sync"
     olt_pon_repair = "olt_pon_repair"
+    olt_firmware_upgrade = "olt_firmware_upgrade"
     ont_provision = "ont_provision"
     ont_authorize = "ont_authorize"
     ont_reboot = "ont_reboot"

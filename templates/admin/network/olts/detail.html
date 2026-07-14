@@ -269,6 +269,61 @@
         </div>
     </details>
 
+    {# Firmware lifecycle #}
+    <details class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <summary class="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 dark:text-white">Firmware lifecycle</summary>
+        <div class="border-t border-slate-200 px-5 py-4 dark:border-slate-700">
+            <div class="grid gap-4 md:grid-cols-3">
+                <div>
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Observed version</p>
+                    <p class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ firmware_context.current_version }}</p>
+                </div>
+                <div>
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Software</p>
+                    <p class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ firmware_context.software_version or 'Unknown' }}</p>
+                </div>
+                <div>
+                    <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last operation</p>
+                    {% if firmware_context.latest_operation %}
+                    <p class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ firmware_context.latest_operation.status }}</p>
+                    {% if firmware_context.latest_operation.message %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ firmware_context.latest_operation.message }}</p>{% endif %}
+                    {% else %}
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No upgrade recorded</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if firmware_context.images %}
+            <form method="POST"
+                  action="/admin/network/olts/{{ olt.id }}/firmware-upgrade"
+                  class="mt-5 grid gap-3 border-t border-slate-200 pt-4 dark:border-slate-700 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end"
+                  data-confirm="Queue this firmware upgrade for {{ olt.name }}? Customer traffic will be interrupted during reboot and success requires exact version readback."
+                  data-confirm-variant="warning"
+                  data-confirm-label="Queue upgrade">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label for="olt-firmware-image" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Target image</label>
+                    <select id="olt-firmware-image" name="firmware_image_id" required {% if firmware_context.upgrade_active %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                        <option value="">Select firmware</option>
+                        {% for image in firmware_context.images %}
+                        <option value="{{ image.id }}">{{ image.vendor }} {{ image.model or 'all models' }} v{{ image.version }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="firmware-confirm-olt-name" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Type {{ olt.name }} to confirm</label>
+                    <input id="firmware-confirm-olt-name" name="confirm_olt_name" type="text" required autocomplete="off" {% if firmware_context.upgrade_active %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                </div>
+                <button type="submit" {% if firmware_context.upgrade_active %}disabled{% endif %} class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50">
+                    {{ 'Upgrade active' if firmware_context.upgrade_active else 'Queue upgrade' }}
+                </button>
+            </form>
+            {% else %}
+            <p class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No compatible active firmware image is available for this OLT.</p>
+            {% endif %}
+        </div>
+    </details>
+
     {# Collapsible CLI Terminal #}
     <details class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <summary class="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 dark:text-white">
