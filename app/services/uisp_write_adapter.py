@@ -56,6 +56,20 @@ class UispFieldMapping:
     values: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class UispCapabilityProfile:
+    vendor: str
+    model: str
+    transport: str
+    writable_fields: tuple[str, ...]
+    requested_fields: tuple[str, ...]
+    unsupported_fields: tuple[str, ...]
+
+    @property
+    def apply_ready(self) -> bool:
+        return bool(self.requested_fields) and not self.unsupported_fields
+
+
 @dataclass
 class UispApplyResult:
     outcome: str
@@ -138,16 +152,16 @@ def _desired_fields(desired: dict[str, Any]) -> dict[str, Any]:
             fields[key] = desired[key]
     wifi = desired.get("wifi")
     if isinstance(wifi, dict):
-        if "ssid" in wifi:
-            fields["wifi.ssid"] = wifi["ssid"]
-        if "password_ref" in wifi:
-            fields["wifi.password_ref"] = wifi["password_ref"]
+        for key, value in wifi.items():
+            fields[f"wifi.{key}"] = value
     remote_access = desired.get("remote_access")
-    if isinstance(remote_access, dict) and "enabled" in remote_access:
-        fields["remote_access.enabled"] = remote_access["enabled"]
+    if isinstance(remote_access, dict):
+        for key, value in remote_access.items():
+            fields[f"remote_access.{key}"] = value
     lifecycle = desired.get("lifecycle")
-    if isinstance(lifecycle, dict) and "state" in lifecycle:
-        fields["lifecycle.state"] = lifecycle["state"]
+    if isinstance(lifecycle, dict):
+        for key, value in lifecycle.items():
+            fields[f"lifecycle.{key}"] = value
     return fields
 
 
@@ -212,6 +226,8 @@ def _field_mappings(
             )
         path = str(raw.get("path") or "").strip()
         readback_path = str(raw.get("readback_path") or path).strip()
+        _pointer_parts(path)
+        _pointer_parts(readback_path)
         raw_values = raw.get("values")
         values: dict[str, Any] = raw_values if isinstance(raw_values, dict) else {}
         mappings[canonical_name] = UispFieldMapping(
@@ -222,6 +238,57 @@ def _field_mappings(
             values={str(key): value for key, value in values.items()},
         )
     return mappings
+
+
+def capability_profile(
+    db: Session,
+    intent: UispDeviceIntent,
+    *,
+    desired_state: dict[str, Any] | None = None,
+) -> UispCapabilityProfile:
+    """Resolve the exact writable/readable field contract for an intent target."""
+    _target, vendor, model = _resolve_target(db, intent)
+    firmware = str(getattr(_target, "firmware_version", "") or "") or None
+    _capability, config = _uisp_capability(
+        db, vendor=vendor, model=model, firmware=firmware
+    )
+    raw_fields = config.get("fields")
+    if not isinstance(raw_fields, dict):
+        raise UispWriteUnsupported("UISP capability has no field mappings")
+    writable_fields: list[str] = []
+    for canonical_name, raw in raw_fields.items():
+        if canonical_name not in _CANONICAL_FIELDS:
+            raise UispWriteUnsupported(
+                f"UISP capability contains an unknown field: {canonical_name}"
+            )
+        if isinstance(raw, dict) and raw.get("writable", True) is not True:
+            continue
+        _field_mappings(config, {canonical_name: None})
+        writable_fields.append(canonical_name)
+    desired = desired_state if desired_state is not None else intent.desired_state
+    requested = tuple(sorted(_desired_fields(desired or {})))
+    writable = tuple(sorted(writable_fields))
+    return UispCapabilityProfile(
+        vendor=vendor,
+        model=model,
+        transport=str(config["transport"]),
+        writable_fields=writable,
+        requested_fields=requested,
+        unsupported_fields=tuple(sorted(set(requested) - set(writable))),
+    )
+
+
+def require_apply_ready(db: Session, intent: UispDeviceIntent) -> UispCapabilityProfile:
+    profile = capability_profile(db, intent)
+    if not profile.requested_fields:
+        raise UispWriteUnsupported("UISP intent has no writable fields")
+    if profile.unsupported_fields:
+        raise UispWriteUnsupported(
+            "UISP desired state contains fields not mapped for "
+            f"{profile.vendor} {profile.model}: "
+            + ", ".join(profile.unsupported_fields)
+        )
+    return profile
 
 
 def _materialize_value(

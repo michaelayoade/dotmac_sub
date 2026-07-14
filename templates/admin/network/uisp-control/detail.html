@@ -1,34 +1,95 @@
 {% extends "layouts/admin.html" %}
 {% block title %}UISP Intent - Admin{% endblock %}
 {% block content %}
+{% set profile = capability_profile %}
+{% set writable = profile.writable_fields if profile else [] %}
+{% set busy = intent.status.value in ['applying', 'pending_readback'] %}
 <div class="space-y-6">
     <header>
         <a href="/admin/network/uisp-control" class="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">UISP Control</a>
         <div class="mt-2 flex flex-wrap items-center justify-between gap-3">
-            <div><h1 class="text-2xl font-semibold text-slate-900 dark:text-white">{{ intent.target_type.value | upper }} {{ intent.uisp_device_id or intent.target_id }}</h1><p class="mt-1 text-sm text-slate-500">Revision {{ intent.desired_revision }} · {{ intent.status.value | replace('_', ' ') | title }}</p></div>
-            {% if intent.status.value != 'verified' %}<form method="post" action="/admin/network/uisp-control/{{ intent.id }}/apply" data-confirm="Apply this desired-state revision to the device? Success requires device readback." data-confirm-variant="warning" data-confirm-label="Apply configuration">{% include "components/forms/csrf_input.html" %}<button class="bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Apply configuration</button></form>{% endif %}
+            <div>
+                <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">{{ intent.target_type.value | upper }} {{ intent.uisp_device_id or intent.target_id }}</h1>
+                <p class="mt-1 text-sm text-slate-500">Revision {{ intent.desired_revision }} · {{ intent.status.value | replace('_', ' ') | title }}{% if profile %} · {{ profile.vendor }} {{ profile.model }} · {{ profile.transport | upper }}{% endif %}</p>
+            </div>
+            {% if profile and profile.apply_ready and not busy and intent.status.value != 'verified' %}
+            <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/apply" data-confirm="Apply this desired-state revision to the device? Success requires device readback." data-confirm-variant="warning" data-confirm-label="Apply configuration">
+                {% include "components/forms/csrf_input.html" %}
+                <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Apply configuration</button>
+            </form>
+            {% endif %}
         </div>
     </header>
-    {% if request.query_params.get('notice') == 'queued' %}<div class="border-l-4 border-blue-500 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:bg-blue-900/20 dark:text-blue-200">Configuration queued. Success requires device readback.</div>{% elif request.query_params.get('notice') == 'staged' %}<div class="border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">Desired-state revision staged.</div>{% endif %}
-    <section class="grid gap-6 lg:grid-cols-2">
-        <div><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Desired</h2><pre class="min-h-48 overflow-auto border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ desired_redacted | tojson(indent=2) }}</pre></div>
-        <div><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Observed</h2><pre class="min-h-48 overflow-auto border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ (intent.observed_config or {}) | tojson(indent=2) }}</pre></div>
+
+    {% if request.query_params.get('notice') == 'queued' %}
+    <div class="border-l-4 border-blue-500 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:bg-blue-900/20 dark:text-blue-200">Configuration queued. Success requires device readback.</div>
+    {% elif request.query_params.get('notice') == 'staged' %}
+    <div class="border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">Desired-state revision staged.</div>
+    {% elif request.query_params.get('notice') == 'pruned' %}
+    <div class="border-l-4 border-emerald-500 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-200">Unsupported desired fields removed in a new revision.</div>
+    {% endif %}
+    {% if request.query_params.get('error') %}
+    <div class="border-l-4 border-red-500 bg-red-50 px-4 py-3 text-sm text-red-900 dark:bg-red-900/20 dark:text-red-200">{{ request.query_params.get('error') }}</div>
+    {% endif %}
+
+    {% if capability_error %}
+    <section class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-800 dark:bg-red-900/20">
+        <h2 class="text-sm font-semibold text-red-900 dark:text-red-200">Model mapping unavailable</h2>
+        <p class="mt-1 text-sm text-red-800 dark:text-red-300">{{ capability_error }}</p>
     </section>
-    <section class="border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-        <h2 class="text-sm font-semibold uppercase text-slate-500">Edit desired state</h2>
-        <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/desired" class="mt-4 grid gap-4 md:grid-cols-3">
+    {% elif profile.unsupported_fields %}
+    <section class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-900/20">
+        <div>
+            <h2 class="text-sm font-semibold text-amber-900 dark:text-amber-200">Unsupported desired fields</h2>
+            <p class="mt-1 font-mono text-xs text-amber-800 dark:text-amber-300">{{ profile.unsupported_fields | join(', ') }}</p>
+        </div>
+        <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/desired/prune" data-confirm="Remove desired fields that are not mapped for {{ profile.vendor }} {{ profile.model }}? A new desired-state revision will be staged." data-confirm-variant="warning" data-confirm-label="Remove fields">
             {% include "components/forms/csrf_input.html" %}
-            <label class="text-sm text-slate-600 dark:text-slate-300">Name<input name="name" value="{{ intent.desired_state.get('name', '') }}" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
-            <label class="text-sm text-slate-600 dark:text-slate-300">Management IP<input name="management_ip" value="{{ intent.desired_state.get('management_ip', '') }}" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
-            <label class="text-sm text-slate-600 dark:text-slate-300">Target firmware<input name="firmware_version" value="{{ intent.desired_state.get('firmware_version', '') }}" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
-            <label class="text-sm text-slate-600 dark:text-slate-300">WiFi name<input name="wifi_ssid" maxlength="32" value="{{ intent.desired_state.get('wifi', {}).get('ssid', '') }}" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
-            <label class="text-sm text-slate-600 dark:text-slate-300">New WiFi password<input name="wifi_password" type="password" minlength="8" maxlength="63" autocomplete="new-password" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
-            <label class="text-sm text-slate-600 dark:text-slate-300">Lifecycle<select name="lifecycle_state" class="mt-1 w-full border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">{% for state in ['active', 'suspended', 'decommissioned'] %}<option value="{{ state }}" {% if intent.desired_state.get('lifecycle', {}).get('state', 'active') == state %}selected{% endif %}>{{ state | title }}</option>{% endfor %}</select></label>
-            <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300"><input type="checkbox" name="remote_access_enabled" value="true" {% if intent.desired_state.get('remote_access', {}).get('enabled') %}checked{% endif %}>Remote access desired</label>
-            <div class="md:col-span-2 md:text-right"><button class="bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Stage revision</button></div>
+            <button class="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">Remove unsupported fields</button>
         </form>
     </section>
-    <section><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Drift</h2><pre class="overflow-auto border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ (intent.drift or {}) | tojson(indent=2) }}</pre></section>
-    <section class="border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800"><div class="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900 dark:border-slate-700 dark:text-white">Snapshots</div><div class="divide-y divide-slate-100 dark:divide-slate-700">{% for snapshot in intent.snapshots | sort(attribute='created_at', reverse=true) %}<div class="flex flex-wrap justify-between gap-2 px-4 py-3 text-sm"><span class="font-medium text-slate-800 dark:text-slate-200">{{ snapshot.source.value | title }}{% if snapshot.revision %} revision {{ snapshot.revision }}{% endif %}</span><time class="text-slate-500">{{ snapshot.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</time></div>{% else %}<p class="px-4 py-6 text-sm text-slate-500">No snapshots.</p>{% endfor %}</div></section>
+    {% endif %}
+
+    <section class="grid gap-6 lg:grid-cols-2">
+        <div><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Desired</h2><pre class="min-h-48 overflow-auto rounded-lg border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ desired_redacted | tojson(indent=2) }}</pre></div>
+        <div><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Observed</h2><pre class="min-h-48 overflow-auto rounded-lg border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ (intent.observed_config or {}) | tojson(indent=2) }}</pre></div>
+    </section>
+
+    {% if profile and writable %}
+    <section class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-sm font-semibold uppercase text-slate-500">Edit desired state</h2>
+            <p class="font-mono text-xs text-slate-500">{{ writable | join(', ') }}</p>
+        </div>
+        <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/desired" class="mt-4 grid gap-4 md:grid-cols-3">
+            {% include "components/forms/csrf_input.html" %}
+            {% if 'name' in writable %}
+            <label class="text-sm text-slate-600 dark:text-slate-300">Name<input name="name" value="{{ intent.desired_state.get('name', '') }}" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            {% endif %}
+            {% if 'management_ip' in writable %}
+            <label class="text-sm text-slate-600 dark:text-slate-300">Management IP<input name="management_ip" value="{{ intent.desired_state.get('management_ip', '') }}" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            {% endif %}
+            {% if 'firmware_version' in writable %}
+            <label class="text-sm text-slate-600 dark:text-slate-300">Target firmware<input name="firmware_version" value="{{ intent.desired_state.get('firmware_version', '') }}" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            {% endif %}
+            {% if 'wifi.ssid' in writable %}
+            <label class="text-sm text-slate-600 dark:text-slate-300">WiFi name<input name="wifi_ssid" maxlength="32" value="{{ intent.desired_state.get('wifi', {}).get('ssid', '') }}" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            {% endif %}
+            {% if 'wifi.password_ref' in writable %}
+            <label class="text-sm text-slate-600 dark:text-slate-300">New WiFi password<input name="wifi_password" type="password" minlength="8" maxlength="63" autocomplete="new-password" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900"></label>
+            {% endif %}
+            {% if 'lifecycle.state' in writable %}
+            <label class="text-sm text-slate-600 dark:text-slate-300">Lifecycle<select name="lifecycle_state" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">{% for state in ['active', 'suspended', 'decommissioned'] %}<option value="{{ state }}" {% if intent.desired_state.get('lifecycle', {}).get('state', 'active') == state %}selected{% endif %}>{{ state | title }}</option>{% endfor %}</select></label>
+            {% endif %}
+            {% if 'remote_access.enabled' in writable %}
+            <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300"><input type="hidden" name="remote_access_enabled" value="false"><input type="checkbox" name="remote_access_enabled" value="true" {% if intent.desired_state.get('remote_access', {}).get('enabled') %}checked{% endif %}>Remote access desired</label>
+            {% endif %}
+            <div class="flex items-end justify-end md:col-span-3"><button class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Stage revision</button></div>
+        </form>
+    </section>
+    {% endif %}
+
+    <section><h2 class="mb-2 text-sm font-semibold uppercase text-slate-500">Drift</h2><pre class="overflow-auto rounded-lg border border-slate-200 bg-white p-4 text-xs text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">{{ (intent.drift or {}) | tojson(indent=2) }}</pre></section>
+    <section class="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800"><div class="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900 dark:border-slate-700 dark:text-white">Snapshots</div><div class="divide-y divide-slate-100 dark:divide-slate-700">{% for snapshot in intent.snapshots | sort(attribute='created_at', reverse=true) %}<div class="flex flex-wrap justify-between gap-2 px-4 py-3 text-sm"><span class="font-medium text-slate-800 dark:text-slate-200">{{ snapshot.source.value | title }}{% if snapshot.revision %} revision {{ snapshot.revision }}{% endif %}</span><time class="text-slate-500">{{ snapshot.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</time></div>{% else %}<p class="px-4 py-6 text-sm text-slate-500">No snapshots.</p>{% endfor %}</div></section>
 </div>
 {% endblock %}
