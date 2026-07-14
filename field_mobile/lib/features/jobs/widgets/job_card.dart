@@ -28,7 +28,10 @@ class JobCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final statusColor = AppColors.status(job.status);
+    final statusColor = AppColors.statusTone(
+      context,
+      job.statusPresentation.tone,
+    );
     final done = job.status == 'completed';
     final line = isDark ? AppColors.lineDark : AppColors.lineLight;
     final faint = isDark ? AppColors.inkFaintDark : AppColors.inkFaint;
@@ -55,7 +58,7 @@ class JobCard extends StatelessWidget {
                           Icon(
                             done ? Icons.check_circle : Icons.schedule_rounded,
                             size: 15,
-                            color: done ? AppColors.status('completed') : faint,
+                            color: done ? statusColor : faint,
                           ),
                           const SizedBox(width: 7),
                           Text(
@@ -75,7 +78,7 @@ class JobCard extends StatelessWidget {
                             ),
                           ),
                           const Spacer(),
-                          StatusPill(job.status),
+                          StatusPill(job.statusPresentation),
                         ],
                       ),
                       const SizedBox(height: AppSpace.sm),

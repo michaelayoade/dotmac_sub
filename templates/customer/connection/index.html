@@ -9,28 +9,18 @@
         <p class="mt-1 text-base text-stone-500 dark:text-stone-400">A live check of your service — and what to do if something's wrong.</p>
     </div>
 
-    <div class="rounded-2xl border p-6 shadow-premium transition-colors"
-         :class="{
-            'border-emerald-200 bg-emerald-50 dark:border-emerald-800/60 dark:bg-emerald-900/20': status.state === 'connected',
-            'border-amber-200 bg-amber-50 dark:border-amber-800/60 dark:bg-amber-900/20': status.state === 'trouble',
-            'border-red-200 bg-red-50 dark:border-red-800/60 dark:bg-red-900/20': status.state === 'outage'
-         }">
+    <div class="status-panel rounded-2xl border p-6 shadow-premium transition-colors"
+         :class="panelClass">
         <div class="flex items-start justify-between gap-4">
             <div class="flex items-start gap-4">
                 <span class="mt-1 inline-flex h-3 w-3 flex-shrink-0 rounded-full"
-                      :class="{
-                        'bg-emerald-500': status.state === 'connected',
-                        'bg-amber-500': status.state === 'trouble',
-                        'bg-red-500': status.state === 'outage'
-                      }"></span>
+                      :class="dotClass"></span>
                 <div>
+                    <span class="mb-2 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold"
+                          :class="badgeClass"
+                          x-text="status.status_presentation?.label || 'Connection status'"></span>
                     <h2 class="text-xl font-display font-semibold text-stone-900 dark:text-white" x-text="status.headline"></h2>
                     <p class="mt-1 text-base text-stone-600 dark:text-stone-300" x-text="status.message"></p>
-                    <template x-if="status.area_outage">
-                        <p class="mt-3 inline-flex items-center gap-2 rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-300">
-                            Known area outage
-                        </p>
-                    </template>
                 </div>
             </div>
             <button type="button" @click="refresh()" :disabled="loading"
@@ -69,6 +59,21 @@ function connectionStatus() {
     return {
         status: {{ status | tojson }},
         loading: false,
+        get tone() {
+            const candidate = this.status?.status_presentation?.tone || 'neutral';
+            return ['positive', 'info', 'warning', 'negative', 'neutral'].includes(candidate)
+                ? candidate
+                : 'neutral';
+        },
+        get panelClass() {
+            return `status-panel-${this.tone}`;
+        },
+        get dotClass() {
+            return `status-tone-dot status-tone-dot-${this.tone}`;
+        },
+        get badgeClass() {
+            return `status-tone status-tone-${this.tone}`;
+        },
         get checkedLabel() {
             if (!this.status.checked_at) return '';
             try { return new Date(this.status.checked_at).toLocaleString(); }

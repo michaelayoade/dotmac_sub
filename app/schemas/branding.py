@@ -46,6 +46,7 @@ class ResolvedBrandRead(BaseModel):
     tagline: str
     primary_color: str
     secondary_color: str
+    semantic_colors: dict[str, str]
     logo_url: str
     dark_logo_url: str
     favicon_url: str

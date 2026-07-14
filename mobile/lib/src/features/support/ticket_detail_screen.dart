@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../config/env.dart';
 import '../../core/api_exception.dart';
 import '../../core/formatters.dart';
+import '../../core/semantic_colors.dart';
 import '../../models/ticket.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
@@ -134,7 +135,7 @@ class _TicketDetailScreenState extends ConsumerState<TicketDetailScreen> {
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
                       ),
-                      StatusChip.forTicket(t.status),
+                      StatusChip.fromPresentation(t.statusPresentation),
                     ],
                   ),
                   const SizedBox(height: 4),
@@ -413,7 +414,7 @@ class _CsatCard extends StatelessWidget {
                         for (var i = 1; i <= 5; i++)
                           Icon(
                             i <= rating! ? Icons.star : Icons.star_border,
-                            color: Colors.amber,
+                            color: context.semantic.warning,
                             size: 20,
                           ),
                       ],
@@ -476,7 +477,7 @@ class _SupportRatingDialogState extends State<_SupportRatingDialog> {
                   onPressed: () => setState(() => _rating = i),
                   icon: Icon(
                     i <= _rating ? Icons.star : Icons.star_border,
-                    color: Colors.amber,
+                    color: context.semantic.warning,
                     size: 32,
                   ),
                 ),

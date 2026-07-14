@@ -117,13 +117,13 @@
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Sets buttons, links and accents across all portals.</p>
                 <div class="mt-4 flex items-center gap-3">
                     <input type="color" name="brand_primary_color"
-                           value="{{ current_brand_primary_color or '#206a07' }}"
+                           value="{{ current_brand_primary_color }}"
                            oninput="this.form.brand_primary_color_hex.value = this.value"
                            class="h-10 w-14 cursor-pointer rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-600 dark:bg-slate-700">
                     <input type="text" name="brand_primary_color_hex"
-                           value="{{ current_brand_primary_color or '#206a07' }}"
+                           value="{{ current_brand_primary_color }}"
                            oninput="this.form.brand_primary_color.value = this.value"
-                           placeholder="#206a07"
+                           placeholder="{{ current_brand_primary_color }}"
                            class="block w-40 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </section>
@@ -133,14 +133,42 @@
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for links, highlights and secondary chart series.</p>
                 <div class="mt-4 flex items-center gap-3">
                     <input type="color" name="brand_secondary_color"
-                           value="{{ current_brand_secondary_color or '#06b6d4' }}"
+                           value="{{ current_brand_secondary_color }}"
                            oninput="this.form.brand_secondary_color_hex.value = this.value"
                            class="h-10 w-14 cursor-pointer rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-600 dark:bg-slate-700">
                     <input type="text" name="brand_secondary_color_hex"
-                           value="{{ current_brand_secondary_color or '#06b6d4' }}"
+                           value="{{ current_brand_secondary_color }}"
                            oninput="this.form.brand_secondary_color.value = this.value"
-                           placeholder="#06b6d4"
+                           placeholder="{{ current_brand_secondary_color }}"
                            class="block w-40 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </section>
+
+            <section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700 sm:col-span-2">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Semantic Status Colours</h3>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Shared accessible roles used by status badges, diagnostic panels, maps, and mobile clients. Domain screens select a role, never a literal colour.</p>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                    {% for tone, label in [
+                        ('positive', 'Positive'),
+                        ('info', 'Information'),
+                        ('warning', 'Warning'),
+                        ('negative', 'Negative'),
+                        ('neutral', 'Neutral')
+                    ] %}
+                    <div>
+                        <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">{{ label }}</label>
+                        <div class="flex items-center gap-2">
+                            <input type="color" name="brand_semantic_{{ tone }}_color"
+                                   value="{{ current_brand_semantic_colors[tone] }}"
+                                   oninput="this.nextElementSibling.value = this.value"
+                                   class="h-10 w-12 cursor-pointer rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-600 dark:bg-slate-700">
+                            <input type="text" value="{{ current_brand_semantic_colors[tone] }}"
+                                   oninput="this.previousElementSibling.value = this.value"
+                                   aria-label="{{ label }} semantic colour hex value"
+                                   class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        </div>
+                    </div>
+                    {% endfor %}
                 </div>
             </section>
 

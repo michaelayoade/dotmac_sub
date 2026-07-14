@@ -35,7 +35,7 @@ class InvoiceDetailScreen extends ConsumerWidget {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
-                StatusChip.forInvoice(inv.isOverdue ? 'overdue' : inv.status),
+                StatusChip.fromPresentation(inv.statusPresentation),
               ],
             ),
             const SizedBox(height: 16),

@@ -85,6 +85,13 @@ from app.services.network.radius_sessions import (
     latest_open_accounting_sessions_by_subscription,
 )
 from app.services.nin_matching import mask_nin
+from app.services.status_presentation import (
+    access_session_status_presentation,
+    account_status_presentation,
+    invoice_status_presentation,
+    payment_status_presentation,
+    subscription_status_presentation,
+)
 from app.services.subscription_lifecycle_policy import (
     is_customer_impact_service_status,
     is_mrr_countable_service_status,
@@ -542,13 +549,14 @@ def _build_activity_items(
         )
 
     for payment in payments:
+        presentation = payment_status_presentation(payment.status)
         activity_items.append(
             {
                 "type": "payment",
                 "title": "Payment received"
                 if payment.status == PaymentStatus.succeeded
                 else "Payment update",
-                "description": _enum_label(payment.status),
+                "description": presentation.label,
                 "timestamp": _event_timestamp(payment.paid_at, payment.created_at),
                 "amount": float(payment.amount or 0),
             }
@@ -746,7 +754,15 @@ def _build_common_financials(db: Session, account_ids):
 
     return {
         "invoices": invoices,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        },
         "payments": payments,
+        "payment_status_presentations": {
+            str(payment.id): payment_status_presentation(payment.status)
+            for payment in payments
+        },
         "balance_due": balance_due,
         "financials": {
             "current_balance": current_balance,
@@ -1184,22 +1200,37 @@ def _connection_status_for_session(
     subscription: Subscription,
     session: RadiusAccountingSession | None,
 ) -> dict[str, object]:
+    def snapshot(
+        state: str,
+        *,
+        detail: str,
+        last_seen_at: datetime | None,
+        identifier: str | None,
+    ) -> dict[str, object]:
+        presentation = access_session_status_presentation(state)
+        return {
+            "state": state,
+            "label": presentation.label,
+            "detail": detail,
+            "last_seen_at": last_seen_at,
+            "identifier": identifier,
+            "status_presentation": presentation.model_dump(mode="json"),
+        }
+
     if subscription.status != SubscriptionStatus.active:
-        return {
-            "state": "inactive",
-            "label": "Not connected",
-            "detail": "Service is not active",
-            "last_seen_at": None,
-            "identifier": None,
-        }
+        return snapshot(
+            "inactive",
+            detail="Service is not active",
+            last_seen_at=None,
+            identifier=None,
+        )
     if not session:
-        return {
-            "state": "offline",
-            "label": "Not connected",
-            "detail": "No open RADIUS accounting session",
-            "last_seen_at": None,
-            "identifier": None,
-        }
+        return snapshot(
+            "offline",
+            detail="No open RADIUS accounting session",
+            last_seen_at=None,
+            identifier=None,
+        )
 
     last_seen_at = session.last_update_at or session.session_start or session.created_at
     last_seen_utc = last_seen_at
@@ -1210,15 +1241,16 @@ def _connection_status_for_session(
         and last_seen_utc
         >= datetime.now(UTC) - timedelta(seconds=_RADIUS_CONNECTED_FRESH_SECONDS)
     )
-    return {
-        "state": "connected" if is_fresh else "stale",
-        "label": "Connected" if is_fresh else "Last seen",
-        "detail": "Open RADIUS accounting session"
-        if is_fresh
-        else "Open session has stale accounting updates",
-        "last_seen_at": last_seen_at,
-        "identifier": session.framed_ip_address or session.session_id,
-    }
+    return snapshot(
+        "connected" if is_fresh else "stale",
+        detail=(
+            "Open RADIUS accounting session"
+            if is_fresh
+            else "Open session has stale accounting updates"
+        ),
+        last_seen_at=last_seen_at,
+        identifier=session.framed_ip_address or session.session_id,
+    )
 
 
 def _build_network_connection_snapshot(
@@ -1263,6 +1295,9 @@ def _build_network_connection_snapshot(
             "state": state,
             "label": label,
             "detail": detail,
+            "status_presentation": access_session_status_presentation(state).model_dump(
+                mode="json"
+            ),
             "connected_count": len(connected),
             "active_count": active_count,
         },
@@ -1319,6 +1354,7 @@ def _build_network_access_cards(
                 "subscription_id": sub_id,
                 "offer_name": sub.offer.name if sub.offer else "Subscription",
                 "status": status,
+                "status_presentation": subscription_status_presentation(raw_status),
                 "connection_status": connection_by_subscription.get(sub_id, {}),
                 "login": sub.login,
                 "ipv4_address": sub.ipv4_address,
@@ -1552,6 +1588,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
     finance_data = _build_common_financials(db, account_ids)
     invoices = finance_data["invoices"]
     payments = finance_data["payments"]
+    payment_status_presentations = finance_data["payment_status_presentations"]
     balance_due = finance_data["balance_due"]
     financials = finance_data["financials"]
     active_subscriptions = sum(
@@ -1683,12 +1720,27 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
 
     return {
         "customer": customer,
+        "customer_status_presentation": account_status_presentation(
+            customer.status,
+            is_active=customer.is_active,
+        ),
         "customer_type": "person",
         "customer_name": customer_name,
         "organization": organization,
         "subscribers": subscribers,
         "accounts": accounts,
+        "account_status_presentations": {
+            str(account.id): account_status_presentation(
+                account.status,
+                is_active=account.is_active,
+            )
+            for account in accounts
+        },
         "subscriptions": subscriptions,
+        "subscription_status_presentations": {
+            str(subscription.id): subscription_status_presentation(subscription.status)
+            for subscription in subscriptions
+        },
         "account_lookup": account_lookup,
         "addresses": addresses,
         "primary_address": primary_address,
@@ -1697,6 +1749,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "contacts": contacts,
         "invoices": invoices,
         "payments": payments,
+        "payment_status_presentations": payment_status_presentations,
         "notifications": notifications,
         "stats": stats,
         "financials": financials,

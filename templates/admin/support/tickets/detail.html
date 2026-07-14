@@ -25,7 +25,7 @@
         color='amber',
         color2='orange',
         back_href='/admin/support/tickets',
-        status=ticket_status_badge(ticket.status, status_colors)
+        status=ticket_status_badge(status_presentations.get(ticket.status))
     ) %}
         {{ ticket_priority_badge(ticket.priority) }}
         {% if not crm_write_locked %}
@@ -34,12 +34,13 @@
     {% endcall %}
 
     {% if action_error %}
-    <div class="rounded-2xl border border-red-200 bg-red-50/90 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/25 dark:text-red-100">
+    <div class="status-panel status-panel-negative status-foreground status-tone-negative rounded-2xl border p-4 text-sm">
         {{ action_error }}
     </div>
     {% elif request.query_params.get('auto_assign_message') %}
     {% set auto_assign_status = request.query_params.get('auto_assign_status') %}
-    <div class="rounded-2xl border p-4 text-sm {% if auto_assign_status == 'success' %}border-emerald-200 bg-emerald-50/90 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/25 dark:text-emerald-100{% elif auto_assign_status == 'warning' %}border-amber-200 bg-amber-50/90 text-amber-800 dark:border-amber-800 dark:bg-amber-900/25 dark:text-amber-100{% else %}border-slate-200 bg-slate-50/90 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200{% endif %}">
+    {% set auto_assign_tone = 'positive' if auto_assign_status == 'success' else 'warning' if auto_assign_status == 'warning' else 'neutral' %}
+    <div class="status-panel status-panel-{{ auto_assign_tone }} status-foreground status-tone-{{ auto_assign_tone }} rounded-2xl border p-4 text-sm">
         {{ request.query_params.get('auto_assign_message') }}
     </div>
     {% endif %}

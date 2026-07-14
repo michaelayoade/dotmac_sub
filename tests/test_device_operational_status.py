@@ -131,6 +131,10 @@ def test_annotate_sets_operational_attribute_and_is_render_safe():
     ]
     annotate_operational_status(devices)
     assert devices[0].operational.status == UP
+    assert devices[0].operational_status == UP
+    assert devices[0].status_presentation.tone.value == "positive"
     assert devices[1].operational.status == DOWN
     # object with no status/live_status still gets a (safe) operational value
     assert devices[2].operational.status == DOWN
+    assert devices[2].operational_retry_pending is True
+    assert devices[2].status_presentation.tone.value == "warning"

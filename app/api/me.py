@@ -157,6 +157,7 @@ from app.services import (
 )
 from app.services import push as push_service
 from app.services import referrals as referrals_service
+from app.services import status_presentation as status_presentation_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
@@ -481,6 +482,9 @@ def my_plan_change_quote(
 # (mirrors the portal /connection surface so the two never disagree).
 _NO_SERVICE_CONNECTION_STATUS = {
     "state": "connected",
+    "status_presentation": status_presentation_service.connection_health_status_presentation(
+        "connected"
+    ).model_dump(mode="json"),
     "headline": "No active service",
     "message": "We couldn't find an active service on your account to check.",
     "advice": None,
@@ -500,10 +504,11 @@ def my_connection_status_detail(
     suppression, from ``topology.connection_status``.
 
     Bearer-auth sibling of the portal ``/portal/connection/status.json`` — same
-    customer-safe payload ``{state, headline, message, advice, medium,
-    area_outage, checked_at}`` (no node names / signal values / internals), so
-    the mobile app can reach the richer surface the cookie-only portal route
-    isn't reachable for. Self-scoped: only ever the caller's own subscription.
+    customer-safe payload ``{state, status_presentation, headline, message,
+    advice, medium, area_outage, checked_at}`` (no node names / signal values /
+    internals), so the mobile app can reach the richer surface the cookie-only
+    portal route isn't reachable for. Self-scoped: only ever the caller's own
+    subscription.
     """
     _subscriber_id(principal)  # enforce a subscriber principal (403 otherwise)
     try:

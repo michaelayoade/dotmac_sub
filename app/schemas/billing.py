@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from app.models.billing import (
     BankAccountType,
@@ -25,6 +25,7 @@ from app.models.billing import (
     TaxApplication,
 )
 from app.models.catalog import BillingCycle
+from app.schemas.status_presentation import StatusPresentation
 
 
 class InvoiceBase(BaseModel):
@@ -430,6 +431,14 @@ class PaymentRead(PaymentBase):
     provider_fee: Decimal = Decimal("0")
     allocations: list[PaymentAllocationRead] = Field(default_factory=list)
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status_presentation(self) -> StatusPresentation:
+        """Canonical label/tone/icon projection for payment rendering."""
+        from app.services.status_presentation import payment_status_presentation
+
+        return payment_status_presentation(self.status)
+
 
 class PaymentSyncRead(BaseModel):
     """Minimal payment contract used by the ERP bulk sync feed."""
@@ -795,6 +804,14 @@ class InvoiceRead(InvoiceBase):
     updated_at: datetime
     lines: list[InvoiceLineRead] = Field(default_factory=list)
     payment_allocations: list[PaymentAllocationRead] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status_presentation(self) -> StatusPresentation:
+        """Canonical label/tone/icon projection for invoice rendering."""
+        from app.services.status_presentation import invoice_status_presentation
+
+        return invoice_status_presentation(self.status)
 
 
 class CreditNoteRead(CreditNoteBase):

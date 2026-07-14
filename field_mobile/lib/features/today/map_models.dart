@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../app/status_presentation.dart';
 import '../../core/location/map_coordinates.dart';
 import '../jobs/job_models.dart';
 
@@ -11,14 +12,19 @@ class JobPin {
     required this.latitude,
     required this.longitude,
     this.addressText,
+    this.statusPresentation,
   });
 
   final String id;
   final String title;
   final String status;
+  final StatusPresentation? statusPresentation;
   final double latitude;
   final double longitude;
   final String? addressText;
+
+  StatusPresentation get presentation =>
+      statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   bool get hasValidCoordinates => isValidMapCoordinate(latitude, longitude);
 }
@@ -71,6 +77,7 @@ class MapPlaceSearchResult {
     this.subtitle,
     this.status,
     this.addressText,
+    this.statusPresentation,
   });
 
   final String kind;
@@ -82,6 +89,7 @@ class MapPlaceSearchResult {
   final String? subtitle;
   final String? status;
   final String? addressText;
+  final StatusPresentation? statusPresentation;
 
   bool get hasValidCoordinates => isValidMapCoordinate(latitude, longitude);
 
@@ -95,6 +103,12 @@ class MapPlaceSearchResult {
         assetType: json['asset_type'] as String?,
         subtitle: json['subtitle'] as String?,
         status: json['status'] as String?,
+        statusPresentation: json['kind'] == 'job'
+            ? StatusPresentation.fromJsonOrFallback(
+                json['status_presentation'],
+                json['status']?.toString() ?? 'unknown',
+              )
+            : null,
         addressText: json['address_text'] as String?,
       );
 }
@@ -138,6 +152,7 @@ List<JobPin> buildJobPins(
         id: job.id,
         title: job.title,
         status: job.status,
+        statusPresentation: job.statusPresentation,
         latitude: lat,
         longitude: lng,
         addressText:

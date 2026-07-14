@@ -2082,15 +2082,20 @@ def outage_incident_row(session: Session, incident) -> dict[str, Any]:
     operator-declared one — added additively rather than repurposing the
     existing field, so any external reader of ``detection_source`` keeps working.
     ``state`` mirrors the lifecycle ``status`` (open/resolved for operator;
-    suspected/confirmed/clearing/resolved/discarded for classifier). ``mttr_seconds``
-    is ``resolved_at - confirmed_at`` once an incident is resolved.
+    suspected/confirmed/clearing/resolved/discarded for classifier).
+    ``status_presentation`` adds the server-owned UI label/tone/icon projection.
+    ``mttr_seconds`` is ``resolved_at - confirmed_at`` once an incident is resolved.
     """
+    from app.services.status_presentation import outage_status_presentation
     from app.services.topology.outage import detection_source, mttr_seconds
+
+    status_presentation = outage_status_presentation(incident.status)
 
     return {
         "id": str(incident.id),
         "status": incident.status,
         "state": incident.status,
+        "status_presentation": status_presentation.model_dump(mode="json"),
         "detection_source": detection_source(incident),
         "provenance": incident.detection_source,
         "scope": _outage_incident_scope(session, incident),
@@ -2131,19 +2136,19 @@ def list_outage_incidents(
     ``node_id`` narrow the scope. Returns ``(rows, total)``.
     """
     from app.models.network_monitoring import OutageIncident
+    from app.services.topology.outage import (
+        CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
+        OUTAGE_STATUS_VALUES,
+        OutageStatus,
+    )
 
     # The debounced-real active set: operator open + classifier confirmed/clearing.
-    _ACTIVE_STATUSES = ("open", "confirmed", "clearing")
-    _NARROWABLE_STATUSES = (
-        "open",
-        "resolved",
-        "suspected",
-        "confirmed",
-        "clearing",
-        "discarded",
+    _ACTIVE_STATUSES = (
+        OutageStatus.open.value,
+        *CLASSIFIER_CUSTOMER_VISIBLE_STATUSES,
     )
     query = session.query(OutageIncident)
-    if status in _NARROWABLE_STATUSES:
+    if status in OUTAGE_STATUS_VALUES:
         query = query.filter(OutageIncident.status == status)
     else:
         cutoff = datetime.now(UTC) - timedelta(hours=max(resolved_within_hours, 0))

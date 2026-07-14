@@ -703,12 +703,14 @@ def test_core_network_table_shows_ping_result_and_device_tooltip():
     assert "POP: {{ device_pop_name }}" in template
     assert "latest_ping.label if latest_ping else '-'" in template
     assert "latest_ping.recorded_at.strftime('%Y-%m-%d %H:%M')" in template
-    assert "bg-green-100 text-green-700" in template
-    assert "bg-red-100 text-red-700" in template
+    assert "status-tone-{{ ping_tone }}" in template
+    assert "status-tone-dot-{{ ping_tone }}" in template
 
 
 def test_core_devices_list_page_data_prefers_live_status(db_session, monkeypatch):
-    monkeypatch.setattr(core_devices_forms, "warmer_is_stale", lambda: False)
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale", lambda now=None: False
+    )
     parent = NetworkDevice(
         name="Live Parent",
         mgmt_ip="10.220.0.1",
@@ -731,14 +733,18 @@ def test_core_devices_list_page_data_prefers_live_status(db_session, monkeypatch
 
     payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
 
-    assert payload["display_status_map"][str(child.id)] == "online"
+    displayed_child = next(item for item in payload["devices"] if item.id == child.id)
+    assert displayed_child.operational_status == "up"
+    assert displayed_child.status_presentation.tone.value == "positive"
     assert payload["child_impacts"][str(parent.id)]["impacted"] is False
 
 
-def test_core_devices_list_page_data_falls_back_when_live_status_stale(
+def test_core_devices_list_page_data_marks_stale_live_status_retry_pending(
     db_session, monkeypatch
 ):
-    monkeypatch.setattr(core_devices_forms, "warmer_is_stale", lambda: True)
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale", lambda now=None: True
+    )
     device = NetworkDevice(
         name="Stale Live Device",
         mgmt_ip="10.220.0.3",
@@ -752,7 +758,10 @@ def test_core_devices_list_page_data_falls_back_when_live_status_stale(
 
     payload = core_devices_forms.list_page_data(db_session, role=None, status="active")
 
-    assert payload["display_status_map"][str(device.id)] == "degraded"
+    displayed = next(item for item in payload["devices"] if item.id == device.id)
+    assert displayed.operational_status == "up"
+    assert displayed.operational_retry_pending is True
+    assert displayed.status_presentation.tone.value == "positive"
 
 
 def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
@@ -1149,6 +1158,13 @@ def test_collect_devices_excludes_system_owned_inventory_cpes(db_session, subscr
     }
     assert "VISIBLE-CORE-CPE" in cpe_serials
     assert "PARKED-CORE-ONT" not in cpe_serials
+    visible_cpe = next(
+        device
+        for device in devices
+        if device.get("serial_number") == "VISIBLE-CORE-CPE"
+    )
+    assert visible_cpe["status"] == "unknown"
+    assert visible_cpe["status_presentation"].tone.value == "neutral"
 
 
 def test_web_network_home_excludes_system_owned_inventory_cpes(db_session, subscriber):
@@ -1589,6 +1605,7 @@ def test_network_map_context_includes_network_device_markers(db_session):
             pop_site_id=pop.id,
             role=DeviceRole.core,
             status=DeviceStatus.online,
+            live_status="up",
             is_active=True,
         )
     )
@@ -1602,7 +1619,8 @@ def test_network_map_context_includes_network_device_markers(db_session):
     ]
     assert len(device_features) == 1
     assert device_features[0]["properties"]["name"] == "Core Router 1"
-    assert device_features[0]["properties"]["status"] == "online"
+    assert device_features[0]["properties"]["status"] == "up"
+    assert device_features[0]["properties"]["status_presentation"]["tone"] == "positive"
     assert context["stats"]["network_devices"] == 1
     assert context["stats"]["network_devices_online"] == 1
 
@@ -1631,6 +1649,80 @@ def test_network_map_context_uses_effective_ont_status(db_session):
     assert ont_features[0]["properties"]["status"] == "online"
     assert context["stats"]["onts_online"] == 1
     assert context["stats"]["onts_offline"] == 0
+
+
+def test_monitoring_dashboard_stats_use_operational_state(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.device_operational_status.warmer_is_stale", lambda now=None: False
+    )
+    monkeypatch.setattr("app.services.monitoring_coverage.get_coverage", lambda: None)
+    db_session.add_all(
+        [
+            NetworkDevice(
+                name="Observed Up",
+                status=DeviceStatus.online,
+                live_status="up",
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Observed Down",
+                status=DeviceStatus.online,
+                live_status="down",
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Observed Degraded",
+                status=DeviceStatus.online,
+                live_status="problem",
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Refresh Pending",
+                status=DeviceStatus.online,
+                live_status=None,
+                is_active=True,
+            ),
+            NetworkDevice(
+                name="Planned Maintenance",
+                status=DeviceStatus.maintenance,
+                live_status="down",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    payload = monitoring_service.NetworkDevices.get_monitoring_dashboard_stats(
+        db_session,
+        format_duration=lambda value: str(value),
+        format_bps=lambda value: str(value),
+    )
+
+    assert payload["stats"] == {
+        "devices_total": 5,
+        "devices_online": 1,
+        "devices_offline": 1,
+        "devices_degraded": 1,
+        "devices_maintenance": 1,
+        "devices_retry_pending": 1,
+        "alarms_open": 0,
+        "subscribers_online": 0,
+    }
+    assert payload["device_status_chart"]["labels"] == [
+        "Up",
+        "Degraded",
+        "Down",
+        "Refresh pending",
+        "Maintenance",
+    ]
+    assert payload["device_status_chart"]["tones"] == [
+        "positive",
+        "warning",
+        "negative",
+        "warning",
+        "neutral",
+    ]
+    assert "colors" not in payload["device_status_chart"]
 
 
 def test_speedtest_form_parse_and_validate():
@@ -2243,7 +2335,7 @@ def test_consolidated_page_data_includes_ont_signal_data(db_session):
 
     signal_data = payload["signal_data"][str(ont.id)]
     assert signal_data["operational"] == "up"
-    assert signal_data["operational_label"] == "Up"
+    assert signal_data["status_presentation"].label == "Up"
     assert signal_data["operational_reason"] == "last_confirmed_online_retry_pending"
 
 
@@ -2565,19 +2657,23 @@ def test_olts_list_page_data_uses_binary_operational_status(db_session):
     payload = web_network_core_devices_service.olts_list_page_data(db_session)
     rows = {item["name"]: item for item in payload["olts"]}
 
-    assert rows["OLT Online"]["runtime_operational_status"] == "online"
+    assert rows["OLT Online"]["operational_status"] == "up"
+    assert rows["OLT Online"]["status_presentation"].tone.value == "positive"
     assert rows["OLT Online"]["runtime_retry_pending"] is False
-    assert rows["OLT Offline"]["runtime_operational_status"] == "offline"
+    assert rows["OLT Offline"]["operational_status"] == "down"
     assert rows["OLT Offline"]["runtime_health_state"] == "attention"
-    assert rows["OLT Pending"]["runtime_operational_status"] == "offline"
+    assert rows["OLT Offline"]["status_presentation"].tone.value == "negative"
+    assert rows["OLT Pending"]["operational_status"] == "down"
     assert rows["OLT Pending"]["runtime_health_state"] == "retry_pending"
     assert rows["OLT Pending"]["runtime_retry_pending"] is True
-    assert payload["stats"]["online"] == 1
-    assert payload["stats"]["offline"] == 2
+    assert rows["OLT Pending"]["status_presentation"].tone.value == "warning"
+    assert payload["stats"]["up"] == 1
+    assert payload["stats"]["down"] == 2
+    assert payload["stats"]["retry_pending"] == 1
     assert payload["stats"]["attention"] == 1
 
     offline_payload = web_network_core_devices_service.olts_list_page_data(
-        db_session, status="offline"
+        db_session, status="down"
     )
     assert {item["name"] for item in offline_payload["olts"]} == {
         "OLT Offline",
@@ -2585,7 +2681,7 @@ def test_olts_list_page_data_uses_binary_operational_status(db_session):
     }
 
     online_payload = web_network_core_devices_service.olts_list_page_data(
-        db_session, status="online"
+        db_session, status="up"
     )
     assert [item["name"] for item in online_payload["olts"]] == ["OLT Online"]
 

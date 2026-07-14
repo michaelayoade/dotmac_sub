@@ -29,10 +29,10 @@ class PrimaryActionButton extends StatelessWidget {
           child: Ink(
             height: AppSizes.primaryTouchTarget,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
+              gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [AppColors.primary, Color(0xFF0891B2)],
+                colors: [AppColors.primary, AppColors.primaryDeep],
               ),
               borderRadius: BorderRadius.circular(AppRadii.control),
               boxShadow: [

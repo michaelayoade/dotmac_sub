@@ -29,7 +29,7 @@ class ServiceDetailScreen extends StatelessWidget {
                 child: Text(s.displayName,
                     style: Theme.of(context).textTheme.titleLarge),
               ),
-              StatusChip.forSubscription(s.status),
+              StatusChip.fromPresentation(s.statusPresentation),
             ],
           ),
           if (s.planType != null) ...[

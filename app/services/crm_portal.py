@@ -20,6 +20,7 @@ from app.models.support import TicketCommentAuthorType
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError, get_crm_client
 from app.services.session_store import get_session_redis
+from app.services.status_presentation import ticket_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -28,38 +29,6 @@ logger = logging.getLogger(__name__)
 _CACHE_SUBSCRIBER_MAP = 3600  # 1hr — subscriber ID mapping
 _CACHE_LIST = 60  # 60s — list pages
 _CACHE_DETAIL = 30  # 30s — detail pages
-
-# ── Status display dicts (no Tailwind interpolation) ─────────────────────
-
-TICKET_STATUS_DISPLAY: dict[str, str] = {
-    "new": "New",
-    "open": "Open",
-    "pending": "Pending",
-    "waiting_on_customer": "Waiting on Customer",
-    "lastmile_rerun": "Last-mile Rerun",
-    "site_under_construction": "Site Under Construction",
-    "on_hold": "On Hold",
-    "pending_confirmation": "Pending Confirmation",
-    "resolved": "Resolved",
-    "closed": "Closed",
-    "canceled": "Canceled",
-    "merged": "Merged",
-}
-
-TICKET_STATUS_COLORS: dict[str, str] = {
-    "new": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    "open": "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    "pending": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-    "waiting_on_customer": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-    "lastmile_rerun": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-    "site_under_construction": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-    "on_hold": "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
-    "pending_confirmation": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-    "resolved": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
-    "closed": "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200",
-    "canceled": "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-    "merged": "bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200",
-}
 
 TICKET_PRIORITY_DISPLAY: dict[str, str] = {
     "lower": "Lower",
@@ -198,6 +167,9 @@ def _ticket_to_dict(ticket: Any) -> dict[str, Any]:
         "title": ticket.title,
         "description": ticket.description or "",
         "status": ticket.status,
+        "status_presentation": ticket_status_presentation(ticket.status).model_dump(
+            mode="json"
+        ),
         "priority": ticket.priority,
         "subscriber_id": str(ticket.subscriber_id) if ticket.subscriber_id else None,
         "due_at": due_at.isoformat() if due_at else None,
@@ -270,8 +242,6 @@ def _ticket_list_base(request: Request, customer: dict) -> dict[str, Any]:
         "request": request,
         "customer": customer,
         "active_page": "support",
-        "status_display": TICKET_STATUS_DISPLAY,
-        "status_colors": TICKET_STATUS_COLORS,
         "priority_display": TICKET_PRIORITY_DISPLAY,
         "priority_colors": TICKET_PRIORITY_COLORS,
         "max_attachment_bytes": web_support_tickets.MAX_ATTACHMENT_BYTES,
@@ -525,8 +495,6 @@ def reseller_account_tickets_context(
                 "tickets": [],
                 "account_id": account_id,
                 "active_page": "accounts",
-                "status_display": TICKET_STATUS_DISPLAY,
-                "status_colors": TICKET_STATUS_COLORS,
                 **_ok_context(),
             }
         client = get_crm_client()
@@ -539,8 +507,6 @@ def reseller_account_tickets_context(
             "tickets": [],
             "account_id": account_id,
             "active_page": "accounts",
-            "status_display": TICKET_STATUS_DISPLAY,
-            "status_colors": TICKET_STATUS_COLORS,
             **_error_context(),
         }
 
@@ -548,11 +514,17 @@ def reseller_account_tickets_context(
         "request": request,
         "current_user": current_user,
         "reseller": reseller,
-        "tickets": tickets,
+        "tickets": [
+            {
+                **ticket,
+                "status_presentation": ticket_status_presentation(
+                    ticket.get("status")
+                ).model_dump(mode="json"),
+            }
+            for ticket in tickets
+        ],
         "account_id": account_id,
         "active_page": "accounts",
-        "status_display": TICKET_STATUS_DISPLAY,
-        "status_colors": TICKET_STATUS_COLORS,
         **_ok_context(),
     }
 

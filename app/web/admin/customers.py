@@ -267,30 +267,52 @@ def customers_list(
     customer_type: str | None = None,  # 'person' or 'business'
     nas_id: str | None = None,
     pop_site_id: str | None = None,
+    sort: Literal["created_at", "name", "status"] = Query("created_at"),
+    direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=10, le=100),
+    per_page: Literal[10, 25, 50, 100] = Query(25),
     db: Session = Depends(get_db),
 ):
     """List all customers with search and filtering."""
+    try:
+        list_query = web_customer_lists_service.build_customer_list_query(
+            search=search,
+            status=status,
+            customer_type=customer_type,
+            nas_id=nas_id,
+            pop_site_id=pop_site_id,
+            sort_by=sort,
+            sort_dir=direction,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     page_data = web_customer_lists_service.build_customers_index_context(
         db=db,
-        search=search,
-        status=status,
-        customer_type=customer_type,
-        nas_id=nas_id,
-        pop_site_id=pop_site_id,
-        page=page,
-        per_page=per_page,
+        list_query=list_query,
     )
+
+    effective_query = page_data["list_query"]
+    page_was_clamped = effective_query.page != page
 
     # Check if this is an HTMX request for table body only
     if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(
+        response = templates.TemplateResponse(
             "admin/customers/_table.html",
             {
                 "request": request,
                 **page_data,
             },
+        )
+        if page_was_clamped:
+            response.headers["HX-Replace-Url"] = effective_query.url("/admin/customers")
+        return response
+
+    if page_was_clamped:
+        return RedirectResponse(
+            url=effective_query.url("/admin/customers"),
+            status_code=307,
         )
 
     # Get sidebar stats and current user

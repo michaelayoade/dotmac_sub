@@ -3,9 +3,17 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+)
 
 from app.models.support import TicketChannel, TicketCommentAuthorType, TicketPriority
+from app.schemas.status_presentation import StatusPresentation
 
 
 class AttachmentMeta(BaseModel):
@@ -136,7 +144,9 @@ class TicketRead(BaseModel):
     channel: TicketChannel
     tags: list[str] | None = None
     metadata_: dict | None = Field(
-        default=None, validation_alias="metadata", serialization_alias="metadata"
+        default=None,
+        validation_alias=AliasChoices("metadata_", "metadata"),
+        serialization_alias="metadata",
     )
     attachments: list[dict] | None = None
 
@@ -153,6 +163,14 @@ class TicketRead(BaseModel):
     # ticket. Read from the ORM's `Ticket.csat_rating` property (backed by
     # metadata.csat) so the apps can show the score / hide the rate prompt.
     csat_rating: int | None = None
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status_presentation(self) -> StatusPresentation:
+        """Canonical label/tone/icon projection for ticket rendering."""
+        from app.services.status_presentation import ticket_status_presentation
+
+        return ticket_status_presentation(self.status)
 
 
 class TicketSatisfactionRequest(BaseModel):

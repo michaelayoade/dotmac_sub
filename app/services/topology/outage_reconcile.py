@@ -61,6 +61,7 @@ from app.services.topology.health_classifier import (
 from app.services.topology.outage import (
     CLASSIFIER_OPEN_STATUSES,
     CLASSIFIER_SOURCE,
+    OutageStatus,
     confirm_incident,
     discard_incident,
     find_open_classifier_incident,
@@ -415,10 +416,10 @@ def reconcile_detected_outages(
         "candidates": 0,
         "open_incidents": 0,
         "suspected_opened": 0,
-        "confirmed": 0,
-        "discarded": 0,
-        "clearing": 0,
-        "resolved": 0,
+        OutageStatus.confirmed.value: 0,
+        OutageStatus.discarded.value: 0,
+        OutageStatus.clearing.value: 0,
+        OutageStatus.resolved.value: 0,
         "reopened": 0,
         "rerooted": 0,
         "errors": 0,
@@ -478,19 +479,19 @@ def reconcile_detected_outages(
                         classification=cand.classification,
                     )
                     # Re-darkened inside the resolve window -> reopen (hysteresis).
-                    if incident.status == "clearing":
+                    if incident.status == OutageStatus.clearing.value:
                         reopen_incident(session, incident)
                         counters["reopened"] += 1
                 used.add(incident.id)
 
                 # Debounce up: suspected -> confirmed once W_confirm has elapsed.
-                if incident.status == "suspected":
+                if incident.status == OutageStatus.suspected.value:
                     window = confirm_window_seconds(
                         incident.affected_count, **windows.confirm
                     )
                     if _elapsed_seconds(now, incident.suspected_at) >= window:
                         confirm_incident(session, incident, now=now)
-                        counters["confirmed"] += 1
+                        counters[OutageStatus.confirmed.value] += 1
         except Exception:  # noqa: BLE001 - one bad candidate must not poison the run
             counters["errors"] += 1
             logger.exception(
@@ -503,17 +504,17 @@ def reconcile_detected_outages(
             continue
         try:
             with session.begin_nested():
-                if incident.status == "suspected":
+                if incident.status == OutageStatus.suspected.value:
                     # Recovered before W_confirm -> false positive, discard.
                     discard_incident(session, incident)
-                    counters["discarded"] += 1
-                elif incident.status == "confirmed":
+                    counters[OutageStatus.discarded.value] += 1
+                elif incident.status == OutageStatus.confirmed.value:
                     start_clearing(session, incident, now=now)
-                    counters["clearing"] += 1
-                elif incident.status == "clearing":
+                    counters[OutageStatus.clearing.value] += 1
+                elif incident.status == OutageStatus.clearing.value:
                     if _elapsed_seconds(now, incident.cleared_at) >= windows.resolve:
                         resolve_classifier_incident(session, incident, now=now)
-                        counters["resolved"] += 1
+                        counters[OutageStatus.resolved.value] += 1
         except Exception:  # noqa: BLE001
             counters["errors"] += 1
             logger.exception(

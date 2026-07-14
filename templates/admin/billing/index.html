@@ -1,6 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
-    stats_card, status_badge,
+    stats_card, status_badge, status_presentation_badge,
     action_button,
     icon_invoice, icon_download, icon_credit_card, icon_view,
     icon_archive, icon_building, icon_calendar, icon_chart_bar, icon_clipboard,
@@ -35,7 +35,6 @@
 {% set trend = revenue_trend|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'billed': [0,0,0,0,0,0], 'collected': [0,0,0,0,0,0]}) %}
 {% set pmb = payment_method_breakdown|default({'labels': [], 'values': []}) %}
 {% set dp = daily_payments|default({'labels': [], 'values': []}) %}
-{% set cd = chart_data|default({'labels': ['Paid','Pending','Overdue','Draft'], 'values': [0,0,0,0], 'colors': ['#10b981','#3b82f6','#f59e0b','#94a3b8']}) %}
 
 <div class="space-y-4" x-data="{ billingWorkbenchOpen: false }">
     <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -249,14 +248,7 @@
                         <td class="px-6 py-3 text-right font-mono tabular-nums font-medium text-slate-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total|default(0)) }}</td>
                         <td class="px-6 py-3 text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else '—' }}</td>
                         <td class="px-6 py-3">
-                            {% set inv_status = invoice.status|default('draft') %}
-                            {% set status_val = inv_status.value if inv_status is not string else inv_status %}
-                            {% if status_val == 'paid' %}{{ status_badge("Paid", variant="paid") }}
-                            {% elif status_val in ('issued', 'sent') %}{{ status_badge("Pending", variant="pending") }}
-                            {% elif status_val == 'overdue' %}{{ status_badge("Overdue", variant="overdue") }}
-                            {% elif status_val == 'draft' %}{{ status_badge("Draft", variant="draft") }}
-                            {% else %}{{ status_badge(status_val|capitalize, variant="default") }}
-                            {% endif %}
+                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </td>
                     </tr>
                     {% endfor %}
@@ -283,8 +275,8 @@ document.addEventListener('DOMContentLoaded', function() {
             data: {
                 labels: {{ trend["labels"] | tojson | safe }},
                 datasets: [
-                    { label: 'Billed', data: {{ trend["billed"] | tojson | safe }}, borderColor: '#206a07', backgroundColor: 'rgba(32, 106, 7, 0.1)' },
-                    { label: 'Collected', data: {{ trend["collected"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)' }
+                    { label: 'Billed', data: {{ trend["billed"] | tojson | safe }}, borderColor: themeColor('primary-600'), backgroundColor: themeColor('primary-600', 0.1) },
+                    { label: 'Collected', data: {{ trend["collected"] | tojson | safe }}, borderColor: themeColor('semantic-positive-600'), backgroundColor: themeColor('semantic-positive-600', 0.1) }
                 ]
             },
             options: {}
@@ -295,7 +287,7 @@ document.addEventListener('DOMContentLoaded', function() {
             data: {
                 labels: {{ pmb["labels"] | tojson | safe }},
                 values: {{ pmb["values"] | tojson | safe }},
-                colors: ['#14b8a6', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#94a3b8']
+                colors: [1, 2, 3, 4, 5, 6].map((index) => themeColor(`data-${index}`))
             },
             options: { legendPosition: 'bottom', cutout: '62%' }
         },
@@ -304,7 +296,7 @@ document.addEventListener('DOMContentLoaded', function() {
             factory: 'createBarChart',
             data: {
                 labels: {{ dp["labels"] | tojson | safe }},
-                datasets: [{ label: 'Payments', data: {{ dp["values"] | tojson | safe }}, backgroundColor: '#10b981' }]
+                datasets: [{ label: 'Payments', data: {{ dp["values"] | tojson | safe }}, backgroundColor: themeColor('semantic-positive-600') }]
             },
             options: { plugins: { legend: { display: false } } }
         }

@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card, card,
-    table_head, table_row, row_actions, row_action, status_badge,
+    table_head, table_row, row_actions, row_action, status_presentation_badge,
     empty_state, action_button, animation_styles,
     icon_plus, icon_view, icon_edit, icon_invoice,
     icon_credit_card, icon_check_circle, icon_clock, icon_warning
@@ -35,15 +35,15 @@
 
     {# ── Summary Stats ── #}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {{ stats_card("Total Collected", status_totals.succeeded.display, icon=icon_credit_card(), color="emerald", color2="green") }}
-        {{ stats_card("Completed", status_totals.succeeded.count, icon=icon_check_circle(), color="blue", color2="indigo") }}
-        {{ stats_card("Pending", status_totals.pending.count, icon=icon_clock(), color="amber", color2="yellow") }}
-        {{ stats_card("Failed", status_totals.failed.count, icon=icon_warning(), color="red", color2="rose") }}
+        {{ stats_card("Total Collected", status_totals.succeeded.display, icon=icon_credit_card(), tone="positive") }}
+        {{ stats_card("Succeeded", status_totals.succeeded.count, icon=icon_check_circle(), tone="positive") }}
+        {{ stats_card("Pending", status_totals.pending.count, icon=icon_clock(), tone="warning") }}
+        {{ stats_card("Failed", status_totals.failed.count, icon=icon_warning(), tone="negative") }}
     </div>
 
     {# ── Charts ── #}
     <div class="grid gap-6 lg:grid-cols-2">
-        {% call card("Payment Trend", icon='<svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>', color="emerald") %}
+        {% call card("Payment Trend", icon='<svg class="h-4 w-4 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>', color="primary") %}
             <div class="chart-container" style="min-height: 260px;">
                 <canvas id="payment-trend-chart"></canvas>
             </div>
@@ -52,13 +52,15 @@
             document.addEventListener('DOMContentLoaded', function() {
                 const ctx = document.getElementById('payment-trend-chart');
                 if (!ctx) return;
+                const theme = getComputedStyle(document.documentElement);
+                const positive = theme.getPropertyValue('--color-semantic-positive-600').trim();
                 const chartData = {
                     labels: {{ payment_trend["labels"] | tojson | safe }},
                     datasets: [{
                         label: 'Payments Received',
                         data: {{ payment_trend["amounts"] | tojson | safe }},
-                        borderColor: '#10b981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        borderColor: positive,
+                        backgroundColor: `${positive}1a`,
                         fill: true,
                         tension: 0.4
                     }]
@@ -78,10 +80,16 @@
             document.addEventListener('DOMContentLoaded', function() {
                 const ctx = document.getElementById('payment-methods-chart');
                 if (!ctx) return;
+                const theme = getComputedStyle(document.documentElement);
                 const chartData = {
                     labels: {{ payment_methods["labels"] | tojson | safe }},
                     values: {{ payment_methods["values"] | tojson | safe }},
-                    colors: ['#f59e0b', '#8b5cf6', '#10b981', '#06b6d4']
+                    colors: [
+                        theme.getPropertyValue('--color-primary-600').trim(),
+                        theme.getPropertyValue('--color-accent-600').trim(),
+                        theme.getPropertyValue('--color-primary-400').trim(),
+                        theme.getPropertyValue('--color-accent-400').trim()
+                    ]
                 };
                 const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'right' });
                 DotmacCharts.registerChart('payment-methods-chart', chart);
@@ -127,11 +135,10 @@
             <div class="w-full sm:w-44">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Status</label>
                 <select name="status" class="block w-full rounded-xl border-0 bg-slate-100 py-3 pl-4 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="">All Status</option>
-                    <option value="succeeded" {% if status == 'succeeded' %}selected{% endif %}>Completed</option>
-                    <option value="pending" {% if status == 'pending' %}selected{% endif %}>Pending</option>
-                    <option value="failed" {% if status == 'failed' %}selected{% endif %}>Failed</option>
-                    <option value="refunded" {% if status == 'refunded' %}selected{% endif %}>Refunded</option>
+                    <option value="">All statuses</option>
+                    {% for option in payment_status_options %}
+                    <option value="{{ option.value }}" {% if status == option.value %}selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
                 </select>
             </div>
             <div class="w-full sm:w-44">
@@ -179,21 +186,11 @@
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if payments %}
                     {% for payment in payments %}
-                    {% set status = payment.status | default('pending') %}
-                    {% set status_val = status.value if status is not string else status %}
-                    {% call table_row(color="emerald") %}
+                    {% call table_row(color="primary") %}
                         <td class="whitespace-nowrap px-6 py-4">
                             <div class="flex items-center gap-4">
-                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br {% if status_val == 'succeeded' %}from-emerald-100 to-green-100 text-emerald-600 dark:from-emerald-900/30 dark:to-green-900/30 dark:text-emerald-400{% elif status_val == 'pending' %}from-amber-100 to-yellow-100 text-amber-600 dark:from-amber-900/30 dark:to-yellow-900/30 dark:text-amber-400{% elif status_val == 'failed' %}from-red-100 to-rose-100 text-red-600 dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-400{% else %}from-slate-100 to-slate-200 text-slate-600 dark:from-slate-700 dark:to-slate-600 dark:text-slate-400{% endif %}">
-                                    {% if status_val == 'succeeded' %}
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    {% elif status_val == 'pending' %}
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    {% elif status_val == 'failed' %}
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    {% else %}
+                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                                    {% endif %}
                                 </div>
                                 <div>
                                     <a href="/admin/billing/payments/{{ payment.id }}" class="font-mono text-sm font-semibold text-slate-900 dark:text-white hover:text-amber-600">
@@ -215,7 +212,7 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm font-bold {% if status_val == 'succeeded' %}text-emerald-600 dark:text-emerald-400{% elif status_val == 'failed' %}text-red-600 dark:text-red-400{% else %}text-slate-900 dark:text-white{% endif %}">
+                            <span class="text-sm font-bold text-slate-900 dark:text-white">
                                 {{ payment.currency or 'NGN' }} {{ "{:,.2f}".format(payment.amount or 0) }}
                             </span>
                         </td>
@@ -244,17 +241,7 @@
                         </td>
                         <td class="max-w-xs truncate px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ payment.narration | default('-') }}</td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% if status_val == 'succeeded' %}
-                            {{ status_badge("Completed", variant="paid") }}
-                            {% elif status_val == 'pending' %}
-                            {{ status_badge("Pending", variant="pending") }}
-                            {% elif status_val == 'failed' %}
-                            {{ status_badge("Failed", variant="error") }}
-                            {% elif status_val == 'refunded' %}
-                            {{ status_badge("Refunded", variant="inactive") }}
-                            {% else %}
-                            {{ status_badge(status_val | title, variant="default") }}
-                            {% endif %}
+                            {{ status_presentation_badge(payment_status_presentations.get(payment.id|string), size="sm") }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             <span class="text-sm text-slate-600 dark:text-slate-400">{{ payment.created_at.strftime('%b %d, %Y') if payment.created_at else '—' }}</span>
@@ -270,10 +257,12 @@
                     <tr class="bg-slate-50 dark:bg-slate-800/70">
                         <td colspan="8" class="px-6 py-3">
                             <div class="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
-                                <span>Completed: {{ status_totals.succeeded.count }} ({{ status_totals.succeeded.display }})</span>
+                                <span>Succeeded: {{ status_totals.succeeded.count }} ({{ status_totals.succeeded.display }})</span>
                                 <span>Pending: {{ status_totals.pending.count }} ({{ status_totals.pending.display }})</span>
                                 <span>Failed: {{ status_totals.failed.count }} ({{ status_totals.failed.display }})</span>
                                 <span>Refunded: {{ status_totals.refunded.count }} ({{ status_totals.refunded.display }})</span>
+                                <span>Partially refunded: {{ status_totals.partially_refunded.count }} ({{ status_totals.partially_refunded.display }})</span>
+                                <span>Canceled: {{ status_totals.canceled.count }} ({{ status_totals.canceled.display }})</span>
                                 <span>Total: {{ status_totals.all.count }} ({{ status_totals.all.display }})</span>
                             </div>
                         </td>

@@ -39,6 +39,7 @@ from app.services.customer_support_links import (
     ticket_customer_linked_ids,
 )
 from app.services.radius_access_state import derive_access_state
+from app.services.status_presentation import connection_health_status_presentation
 from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,9 @@ class CustomerServiceState:
         return {
             "billing_state": self.billing_state,
             "connection_state": self.connection_state,
+            "connection_status_presentation": connection_health_status_presentation(
+                self.connection_state
+            ).model_dump(mode="json"),
             "area_outage": self.area_outage,
             "active_outage_id": (
                 str(self.active_outage_id) if self.active_outage_id else None

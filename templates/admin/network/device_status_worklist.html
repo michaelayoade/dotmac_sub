@@ -1,15 +1,7 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import pagination as table_pagination %}
+{% from "components/ui/macros.html" import pagination as table_pagination, status_presentation_badge %}
 
 {% block title %}Device Status Worklist - Admin{% endblock %}
-
-{% set op_color = {
-  'up': 'text-emerald-600 dark:text-emerald-400',
-  'degraded': 'text-amber-600 dark:text-amber-400',
-  'down': 'text-rose-600 dark:text-rose-400',
-  'maintenance': 'text-indigo-600 dark:text-indigo-400',
-  'unknown': 'text-slate-400'
-} %}
 
 {% block content %}
 <div class="space-y-6">
@@ -71,7 +63,7 @@
             <td class="px-5 py-2 text-slate-700 dark:text-slate-200">{{ row.name }}</td>
             <td class="px-5 py-2 font-mono text-xs text-slate-500 dark:text-slate-400">{{ row.mgmt_ip or '—' }}</td>
             <td class="px-5 py-2 text-slate-500 dark:text-slate-400">{{ row.admin or '—' }}</td>
-            <td class="px-5 py-2 font-medium {{ op_color.get(row.operational, 'text-slate-400') }}">{{ row.operational_label }}</td>
+            <td class="px-5 py-2">{{ status_presentation_badge(row.status_presentation, size="sm") }}</td>
             <td class="px-5 py-2 text-right"><a href="/admin/network/core-devices/{{ row.id }}" class="text-xs text-indigo-600 hover:underline dark:text-indigo-400">View</a></td>
           </tr>
           {% endfor %}

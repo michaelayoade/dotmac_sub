@@ -188,6 +188,7 @@ def invoices_list(
             {
                 "request": request,
                 "invoices": state["invoices"],
+                "invoice_status_presentations": state["invoice_status_presentations"],
                 "page": state["page"],
                 "per_page": state["per_page"],
                 "total": state["total"],

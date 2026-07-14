@@ -1,4 +1,5 @@
 {% extends "layouts/customer.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Billing - My Account{% endblock %}
 
@@ -181,8 +182,6 @@
                 <tbody class="divide-y divide-stone-100 dark:divide-stone-700">
                     {% if invoices %}
                     {% for invoice in invoices %}
-                    {% set status = invoice.status | default('pending') %}
-                    {% set status_val = status.value if status is not string else status %}
                     {% set invoice_currency = invoice.currency or currency_label %}
                     <tr class="group hover:bg-stone-50 dark:hover:bg-stone-700/30 transition-colors">
                         <td class="px-6 py-4">
@@ -192,44 +191,7 @@
                             <p class="text-sm font-semibold tabular-nums text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total_amount or invoice.total or 0) }}</p>
                         </td>
                         <td class="px-6 py-4">
-                            {% if status_val == 'paid' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                                </svg>
-                                Paid
-                            </span>
-                            {% elif status_val == 'issued' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                                </svg>
-                                Issued
-                            </span>
-                            {% elif status_val == 'partially_paid' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/>
-                                </svg>
-                                Partial
-                            </span>
-                            {% elif status_val == 'overdue' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-400">
-                                <span class="relative flex h-2 w-2">
-                                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                                    <span class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
-                                </span>
-                                Overdue
-                            </span>
-                            {% elif status_val == 'void' %}
-                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-500 dark:bg-stone-700 dark:text-stone-400">
-                                Void
-                            </span>
-                            {% else %}
-                            <span class="inline-flex items-center gap-1.5 rounded-lg bg-stone-100 px-2.5 py-1 text-xs font-semibold text-stone-600 dark:bg-stone-700 dark:text-stone-400">
-                                {{ status_val | title }}
-                            </span>
-                            {% endif %}
+                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </td>
                         <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
                         <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>

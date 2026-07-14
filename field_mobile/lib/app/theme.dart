@@ -1,12 +1,61 @@
 import 'package:flutter/material.dart';
 
+import 'status_presentation.dart';
+
 /// DotMac "Industrial Modern", outdoors edition: high contrast, calm status
 /// colours, glove-grade touch targets, Outfit + Plus Jakarta Sans. Mirrors the
 /// web design-system tokens so field and CRM read as one family.
 abstract final class AppColors {
-  static const primary = Color(0xFF06B6D4); // teal
-  static const primaryDeep = Color(0xFF0E7490); // teal-700 (gradients/pressed)
-  static const accent = Color(0xFFF97316); // warm orange
+  static final primary = _brandColor(
+    const String.fromEnvironment(
+      'BRAND_PRIMARY_COLOR',
+      defaultValue: '#206a07',
+    ),
+    0xFF206A07,
+  );
+  static final primaryDeep = Color.lerp(primary, Colors.black, 0.24)!;
+  static final accent = _brandColor(
+    const String.fromEnvironment(
+      'BRAND_SECONDARY_COLOR',
+      defaultValue: '#06b6d4',
+    ),
+    0xFF06B6D4,
+  );
+  static final semanticPositive = _brandColor(
+    const String.fromEnvironment(
+      'BRAND_SEMANTIC_POSITIVE_COLOR',
+      defaultValue: '#15803d',
+    ),
+    0xFF15803D,
+  );
+  static final semanticInfo = _brandColor(
+    const String.fromEnvironment(
+      'BRAND_SEMANTIC_INFO_COLOR',
+      defaultValue: '#1d4ed8',
+    ),
+    0xFF1D4ED8,
+  );
+  static final semanticWarning = _brandColor(
+    const String.fromEnvironment(
+      'BRAND_SEMANTIC_WARNING_COLOR',
+      defaultValue: '#a16207',
+    ),
+    0xFFA16207,
+  );
+  static final semanticNegative = _brandColor(
+    const String.fromEnvironment(
+      'BRAND_SEMANTIC_NEGATIVE_COLOR',
+      defaultValue: '#b91c1c',
+    ),
+    0xFFB91C1C,
+  );
+  static final semanticNeutral = _brandColor(
+    const String.fromEnvironment(
+      'BRAND_SEMANTIC_NEUTRAL_COLOR',
+      defaultValue: '#475569',
+    ),
+    0xFF475569,
+  );
 
   // Cool, teal-biased neutrals — never flat grey.
   static const ink = Color(0xFF0F172A);
@@ -24,55 +73,43 @@ abstract final class AppColors {
   static const groundDark = Color(0xFF080D16);
   static const surfaceDark = Color(0xFF101A2B);
   static const lineDark = Color(0xFF1E2B40);
-  static const green = Color(0xFF10B981);
-  static const greenSoft = Color(0xFFD1FAE5);
-  static const tealSoft = Color(0xFFCFFAFE);
-  static const danger = Color(0xFFEF4444);
+  // Deprecated compatibility alias. New callers should name the semantic role.
+  static final green = semanticPositive;
+  static final greenSoft = Color.lerp(semanticPositive, Colors.white, 0.82)!;
+  static final tealSoft = Color.lerp(accent, Colors.white, 0.82)!;
+  static final danger = semanticNegative;
 
-  // Work-type colours (left card bars, chips) — same mapping as dispatch web.
-  static const workTypeColors = <String, Color>{
-    'install': Color(0xFFF59E0B), // amber
-    'repair': Color(0xFFF43F5E), // rose
-    'survey': Color(0xFF8B5CF6), // violet
-    'maintenance': Color(0xFF06B6D4), // cyan
-    'disconnect': Color(0xFF64748B), // slate
-    'other': Color(0xFF64748B),
-  };
+  // Brand-derived categorical palette shared by maps, charts, and work types.
+  static final categorical = <Color>[
+    primary,
+    accent,
+    semanticInfo,
+    semanticPositive,
+    semanticWarning,
+    semanticNegative,
+    semanticNeutral,
+  ];
 
-  // One status ramp shared with dispatch.
-  static const statusColors = <String, Color>{
-    'scheduled': Color(0xFF64748B), // slate
-    'dispatched': Color(0xFF6366F1), // indigo
-    'accepted': Color(0xFF06B6D4), // cyan
-    'en_route': Color(0xFFF97316), // orange
-    'in_progress': Color(0xFF3B82F6), // blue
-    'paused': Color(0xFFF59E0B), // amber
-    'completed': Color(0xFF10B981), // emerald
-    'hold': Color(0xFFF59E0B), // amber
-    'canceled': Color(0xFF94A3B8),
-  };
-
-  static const _statusLabels = <String, String>{
-    'scheduled': 'Scheduled',
-    'dispatched': 'Assigned',
-    'accepted': 'Accepted',
-    'en_route': 'En route',
-    'in_progress': 'Active',
-    'paused': 'Paused',
-    'completed': 'Completed',
-    'hold': 'On hold',
-    'canceled': 'Canceled',
+  static final workTypeColors = <String, Color>{
+    'install': semanticWarning,
+    'repair': semanticNegative,
+    'survey': primary,
+    'maintenance': accent,
+    'disconnect': semanticNeutral,
+    'other': semanticNeutral,
   };
 
   static Color workType(String type) =>
       workTypeColors[type] ?? workTypeColors['other']!;
-  static Color status(String status) =>
-      statusColors[status] ?? statusColors['scheduled']!;
-  static String statusLabel(String status) =>
-      _statusLabels[status] ??
-      status
-          .replaceAll('_', ' ')
-          .replaceFirstMapped(RegExp(r'^\w'), (m) => m[0]!.toUpperCase());
+  static Color category(int index) => categorical[index % categorical.length];
+  static Color statusTone(BuildContext context, StatusTone tone) =>
+      switch (tone) {
+        StatusTone.positive => _forBrightness(context, semanticPositive),
+        StatusTone.info => _forBrightness(context, semanticInfo),
+        StatusTone.warning => _forBrightness(context, semanticWarning),
+        StatusTone.negative => _forBrightness(context, semanticNegative),
+        StatusTone.neutral => _forBrightness(context, semanticNeutral),
+      };
   static bool dark(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark;
   static Color surface(BuildContext context) =>
@@ -83,9 +120,19 @@ abstract final class AppColors {
   static Color border(BuildContext context) =>
       dark(context) ? lineDark : lineLight;
   static Color softGreen(BuildContext context) =>
-      dark(context) ? const Color(0xFF0F2E25) : greenSoft;
+      dark(context) ? Color.lerp(semanticPositive, Colors.black, 0.68)! : greenSoft;
   static Color softTeal(BuildContext context) =>
-      dark(context) ? const Color(0xFF10333D) : tealSoft;
+      dark(context) ? Color.lerp(accent, Colors.black, 0.68)! : tealSoft;
+
+  static Color _forBrightness(BuildContext context, Color color) =>
+      dark(context) ? Color.lerp(color, Colors.white, 0.52)! : color;
+
+  static Color _brandColor(String hex, int fallback) {
+    var value = hex.trim();
+    if (value.startsWith('#')) value = value.substring(1);
+    if (value.length == 6) value = 'FF$value';
+    return Color(int.tryParse(value, radix: 16) ?? fallback);
+  }
 }
 
 /// 4-based spacing scale. Use these instead of magic numbers.

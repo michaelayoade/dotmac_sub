@@ -21,6 +21,12 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from app.services.brand_theme import (
+    DEFAULT_HEX,
+    DEFAULT_SECONDARY_HEX,
+    DEFAULT_SEMANTIC_COLORS,
+)
+
 logger = logging.getLogger(__name__)
 
 # Friendly key -> JSON/env key. The friendly keys are what callers and templates
@@ -32,6 +38,12 @@ _KEY_MAP: dict[str, str] = {
     "legal_name": "BRAND_LEGAL_NAME",
     "tagline": "BRAND_TAGLINE",
     "primary_color": "BRAND_PRIMARY_COLOR",
+    "secondary_color": "BRAND_SECONDARY_COLOR",
+    "semantic_positive_color": "BRAND_SEMANTIC_POSITIVE_COLOR",
+    "semantic_info_color": "BRAND_SEMANTIC_INFO_COLOR",
+    "semantic_warning_color": "BRAND_SEMANTIC_WARNING_COLOR",
+    "semantic_negative_color": "BRAND_SEMANTIC_NEGATIVE_COLOR",
+    "semantic_neutral_color": "BRAND_SEMANTIC_NEUTRAL_COLOR",
     "support_email": "BRAND_SUPPORT_EMAIL",
     "from_email": "BRAND_FROM_EMAIL",
     "from_name": "BRAND_FROM_NAME",
@@ -46,7 +58,12 @@ _DEFAULTS: dict[str, str] = {
     "product_name": "DotMac Subs",
     "legal_name": "Dotmac Technologies",
     "tagline": "Sign in to manage your service",
-    "primary_color": "#206a07",
+    "primary_color": DEFAULT_HEX,
+    "secondary_color": DEFAULT_SECONDARY_HEX,
+    **{
+        f"semantic_{tone}_color": color
+        for tone, color in DEFAULT_SEMANTIC_COLORS.items()
+    },
     "support_email": "support@dotmac.ng",
     "from_email": "noreply@dotmac.ng",
     "from_name": "DotMac Selfcare",

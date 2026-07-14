@@ -1,3 +1,4 @@
+{% from "components/ui/macros.html" import status_presentation_badge %}
 {% for device in devices %}
 <tr class="group transition-all hover:bg-gradient-to-r hover:from-cyan-50/50 hover:to-blue-50/30 dark:hover:from-cyan-900/10 dark:hover:to-blue-900/5">
     <td class="px-6 py-4 whitespace-nowrap">
@@ -43,28 +44,8 @@
         </span>
     </td>
     <td class="px-6 py-4 whitespace-nowrap">
-        <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
-            {% if device.status == 'online' %}bg-gradient-to-r from-emerald-500 to-green-600 text-white shadow-sm shadow-emerald-500/25
-            {% elif device.status == 'offline' %}bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-sm shadow-red-500/25
-            {% elif device.status == 'warning' %}bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-sm shadow-amber-500/25
-            {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
-            {% if device.status == 'online' %}
-            <span class="relative flex h-1.5 w-1.5">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
-                <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-white"></span>
-            </span>
-            {% elif device.status == 'offline' %}
-            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-            </svg>
-            {% elif device.status == 'warning' %}
-            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01"/>
-            </svg>
-            {% else %}
-            <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>
-            {% endif %}
-            {{ device.status | capitalize }}
+        <span title="{{ device.operational_reason | replace('_', ' ') }}">
+            {{ status_presentation_badge(device.status_presentation, size="sm") }}
         </span>
     </td>
     <td class="px-6 py-4 whitespace-nowrap">

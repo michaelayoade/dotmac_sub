@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
@@ -34,11 +35,23 @@ from app.services.topology.outage_operations import (
 
 logger = logging.getLogger(__name__)
 
-# status is a free-form String column (String, not a DB enum — the enum route
-# caused a prod migration collision in #876; validated here in code instead).
-# Operator-declared incidents use open/resolved; the classifier-driven lifecycle
-# (§7.6) adds suspected/confirmed/clearing/resolved/discarded.
-_OUTAGE_STATUSES = frozenset({"open", "resolved"})
+
+# Status remains a free-form String column (not a DB enum — the enum migration
+# collided in #876). This code-native vocabulary is the lifecycle source of
+# truth for validation, filters, and read projections.
+class OutageStatus(StrEnum):
+    open = "open"
+    suspected = "suspected"
+    confirmed = "confirmed"
+    clearing = "clearing"
+    resolved = "resolved"
+    discarded = "discarded"
+
+
+OUTAGE_STATUS_VALUES = tuple(status.value for status in OutageStatus)
+OPERATOR_OUTAGE_STATUSES = frozenset(
+    {OutageStatus.open.value, OutageStatus.resolved.value}
+)
 # Actor stamped on classifier incidents — distinct from AUTO_DETECT_ACTOR so the
 # two auto provenances never collide. The ``detection_source`` COLUMN (not
 # ``declared_by``) is the authoritative operator/classifier discriminator.
@@ -47,15 +60,25 @@ CLASSIFIER_SOURCE = "classifier"
 OPERATOR_SOURCE = "operator"
 # Open classifier states: an incident still describing a live/settling outage.
 # suspected (debouncing up), confirmed (declared), clearing (debouncing down).
-CLASSIFIER_OPEN_STATUSES = ("suspected", "confirmed", "clearing")
-CLASSIFIER_CUSTOMER_VISIBLE_STATUSES = ("confirmed", "clearing")
-CLASSIFIER_TERMINAL_STATUSES = ("resolved", "discarded")
+CLASSIFIER_OPEN_STATUSES = (
+    OutageStatus.suspected.value,
+    OutageStatus.confirmed.value,
+    OutageStatus.clearing.value,
+)
+CLASSIFIER_CUSTOMER_VISIBLE_STATUSES = (
+    OutageStatus.confirmed.value,
+    OutageStatus.clearing.value,
+)
+CLASSIFIER_TERMINAL_STATUSES = (
+    OutageStatus.resolved.value,
+    OutageStatus.discarded.value,
+)
 _CLASSIFIER_STATUSES = frozenset(CLASSIFIER_OPEN_STATUSES) | frozenset(
     CLASSIFIER_TERMINAL_STATUSES
 )
 # Statuses that keep an incident "live" for the open-incidents surfaces: operator
 # open + every non-terminal classifier state (resolved/discarded excluded).
-_LIVE_STATUSES = ("open",) + CLASSIFIER_OPEN_STATUSES
+_LIVE_STATUSES = (OutageStatus.open.value,) + CLASSIFIER_OPEN_STATUSES
 # ``declared_by`` sentinel marking auto-detected incidents (see module doc).
 AUTO_DETECT_ACTOR = "system:outage-autodetect"
 AUTO_NOTE_PREFIX = "AUTO-DETECTED:"
@@ -75,7 +98,7 @@ def set_outage_status(incident: OutageIncident, status: str) -> bool:
     Jumping one straight to ``resolved`` here would drop confirmed_at (breaking
     MTTR = resolved_at - confirmed_at) and let the next reconcile re-open a
     duplicate suspected incident for the still-dark node."""
-    if status not in _OUTAGE_STATUSES:
+    if status not in OPERATOR_OUTAGE_STATUSES:
         raise ValueError(f"invalid outage status: {status!r}")
     # detection_source is None only for an un-flushed operator row; classifier
     # incidents always carry CLASSIFIER_SOURCE from open_classifier_incident.
@@ -87,13 +110,15 @@ def set_outage_status(incident: OutageIncident, status: str) -> bool:
     if incident.status == status:
         return False
     incident.status = status
-    incident.resolved_at = datetime.now(UTC) if status == "resolved" else None
+    incident.resolved_at = (
+        datetime.now(UTC) if status == OutageStatus.resolved.value else None
+    )
     return True
 
 
 def is_stale_open(incident: OutageIncident, *, now: datetime | None = None) -> bool:
     """True for an `open` incident that has lingered past STALE_OPEN_HOURS."""
-    if incident.status != "open" or incident.started_at is None:
+    if incident.status != OutageStatus.open.value or incident.started_at is None:
         return False
     started = incident.started_at
     if started.tzinfo is None:
@@ -218,7 +243,7 @@ def declare_outage(
         note=note,
         severity=severity,
         affected_count=impact["count"],
-        status="open",
+        status=OutageStatus.open.value,
     )
     session.add(incident)
     session.flush()
@@ -237,7 +262,7 @@ def resolve_outage(session: Session, incident_id) -> OutageIncident | None:
     # operator Resolve button is a no-op on them (never operator-terminated).
     if incident.detection_source not in (None, OPERATOR_SOURCE):
         return incident
-    if set_outage_status(incident, "resolved"):
+    if set_outage_status(incident, OutageStatus.resolved.value):
         session.flush()
         operational_escalation.cancel_entity_events(
             session,
@@ -280,7 +305,7 @@ def open_classifier_incident(
         basestation_id=basestation_id,
         declared_by=CLASSIFIER_ACTOR,
         detection_source=CLASSIFIER_SOURCE,
-        status="suspected",
+        status=OutageStatus.suspected.value,
         affected_count=affected_count,
         confidence=confidence,
         classification=classification,
@@ -377,7 +402,7 @@ def confirm_incident(
     session: Session, incident: OutageIncident, *, now: datetime
 ) -> None:
     """suspected -> confirmed (debounce satisfied). Stamps confirmed_at."""
-    incident.status = "confirmed"
+    incident.status = OutageStatus.confirmed.value
     incident.confirmed_at = now
     session.flush()
     ensure_outage_operations(session, incident)
@@ -389,7 +414,7 @@ def confirm_incident(
 def discard_incident(session: Session, incident: OutageIncident) -> None:
     """suspected -> discarded (recovered before W_confirm — a false positive).
     No confirmed event ever fires for a discarded incident."""
-    incident.status = "discarded"
+    incident.status = OutageStatus.discarded.value
     session.flush()
     operational_escalation.cancel_entity_events(
         session,
@@ -405,7 +430,7 @@ def start_clearing(
 ) -> None:
     """confirmed -> clearing (recovery observed). Stamps cleared_at; the
     W_resolve window must elapse sustained before this becomes resolved."""
-    incident.status = "clearing"
+    incident.status = OutageStatus.clearing.value
     incident.cleared_at = now
     session.flush()
     _emit_outage_event(session, incident, "outage.clearing")
@@ -414,7 +439,7 @@ def start_clearing(
 def reopen_incident(session: Session, incident: OutageIncident) -> None:
     """clearing -> confirmed (re-darkened inside W_resolve — hysteresis). Clears
     cleared_at so the resolve window restarts on the next recovery."""
-    incident.status = "confirmed"
+    incident.status = OutageStatus.confirmed.value
     incident.cleared_at = None
     session.flush()
     _emit_outage_event(session, incident, "outage.reopened")
@@ -425,7 +450,7 @@ def resolve_classifier_incident(
 ) -> None:
     """clearing -> resolved (recovery sustained past W_resolve). Stamps
     resolved_at; MTTR = resolved_at - confirmed_at."""
-    incident.status = "resolved"
+    incident.status = OutageStatus.resolved.value
     incident.resolved_at = _match_timestamp_style(now, incident.confirmed_at)
     session.flush()
     operational_escalation.cancel_entity_events(
@@ -476,7 +501,7 @@ def open_incident_for_path(
             or_(
                 and_(
                     OutageIncident.detection_source == OPERATOR_SOURCE,
-                    OutageIncident.status == "open",
+                    OutageIncident.status == OutageStatus.open.value,
                 ),
                 and_(
                     OutageIncident.detection_source == CLASSIFIER_SOURCE,
@@ -591,7 +616,7 @@ def list_operator_open_incidents(session: Session) -> list[OutageIncident]:
         session.query(OutageIncident)
         .filter(
             OutageIncident.detection_source == OPERATOR_SOURCE,
-            OutageIncident.status == "open",
+            OutageIncident.status == OutageStatus.open.value,
         )
         .order_by(OutageIncident.started_at.desc())
         .all()
@@ -606,7 +631,10 @@ def list_stale_open_incidents(
     cutoff = datetime.now(UTC) - timedelta(hours=older_than_hours)
     return (
         session.query(OutageIncident)
-        .filter(OutageIncident.status == "open", OutageIncident.started_at < cutoff)
+        .filter(
+            OutageIncident.status == OutageStatus.open.value,
+            OutageIncident.started_at < cutoff,
+        )
         .order_by(OutageIncident.started_at.asc())
         .all()
     )

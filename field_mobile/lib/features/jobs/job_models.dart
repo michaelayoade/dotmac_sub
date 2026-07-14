@@ -1,9 +1,10 @@
+import '../../app/status_presentation.dart';
 import '../../core/location/map_coordinates.dart';
 
 /// Wire models for the field jobs API. Hand-rolled fromJson keeps the app
 /// free of codegen for plain DTOs.
 class JobSummary {
-  const JobSummary({
+  JobSummary({
     required this.id,
     required this.title,
     required this.status,
@@ -18,11 +19,14 @@ class JobSummary {
     this.resumedAt,
     this.completedAt,
     this.totalActiveSeconds,
-  });
+    StatusPresentation? statusPresentation,
+  }) : statusPresentation =
+           statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String title;
   final String status;
+  final StatusPresentation statusPresentation;
   final String workType;
   final String priority;
   final String? description;
@@ -39,6 +43,10 @@ class JobSummary {
     id: json['id'] as String,
     title: json['title'] as String,
     status: json['status'] as String,
+    statusPresentation: StatusPresentation.fromJsonOrFallback(
+      json['status_presentation'],
+      json['status'] as String,
+    ),
     workType: json['work_type'] as String,
     priority: json['priority'] as String,
     description: json['description'] as String?,
@@ -429,13 +437,6 @@ String actionLabel(String action) => switch (action) {
   'resume' => 'Resume Work',
   'complete' => 'Complete Work',
   _ => action,
-};
-
-String statusLabel(String status) => switch (status) {
-  'in_progress' => 'In Progress',
-  'paused' => 'Paused',
-  'completed' => 'Completed',
-  _ => status.replaceAll('_', ' '),
 };
 
 DateTime? _date(Object? value) =>

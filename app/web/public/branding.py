@@ -17,9 +17,14 @@ from app.db import get_db
 from app.models.stored_file import StoredFile
 from app.services import settings_spec
 from app.services.brand_theme import (
+    CATEGORICAL_COLOR_ROLES,
+    COLOR_SCALE_STEPS,
     DEFAULT_HEX,
     DEFAULT_SECONDARY_HEX,
+    DEFAULT_SEMANTIC_COLORS,
+    LEGACY_TAILWIND_PALETTE_ROLES,
     generate_scale,
+    is_accessible_semantic_color,
 )
 from app.services.file_storage import file_uploads
 from app.services.object_storage import ObjectNotFoundError
@@ -31,10 +36,13 @@ router = APIRouter(prefix="/branding", tags=["public-branding"])
 _LOGIN_HERO_PORTALS = {"customer", "reseller", "admin"}
 
 
-def _theme_css(scale: dict[int, str], secondary_scale: dict[int, str]) -> str:
+def _theme_css(
+    scale: dict[int, str],
+    secondary_scale: dict[int, str],
+    semantic_scales: dict[str, dict[int, str]],
+) -> str:
     primary_lines = "".join(
-        f"  --color-primary-{step}:{scale[step]};\n"
-        for step in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950)
+        f"  --color-primary-{step}:{scale[step]};\n" for step in COLOR_SCALE_STEPS
     )
     brand_lines = "".join(
         f"  --color-brand-{step}:{scale[step]};\n"
@@ -42,9 +50,32 @@ def _theme_css(scale: dict[int, str], secondary_scale: dict[int, str]) -> str:
     )
     accent_lines = "".join(
         f"  --color-accent-{step}:{secondary_scale[step]};\n"
-        for step in (50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950)
+        for step in COLOR_SCALE_STEPS
     )
-    return ":root{\n" + primary_lines + brand_lines + accent_lines + "}\n"
+    semantic_lines = "".join(
+        f"  --color-semantic-{tone}-{step}:{tone_scale[step]};\n"
+        for tone, tone_scale in semantic_scales.items()
+        for step in COLOR_SCALE_STEPS
+    )
+    compatibility_lines = "".join(
+        f"  --color-{palette}-{step}:var(--color-{role}-{step});\n"
+        for palette, role in LEGACY_TAILWIND_PALETTE_ROLES.items()
+        for step in COLOR_SCALE_STEPS
+    )
+    categorical_lines = "".join(
+        f"  --color-data-{index}:var(--color-{role}-600);\n"
+        for index, role in enumerate(CATEGORICAL_COLOR_ROLES, start=1)
+    )
+    return (
+        ":root{\n"
+        + primary_lines
+        + brand_lines
+        + accent_lines
+        + semantic_lines
+        + compatibility_lines
+        + categorical_lines
+        + "}\n"
+    )
 
 
 @router.get("/theme.css", include_in_schema=False)
@@ -52,10 +83,11 @@ def theme_css(db: Session = Depends(get_db)):
     """Runtime brand colour theme as a CSS variable stylesheet.
 
     Reads ``brand_primary_color`` and ``brand_secondary_color`` and emits an
-    11-stop scale for the ``--color-primary-*``, ``--color-brand-*`` and
-    ``--color-accent-*`` custom properties. Never raises: any failure falls
-    back to the default green/cyan scales.
+    11-stop scale for the identity and semantic custom properties, then maps
+    legacy Tailwind palettes and categorical data tokens onto those owners.
+    Never raises: any failure falls back to the checked-in brand defaults.
     """
+    brand = None
     try:
         from app.services.brand_profiles import resolve_brand
 
@@ -65,12 +97,31 @@ def theme_css(db: Session = Depends(get_db)):
     except Exception:
         scale = generate_scale(DEFAULT_HEX)
     try:
-        secondary_hex = brand.secondary_color
+        secondary_hex = brand.secondary_color if brand else DEFAULT_SECONDARY_HEX
         secondary_scale = generate_scale(secondary_hex or DEFAULT_SECONDARY_HEX)
     except Exception:
         secondary_scale = generate_scale(DEFAULT_SECONDARY_HEX)
+    try:
+        configured_semantic_colors = (
+            brand.semantic_colors if brand else DEFAULT_SEMANTIC_COLORS
+        )
+        semantic_scales = {
+            tone: generate_scale(
+                configured_semantic_colors.get(tone, default)
+                if is_accessible_semantic_color(
+                    configured_semantic_colors.get(tone, default)
+                )
+                else default
+            )
+            for tone, default in DEFAULT_SEMANTIC_COLORS.items()
+        }
+    except Exception:
+        semantic_scales = {
+            tone: generate_scale(color)
+            for tone, color in DEFAULT_SEMANTIC_COLORS.items()
+        }
     return Response(
-        content=_theme_css(scale, secondary_scale),
+        content=_theme_css(scale, secondary_scale, semantic_scales),
         media_type="text/css",
         headers={"Cache-Control": "public, max-age=300"},
     )

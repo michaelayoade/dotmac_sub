@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, status_presentation_badge %}
 
 {% block title %}{{ customer_name }} - Customer - Admin{% endblock %}
 
@@ -50,31 +50,6 @@
                         <svg class="h-10 w-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
                     </div>
                     {% endif %}
-                    <!-- Status indicator -->
-                    {% set status_icon = customer.status.value if customer.status else ('active' if customer.is_active else 'inactive') %}
-                    {% set status_ring = {
-                        'active': 'bg-indigo-500',
-                        'blocked': 'bg-rose-500',
-                        'suspended': 'bg-amber-500',
-                        'disabled': 'bg-slate-500',
-                        'new': 'bg-blue-500',
-                        'canceled': 'bg-rose-400',
-                        'delinquent': 'bg-orange-500',
-                        'inactive': 'bg-slate-400'
-                    } %}
-                    <span class="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full ring-4 ring-white dark:ring-slate-900 {{ status_ring.get(status_icon, 'bg-slate-400') }}">
-                        {% if status_icon == 'active' %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
-                        {% elif status_icon in ['blocked', 'canceled'] %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"/></svg>
-                        {% elif status_icon == 'suspended' or status_icon == 'delinquent' %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                        {% elif status_icon == 'new' %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        {% else %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M20 12H4"/></svg>
-                        {% endif %}
-                    </span>
                 </div>
                 <div>
                     <div class="flex flex-wrap items-center gap-3">
@@ -90,9 +65,7 @@
                             Individual
                         </span>
                         {% endif %}
-                        {% set cs = customer.status.value if customer.status else ('active' if customer.is_active else 'inactive') %}
-                        {% set status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'new': 'New', 'canceled': 'Canceled', 'delinquent': 'Delinquent', 'inactive': 'Inactive'} %}
-                        {{ status_badge(status_labels.get(cs, cs|title), cs, size="sm") }}
+                        {{ status_presentation_badge(customer_status_presentation, pulse=(customer_status_presentation.value == 'active'), size="sm") }}
                         {% if customer.captive_redirect_enabled %}
                         <span class="inline-flex items-center gap-1 rounded-lg bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300" title="Captive portal redirect enabled">
                             <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
@@ -350,10 +323,11 @@
                 <!-- CRM Sync Status -->
                 {% set crm_status = crm_sync_status|default({}) %}
                 {% set identity = identity_profile|default({}) %}
-                <div class="rounded-2xl border {% if crm_status.status == 'failed' %}border-rose-200/70{% elif crm_status.status == 'linked' %}border-emerald-200/70{% else %}border-amber-200/70{% endif %} bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                {% set crm_tone = 'negative' if crm_status.status == 'failed' else 'positive' if crm_status.status == 'linked' else 'warning' %}
+                <div class="status-panel status-panel-{{ crm_tone }} rounded-2xl border shadow-sm">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">CRM Sync</h3>
-                        <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold {% if crm_status.status == 'failed' %}bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300{% elif crm_status.status == 'linked' %}bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300{% endif %}">
+                        <span class="status-tone status-tone-{{ crm_tone }} inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold">
                             {% if crm_status.status == 'failed' %}
                             <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
                             {% elif crm_status.status == 'linked' %}
@@ -376,24 +350,25 @@
                             </div>
                         </div>
                         {% if crm_status.error %}
-                        <div class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 dark:border-rose-900/50 dark:bg-rose-900/20">
+                        <div class="status-panel status-panel-negative rounded-xl border px-3 py-2">
                             <div class="flex items-start justify-between gap-3">
                                 <div class="min-w-0">
-                                    <p class="text-xs font-semibold uppercase tracking-wide text-rose-700 dark:text-rose-300">Dead Letter</p>
-                                    <p class="mt-1 break-words text-sm text-rose-900 dark:text-rose-100">{{ crm_status.error }}</p>
-                                    <p class="mt-1 text-xs text-rose-700/80 dark:text-rose-300/80">Attempts: {{ crm_status.attempts }}</p>
+                                    <p class="status-foreground status-tone-negative text-xs font-semibold uppercase tracking-wide">Dead Letter</p>
+                                    <p class="status-foreground status-tone-negative mt-1 break-words text-sm">{{ crm_status.error }}</p>
+                                    <p class="status-foreground status-tone-negative mt-1 text-xs opacity-80">Attempts: {{ crm_status.attempts }}</p>
                                 </div>
-                                <a href="/admin/integrations" class="shrink-0 text-xs font-semibold text-rose-700 hover:text-rose-800 dark:text-rose-300 dark:hover:text-rose-200">View</a>
+                                <a href="/admin/integrations" class="status-foreground status-tone-negative shrink-0 text-xs font-semibold hover:opacity-80">View</a>
                             </div>
                         </div>
                         {% endif %}
                     </div>
                 </div>
 
-                <div class="rounded-2xl border {% if identity.complete %}border-emerald-200/70{% else %}border-amber-200/70{% endif %} bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                {% set identity_tone = 'positive' if identity.complete else 'warning' %}
+                <div class="status-panel status-panel-{{ identity_tone }} rounded-2xl border shadow-sm">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <h3 class="font-semibold text-slate-900 dark:text-white">Identity Profile</h3>
-                        <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold {% if identity.complete %}bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300{% endif %}">
+                        <span class="status-tone status-tone-{{ identity_tone }} inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold">
                             {{ identity.completed_count or 0 }}/{{ identity.total_count or 0 }} complete
                         </span>
                     </div>
@@ -409,7 +384,7 @@
                             </div>
                         </div>
                         {% if identity.missing_labels %}
-                        <p class="text-xs text-amber-700 dark:text-amber-300">Missing: {{ identity.missing_labels }}</p>
+                        <p class="status-foreground status-tone-warning text-xs">Missing: {{ identity.missing_labels }}</p>
                         {% endif %}
                     </div>
                 </div>
@@ -800,18 +775,6 @@
                                     <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-100 to-blue-50 text-blue-600 dark:from-blue-900/40 dark:to-blue-900/20 dark:text-blue-400">
                                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
                                     </div>
-                                    {% set subscriber_status_dot = subscriber.status.value if subscriber.status else ('active' if subscriber.is_active else 'inactive') %}
-                                    {% set subscriber_status_ring = {
-                                        'active': 'bg-indigo-500',
-                                        'blocked': 'bg-rose-500',
-                                        'suspended': 'bg-amber-500',
-                                        'disabled': 'bg-slate-500',
-                                        'new': 'bg-blue-500',
-                                        'canceled': 'bg-rose-400',
-                                        'delinquent': 'bg-orange-500',
-                                        'inactive': 'bg-slate-400'
-                                    } %}
-                                    <span class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-white dark:ring-slate-800 {{ subscriber_status_ring.get(subscriber_status_dot, 'bg-slate-400') }}"></span>
                                 </div>
                                 <div>
                                     <p class="text-sm font-semibold text-slate-900 dark:text-white">
@@ -822,9 +785,8 @@
                                 </div>
                             </div>
                             <div class="flex items-center gap-3">
-                                {% set subscriber_status = subscriber.status.value if subscriber.status else ('active' if subscriber.is_active else 'inactive') %}
-                                {% set subscriber_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'new': 'New', 'canceled': 'Canceled', 'delinquent': 'Delinquent', 'inactive': 'Inactive'} %}
-                                {{ status_badge(subscriber_status_labels.get(subscriber_status, subscriber_status | title), subscriber_status if subscriber_status in subscriber_status_labels else 'default', size="sm") }}
+                                {% set subscriber_status_presentation = account_status_presentations.get(subscriber.id|string) %}
+                                {{ status_presentation_badge(subscriber_status_presentation, pulse=(subscriber_status_presentation.value == 'active'), size="sm") }}
                                 <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                             </div>
                         </a>
@@ -869,21 +831,12 @@
                         <div class="px-5 py-4">
                             <div class="flex items-start justify-between">
                                 <div class="flex items-start gap-3">
-                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl {% if sub_status == 'active' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif sub_status in ['pending', 'suspended', 'delinquent'] %}bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400{% elif sub_status in ['blocked', 'canceled', 'expired'] %}bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                                        {% if sub_status == 'active' %}
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        {% elif sub_status in ['blocked', 'canceled', 'expired'] %}
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                        {% elif sub_status in ['pending', 'suspended', 'delinquent'] %}
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                        {% else %}
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
-                                        {% endif %}
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">
+                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
                                     </div>
                                     <div>
                                         <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
-                                        {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
-                                        {{ status_badge(sub_status_labels.get(sub_status, sub_status|replace('_', ' ')|title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
+                                        {{ status_presentation_badge(subscription_status_presentations.get(subscription.id|string), pulse=(sub_status == 'active'), size="sm") }}
                                         {% if show_service_assignments %}
                                         <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                                             {% if subscription.login %}
@@ -926,7 +879,7 @@
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                         <div class="flex items-center gap-2">
-                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-100 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.142 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
                             </div>
                             <h3 class="font-semibold text-slate-900 dark:text-white">Network Access</h3>
@@ -939,20 +892,8 @@
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ card.offer_name }}</p>
                                 <div class="flex flex-wrap items-center justify-end gap-2">
                                     {% set card_conn = card.connection_status or {} %}
-                                    {% set card_conn_state = card_conn.state | default('offline') %}
-                                    <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium
-                                        {% if card_conn_state == 'connected' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300
-                                        {% elif card_conn_state == 'stale' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
-                                        {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
-                                        <span class="h-1.5 w-1.5 rounded-full
-                                            {% if card_conn_state == 'connected' %}bg-emerald-500
-                                            {% elif card_conn_state == 'stale' %}bg-amber-500
-                                            {% else %}bg-slate-400{% endif %}"></span>
-                                        {{ card_conn.label | default('Not connected') }}
-                                    </span>
-                                    {% set na_status = card.status %}
-                                    {% set na_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled'} %}
-                                    {{ status_badge(na_labels.get(na_status, na_status|title), na_status if na_status in na_labels else 'default', size="sm") }}
+                                    {{ status_presentation_badge(card_conn.status_presentation, size="sm") }}
+                                    {{ status_presentation_badge(card.status_presentation, size="sm") }}
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3 text-sm">
@@ -1201,7 +1142,7 @@
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                             </div>
                             {% elif activity.type == 'payment' %}
-                            <div class="flex h-9 w-9 items-center justify-center rounded-full bg-green-100 text-green-600 ring-4 ring-white dark:bg-green-900/30 dark:text-green-400 dark:ring-slate-800">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-600 ring-4 ring-white dark:bg-slate-700 dark:text-slate-300 dark:ring-slate-800">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>
                             </div>
                             {% elif activity.type == 'subscription' %}
@@ -1266,8 +1207,8 @@
                         <div class="flex-1 min-w-0 pt-1">
                             <p class="text-sm text-slate-700 dark:text-slate-300">
                                 <span class="font-medium text-slate-900 dark:text-white">Invoice {{ invoice.invoice_number | default('created') }}</span>
-                                {% set inv_status = invoice.status.value if invoice.status is not string and invoice.status else (invoice.status | default('draft')) %}
-                                <span class="text-slate-500 dark:text-slate-400"> - {{ inv_status | title }}</span>
+                                {% set invoice_presentation = invoice_status_presentations.get(invoice.id|string) %}
+                                <span class="text-slate-500 dark:text-slate-400"> - {{ invoice_presentation.label }}</span>
                             </p>
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
                                 {% set inv_date = invoice.issued_at or invoice.created_at %}
@@ -1282,6 +1223,7 @@
                     </div>
                     {% endfor %}
                     {% for payment in payments[:2] %}
+                    {% set payment_presentation = payment_status_presentations.get(payment.id|string) %}
                     <div class="relative flex gap-4">
                         <div class="relative z-10 flex-shrink-0">
                             <div class="flex h-9 w-9 items-center justify-center rounded-full bg-green-100 text-green-600 ring-4 ring-white dark:bg-green-900/30 dark:text-green-400 dark:ring-slate-800">
@@ -1290,13 +1232,12 @@
                         </div>
                         <div class="flex-1 min-w-0 pt-1">
                             <p class="text-sm text-slate-700 dark:text-slate-300">
-                                <span class="font-medium text-slate-900 dark:text-white">Payment received</span>
-                                {% set pay_status = payment.status.value if payment.status is not string and payment.status else (payment.status | default('pending')) %}
-                                <span class="text-slate-500 dark:text-slate-400"> - {{ pay_status | title }}</span>
+                                <span class="font-medium text-slate-900 dark:text-white">Payment</span>
+                                <span class="text-slate-500 dark:text-slate-400"> - {{ payment_presentation.label }}</span>
                             </p>
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
                                 {{ (payment.paid_at or payment.created_at).strftime('%b %d, %Y at %I:%M %p') if payment.paid_at or payment.created_at else 'Unknown' }}
-                                <span class="ml-2 font-medium text-green-600 dark:text-green-400">₦{{ '{:,.0f}'.format(payment.amount | default(0)) }}</span>
+                                <span class="ml-2 font-medium text-slate-600 dark:text-slate-300">₦{{ '{:,.0f}'.format(payment.amount | default(0)) }}</span>
                             </p>
                         </div>
                     </div>
@@ -1415,11 +1356,9 @@
                 {% if invoices %}
                 <div class="divide-y divide-slate-100 dark:divide-slate-700">
                     {% for invoice in invoices[:5] %}
-                    {% set status = invoice.status | default('draft') %}
-                    {% set status_val = status.value if status is not string else status %}
                     <a href="/admin/billing/invoices/{{ invoice.id }}" class="flex items-center justify-between px-5 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                         <div class="flex items-center gap-3">
-                            <div class="flex h-9 w-9 items-center justify-center rounded-lg {% if status_val == 'paid' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif status_val == 'overdue' %}bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400{% else %}bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400{% endif %}">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                             </div>
                             <div>
@@ -1430,13 +1369,7 @@
                         <div class="text-right">
                             {% set amount = invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else (invoice.total if invoice.total is not none else 0) %}
                             <p class="text-sm font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(amount) }}</p>
-                            {% if status_val == 'paid' %}
-                            <span class="text-xs text-green-600 dark:text-green-400">Paid</span>
-                            {% elif status_val == 'overdue' %}
-                            <span class="text-xs text-red-600 dark:text-red-400">Overdue</span>
-                            {% else %}
-                            <span class="text-xs text-amber-600 dark:text-amber-400">{{ status_val | title }}</span>
-                            {% endif %}
+                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </div>
                     </a>
                     {% endfor %}
@@ -1452,15 +1385,15 @@
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                     <h3 class="font-semibold text-slate-900 dark:text-white">Recent Payments</h3>
-                    <a href="/admin/billing/payments" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View all</a>
+                    <a href="/admin/billing/payments" class="text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View all</a>
                 </div>
                 {% if payments %}
                 <div class="divide-y divide-slate-100 dark:divide-slate-700">
                     {% for payment in payments[:5] %}
-                    {% set pay_status = payment.status.value if payment.status is not string and payment.status else (payment.status | default('pending')) %}
+                    {% set payment_presentation = payment_status_presentations.get(payment.id|string) %}
                     <div class="flex items-center justify-between px-5 py-3">
                         <div class="flex items-center gap-3">
-                            <div class="flex h-9 w-9 items-center justify-center rounded-lg {% if pay_status == 'succeeded' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif pay_status == 'failed' %}bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                             </div>
                             <div>
@@ -1470,7 +1403,7 @@
                         </div>
                         <div class="text-right">
                             <p class="text-sm font-semibold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(payment.amount | default(0)) }}</p>
-                            <span class="text-xs {% if pay_status == 'succeeded' %}text-green-600 dark:text-green-400{% elif pay_status == 'failed' %}text-red-600 dark:text-red-400{% else %}text-slate-500{% endif %}">{{ pay_status | title }}</span>
+                            {{ status_presentation_badge(payment_presentation, size="sm") }}
                         </div>
                     </div>
                     {% endfor %}
@@ -1502,14 +1435,12 @@
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
                         {% for invoice in invoices %}
-                        {% set status = invoice.status | default('draft') %}
-                        {% set status_val = status.value if status is not string else status %}
                         <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
                             <td class="px-5 py-3">
                                 <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ invoice.invoice_number | default((invoice.id|string)[:8]|upper) }}</a>
                             </td>
                             <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at).strftime('%b %d, %Y') if (invoice.issued_at or invoice.created_at) else 'N/A' }}</td>
-                            <td class="px-5 py-3 text-sm text-slate-600 dark:text-slate-300">{{ status_val | replace('_', ' ') | title }}</td>
+                            <td class="px-5 py-3">{{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}</td>
                             <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.balance_due | default(0)) }}</td>
                             <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else invoice.total | default(0)) }}</td>
                         </tr>
@@ -1530,13 +1461,16 @@
             {% if payments %}
             <div class="divide-y divide-slate-100 dark:divide-slate-700">
                 {% for payment in payments %}
-                {% set pay_status = payment.status.value if payment.status is not string and payment.status else (payment.status | default('pending')) %}
+                {% set payment_presentation = payment_status_presentations.get(payment.id|string) %}
                 <a href="/admin/billing/payments/{{ payment.id }}" class="flex items-center justify-between gap-4 px-5 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <div>
                         <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ payment.receipt_number or (payment.id|string)[:8]|upper }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at.strftime('%b %d, %Y') if payment.paid_at else payment.created_at.strftime('%b %d, %Y') }} · {{ pay_status | replace('_', ' ') | title }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at.strftime('%b %d, %Y') if payment.paid_at else payment.created_at.strftime('%b %d, %Y') }}</p>
                     </div>
-                    <p class="text-sm font-bold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(payment.amount | default(0)) }}</p>
+                    <div class="text-right">
+                        <p class="text-sm font-bold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(payment.amount | default(0)) }}</p>
+                        <div class="mt-1">{{ status_presentation_badge(payment_presentation, size="sm") }}</div>
+                    </div>
                 </a>
                 {% endfor %}
             </div>
@@ -1801,20 +1735,13 @@
                 <div x-show="showAllSubscriptions || '{{ sub_status }}' === 'active'" x-cloak class="px-5 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition">
                     <div class="flex items-start justify-between">
                         <div class="flex items-start gap-4">
-                            <div class="flex h-12 w-12 items-center justify-center rounded-xl {% if sub_status == 'active' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif sub_status in ['pending', 'suspended'] %}bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                                {% if sub_status == 'active' %}
-                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                {% elif sub_status == 'suspended' %}
-                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                {% else %}
-                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                {% endif %}
+                            <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">
+                                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/></svg>
                             </div>
                             <div>
                                 <div class="flex items-center gap-2">
                                     <a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>
-                                    {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
-                                    {{ status_badge(sub_status_labels.get(sub_status, sub_status|replace('_', ' ')|title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
+                                    {{ status_presentation_badge(subscription_status_presentations.get(subscription.id|string), pulse=(sub_status == 'active'), size="sm") }}
                                 </div>
                                 <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                                     {% if account and account.account_number %}
@@ -1880,17 +1807,9 @@
                                 {% endif %}
                                 {% if show_service_assignments %}
                                 {% set sub_conn = (connection_by_subscription or {}).get(subscription.id|string, {}) %}
-                                {% set sub_conn_state = sub_conn.state | default('offline') %}
-                                <p class="flex w-24 items-center justify-center gap-1 whitespace-nowrap text-[10px] font-medium
-                                    {% if sub_conn_state == 'connected' %}text-emerald-600 dark:text-emerald-400
-                                    {% elif sub_conn_state == 'stale' %}text-amber-600 dark:text-amber-400
-                                    {% else %}text-slate-500 dark:text-slate-400{% endif %}">
-                                    <span class="h-1.5 w-1.5 rounded-full
-                                        {% if sub_conn_state == 'connected' %}bg-emerald-500
-                                        {% elif sub_conn_state == 'stale' %}bg-amber-500
-                                        {% else %}bg-slate-400{% endif %}"></span>
-                                    {{ sub_conn.label | default('Not connected') }}
-                                </p>
+                                <div class="w-24 text-center">
+                                    {{ status_presentation_badge(sub_conn.status_presentation, size="sm") }}
+                                </div>
                                 {% endif %}
                             </div>
                         </div>
@@ -2243,7 +2162,7 @@
                 <div x-show="networkDetailModalType === 'cpe'" class="space-y-3">
                     {% if cpe_devices %}
                     {% for cpe in cpe_devices %}
-                    <a href="/admin/network/cpes/{{ cpe.id }}" class="block rounded-xl border border-slate-200 px-4 py-3 transition hover:border-blue-200 hover:bg-blue-50/60 dark:border-slate-700 dark:hover:border-blue-900/60 dark:hover:bg-blue-900/10">
+                    <a href="/admin/network/cpes/{{ cpe.id }}" class="block rounded-xl border border-slate-200 px-4 py-3 transition hover:border-primary-200 hover:bg-primary-50/60 dark:border-slate-700 dark:hover:border-primary-900/60 dark:hover:bg-primary-900/10">
                         <div class="flex items-start justify-between gap-4">
                             <div class="min-w-0">
                                 <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ cpe.serial_number or cpe.mac_address or 'Unknown CPE' }}</p>
@@ -2252,7 +2171,8 @@
                                 <p class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">{{ cpe.mac_address }}</p>
                                 {% endif %}
                             </div>
-                            <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium {% if cpe.status and cpe.status.value == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                            {% set cpe_tone = 'positive' if cpe.status and cpe.status.value == 'active' else 'neutral' %}
+                            <span class="status-tone status-tone-{{ cpe_tone }} shrink-0 rounded-full px-2 py-0.5 text-xs font-medium">
                                 {{ cpe.status.value | title if cpe.status else 'Unknown' }}
                             </span>
                         </div>
@@ -3118,19 +3038,19 @@ function customerDetail(config = {}) {
 
     const icons = {
         customer: L.divIcon({
-            html: '<div style="background:linear-gradient(135deg,#10b981,#059669);width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 4px 12px rgba(16,185,129,0.4)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
+            html: '<div style="background:linear-gradient(135deg,var(--color-semantic-positive-600),var(--color-semantic-positive-700));width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:3px solid white;box-shadow:0 4px 12px color-mix(in srgb,var(--color-semantic-positive-600) 40%,transparent)"><svg style="width:14px;height:14px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/></svg></div>',
             className: '',
             iconSize: [28, 28],
             iconAnchor: [14, 14]
         }),
         fdh_cabinet: L.divIcon({
-            html: '<div style="background:linear-gradient(135deg,#8b5cf6,#7c3aed);width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 8px rgba(139,92,246,0.4)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
+            html: '<div style="background:linear-gradient(135deg,var(--color-data-1),var(--color-primary-700));width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 8px color-mix(in srgb,var(--color-data-1) 40%,transparent)"><svg style="width:12px;height:12px;color:white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg></div>',
             className: '',
             iconSize: [22, 22],
             iconAnchor: [11, 11]
         }),
         splice_closure: L.divIcon({
-            html: '<div style="background:linear-gradient(135deg,#14b8a6,#0d9488);width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 6px rgba(20,184,166,0.4)"></div>',
+            html: '<div style="background:linear-gradient(135deg,var(--color-accent-600),var(--color-accent-700));width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;box-shadow:0 2px 6px color-mix(in srgb,var(--color-accent-600) 40%,transparent)"></div>',
             className: '',
             iconSize: [18, 18],
             iconAnchor: [9, 9]

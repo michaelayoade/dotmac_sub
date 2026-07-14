@@ -37,13 +37,16 @@ but equivalent state and actions resolve through the same backend owners.
 8. `events_webhooks`
 9. `runtime_infrastructure`
 10. `observability`
-11. `provisioning_operations`
-12. `feature_control_plane`
-13. `authorization_control_plane`
-14. `scheduler_control_plane`
-15. `network_access_control_plane`
-16. `service_intent_control_plane`
-17. `integration_control_plane`
+11. `support_operations`
+12. `provisioning_operations`
+13. `feature_control_plane`
+14. `authorization_control_plane`
+15. `scheduler_control_plane`
+16. `network_access_control_plane`
+17. `service_intent_control_plane`
+18. `integration_control_plane`
+19. `ui_list_projection`
+20. `ui_semantic_presentation`
 
 Rule: each PR should finish one domain slice: define the owner service, migrate
 the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
@@ -120,6 +123,156 @@ amounts from locally loaded invoice rows; they consume `/me/service-status`.
 Customer clients consume `/me/usage-summary` totals and provenance; they do not
 replace a server total with a loaded-session page, chart-series sum, or a
 different time window.
+
+## Support Operations
+
+1. `support.ticket_lifecycle` owns the ticket status vocabulary, guarded status
+   transitions, lifecycle timestamps, and transition consequences.
+2. `support.ticket_configuration` owns the operator-visible status subset,
+   priority/type choices, routing, and SLA policy. A configured status must be
+   part of the lifecycle vocabulary.
+3. Status configuration does not own labels, tones, icons, or platform colors;
+   those are read-side presentation concerns.
+
+Rule: API, admin, customer, reseller, automation, and import adapters request
+ticket mutation through the ticket lifecycle service. Settings may narrow the
+choices presented to operators but cannot create a state the lifecycle owner
+will reject.
+
+## UI List Projections
+
+1. `ui.list_contracts` owns normalized list query state, list capability
+   declarations, page metadata, and canonical URL serialization.
+2. Each resource declares one projection owner for its searchable fields,
+   filters, stable sort, row projection, and filtered count.
+3. `ui.customer_list_projection` is the first migrated resource. The live admin
+   customer route and Jinja table consume `ListQuery` and `PageMeta` from
+   `app.services.web_customer_lists`.
+4. The configurable-table customer data endpoint is now a compatibility
+   projection over `app.services.web_customer_lists`. `app.services.table_config`
+   still owns saved column visibility/order and serialization, but it does not
+   select, filter, count, sort, or paginate customer rows. The live customer
+   template does not load or mount the legacy client.
+5. Customer configurable-table migration record:
+   - Old owner: the generic
+     `TableConfigurationService.apply_query_config` customer branch.
+   - New owner: `app.services.web_customer_lists`, using `ui.list_contracts`.
+   - Verification phase: contract tests exercise canonical scope, compatibility
+     aliases, filters, stable sorting, and clamped pagination. A runtime dual-read
+     shadow was not retained because the live customer screen had already been
+     gated off the legacy client.
+   - Cutover gate: customer list, compatibility API, SOT-registry, and route
+     architecture tests must remain green.
+   - Fallback retirement: the generic customer scalar-filter and location-filter
+     branches were removed; unsupported inputs fail closed with HTTP 400.
+6. Legacy `q`, `activation_state`, `customer_type`, NAS/location,
+   `customer_name` sort, `limit`, and aligned `offset` inputs are normalized into
+   `ListQuery`.
+7. `ui.subscriber_list_projection` owns the remaining subscriber
+   configurable-table query. There is no separate live subscriber list: the
+   production admin list and legacy Playwright facade both use `/admin/customers`,
+   while `app.web.admin.subscribers` is an import alias to the customer router.
+8. Subscriber configurable-table migration record:
+   - Old owner: the generic `TableConfigurationService.apply_query_config`
+     Subscriber branch.
+   - New owner: `app.services.web_subscriber_lists`, using `ui.list_contracts`
+     and delegating subscriber scope/full-text search to
+     `app.services.subscriber.Subscribers.query`.
+   - Verification phase: contract tests exercise scope, search aliases, filters,
+     stable sorting, filter-before-pagination, and clamped offsets. No runtime
+     shadow was retained because no production template mounts the subscriber
+     dynamic-table client.
+   - Cutover gate: subscriber service, compatibility projection, SOT registry,
+     and architecture tests must remain green.
+   - Fallback retirement: the generic table query engine and Subscriber-specific
+     fallback were removed. New table data resources require a named projection
+     owner before registration.
+9. Subscriber list reads are read-only. The retired table path used to generate
+   missing subscriber numbers and commit them during serialization. Identifier
+   assignment remains with subscriber creation/update workflows; projections
+   return the stored value, including `null`, and never repair it implicitly.
+10. Legacy subscriber `q`, `status`/`activation_state`, `subscriber_type`,
+    declared sorts, `limit`, and aligned `offset` inputs normalize into
+    `ListQuery`; undeclared scalar filters and sorts fail closed with HTTP 400.
+
+Rule: filters and search are applied before pagination; every paginated sort has
+a unique tie-breaker. Web list state is encoded in URL query parameters so deep
+links, refresh, and browser history reproduce the same projection. A changed
+search, filter, sort, or page size starts at page one. Templates render the
+owner-provided query and page metadata and do not hand-build competing query
+strings, totals, page counts, or sort rules. Under the global Dotmac UI
+standard, the interaction model follows the Carbon data-table, filtering, and
+pagination patterns, with WCAG 2.2 AA as the accessibility floor. This is a
+behavior standard, not a Carbon visual-theme migration. Column-configuration
+responses derive their `sortable` flags from the corresponding resource owner
+rather than the legacy table-field registry.
+
+## UI Semantic Presentation
+
+1. Account, subscription, invoice, payment, outage-incident, support-ticket, and
+   work-order lifecycle owners remain authoritative for raw values and
+   transitions. `network.device_state` remains authoritative for the derived
+   device operational vocabulary, retry-pending state, and alarm classification;
+   `network.connection_health` owns the separate customer-safe
+   `connected/trouble/outage` verdict and diagnostic wording.
+2. `ui.status_presentation` owns the human label, semantic tone (`positive`,
+   `info`, `warning`, `negative`, or `neutral`), and non-color icon key for each
+   account, subscription, invoice, payment, outage-incident, device operational,
+   customer connection health, support-ticket, and field work-order status.
+3. Admin customer, billing, and support screens; customer billing/support;
+   reseller invoice/ticket and customer-connection screens; network outage and
+   device NOC consoles;
+   catalog, billing, service-status, support, CRM outage, and network-device API
+   projections; customer mobile;
+   field job/manager APIs; and field mobile consume the same
+   `StatusPresentation` contract.
+4. Server responses carry semantic meanings, not Tailwind classes, Flutter
+   colors, or other platform-specific tokens. `customer.branding` owns the
+   concrete primary, secondary, and five-role semantic palette. Web renders it
+   through `/branding/theme.css`; both Flutter clients resolve the same
+   `BRAND_SEMANTIC_*_COLOR` build inputs from `brand.json`. Renderers select a
+   role and icon; they do not keep local role-to-color dictionaries.
+   The runtime stylesheet also owns compatibility aliases for legacy non-neutral
+   Tailwind palette names and the ordered `data-1` through `data-7` categorical
+   palette used by charts and maps. Structural neutral surfaces, text, borders,
+   shadows, white, and black remain owned by the design-system foundation.
+5. Unknown or old-backend values fail neutral. Clients may humanize the raw
+   value for compatibility, but must not recreate state-specific tone policy.
+
+Migration record:
+
+- Old owners: account label/color dictionaries in customer Jinja and portal
+  context, subscription/invoice/ticket state-to-tone switches in customer
+  mobile, invoice and ticket label/color dictionaries in portal/admin/reseller
+  Jinja, configurable ticket status colors, and work-order label/color
+  dictionaries in field mobile, plus outage lifecycle badges in the manual,
+  classifier, and notification-review consoles, plus device operational label/
+  color maps in NOC inventory, detail, monitoring, worklist, and map surfaces,
+  plus customer-connection state/color switches in portal, reseller, and mobile
+  diagnostic surfaces.
+- Old color owners: literal Tailwind/hex tone maps in the shared badge,
+  connection diagnostics, NOC map/summary renderers, and Flutter status widgets.
+- New meaning owner: `app.services.status_presentation`, transported through
+  `app.schemas.status_presentation.StatusPresentation`. New concrete-color
+  owner: `app.services.brand_profiles` and the generated brand theme tokens.
+- Compatibility phase: legacy Tailwind palette names resolve to branding-owned
+  scales at runtime; new or touched code uses primary, accent, semantic, or
+  categorical data tokens directly. Literal chart, map, and mobile palettes are
+  retired from migrated slices.
+- Verification phase: exhaustive enum coverage, API serialization, projection,
+  template architecture, and Flutter parsing/rendering tests.
+- Cutover gate: no customer account/subscription, invoice, payment, outage-incident,
+  device operational, customer connection-health, support-ticket, or field
+  work-order status dictionary or local semantic role-to-color map remains in
+  migrated templates or mobile presentation paths. Configured semantic seeds
+  must retain WCAG 2.2 AA text contrast in light and dark themes.
+- Fallback retirement: client compatibility fallbacks are neutral-only and may
+  be removed after all supported servers emit `status_presentation`.
+
+Rule: UI consumers render semantic tones and icon keys through branding-owned
+theme tokens. They do not decide that a domain state is positive, warning,
+negative, informational, or neutral, and they do not assign a literal color to
+one of those roles locally.
 
 ## Secrets and Credentials
 
@@ -201,16 +354,31 @@ Dependency order:
 3. `network.access_path`: resolves `subscriber/subscription -> access path`.
 4. `network.radius_sessions`: resolves online-now state from active sessions.
 5. `network.device_state`: derives NOC operational state, retry state, and alarm
-   classification from administrative intent and monitoring observations.
+   classification from administrative intent and monitoring observations, and
+   owns the `up/degraded/down/maintenance` vocabulary. Retry-pending gaps stay
+   binary but are non-alarming; presentation renders retry-pending `down` as
+   warning/clock rather than a confirmed negative failure.
 6. `network.outage_impact`: resolves affected customers from topology.
 7. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
-8. `network.outage_lifecycle`: owns incident transitions, escalation planning,
-   and outage event emission.
+8. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
+   incident transitions, escalation planning, and outage event emission.
+9. `network.connection_health`: combines authoritative path, live-session,
+   last-mile, impact, and active-incident inputs into the customer-safe
+   `connected/trouble/outage` verdict plus headline/message/advice. It does not
+   own device operational state or raw online-session observations.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
 context, and escalation should consume these network SOT layers.
+Outage list/detail projections add `StatusPresentation` from the raw lifecycle
+state; templates and CRM consumers do not maintain their own state-to-severity
+dictionaries. Device operational state and customer connection-health verdicts
+remain separate vocabularies owned by their corresponding network services.
+Customer portal, reseller, support context, API, and mobile verdict surfaces
+consume the same connection-health payload and semantic presentation; raw
+session dots on subscription views remain observation surfaces outside that
+verdict.
 
 ## Subscriber Sessions
 
@@ -269,10 +437,12 @@ Dependency order:
    CPE, TR-069, ACS, service address, and NAS context.
 2. `operations.provisioning_workflow`: executes service-order workflows and
    provisioning steps from the resolved context.
-3. `operations.work_orders`: exposes work-order read models and customer links.
-4. `operations.field_completion`: owns field-job completion eligibility, evidence
+3. `operations.work_order_status`: declares persisted work-order values and the
+   canonical open, assignable, and terminal sets.
+4. `operations.work_orders`: exposes work-order read models and customer links.
+5. `operations.field_completion`: owns field-job completion eligibility, evidence
    requirements, and completion transitions.
-5. `operations.project_lifecycle`: owns native project field/status mutations,
+6. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
 
 Rule: provisioning callers should resolve customer/network context once through
@@ -287,6 +457,9 @@ never as the authority. Field job detail projects `completion_requirements`
 from the same transition service that validates completion. Field clients consume
 that contract and may offer advisory quality checks, but must not invent a separate
 completion gate from local checklist state or cached settings.
+Work-order API projections carry server-owned status labels, tones, and icons;
+field clients retain the raw value for transitions and filtering, but do not
+reinterpret its presentation.
 
 ## Control Planes
 

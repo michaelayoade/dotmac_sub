@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../app/theme.dart';
+import '../../app/status_presentation.dart';
+import '../../app/widgets/status_pill.dart';
 import '../jobs/jobs_providers.dart';
 import '../jobs/job_models.dart';
 import '../jobs/widgets/job_card.dart';
@@ -34,8 +36,8 @@ class TodayScreen extends ConsumerWidget {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: isDark
-                ? const [Color(0xFF11140F), Color(0xFF1A1F18)]
-                : const [Color(0xFFF7F5EC), Color(0xFFEDE9DC)],
+                ? [AppColors.surfaceDark, AppColors.groundDark]
+                : [AppColors.surfaceLight, AppColors.groundLight],
           ),
         ),
         child: RefreshIndicator(
@@ -240,10 +242,10 @@ class _DotmacWordmark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return RichText(
-      text: const TextSpan(
+      text: TextSpan(
         text: 'DOTMAC',
         style: TextStyle(
-          color: AppColors.green,
+          color: AppColors.semanticPositive,
           fontFamily: 'Georgia',
           fontSize: 25,
           fontWeight: FontWeight.w800,
@@ -269,8 +271,8 @@ class _ShiftToggle extends StatelessWidget {
       padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(
         color: AppColors.dark(context)
-            ? const Color(0xFF242A22)
-            : const Color(0xFFE9E6DC),
+            ? AppColors.surfaceDark
+            : AppColors.groundLight,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
@@ -281,9 +283,9 @@ class _ShiftToggle extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.surface(context),
                 borderRadius: BorderRadius.circular(16),
-                boxShadow: const [
+                boxShadow: [
                   BoxShadow(
-                    color: Color(0x1F272722),
+                    color: Colors.black.withValues(alpha: 0.12),
                     blurRadius: 10,
                     offset: Offset(0, 4),
                   ),
@@ -353,11 +355,11 @@ class _ConnectionStrip extends StatelessWidget {
             width: 22,
             height: 22,
             decoration: BoxDecoration(
-              color: AppColors.green,
+              color: AppColors.semanticPositive,
               borderRadius: BorderRadius.circular(999),
-              boxShadow: const [
+              boxShadow: [
                 BoxShadow(
-                  color: Color(0x24367332),
+                  color: AppColors.semanticPositive.withValues(alpha: 0.14),
                   spreadRadius: 8,
                   blurRadius: 0,
                 ),
@@ -369,8 +371,8 @@ class _ConnectionStrip extends StatelessWidget {
             child: Text(
               'Connected · $openJobs open · $completedToday done',
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: AppColors.green,
+              style: TextStyle(
+                color: AppColors.semanticPositive,
                 fontSize: 19,
                 fontWeight: FontWeight.w800,
               ),
@@ -406,7 +408,7 @@ class _MetricTile extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                 color: value == 'Live'
-                    ? AppColors.green
+                    ? AppColors.semanticPositive
                     : AppColors.text(context),
                 fontWeight: FontWeight.w900,
               ),
@@ -491,9 +493,9 @@ class _LiveJobPanel extends StatelessWidget {
         color: AppColors.surface(context),
         border: Border.all(color: AppColors.primary, width: 2),
         borderRadius: BorderRadius.circular(AppRadii.feature),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color(0x1A2D8898),
+            color: AppColors.accent.withValues(alpha: 0.10),
             blurRadius: 34,
             offset: Offset(0, 16),
           ),
@@ -506,8 +508,8 @@ class _LiveJobPanel extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Padding(
-                  padding: EdgeInsets.only(top: 7),
+                Padding(
+                  padding: const EdgeInsets.only(top: 7),
                   child: Icon(
                     Icons.engineering_outlined,
                     color: AppColors.primary,
@@ -539,7 +541,7 @@ class _LiveJobPanel extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
-                _LiveBadge(label: statusLabel(job.status)),
+                StatusPill(job.statusPresentation),
               ],
             ),
           ),
@@ -585,47 +587,6 @@ class _LiveJobPanel extends StatelessWidget {
   }
 }
 
-class _LiveBadge extends StatelessWidget {
-  const _LiveBadge({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.softTeal(context),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              color: AppColors.primary,
-              borderRadius: BorderRadius.circular(999),
-            ),
-          ),
-          const SizedBox(width: 7),
-          Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              color: AppColors.dark(context)
-                  ? AppColors.tealSoft
-                  : const Color(0xFF1F6573),
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _RoutePreview extends StatelessWidget {
   const _RoutePreview({required this.surfaceColor});
 
@@ -649,7 +610,7 @@ class _RoutePreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final grid = Paint()
-      ..color = const Color(0x29829A88)
+      ..color = AppColors.semanticNeutral.withValues(alpha: 0.16)
       ..strokeWidth = 1;
     for (double x = 0; x <= size.width; x += 38) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
@@ -708,7 +669,11 @@ class _RoutePreviewPainter extends CustomPainter {
       AppColors.primary,
       0.18,
     );
-    point(Offset(size.width * 0.95, size.height * 0.27), AppColors.green, 0.16);
+    point(
+      Offset(size.width * 0.95, size.height * 0.27),
+      AppColors.semanticPositive,
+      0.16,
+    );
   }
 
   @override
@@ -728,7 +693,7 @@ class SyncStatusBar extends ConsumerWidget {
     final queued = pending + photos;
     if (queued == 0 && conflicts == 0) return const SizedBox.shrink();
 
-    final amber = const Color(0xFFF59E0B);
+    final warning = AppColors.statusTone(context, StatusTone.warning);
     final parts = <String>[
       if (queued > 0) '$queued queued',
       if (conflicts > 0) '$conflicts need review',
@@ -742,12 +707,12 @@ class SyncStatusBar extends ConsumerWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: amber.withValues(alpha: 0.12),
+            color: warning.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             children: [
-              Icon(Icons.sync, size: 16, color: amber),
+              Icon(Icons.sync, size: 16, color: warning),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(

@@ -6,52 +6,57 @@
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Current device and ONT state for quick triage confirmation.</p>
         </div>
         <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
-            <span class="h-2 w-2 rounded-full bg-slate-400"></span>
+            <span class="status-tone-dot status-tone-dot-neutral h-2 w-2 rounded-full"></span>
             Snapshot{% if now %} · {{ now.strftime('%H:%M:%S') }} UTC{% endif %}
         </div>
     </div>
 
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div class="rounded-xl border border-emerald-200/70 bg-emerald-50/80 px-4 py-3 dark:border-emerald-900/40 dark:bg-emerald-900/20">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">Devices Online</p>
-            <p class="mt-2 text-2xl font-bold tabular-nums text-emerald-950 dark:text-emerald-100">{{ stats.devices_online }}</p>
-            <p class="mt-1 text-xs text-emerald-700 dark:text-emerald-300">Reachable infrastructure</p>
+        <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
+            <p class="status-foreground status-tone-positive text-[11px] font-semibold uppercase tracking-[0.16em]">Devices Up</p>
+            <p class="status-foreground status-tone-positive mt-2 text-2xl font-bold tabular-nums">{{ stats.devices_online }}</p>
+            <p class="status-foreground status-tone-positive mt-1 text-xs">Reachable infrastructure</p>
         </div>
-        <div class="rounded-xl border border-rose-200/70 bg-rose-50/80 px-4 py-3 dark:border-rose-900/40 dark:bg-rose-900/20">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700 dark:text-rose-300">Devices Offline</p>
-            <p class="mt-2 text-2xl font-bold tabular-nums text-rose-950 dark:text-rose-100">{{ stats.devices_offline }}</p>
-            <p class="mt-1 text-xs text-rose-700 dark:text-rose-300">Hard-down infrastructure</p>
+        <div class="status-panel status-panel-negative rounded-xl border px-4 py-3">
+            <p class="status-foreground status-tone-negative text-[11px] font-semibold uppercase tracking-[0.16em]">Devices Offline</p>
+            <p class="status-foreground status-tone-negative mt-2 text-2xl font-bold tabular-nums">{{ stats.devices_offline }}</p>
+            <p class="status-foreground status-tone-negative mt-1 text-xs">Hard-down infrastructure</p>
         </div>
-        <div class="rounded-xl border border-amber-200/70 bg-amber-50/80 px-4 py-3 dark:border-amber-900/40 dark:bg-amber-900/20">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">Open Alarms</p>
-            <p class="mt-2 text-2xl font-bold tabular-nums text-amber-950 dark:text-amber-100">{{ stats.alarms_open }}</p>
-            <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">Rules currently firing</p>
+        <div class="status-panel status-panel-warning rounded-xl border px-4 py-3">
+            <p class="status-foreground status-tone-warning text-[11px] font-semibold uppercase tracking-[0.16em]">Open Alarms</p>
+            <p class="status-foreground status-tone-warning mt-2 text-2xl font-bold tabular-nums">{{ stats.alarms_open }}</p>
+            <p class="status-foreground status-tone-warning mt-1 text-xs">Rules currently firing</p>
         </div>
-        <div class="rounded-xl border border-blue-200/70 bg-blue-50/80 px-4 py-3 dark:border-blue-900/40 dark:bg-blue-900/20">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-700 dark:text-blue-300">Subscribers Online</p>
-            <p class="mt-2 text-2xl font-bold tabular-nums text-blue-950 dark:text-blue-100">{{ stats.subscribers_online }}</p>
-            <p class="mt-1 text-xs text-blue-700 dark:text-blue-300">Sessions currently up</p>
+        <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
+            <p class="status-foreground status-tone-positive text-[11px] font-semibold uppercase tracking-[0.16em]">Subscribers Online</p>
+            <p class="status-foreground status-tone-positive mt-2 text-2xl font-bold tabular-nums">{{ stats.subscribers_online }}</p>
+            <p class="status-foreground status-tone-positive mt-1 text-xs">Sessions currently up</p>
         </div>
     </div>
+    {% if stats.devices_retry_pending %}
+    <p class="status-foreground status-tone-warning text-xs font-medium">
+        {{ stats.devices_retry_pending }} device{{ '' if stats.devices_retry_pending == 1 else 's' }} awaiting fresh monitoring evidence.
+    </p>
+    {% endif %}
 
     {% if ont_service_summary and ont_service_summary.total > 0 %}
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div class="rounded-xl border border-emerald-200/70 bg-white px-4 py-3 dark:border-emerald-900/30 dark:bg-slate-800/80">
+        <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Service Online</p>
             <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.online }}</p>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective status after ACS fallback</p>
         </div>
-        <div class="rounded-xl border border-rose-200/70 bg-white px-4 py-3 dark:border-rose-900/30 dark:bg-slate-800/80">
+        <div class="status-panel status-panel-negative rounded-xl border px-4 py-3">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Service Offline</p>
             <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.offline }}</p>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective service loss</p>
         </div>
-        <div class="rounded-xl border border-amber-200/70 bg-white px-4 py-3 dark:border-amber-900/30 dark:bg-slate-800/80">
+        <div class="status-panel status-panel-warning rounded-xl border px-4 py-3">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Low Signal</p>
             <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.low_signal }}</p>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optical warning threshold breached</p>
         </div>
-        <div class="rounded-xl border border-slate-200/70 bg-white px-4 py-3 dark:border-slate-700/60 dark:bg-slate-800/80">
+        <div class="status-panel status-panel-neutral rounded-xl border px-4 py-3">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Total ONTs</p>
             <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.total }}</p>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Managed inventory count</p>
@@ -71,12 +76,12 @@
             </div>
         </div>
         <div class="mt-4 grid gap-3 md:grid-cols-2">
-            <div class="rounded-xl border border-emerald-200/70 bg-emerald-50/60 px-4 py-3 dark:border-emerald-900/30 dark:bg-emerald-900/10">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">PON Online</p>
+            <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
+                <p class="status-foreground status-tone-positive text-[11px] font-semibold uppercase tracking-[0.16em]">PON Online</p>
                 <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_olt_link_summary.online }}</p>
             </div>
-            <div class="rounded-xl border border-rose-200/70 bg-rose-50/60 px-4 py-3 dark:border-rose-900/30 dark:bg-rose-900/10">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700 dark:text-rose-300">PON Offline</p>
+            <div class="status-panel status-panel-negative rounded-xl border px-4 py-3">
+                <p class="status-foreground status-tone-negative text-[11px] font-semibold uppercase tracking-[0.16em]">PON Offline</p>
                 <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_olt_link_summary.offline }}</p>
             </div>
         </div>

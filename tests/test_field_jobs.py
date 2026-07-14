@@ -148,6 +148,12 @@ def test_field_jobs_scope_by_crm_person_and_assignment_queue(db_session):
         assigned_by_crm.crm_work_order_id,
         assigned_by_queue.crm_work_order_id,
     ]
+    assert jobs[0].status_presentation.model_dump(mode="json") == {
+        "value": "dispatched",
+        "label": "Dispatched",
+        "tone": "info",
+        "icon": "info",
+    }
     assert {job.id for job in field_jobs.list(db_session, _auth(other_user))} == {
         "wo-queue-assigned",
         "wo-hidden",
@@ -273,6 +279,7 @@ def test_field_job_detail_returns_customer_and_location(db_session):
     detail = field_jobs.get_detail(db_session, _auth(user), "wo-detail")
 
     assert detail.job.id == "wo-detail"
+    assert detail.job.status_presentation.value == detail.job.status
     assert detail.customer is not None
     assert detail.customer.name == "Adaeze Nwosu"
     assert detail.location.latitude == 9.07

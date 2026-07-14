@@ -1,5 +1,6 @@
 import 'package:dotmac_portal/src/features/home/dashboard_screen.dart';
 import 'package:dotmac_portal/src/models/connection_status.dart';
+import 'package:dotmac_portal/src/models/status_presentation.dart';
 import 'package:dotmac_portal/src/models/usage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,6 +30,12 @@ void main() {
         serviceActive: true,
         classifier: ConnectionStatus(
           state: ConnectionHealth.connected,
+          statusPresentation: StatusPresentation(
+            value: 'connected',
+            label: 'Connected',
+            tone: StatusTone.positive,
+            icon: 'check',
+          ),
           headline: "You're connected",
           message: 'Your connection looks healthy.',
           areaOutage: false,
@@ -48,6 +55,12 @@ void main() {
         serviceActive: true,
         classifier: const ConnectionStatus(
           state: ConnectionHealth.connected,
+          statusPresentation: StatusPresentation(
+            value: 'connected',
+            label: 'Connected',
+            tone: StatusTone.positive,
+            icon: 'check',
+          ),
           headline: "You're connected",
           message: 'Healthy.',
           areaOutage: false,
@@ -66,6 +79,12 @@ void main() {
         serviceActive: true,
         classifier: ConnectionStatus(
           state: ConnectionHealth.trouble,
+          statusPresentation: StatusPresentation(
+            value: 'trouble',
+            label: 'Connection issue',
+            tone: StatusTone.warning,
+            icon: 'alert',
+          ),
           headline: 'Router not responding',
           message: "Your router isn't responding.",
           advice: 'Reboot your router',
@@ -76,6 +95,7 @@ void main() {
       expect(find.text('Router not responding'), findsOneWidget);
       expect(find.text('Reboot your router'), findsOneWidget);
       expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
     });
 
     testWidgets(
@@ -87,6 +107,12 @@ void main() {
         serviceActive: true,
         classifier: ConnectionStatus(
           state: ConnectionHealth.outage,
+          statusPresentation: StatusPresentation(
+            value: 'outage',
+            label: 'Area outage',
+            tone: StatusTone.negative,
+            icon: 'alert',
+          ),
           headline: 'Service interruption in your area',
           message: "A known interruption is affecting your area — we're on it.",
           // Even if advice leaks through, the banner must not self-blame under

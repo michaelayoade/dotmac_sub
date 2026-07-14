@@ -13,6 +13,7 @@ import 'package:dotmac_portal/src/models/plan_change.dart';
 import 'package:dotmac_portal/src/models/service_status.dart';
 import 'package:dotmac_portal/src/models/session.dart';
 import 'package:dotmac_portal/src/models/subscription.dart';
+import 'package:dotmac_portal/src/models/ticket.dart';
 import 'package:dotmac_portal/src/models/usage.dart';
 
 void main() {
@@ -67,6 +68,12 @@ void main() {
         'id': 'i1',
         'account_id': 'a1',
         'status': 'issued',
+        'status_presentation': {
+          'value': 'issued',
+          'label': 'Awaiting payment',
+          'tone': 'info',
+          'icon': 'info',
+        },
         'currency': 'NGN',
         'subtotal': '1000.00',
         'tax_total': '75.00',
@@ -77,6 +84,8 @@ void main() {
       expect(inv.total, 1075.0);
       expect(inv.isPaid, isFalse);
       expect(inv.isOverdue, isTrue);
+      expect(inv.statusPresentation.label, 'Awaiting payment');
+      expect(inv.statusPresentation.tone.name, 'info');
     });
 
     test('treats zero balance as paid', () {
@@ -88,6 +97,40 @@ void main() {
         'total': '500.00',
       });
       expect(inv.isPaid, isTrue);
+      expect(inv.statusPresentation.tone.name, 'neutral');
+    });
+  });
+
+  group('Payment', () {
+    test('parses the server-owned status presentation', () {
+      final payment = Payment.fromJson({
+        'id': 'p1',
+        'amount': '2500.00',
+        'currency': 'NGN',
+        'status': 'partially_refunded',
+        'status_presentation': {
+          'value': 'partially_refunded',
+          'label': 'Partially refunded',
+          'tone': 'warning',
+          'icon': 'clock',
+        },
+      });
+
+      expect(payment.amount, 2500.0);
+      expect(payment.statusPresentation.label, 'Partially refunded');
+      expect(payment.statusPresentation.tone.name, 'warning');
+      expect(payment.statusPresentation.icon, 'clock');
+    });
+
+    test('uses a neutral compatibility fallback for older servers', () {
+      final payment = Payment.fromJson({
+        'id': 'p2',
+        'amount': '100.00',
+        'status': 'succeeded',
+      });
+
+      expect(payment.statusPresentation.label, 'Succeeded');
+      expect(payment.statusPresentation.tone.name, 'neutral');
     });
   });
 
@@ -158,6 +201,12 @@ void main() {
         'account_id': 'a1',
         'offer_id': 'o1',
         'status': 'active',
+        'status_presentation': {
+          'value': 'active',
+          'label': 'Service active',
+          'tone': 'positive',
+          'icon': 'check',
+        },
         'billing_mode': 'prepaid',
         'ipv4_address': '10.11.128.186',
         'offer': {
@@ -170,6 +219,8 @@ void main() {
       expect(s.isPrepaid, isTrue);
       expect(s.planType, 'business · fiber');
       expect(s.displayName, 'unlimited 3');
+      expect(s.statusPresentation.label, 'Service active');
+      expect(s.statusPresentation.tone.name, 'positive');
     });
 
     test('computes negative days for an expired service', () {
@@ -324,6 +375,40 @@ void main() {
       ]) {
         expect(withStatus(status).isCurrent, isFalse, reason: status);
       }
+    });
+  });
+
+  group('Ticket', () {
+    test('parses the server-owned status presentation', () {
+      final ticket = Ticket.fromJson({
+        'id': 'ticket-1',
+        'title': 'Slow browsing',
+        'status': 'waiting_on_customer',
+        'priority': 'normal',
+        'status_presentation': {
+          'value': 'waiting_on_customer',
+          'label': 'Waiting on customer',
+          'tone': 'warning',
+          'icon': 'clock',
+        },
+      });
+
+      expect(ticket.statusPresentation.label, 'Waiting on customer');
+      expect(ticket.statusPresentation.tone.name, 'warning');
+      expect(ticket.statusPresentation.icon, 'clock');
+    });
+
+    test('uses a neutral fallback for an old server payload', () {
+      final ticket = Ticket.fromJson({
+        'id': 'ticket-2',
+        'title': 'Legacy ticket',
+        'status': 'future_state',
+        'priority': 'normal',
+      });
+
+      expect(ticket.statusPresentation.label, 'Future State');
+      expect(ticket.statusPresentation.tone.name, 'neutral');
+      expect(ticket.statusPresentation.icon, 'info');
     });
   });
 
@@ -592,6 +677,12 @@ void main() {
           {
             'subscription_id': 's1',
             'status': 'active',
+            'status_presentation': {
+              'value': 'active',
+              'label': 'Active',
+              'tone': 'positive',
+              'icon': 'check',
+            },
             'billing_mode': 'prepaid',
             'usable': true,
             'reason': 'low_balance',
@@ -612,6 +703,8 @@ void main() {
       expect(s.graceUntil, isNotNull);
       expect(s.needsRenewal, isTrue);
       expect(s.services.single.actionable, isTrue);
+      expect(s.services.single.statusPresentation.label, 'Active');
+      expect(s.services.single.statusPresentation.tone.name, 'positive');
       expect(s.primaryAction?.kind, 'top_up');
       expect(s.primaryAction?.amount, 50.0);
       expect(s.primaryAction?.restoresService, isFalse);

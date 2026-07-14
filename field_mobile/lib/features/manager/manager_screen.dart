@@ -6,8 +6,8 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../app/theme.dart';
+import '../../app/widgets/status_pill.dart';
 import '../expenses/expense_models.dart';
-import '../jobs/job_models.dart';
 import 'manager_providers.dart';
 
 class ManagerDashboardScreen extends ConsumerWidget {
@@ -466,7 +466,7 @@ class _MapDot extends StatelessWidget {
               width: 22,
               height: 22,
               decoration: BoxDecoration(
-                color: AppColors.green,
+                color: AppColors.semanticPositive,
                 shape: BoxShape.circle,
                 border: Border.all(color: AppColors.panel, width: 3),
                 boxShadow: const [
@@ -507,7 +507,7 @@ class _TechnicianTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = technician.isLive
-        ? AppColors.green
+        ? AppColors.semanticPositive
         : technician.locationSharingEnabled
         ? AppColors.accent
         : AppColors.subdued(context);
@@ -544,7 +544,6 @@ class _DispatchJobCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final statusColor = AppColors.status(job.status);
     final time = job.scheduledStart == null
         ? 'Unscheduled'
         : DateFormat('d MMM, HH:mm').format(job.scheduledStart!.toLocal());
@@ -557,7 +556,7 @@ class _DispatchJobCard extends ConsumerWidget {
           children: [
             Row(
               children: [
-                _StatusPill(label: statusLabel(job.status), color: statusColor),
+                StatusPill(job.statusPresentation),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -683,10 +682,7 @@ class _ExpenseApprovalCardState extends ConsumerState<_ExpenseApprovalCard> {
           children: [
             Row(
               children: [
-                const Icon(
-                  Icons.receipt_long_outlined,
-                  color: AppColors.primary,
-                ),
+                Icon(Icons.receipt_long_outlined, color: AppColors.primary),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -809,7 +805,7 @@ Future<void> _assign(
             ListTile(
               leading: Icon(
                 tech.isLive ? Icons.radio_button_checked : Icons.person_outline,
-                color: tech.isLive ? AppColors.green : null,
+                color: tech.isLive ? AppColors.semanticPositive : null,
               ),
               title: Text(tech.name),
               subtitle: Text(

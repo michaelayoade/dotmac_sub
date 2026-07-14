@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.domain_settings import SettingDomain
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.subscription_engine import SettingValueType
+from app.models.support import TicketStatus
 from app.models.ticket_workflow import TicketAssignmentRule, TicketAssignmentStrategy
 from app.schemas.settings import DomainSettingUpdate
 from app.services import domain_settings as domain_settings_service
@@ -16,7 +17,6 @@ from app.services import domain_settings as domain_settings_service
 STATUS_OPTIONS_KEY = "support_ticket_status_options"
 PRIORITY_OPTIONS_KEY = "support_ticket_priority_options"
 TYPE_OPTIONS_KEY = "support_ticket_type_options"
-STATUS_COLORS_KEY = "support_ticket_status_colors"
 SERVICE_TEAMS_KEY = "support_service_teams"
 REGION_OPTIONS_KEY = "support_ticket_region_options"
 AUTO_ASSIGN_ENABLED_KEY = "support_ticket_auto_assign_enabled"
@@ -26,20 +26,8 @@ SERVICE_TEAM_MEMBERS_KEY = "support_service_team_members"
 SLA_POLICY_KEY = "support_ticket_sla_policy"
 SETTINGS_DOMAIN = SettingDomain.workflow
 
-DEFAULT_STATUS_OPTIONS = [
-    "new",
-    "open",
-    "pending",
-    "waiting_on_customer",
-    "lastmile_rerun",
-    "site_under_construction",
-    "on_hold",
-    "pending_confirmation",
-    "resolved",
-    "closed",
-    "canceled",
-    "merged",
-]
+DEFAULT_STATUS_OPTIONS = [status.value for status in TicketStatus]
+VALID_STATUS_OPTIONS = frozenset(DEFAULT_STATUS_OPTIONS)
 DEFAULT_PRIORITY_OPTIONS = [
     "lower",
     "low",
@@ -56,20 +44,6 @@ DEFAULT_TYPE_OPTIONS = [
     "outage",
 ]
 DEFAULT_REGION_OPTIONS = ["north", "south", "east", "west", "central"]
-DEFAULT_STATUS_COLORS = {
-    "new": "blue",
-    "open": "emerald",
-    "pending": "amber",
-    "waiting_on_customer": "amber",
-    "lastmile_rerun": "amber",
-    "site_under_construction": "amber",
-    "on_hold": "orange",
-    "pending_confirmation": "amber",
-    "resolved": "teal",
-    "closed": "slate",
-    "canceled": "red",
-    "merged": "violet",
-}
 DEFAULT_SLA_POLICY = {
     "urgent": {"response_hours": 1, "resolution_hours": 8, "aging_hours": 4},
     "high": {"response_hours": 4, "resolution_hours": 24, "aging_hours": 12},
@@ -78,16 +52,6 @@ DEFAULT_SLA_POLICY = {
     "low": {"response_hours": 24, "resolution_hours": 120, "aging_hours": 48},
     "lower": {"response_hours": 24, "resolution_hours": 168, "aging_hours": 72},
 }
-STATUS_COLOR_VARIANTS = [
-    "slate",
-    "blue",
-    "emerald",
-    "amber",
-    "orange",
-    "teal",
-    "red",
-    "violet",
-]
 TERMINAL_STATUSES = {"resolved", "closed", "canceled", "merged"}
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
@@ -109,6 +73,12 @@ def normalize_system_value(value: str) -> str:
     text = str(value or "").strip().lower()
     text = _NON_ALNUM_RE.sub("_", text)
     return text.strip("_")
+
+
+def normalize_ticket_status(value: str) -> str:
+    """Keep configured choices inside the lifecycle owner's vocabulary."""
+    normalized = normalize_system_value(value)
+    return normalized if normalized in VALID_STATUS_OPTIONS else ""
 
 
 def _normalize_list(
@@ -445,7 +415,7 @@ def list_status_options(db: Session) -> list[str]:
         db,
         key=STATUS_OPTIONS_KEY,
         defaults=DEFAULT_STATUS_OPTIONS,
-        normalizer=normalize_system_value,
+        normalizer=normalize_ticket_status,
     )
 
 
@@ -490,18 +460,6 @@ def list_service_teams(db: Session) -> list[dict[str, str]]:
         seen.add(team_id)
         normalized.append({"id": team_id, "label": label})
     return normalized
-
-
-def status_color_options(db: Session) -> dict[str, str]:
-    raw = _read_raw_setting(db, STATUS_COLORS_KEY)
-    configured = raw if isinstance(raw, dict) else {}
-    colors: dict[str, str] = {}
-    for status in list_status_options(db):
-        color = str(
-            configured.get(status) or DEFAULT_STATUS_COLORS.get(status) or "slate"
-        )
-        colors[status] = color if color in STATUS_COLOR_VARIANTS else "slate"
-    return colors
 
 
 def auto_assign_enabled(db: Session) -> bool:
@@ -610,14 +568,19 @@ def update_options(
     sla_response_hours: list[str] | None = None,
     sla_resolution_hours: list[str] | None = None,
     sla_aging_hours: list[str] | None = None,
-    status_color_statuses: list[str] | None = None,
-    status_color_values: list[str] | None = None,
 ) -> None:
-    normalized_statuses = _normalize_list(
+    requested_statuses = _normalize_list(
         statuses,
         defaults=DEFAULT_STATUS_OPTIONS,
         normalizer=normalize_system_value,
     )
+    invalid_statuses = [
+        status for status in requested_statuses if status not in VALID_STATUS_OPTIONS
+    ]
+    if invalid_statuses:
+        unsupported = ", ".join(invalid_statuses)
+        raise ValueError(f"Unsupported ticket status: {unsupported}")
+    normalized_statuses = requested_statuses
     normalized_priorities = _normalize_list(
         priorities,
         defaults=DEFAULT_PRIORITY_OPTIONS,
@@ -742,19 +705,6 @@ def update_options(
                 ),
             }
         _write_json(db, key=SLA_POLICY_KEY, value=policy)
-    if status_color_statuses is not None:
-        colors: dict[str, str] = {}
-        color_values = status_color_values or []
-        for index, status_raw in enumerate(status_color_statuses):
-            status = normalize_system_value(status_raw)
-            color = (
-                str(color_values[index] or "").strip()
-                if index < len(color_values)
-                else ""
-            )
-            if status:
-                colors[status] = color if color in STATUS_COLOR_VARIANTS else "slate"
-        _write_json(db, key=STATUS_COLORS_KEY, value=colors)
 
 
 def default_status(db: Session) -> str:
@@ -773,7 +723,3 @@ def status_is_terminal(value: str | None) -> bool:
 
 def status_is_merged(value: str | None) -> bool:
     return str(value or "").strip() == "merged"
-
-
-def status_color(value: str) -> str:
-    return DEFAULT_STATUS_COLORS.get(str(value or "").strip(), "slate")

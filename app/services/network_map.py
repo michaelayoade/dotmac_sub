@@ -22,6 +22,7 @@ from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.subscriber import Address, Subscriber
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import settings_spec
+from app.services.device_operational_status import annotate_operational_status
 from app.services.network.ont_status import resolve_effective_ont_status
 from app.services.network.signal_thresholds import (
     classify_signal,
@@ -82,6 +83,7 @@ def build_network_map_context(db: Session) -> dict:
         .order_by(PopSite.id.asc(), NetworkDevice.name.asc())
         .all()
     )
+    annotate_operational_status([device for device, _ in network_devices])
     for idx, (device, pop_site) in enumerate(network_devices):
         # Spread markers around the POP to avoid complete overlap.
         angle = (idx % 12) * (math.pi / 6.0)
@@ -96,7 +98,11 @@ def build_network_map_context(db: Session) -> dict:
                     "id": str(device.id),
                     "type": "network_device",
                     "name": device.name,
-                    "status": device.status.value if device.status else "unknown",
+                    "status": device.operational_status,
+                    "status_reason": device.operational_reason,
+                    "status_presentation": device.status_presentation.model_dump(
+                        mode="json"
+                    ),
                     "role": device.role.value if device.role else None,
                     "device_type": device.device_type.value
                     if device.device_type
@@ -424,19 +430,23 @@ def build_network_map_context(db: Session) -> dict:
         "customers_offline": offline_count,
         "network_devices": len(network_devices),
         "network_devices_online": sum(
-            1
-            for device, _ in network_devices
-            if device.status and device.status.value == "online"
+            1 for device, _ in network_devices if device.operational_status == "up"
         ),
         "network_devices_offline": sum(
-            1
-            for device, _ in network_devices
-            if device.status and device.status.value == "offline"
+            1 for device, _ in network_devices if device.operational_status == "down"
         ),
         "network_devices_degraded": sum(
             1
             for device, _ in network_devices
-            if device.status and device.status.value in {"degraded", "maintenance"}
+            if device.operational_status == "degraded"
+        ),
+        "network_devices_maintenance": sum(
+            1
+            for device, _ in network_devices
+            if device.operational_status == "maintenance"
+        ),
+        "network_devices_retry_pending": sum(
+            1 for device, _ in network_devices if device.operational_retry_pending
         ),
         "onts": len(ont_units),
         "onts_online": ont_online,

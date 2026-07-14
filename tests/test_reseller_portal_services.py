@@ -757,6 +757,12 @@ def test_list_accounts_success(db_session, reseller_account, reseller):
 
     assert len(result) == 1
     assert result[0]["id"] == str(reseller_account.id)
+    assert result[0]["status_presentation"] == {
+        "value": reseller_account.status.value,
+        "label": "Active",
+        "tone": "positive",
+        "icon": "check",
+    }
     assert result[0]["open_balance"] == 0
     assert result[0]["open_invoices"] == 0
 
@@ -990,6 +996,12 @@ def test_list_customer_connection_statuses_is_reseller_scoped(
     assert result["counts"]["connected"] == 1
     assert [row["account_id"] for row in result["rows"]] == [str(reseller_account.id)]
     assert result["rows"][0]["subscription_id"] == str(owned_subscription.id)
+    assert result["rows"][0]["status_presentation"] == {
+        "value": "connected",
+        "label": "Connected",
+        "tone": "positive",
+        "icon": "check",
+    }
     status_mock.assert_called_once()
     assert status_mock.call_args.args[1].id == owned_subscription.id
 
@@ -1007,6 +1019,7 @@ def test_list_customer_connection_statuses_handles_no_active_service(
     assert result["counts"]["trouble"] == 1
     assert result["rows"][0]["state"] == "trouble"
     assert result["rows"][0]["headline"] == "No active service"
+    assert result["rows"][0]["status_presentation"]["tone"] == "warning"
 
 
 def test_list_customer_connection_statuses_expands_multiple_active_connections(

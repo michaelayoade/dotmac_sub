@@ -90,7 +90,10 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
     final executionActions = actions
         .where((action) => action != 'en_route' && action != 'arrived')
         .toList();
-    final statusColor = AppColors.status(job.status);
+    final statusColor = AppColors.statusTone(
+      context,
+      job.statusPresentation.tone,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -119,7 +122,7 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
                 children: [
                   Icon(Icons.circle, size: 10, color: statusColor),
                   const SizedBox(width: 6),
-                  Text(statusLabel(job.status)),
+                  Text(job.statusPresentation.label),
                 ],
               ),
             ),

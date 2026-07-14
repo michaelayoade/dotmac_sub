@@ -1,6 +1,6 @@
 # Spec: Device Operational Status (derived NOC truth, not a field swap)
 
-Date: 2026-06-26 · Status: draft for review · Owner: NOC/Network ops
+Date: 2026-06-26 · Updated: 2026-07-14 · Status: implemented, coverage follow-up open · Owner: NOC/Network ops
 
 ## 1. Problem
 
@@ -94,6 +94,30 @@ monitoring gaps into fake outages.
   - `active + retry_pending`                → net-eng / VPN
   - `monitored + stale`                     → monitoring infra
   - `monitored + down >30d + 0 customers`   → decommission candidate (the 171 dead Zabbix hosts)
+
+### Semantic presentation cutover
+
+`network.device_state` owns derivation and the
+`up/degraded/down/maintenance` vocabulary. `ui.status_presentation` owns only
+the cross-client label, semantic tone, and non-color icon:
+
+| Operational state | Label | Tone | Icon |
+|---|---|---|---|
+| `up` | Up | positive | check |
+| `degraded` | Degraded | warning | alert |
+| `down` with negative evidence | Down | negative | x |
+| `down` with `retry_pending` | Down | warning | clock |
+| `maintenance` | Maintenance | neutral | minus |
+
+The retry-pending override is presentation of the resolver's existing
+non-alarming classification; it does not change the derived state. NOC
+inventory, core-device detail, monitoring, mismatch worklist, map, OLT/ONT
+lists, compatibility inventory, and network-device API projections consume the
+shared contract. Administrative status remains secondary intent, and ping/SNMP
+health dots remain raw observations.
+
+CPE rows without an approved live operational resolver render neutral Unknown.
+Record existence or `is_active` must not be promoted to an online decision.
 
 ## 5. Phasing
 

@@ -55,11 +55,12 @@
     </div>
 
     {# Status Summary #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 100ms;">
-        {{ stats_card("Online", stats.online, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-white"></span></span>', color="emerald", color2="green") }}
-        {{ stats_card("Offline", stats.offline, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', color="red", color2="rose") }}
-        {{ stats_card("Warning", stats.warning, icon=icon_warning(), color="amber", color2="orange") }}
-        {{ stats_card("Unprovisioned", stats.unprovisioned, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>', color="slate", color2="slate") }}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 animate-fade-in-up" style="animation-delay: 100ms;">
+        {{ stats_card("Up", stats.up, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-current opacity-40"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-current"></span></span>', tone="positive") }}
+        {{ stats_card("Down", stats.down, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', tone="negative") }}
+        {{ stats_card("Degraded", stats.degraded, icon=icon_warning(), tone="warning") }}
+        {{ stats_card("Maintenance", stats.maintenance, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8 8-4-4"/></svg>', tone="neutral") }}
+        {{ stats_card("Unknown", stats.unknown, icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8h.01M11 12h1v4h1m8-4a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', tone="neutral") }}
     </div>
 
     <div id="discovery-status"></div>
@@ -75,10 +76,11 @@
         <div class="w-full lg:w-44">
             {{ filter_select("status", [
                 {"value": "", "label": "All Status"},
-                {"value": "online", "label": "Online"},
-                {"value": "offline", "label": "Offline"},
-                {"value": "warning", "label": "Warning"},
-                {"value": "unprovisioned", "label": "Unprovisioned"}
+                {"value": "up", "label": "Up"},
+                {"value": "down", "label": "Down"},
+                {"value": "degraded", "label": "Degraded"},
+                {"value": "maintenance", "label": "Maintenance"},
+                {"value": "unknown", "label": "Unknown"}
             ], status or '', "Status", "cyan", {"hx-get": "/admin/network/devices/filter", "hx-trigger": "change", "hx-target": "#devices-table-body", "hx-include": "#devices-filter-form"}) }}
         </div>
         <div class="w-full lg:w-44">

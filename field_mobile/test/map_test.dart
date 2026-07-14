@@ -219,7 +219,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('map-search-result-job-a')), findsOneWidget);
-    expect(find.text('12 Fiber Street, Lekki · dispatched'), findsOneWidget);
+    expect(find.text('12 Fiber Street, Lekki · Dispatched'), findsOneWidget);
   });
 
   testWidgets('map search includes online street results', (tester) async {
@@ -255,7 +255,7 @@ void main() {
       find.byKey(const Key('map-search-result-job-online-job')),
       findsOneWidget,
     );
-    expect(find.text('12 Fiber Street, Lekki · dispatched'), findsOneWidget);
+    expect(find.text('12 Fiber Street, Lekki · Dispatched'), findsOneWidget);
   });
 
   testWidgets('map search finds a network asset and opens it', (tester) async {

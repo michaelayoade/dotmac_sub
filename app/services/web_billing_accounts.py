@@ -21,6 +21,7 @@ from app.services import display_format
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
+from app.services.status_presentation import invoice_status_presentation
 
 logger = logging.getLogger(__name__)
 
@@ -458,5 +459,9 @@ def build_account_detail_data(db, *, account_id: str) -> dict[str, object]:
     return {
         "account": account,
         "invoices": invoices,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in invoices
+        },
         "default_currency": default_currency,
     }

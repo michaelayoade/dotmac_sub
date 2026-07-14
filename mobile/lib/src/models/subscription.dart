@@ -1,3 +1,5 @@
+import 'status_presentation.dart';
+
 /// Mirrors SubscriptionRead from app/schemas/catalog.py.
 ///
 /// Note: the backend serialises `subscriber_id` as `account_id`
@@ -8,6 +10,7 @@ class Subscription {
     required this.accountId,
     required this.offerId,
     required this.status,
+    StatusPresentation? statusPresentation,
     required this.billingMode,
     this.serviceDescription,
     this.offerName,
@@ -25,12 +28,14 @@ class Subscription {
     this.serverExpiresAt,
     this.serverIsExpired,
     this.hasServerExpiry = false,
-  });
+  }) : statusPresentation =
+            statusPresentation ?? StatusPresentation.neutralFallback(status);
 
   final String id;
   final String accountId;
   final String offerId;
   final String status;
+  final StatusPresentation statusPresentation;
   final String billingMode; // prepaid | postpaid
   final String? serviceDescription;
   final String? offerName;
@@ -138,11 +143,16 @@ class Subscription {
         offer is Map ? offer[key] as String? : null;
     int? offerInt(String key) =>
         offer is Map ? (offer[key] as num?)?.toInt() : null;
+    final status = json['status'] as String? ?? 'pending';
     return Subscription(
       id: json['id'].toString(),
       accountId: (json['account_id'] ?? json['subscriber_id']).toString(),
       offerId: json['offer_id'].toString(),
-      status: json['status'] as String? ?? 'pending',
+      status: status,
+      statusPresentation: json['status_presentation'] is Map
+          ? StatusPresentation.fromJson(
+              (json['status_presentation'] as Map).cast<String, dynamic>())
+          : StatusPresentation.neutralFallback(status),
       billingMode: json['billing_mode'] as String? ?? 'prepaid',
       serviceDescription: json['service_description'] as String?,
       offerName: offerField('name'),

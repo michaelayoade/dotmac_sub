@@ -7,7 +7,9 @@
 
 > **Stack:** Jinja2 + HTMX + Alpine.js + Tailwind CSS v4
 > **Layout:** Server-rendered templates consuming context dicts from Python web services
-> **No REST API consumed by frontend** — the web service context dict IS the interface contract.
+> **Hybrid frontend contracts** — server-rendered HTML/HTMX primarily consumes
+> web-service context dictionaries; selected widgets and mobile clients consume
+> versioned REST APIs. Each surface must use its declared contract owner.
 
 ---
 
@@ -60,6 +62,87 @@ HTML Response (with HTMX attributes for dynamic behavior)
 ```
 
 **Key principle:** Routes are thin wrappers. ALL data assembly, filtering, aggregation, and business logic lives in web service files (`app/services/web_*.py`). The template receives a **context dict** — that dict is your "API response".
+
+### List-query contract
+
+Production list screens use `app.services.list_query.ListDefinition`,
+`ListQuery`, and `PageMeta` rather than reconstructing query state in routes or
+templates. A resource definition declares searchable, filterable, and sortable
+capabilities plus page-size and sort defaults. Its projection service owns the
+actual filter/search expressions, filtered count, stable ordering, and row
+projection.
+
+Canonical web parameters are `search`, declared resource filters, `sort`, `dir`,
+`page`, and `per_page`. They remain in the URL for deep links, refresh, and
+browser history. Search, filter, sort, or page-size changes reset to page one.
+Every sort must include a unique tie-breaker, and filtering always precedes
+pagination. Templates consume `ListQuery.url(...)` and `PageMeta`; they must not
+hand-build parallel query strings or page calculations.
+
+The customer admin list is the pilot owner in
+`app.services.web_customer_lists`. New migrations should follow that boundary
+and retire older pagination implementations incrementally. Under the global
+Dotmac UI standard, interaction behavior follows Carbon's data-table/filter/
+pagination patterns and WCAG 2.2 AA is the accessibility floor. This governs
+behavior and accessibility, not the product's visual theme.
+
+The legacy `/api/v1/tables/customers/data` endpoint is a compatibility adapter,
+not another list owner. It maps its offset parameters and supported aliases into
+the customer `ListQuery`, delegates filtering/counting/stable ordering/paging to
+`app.services.web_customer_lists`, and applies saved configurable columns only
+after that selection. Unsupported legacy scalar filters or sort fields return
+HTTP 400 rather than silently creating parallel customer semantics.
+
+The `/api/v1/tables/subscribers/data` endpoint follows the same compatibility
+rule through `app.services.web_subscriber_lists`. Subscriber scope and full-text
+search reuse `app.services.subscriber.Subscribers.query`; the compatibility
+projection owns only declared filters, stable ordering, paging, and configured
+column serialization. It is not backed by a separate live admin screen: the
+current subscriber-named web facade resolves to `/admin/customers`. Table reads
+must never generate subscriber numbers or commit any other domain mutation.
+
+### Semantic status contract
+
+Lifecycle services own raw account, subscription, invoice, payment, outage-incident,
+support-ticket, and field work-order status values and transitions;
+`app.services.device_operational_status` owns derived NOC device state;
+`app.services.topology.connection_status` owns the separate customer-safe
+connection-health verdict and diagnostic wording;
+`app.services.status_presentation` owns their UI
+meaning. Web contexts and API schemas carry a `StatusPresentation` with
+`value`, `label`, semantic `tone`, and an icon key. Templates consume
+`status_presentation_badge(...)`; customer mobile consumes
+`StatusChip.fromPresentation(...)` for subscriptions, invoices, and tickets;
+field mobile consumes `StatusPill` from job, manager, and map projections.
+Admin outage consoles consume the same badge macro, and CRM outage rows carry
+`status_presentation` alongside the raw `status`/`state` compatibility fields.
+Payment list/detail/customer/reseller projections use the same contract without
+reinterpreting settlement or refund state. NOC inventory, core-device detail,
+monitoring, worklist, and map projections
+consume the same contract. `NetworkDeviceRead` carries `operational_status`,
+`operational_reason`, `operational_retry_pending`, and `status_presentation`.
+Customer connection API/portal/reseller projections carry
+`status_presentation` beside the raw verdict; customer web and mobile map only
+its tone/icon to platform-native visuals. Raw RADIUS session indicators remain
+separate observations and do not masquerade as the diagnostic verdict.
+
+The shared tones are `positive`, `info`, `warning`, `negative`, and `neutral`.
+They are not colors. Branding owns the concrete seed for each role and generates
+the light/dark web scales; customer and field mobile read the same
+`BRAND_SEMANTIC_*_COLOR` inputs. A renderer may select only a role token and
+non-color icon. Unknown or old-backend values fall back to neutral. A client
+must not add its own state-to-tone or tone-to-literal-color switch. Raw
+work-order values remain available
+for transition eligibility, filters, and offline queue behavior; presentation
+fields are read-only UI metadata. Support status settings may expose a subset of
+the ticket lifecycle vocabulary, but they do not configure semantic tones or
+platform colors.
+
+Device operational presentation does not re-derive state. `up` is positive,
+`degraded` is warning, evidenced `down` is negative, and `maintenance` is
+neutral. A retry-pending `down` remains labeled Down under the binary NOC model
+but is warning/clock and non-alarming, so missing or stale monitoring evidence
+cannot look like a confirmed failure.
 
 ---
 
@@ -182,8 +265,9 @@ Import what you need:
 
 | Macro | Parameters | Purpose |
 |-------|-----------|---------|
-| `stats_card` | `label, value, icon, color, color2, href, change, change_type` | KPI metric card with change indicator |
-| `status_badge` | `status, variant, pulse, size, show_icon` | Accessible status pill (icon + color) |
+| `stats_card` | `label, value, icon, color, color2, href, change, change_type, tone` | KPI metric card; status KPIs use a branding-owned semantic `tone` |
+| `status_badge` | `status, variant, pulse, size, show_icon, icon` | Low-level accessible status pill renderer |
+| `status_presentation_badge` | `presentation, pulse, size, show_icon` | Domain status pill from the server-owned semantic contract |
 | `type_badge` | `type, size` | Person/Organization badge |
 | `info_row` | `label, value, icon` | Key-value detail row |
 | `metric_row` | `label, value, color, mono` | Label-value with colored dot |
@@ -236,7 +320,23 @@ All accept optional `class` parameter for sizing.
 
 ## Design System
 
-### Module Accent Colors
+### Legacy Module Accent References
+
+The named palettes below document existing surfaces; they are not color
+authority and must not be copied into new or touched code. Branding owns
+identity colors through the generated `primary-*` and `accent-*` tokens.
+Semantic state uses the generated `status-*` role tokens. Any categorical
+palette must be centralized in the theme layer instead of being embedded in a
+service, template, or chart payload.
+
+`/branding/theme.css` is the web color compatibility boundary. It remaps every
+non-neutral legacy Tailwind palette (`red`, `amber`, `emerald`, `blue`,
+`violet`, and peers) onto the configured primary, accent, or semantic scale.
+Those old class names therefore remain safe while a template is migrated, but
+they are not authoring vocabulary for new code. Charts and maps use the ordered
+`--color-data-1` through `--color-data-7` tokens, resolved for JavaScript by
+`themeColor(...)`. Structural surfaces, text, borders, shadows, white, and black
+remain design-system foundation tokens rather than tenant brand identity.
 
 | Module | color | color2 | Used In |
 |--------|-------|--------|---------|
@@ -253,7 +353,11 @@ All accept optional `class` parameter for sizing.
 | Notifications | `rose` | `pink` | Alerts, on-call |
 | Integrations | `indigo` | `blue` | Connectors, webhooks |
 
-### Status Badge Variants
+### Legacy Status Badge References
+
+These names describe the intended meaning of older variants, not their literal
+color implementation. Migrate a touched domain to `StatusPresentation`; the
+shared renderer resolves its semantic tone through branding.
 
 | variant | When to use | Visual |
 |---------|-------------|--------|
@@ -1532,23 +1636,19 @@ Complex forms use Alpine.js `x-data` with JSON config from the server:
 {% if value %}{{ value }}{% endif %}
 ```
 
-### Enum Display (never use `.value` directly)
-```python
-# In web service context:
-STATUS_DISPLAY = {"active": "Active", "new_install": "New Install", ...}
-```
-```html
-{{ STATUS_DISPLAY.get(order.status.value, order.status.value) }}
-```
+### Domain status display
 
-### Dynamic Tailwind Classes (never interpolate)
-```python
-# In web service context — dict lookup, not f-string:
-STATUS_COLORS = {
-    "active": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
-    "suspended": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
-}
-```
+For account, subscription, invoice, payment, outage-incident, device operational,
+customer connection-health, support-ticket, and field work-order state, project through
+`app.services.status_presentation` and pass the returned object to
+`status_presentation_badge`. Do not read `.value` to select a label, tone,
+icon, or Tailwind class in a template. Shared renderers resolve semantic tones
+only through the branding-generated `status-*` theme classes; literal
+tone-to-color lookups and dynamic Tailwind interpolation remain prohibited.
+
+Other domains should name their own presentation owner before adding repeated
+status dictionaries. A one-off renderer must still use static, purge-safe class
+lookups and include a non-color distinction.
 
 ### Data Formatting
 
@@ -1645,5 +1745,6 @@ templates/
 4. **Check the context spec above** for what data is available
 5. **Use macros** — don't rebuild buttons, tables, badges from scratch
 6. **Always pair dark mode** — `bg-white dark:bg-slate-800`
-7. **Use module accent colors** — amber for subscribers, emerald for billing, etc.
+7. **Use branding/theme tokens** — `primary-*`/`accent-*` for identity and
+   `status-*` roles for state; do not add literal module or status colors
 8. **Test with HTMX** — partials return fragments, not full pages

@@ -180,6 +180,11 @@ def test_customer_detail_includes_crm_sync_link_status(db_session, subscriber):
     assert context["crm_sync_status"]["last_success_display"] == (
         "2026-07-07T12:00:00+00:00"
     )
+    assert context["customer_status_presentation"].value == subscriber.status.value
+    assert (
+        context["account_status_presentations"][str(subscriber.id)]
+        == context["customer_status_presentation"]
+    )
 
 
 def test_customer_detail_includes_masked_identity_profile(db_session, subscriber):
@@ -251,6 +256,22 @@ def test_person_detail_hides_disabled_service_network_access(
     context = build_person_detail_snapshot(db_session, str(subscriber.id))
 
     assert context["network_access_cards"] == []
+
+
+def test_person_detail_projects_subscription_status_for_network_access(
+    db_session, subscriber, subscription
+):
+    subscriber.user_type = UserType.customer
+    subscription.status = SubscriptionStatus.suspended
+    subscription.login = "suspended-login"
+    db_session.commit()
+
+    context = build_person_detail_snapshot(db_session, str(subscriber.id))
+
+    assert len(context["network_access_cards"]) == 1
+    presentation = context["network_access_cards"][0]["status_presentation"]
+    assert presentation.value == "suspended"
+    assert presentation.tone.value == "warning"
 
 
 def test_reveal_customer_pppoe_password_is_customer_scoped(db_session, subscriber):

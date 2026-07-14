@@ -93,6 +93,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "platform/reseller/organization brand profiles",
                     "customer-facing brand precedence",
+                    "brand primary, secondary, and semantic UI color roles",
+                    "runtime web theme token generation",
                     "legacy branding convergence",
                 ),
                 depends_on=("customer.identity_scope", "control.domain_settings"),
@@ -382,6 +384,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.device_operational_status",
                 owns=(
                     "NOC-facing device operational status",
+                    "device operational status vocabulary",
                     "device retry-pending and alarm classification",
                 ),
                 depends_on=("runtime.infrastructure_polling",),
@@ -444,6 +447,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="network.outage_lifecycle",
                 module="app.services.topology.outage",
                 owns=(
+                    "persisted outage incident status vocabulary",
                     "outage incident lifecycle",
                     "outage event emission and escalation planning",
                 ),
@@ -452,12 +456,35 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "events.dispatcher",
                 ),
             ),
+            SOTService(
+                name="network.connection_health",
+                module="app.services.topology.connection_status",
+                owns=(
+                    "customer-safe connection health vocabulary",
+                    "customer-safe last-mile and area-outage verdict",
+                    "customer connection headline, message, and advice",
+                ),
+                depends_on=(
+                    "network.access_path",
+                    "network.radius_sessions",
+                    "network.outage_impact",
+                    "network.outage_lifecycle",
+                ),
+                notes=(
+                    "This customer diagnostic vocabulary is separate from "
+                    "network.device_state and raw RADIUS session observations."
+                ),
+            ),
         ),
         entrypoints=(
             "app.services.topology.*",
             "app.services.infrastructure_*",
             "app.tasks.network_*",
             "app.web.admin.network_*",
+            "app.web.customer.connection",
+            "app.api.me",
+            "app.services.reseller_portal",
+            "mobile",
         ),
         rule=(
             "Pollers write observations; network resolvers decide state; event "
@@ -869,6 +896,46 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
     DomainSOT(
+        domain="support_operations",
+        services=(
+            SOTService(
+                name="support.ticket_lifecycle",
+                module="app.services.support",
+                owns=(
+                    "ticket status vocabulary",
+                    "guarded ticket status transitions",
+                    "ticket lifecycle timestamps and consequences",
+                ),
+            ),
+            SOTService(
+                name="support.ticket_configuration",
+                module="app.services.support_ticket_settings",
+                owns=(
+                    "operator-visible ticket status subset",
+                    "ticket priority and type options",
+                    "ticket routing and SLA policy",
+                ),
+                depends_on=("support.ticket_lifecycle",),
+                notes=(
+                    "Configured status choices are constrained to the lifecycle "
+                    "vocabulary and do not own semantic colors or tones."
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.api.support",
+            "app.api.me.support",
+            "app.web.admin.support",
+            "app.web.customer.support",
+            "mobile",
+        ),
+        rule=(
+            "Support adapters request ticket mutations through the ticket service. "
+            "The lifecycle owner validates raw statuses; settings may expose a "
+            "subset but cannot add states or define their semantic presentation."
+        ),
+    ),
+    DomainSOT(
         domain="provisioning_operations",
         services=(
             SOTService(
@@ -884,10 +951,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("operations.provisioning_context",),
             ),
             SOTService(
+                name="operations.work_order_status",
+                module="app.services.field.work_order_status",
+                owns=(
+                    "persisted work-order status vocabulary",
+                    "open, assignable, and terminal work-order status sets",
+                ),
+            ),
+            SOTService(
                 name="operations.work_orders",
                 module="app.services.work_order_views",
                 owns=("work-order read models", "customer work-order linkage"),
-                depends_on=("customer.identity_scope",),
+                depends_on=(
+                    "customer.identity_scope",
+                    "operations.work_order_status",
+                ),
             ),
             SOTService(
                 name="operations.field_completion",
@@ -897,7 +975,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "field completion evidence requirements",
                     "field job completion transitions",
                 ),
-                depends_on=("operations.work_orders", "control.domain_settings"),
+                depends_on=(
+                    "operations.work_orders",
+                    "operations.work_order_status",
+                    "control.domain_settings",
+                ),
                 notes=(
                     "Authenticated field job detail projects the same completion "
                     "requirements consumed by transition validation. Field clients "
@@ -1199,6 +1281,138 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         rule=(
             "Integration routes and webhooks validate and enqueue; registry, job, "
             "sync, and hook services own connector behavior and delivery flow."
+        ),
+    ),
+    DomainSOT(
+        domain="ui_list_projection",
+        services=(
+            SOTService(
+                name="ui.list_contracts",
+                module="app.services.list_query",
+                owns=(
+                    "list query normalization",
+                    "page metadata derivation",
+                    "canonical list URL serialization",
+                    "list capability declarations",
+                ),
+            ),
+            SOTService(
+                name="ui.customer_list_projection",
+                module="app.services.web_customer_lists",
+                owns=(
+                    "admin customer searchable fields",
+                    "admin customer filter semantics",
+                    "admin customer stable sort semantics",
+                    "admin customer row and page projection",
+                    "legacy customer offset API compatibility mapping",
+                ),
+                depends_on=("ui.list_contracts",),
+            ),
+            SOTService(
+                name="ui.subscriber_list_projection",
+                module="app.services.web_subscriber_lists",
+                owns=(
+                    "subscriber table searchable fields",
+                    "subscriber table filter semantics",
+                    "subscriber table stable sort semantics",
+                    "subscriber table page projection",
+                    "legacy subscriber offset API compatibility mapping",
+                ),
+                depends_on=("ui.list_contracts",),
+                notes=(
+                    "Subscriber scope and full-text search delegate to "
+                    "app.services.subscriber.Subscribers.query. List reads never "
+                    "generate or persist subscriber identifiers."
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.api.tables",
+            "app.services.subscriber",
+            "app.services.table_config",
+            "app.web.admin.customers",
+            "templates.admin.customers",
+        ),
+        rule=(
+            "List routes normalize request parameters through one declared list "
+            "contract. Owners filter before pagination and apply a stable unique "
+            "tie-breaker. Compatibility APIs delegate row selection to a named "
+            "resource owner and list reads do not mutate domain records. Templates "
+            "consume ListQuery and PageMeta, preserve the canonical URL, and do not "
+            "rebuild pagination or sort semantics."
+        ),
+    ),
+    DomainSOT(
+        domain="ui_semantic_presentation",
+        services=(
+            SOTService(
+                name="ui.status_presentation",
+                module="app.services.status_presentation",
+                owns=(
+                    "account status labels, semantic tones, and icon keys",
+                    "subscription status labels, semantic tones, and icon keys",
+                    "invoice status labels, semantic tones, and icon keys",
+                    "payment status labels, semantic tones, and icon keys",
+                    "outage incident status labels, semantic tones, and icon keys",
+                    "device operational status labels, semantic tones, and icon keys",
+                    "customer connection health labels, semantic tones, and icon keys",
+                    "RADIUS access-session observation labels, semantic tones, and icon keys",
+                    "support-ticket status labels, semantic tones, and icon keys",
+                    "field work-order status labels, semantic tones, and icon keys",
+                    "status presentation fallback semantics",
+                ),
+                depends_on=(
+                    "financial.invoices",
+                    "financial.payments",
+                    "network.device_state",
+                    "network.connection_health",
+                    "network.outage_lifecycle",
+                    "support.ticket_lifecycle",
+                    "operations.work_order_status",
+                ),
+                notes=(
+                    "Domain services own lifecycle or derived operational state. "
+                    "This read projection owns its cross-client semantic meaning; "
+                    "customer.branding owns the concrete color behind each tone. "
+                    "Clients render the tone through brand/theme tokens and do not "
+                    "keep local tone-to-color maps."
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.schemas.catalog.SubscriptionRead",
+            "app.schemas.billing.InvoiceRead",
+            "app.schemas.billing.PaymentRead",
+            "app.schemas.service_status.ServiceStatusItem",
+            "app.schemas.support.TicketRead",
+            "app.schemas.network_monitoring.NetworkDeviceRead",
+            "app.services.crm_api.outage_incident_row",
+            "app.services.web_customer_lists",
+            "app.services.web_customer_details",
+            "app.services.customer_portal_context",
+            "app.schemas.field.FieldJobSummary",
+            "app.schemas.field.FieldManagerJob",
+            "app.services.field.map_search",
+            "templates.admin.customers",
+            "templates.admin.billing",
+            "templates.admin.network.outages",
+            "templates.admin.network.core-devices",
+            "templates.admin.network.network-devices",
+            "templates.admin.network.monitoring",
+            "templates.customer.connection",
+            "templates.reseller.dashboard",
+            "templates.customer.dashboard.restricted",
+            "templates.customer.billing",
+            "templates.admin.support.tickets",
+            "templates.customer.support",
+            "mobile",
+            "field_mobile",
+        ),
+        rule=(
+            "Domain state owners provide raw or derived status values. Server read "
+            "projections add one StatusPresentation label/tone/icon contract. "
+            "Templates and mobile clients render that contract and do not map "
+            "the same domain values independently."
         ),
     ),
 )

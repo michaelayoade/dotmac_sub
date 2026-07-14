@@ -3,7 +3,7 @@
     ambient_background, page_header, action_button,
     data_table, table_head, table_row, row_actions, row_action, empty_state,
     icon_server, icon_plus, icon_view, icon_edit, icon_delete, stats_card,
-    icon_warning, icon_check_circle
+    icon_warning, icon_check_circle, status_presentation_badge
 %}
 
 {% block title %}OLT Devices - Admin{% endblock %}
@@ -14,15 +14,15 @@
 {# ── Local macro: health dot (ok/fail/unknown) ── #}
 {% macro health_dot(state, title_text) %}
 {% if state == 'ok' %}
-<span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white" title="{{ title_text }} OK">
+<span class="status-tone-dot status-tone-dot-positive inline-flex h-5 w-5 items-center justify-center rounded-full text-white" title="{{ title_text }} OK">
     <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
 </span>
 {% elif state == 'fail' %}
-<span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-white" title="{{ title_text }} Failed">
+<span class="status-tone-dot status-tone-dot-negative inline-flex h-5 w-5 items-center justify-center rounded-full text-white" title="{{ title_text }} Failed">
     <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"/></svg>
 </span>
 {% else %}
-<span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-300 text-white dark:bg-slate-600" title="{{ title_text }} Unknown">
+<span class="status-tone-dot status-tone-dot-neutral inline-flex h-5 w-5 items-center justify-center rounded-full text-white" title="{{ title_text }} Unknown">
     <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M20 12H4"/></svg>
 </span>
 {% endif %}
@@ -53,9 +53,9 @@
 
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {{ stats_card("Fleet", stats.fleet_total, icon=icon_server(), color="violet", color2="purple") }}
-        {{ stats_card("Needs Attention", stats.attention, icon=icon_warning(), color="rose", color2="pink") }}
-        {{ stats_card("Online", stats.online, icon=icon_check_circle(), color="emerald", color2="teal") }}
-        {{ stats_card("Offline", stats.offline, icon=icon_warning(), color="slate", color2="gray") }}
+        {{ stats_card("Needs Attention", stats.attention, icon=icon_warning(), tone="negative") }}
+        {{ stats_card("Up", stats.up, icon=icon_check_circle(), tone="positive") }}
+        {{ stats_card("Down", stats.down, icon=icon_warning(), tone="negative") }}
         {{ stats_card("PON Ports", stats.total_pon_ports, icon=icon_server(), color="blue", color2="indigo") }}
     </div>
 
@@ -84,8 +84,10 @@
         <label for="olt_fleet_status" class="sr-only">Filter OLT status</label>
         <select id="olt_fleet_status" name="status" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             <option value="" {% if not filters.status %}selected{% endif %}>All OLTs</option>
-            <option value="online" {% if filters.status in ['online', 'healthy'] %}selected{% endif %}>Online</option>
-            <option value="offline" {% if filters.status == 'offline' %}selected{% endif %}>Offline</option>
+            <option value="up" {% if filters.status in ['up', 'online', 'healthy'] %}selected{% endif %}>Up</option>
+            <option value="degraded" {% if filters.status == 'degraded' %}selected{% endif %}>Degraded</option>
+            <option value="down" {% if filters.status in ['down', 'offline'] %}selected{% endif %}>Down</option>
+            <option value="retry_pending" {% if filters.status == 'retry_pending' %}selected{% endif %}>Refresh pending</option>
             <option value="attention" {% if filters.status == 'attention' %}selected{% endif %}>Needs Attention</option>
         </select>
         <label for="olt_fleet_per_page" class="sr-only">Rows per page</label>
@@ -114,11 +116,9 @@
                         <a href="{{ olt.detail_url }}" class="block truncate text-base font-semibold text-slate-900 hover:text-violet-600 dark:text-white dark:hover:text-violet-400">{{ olt.name }}</a>
                         <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{{ olt.hostname or 'No hostname' }}</p>
                     </div>
-                    {% if olt.runtime_operational_status == 'online' %}
-                    <span class="shrink-0 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" title="{{ olt.runtime_health_reason }}">Online</span>
-                    {% else %}
-                    <span class="shrink-0 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" title="{{ olt.runtime_health_reason }}">Offline</span>
-                    {% endif %}
+                    <span class="shrink-0" title="{{ olt.runtime_operational_reason | replace('_', ' ') }}">
+                        {{ status_presentation_badge(olt.status_presentation, size="sm") }}
+                    </span>
                 </div>
                 <dl class="mt-4 grid grid-cols-2 gap-3 text-sm">
                     <div>
@@ -139,9 +139,9 @@
                     </div>
                 </dl>
                 {% if olt.runtime_retry_pending %}
-                <p class="mt-3 text-xs font-medium text-amber-700 dark:text-amber-300">Reachability refresh pending</p>
+                <p class="status-foreground status-tone-warning mt-3 text-xs font-medium">Reachability refresh pending</p>
                 {% elif olt.runtime_health_state == 'attention' %}
-                <p class="mt-3 text-xs font-medium text-rose-700 dark:text-rose-300">{{ olt.runtime_health_reason }}</p>
+                <p class="status-foreground status-tone-negative mt-3 text-xs font-medium">{{ olt.runtime_health_reason }}</p>
                 {% endif %}
                 <div class="mt-4 flex gap-2">
                     <a href="{{ olt.detail_url }}"
@@ -188,22 +188,20 @@
                     <span class="text-slate-900 dark:text-white">{{ olt.vendor or 'Unknown' }}{% if olt.model %} {{ olt.model }}{% endif %}</span>
                     <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ olt.pon_ports }} PON ports / {{ olt.imported_service_ports | default(0) }} imported service-ports</p>
                     {% if not olt.imported_service_ports %}
-                    <p class="mt-0.5 text-xs font-medium text-amber-600 dark:text-amber-300">Import OLT state before provisioning</p>
+                    <p class="status-foreground status-tone-warning mt-0.5 text-xs font-medium">Import OLT state before provisioning</p>
                     {% endif %}
                 </td>
                 <td class="px-6 py-3 whitespace-nowrap">
                     <div class="flex items-center gap-2">
-                        {% if olt.runtime_operational_status == 'online' %}
-                        <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" title="{{ olt.runtime_health_reason }}"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Online</span>
-                        {% else %}
-                        <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300" title="{{ olt.runtime_health_reason }}"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>Offline</span>
-                        {% endif %}
+                        <span title="{{ olt.runtime_operational_reason | replace('_', ' ') }}">
+                            {{ status_presentation_badge(olt.status_presentation, size="sm") }}
+                        </span>
                         <span class="flex items-center gap-1" title="SNMP {{ olt.runtime_snmp_label }}">{{ health_dot(olt.runtime_snmp_state, "SNMP") }}</span>
                     </div>
                     {% if olt.runtime_retry_pending %}
-                    <p class="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">Refresh pending</p>
+                    <p class="status-foreground status-tone-warning mt-1 text-xs font-medium">Refresh pending</p>
                     {% elif olt.runtime_health_state == 'attention' %}
-                    <p class="mt-1 text-xs font-medium text-rose-700 dark:text-rose-300">Needs attention</p>
+                    <p class="status-foreground status-tone-negative mt-1 text-xs font-medium">Needs attention</p>
                     {% endif %}
                 </td>
                 <td class="px-6 py-3 whitespace-nowrap text-center">

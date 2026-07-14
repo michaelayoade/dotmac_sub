@@ -14,8 +14,19 @@ from app.models.catalog import (
 )
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.models.network_monitoring import PopSite
-from app.models.subscriber import Subscriber, UserType
-from app.services.web_customer_lists import build_customers_index_context
+from app.models.subscriber import Subscriber, SubscriberStatus, UserType
+from app.services.web_customer_lists import (
+    CUSTOMER_LIST_DEFINITION,
+    build_customer_list_query,
+    build_customers_index_context,
+)
+
+
+def _build_context(db_session, **params):
+    return build_customers_index_context(
+        db_session,
+        list_query=build_customer_list_query(**params),
+    )
 
 
 def _make_offer(db_session):
@@ -126,7 +137,7 @@ def test_customer_list_excludes_reseller_users(db_session):
     db_session.add_all([customer, reseller])
     db_session.commit()
 
-    context = build_customers_index_context(
+    context = _build_context(
         db_session,
         search=None,
         status=None,
@@ -169,7 +180,7 @@ def test_customer_list_ip_search_matches_exact_current_ipv4_only(db_session):
     )
     db_session.commit()
 
-    context = build_customers_index_context(
+    context = _build_context(
         db_session,
         search="160.119.126.18",
         status=None,
@@ -203,7 +214,7 @@ def test_customer_list_display_prefers_active_ipam_then_active_subscription(
     _make_ipam_assignment(db_session, customer, active_sub, "10.0.0.7")
     db_session.commit()
 
-    context = build_customers_index_context(
+    context = _build_context(
         db_session,
         search="display-ip",
         status=None,
@@ -242,7 +253,7 @@ def test_customer_list_trims_search_before_text_matching(db_session):
         pppoe_login,
     ]
     for term in search_terms:
-        context = build_customers_index_context(
+        context = _build_context(
             db_session,
             search=f"  {term}  ",
             status=None,
@@ -268,7 +279,7 @@ def test_customer_list_does_not_display_placeholder_ipv4(db_session):
     )
     db_session.commit()
 
-    context = build_customers_index_context(
+    context = _build_context(
         db_session,
         search="placeholder-ip",
         status=None,
@@ -308,7 +319,7 @@ def test_customer_location_filter_uses_customer_pop_site_not_nas_pop_site(db_ses
     )
     db_session.commit()
 
-    context = build_customers_index_context(
+    context = _build_context(
         db_session,
         search=None,
         status=None,
@@ -339,7 +350,7 @@ def test_customer_nas_filter_still_uses_subscription_nas(db_session):
     )
     db_session.commit()
 
-    context = build_customers_index_context(
+    context = _build_context(
         db_session,
         search=None,
         status=None,
@@ -353,3 +364,93 @@ def test_customer_nas_filter_still_uses_subscription_nas(db_session):
     emails = {item["email"] for item in context["customers"]}
     assert karu_customer.email in emails
     assert any(str(nas.id) == str(afr_nas.id) for nas in context["nas_options"])
+
+
+def test_customer_list_declares_search_filter_and_sort_capabilities():
+    assert CUSTOMER_LIST_DEFINITION.searchable_keys == (
+        "name",
+        "email",
+        "phone",
+        "account_number",
+        "pppoe_login",
+        "ipv4",
+    )
+    assert CUSTOMER_LIST_DEFINITION.filterable_keys == (
+        "customer_type",
+        "status",
+        "nas_id",
+        "pop_site_id",
+    )
+    assert CUSTOMER_LIST_DEFINITION.sortable_keys == (
+        "name",
+        "status",
+        "created_at",
+    )
+
+
+def test_customer_list_filters_before_building_page_metadata(db_session):
+    token = f"PageFilter{uuid.uuid4().hex[:8]}"
+    for index in range(11):
+        customer = _make_customer(db_session, f"active-{index}-{token}@example.com")
+        customer.first_name = token
+        customer.status = SubscriberStatus.active
+    for index in range(11):
+        customer = _make_customer(db_session, f"suspended-{index}-{token}@example.com")
+        customer.first_name = token
+        customer.status = SubscriberStatus.suspended
+    db_session.commit()
+
+    context = _build_context(
+        db_session,
+        search=token,
+        status="active",
+        customer_type=None,
+        nas_id=None,
+        pop_site_id=None,
+        sort_by="created_at",
+        sort_dir="asc",
+        page=2,
+        per_page=10,
+    )
+
+    assert context["page_meta"].total_items == 11
+    assert context["page_meta"].total_pages == 2
+    assert context["page_meta"].start_item == 11
+    assert len(context["customers"]) == 1
+    assert context["customers"][0]["raw"].status.value == "active"
+    assert context["customers"][0]["status_presentation"].model_dump(mode="json") == {
+        "value": "active",
+        "label": "Active",
+        "tone": "positive",
+        "icon": "check",
+    }
+
+
+def test_customer_list_uses_id_tie_breaker_across_pages(db_session):
+    token = f"StableSort{uuid.uuid4().hex[:8]}"
+    created_ids = []
+    for index in range(12):
+        customer = _make_customer(db_session, f"stable-{index}-{token}@example.com")
+        customer.first_name = token
+        customer.last_name = "Same"
+        created_ids.append(str(customer.id))
+    db_session.commit()
+
+    common = {
+        "search": token,
+        "status": None,
+        "customer_type": None,
+        "nas_id": None,
+        "pop_site_id": None,
+        "sort_by": "name",
+        "sort_dir": "asc",
+        "per_page": 10,
+    }
+    first = _build_context(db_session, page=1, **common)
+    second = _build_context(db_session, page=2, **common)
+
+    projected_ids = [
+        str(customer["id"]) for customer in [*first["customers"], *second["customers"]]
+    ]
+    assert projected_ids == sorted(created_ids)
+    assert set(projected_ids[:10]).isdisjoint(projected_ids[10:])

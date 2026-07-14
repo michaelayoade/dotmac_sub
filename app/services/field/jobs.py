@@ -40,9 +40,14 @@ from app.schemas.field import (
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.map_assets import field_map_assets
 from app.services.field.source import mark_sub_authoritative
+from app.services.field.work_order_status import (
+    FIELD_OPEN_WORK_ORDER_STATUSES,
+    WORK_ORDER_TERMINAL_VALUES,
+)
+from app.services.status_presentation import work_order_status_presentation
 
-TERMINAL_STATUSES = frozenset({"completed", "canceled", "cancelled"})
-OPEN_STATUSES = frozenset({"scheduled", "dispatched", "in_progress", "paused"})
+TERMINAL_STATUSES = WORK_ORDER_TERMINAL_VALUES
+OPEN_STATUSES = FIELD_OPEN_WORK_ORDER_STATUSES
 FieldJobSummaries = list[FieldJobSummary]
 FieldJobDestinationPayload = dict[str, Any]
 FieldJobDestinationPayloads = list[FieldJobDestinationPayload]
@@ -274,6 +279,7 @@ def _summary(row: WorkOrderMirror) -> FieldJobSummary:
         title=row.title,
         description=row.description,
         status=row.status,
+        status_presentation=work_order_status_presentation(row.status),
         priority=row.priority,
         work_type=row.work_type,
         scheduled_start=row.scheduled_start,

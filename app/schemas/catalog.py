@@ -42,6 +42,7 @@ from app.models.catalog import (
     SubscriptionStatus,
     SuspensionAction,
 )
+from app.schemas.status_presentation import StatusPresentation
 
 
 class UsageAllowanceRead(BaseModel):
@@ -550,6 +551,16 @@ class SubscriptionRead(SubscriptionBase):
     updated_at: datetime
     offer: OfferSummary | None = None
     add_ons: list[SubscriptionAddOnRead] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status_presentation(self) -> StatusPresentation:
+        """Canonical label/tone/icon projection for cross-client rendering."""
+        # Local import keeps the transport schema independent at import time;
+        # the computed read adapter still delegates all decisions to the owner.
+        from app.services.status_presentation import subscription_status_presentation
+
+        return subscription_status_presentation(self.status)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

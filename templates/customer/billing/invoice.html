@@ -1,4 +1,5 @@
 {% extends "layouts/customer.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Invoice - My Account{% endblock %}
 
@@ -25,25 +26,7 @@
             </nav>
             <div class="flex items-center gap-3">
                 <h1 class="text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Invoice {{ invoice.invoice_number | default('') }}</h1>
-                {% if status_val == 'paid' %}
-                <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                    <svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>
-                    Paid
-                </span>
-                {% elif status_val == 'overdue' %}
-                <span class="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700 dark:bg-red-900/40 dark:text-red-300">
-                    <span class="relative flex h-2 w-2">
-                        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75"></span>
-                        <span class="relative inline-flex h-2 w-2 rounded-full bg-red-500"></span>
-                    </span>
-                    Overdue
-                </span>
-                {% else %}
-                <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-                    <svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/></svg>
-                    {{ status_val | title }}
-                </span>
-                {% endif %}
+                {{ status_presentation_badge(invoice_status_presentation) }}
             </div>
             <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
                 {%- if invoice.issued_at -%}
@@ -153,15 +136,9 @@
         <!-- Sidebar -->
         <div class="space-y-6">
             <!-- Amount Due Card -->
-            <div class="overflow-hidden rounded-2xl border shadow-premium
-                {% if status_val == 'overdue' %}border-red-200 bg-gradient-to-br from-red-50 to-white dark:border-red-800/50 dark:from-red-900/20 dark:to-stone-800
-                {% elif status_val == 'paid' %}border-emerald-200 bg-gradient-to-br from-emerald-50 to-white dark:border-emerald-800/50 dark:from-emerald-900/20 dark:to-stone-800
-                {% else %}border-stone-200/60 bg-white/80 dark:border-stone-700/60 dark:bg-stone-800/80{% endif %} p-6">
+            <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium dark:border-stone-700/60 dark:bg-stone-800/80">
                 <h3 class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Amount Due</h3>
-                <p class="mt-3 text-4xl font-bold
-                    {% if status_val == 'overdue' %}text-red-600 dark:text-red-400
-                    {% elif status_val == 'paid' %}text-emerald-600 dark:text-emerald-400
-                    {% else %}text-stone-900 dark:text-white{% endif %}" style="font-family: var(--font-display);">
+                <p class="mt-3 text-4xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
                     {{ invoice_currency }} {{ "{:,.2f}".format(invoice.balance_due or invoice.total or 0) }}
                 </p>
                 <p class="mt-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">

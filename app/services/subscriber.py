@@ -569,22 +569,19 @@ class Subscribers(ListResponseMixin):
         return subscriber
 
     @staticmethod
-    def list(
+    def query(
         db: Session,
         person_id: str | None = None,
         business_account_id: str | None = None,
         subscriber_type: str | None = None,
-        order_by: str = "created_at",
-        order_dir: str = "desc",
-        limit: int = 50,
-        offset: int = 0,
         status: str | None = None,
         search: str | None = None,
         include_deleted: bool = False,
+        include_related: bool = True,
     ):
-        query = db.query(Subscriber).options(
-            selectinload(Subscriber.addresses),
-        )
+        query = db.query(Subscriber)
+        if include_related:
+            query = query.options(selectinload(Subscriber.addresses))
         query = query.filter(Subscriber.user_type != UserType.system_user)
         if not include_deleted:
             query = query.filter(not_(splynx_deleted_import_clause()))
@@ -769,6 +766,33 @@ class Subscribers(ListResponseMixin):
                 query = query.filter(_is_business_clause())
             else:
                 raise HTTPException(status_code=400, detail="Invalid subscriber_type")
+        return query
+
+    @classmethod
+    def list(
+        cls,
+        db: Session,
+        person_id: str | None = None,
+        business_account_id: str | None = None,
+        subscriber_type: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+        status: str | None = None,
+        search: str | None = None,
+        include_deleted: bool = False,
+    ):
+        query = cls.query(
+            db,
+            person_id=person_id,
+            business_account_id=business_account_id,
+            subscriber_type=subscriber_type,
+            status=status,
+            search=search,
+            include_deleted=include_deleted,
+            include_related=True,
+        )
         query = apply_ordering(
             query,
             order_by,
@@ -1214,7 +1238,7 @@ class Subscribers(ListResponseMixin):
         subscriber_status_chart = {
             "labels": ["Active", "Suspended", "Canceled", "Inactive"],
             "values": [active_count, suspended_count, canceled_count, inactive_count],
-            "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
+            "tones": ["positive", "warning", "negative", "neutral"],
         }
 
         # Signup trend - last 12 months using SQL GROUP BY

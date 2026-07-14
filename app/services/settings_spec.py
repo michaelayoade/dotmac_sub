@@ -7,6 +7,11 @@ from fastapi import HTTPException
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import domain_settings as settings_service
+from app.services.brand_theme import (
+    DEFAULT_HEX,
+    DEFAULT_SECONDARY_HEX,
+    DEFAULT_SEMANTIC_COLORS,
+)
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
 from app.services.settings_specs.integration import build_integration_specs
@@ -3565,7 +3570,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="brand_primary_color",
         env_var="BRAND_PRIMARY_COLOR_OVERRIDE",
         value_type=SettingValueType.string,
-        default="#206a07",
+        default=DEFAULT_HEX,
         label="Brand Primary Colour",
     ),
     SettingSpec(
@@ -3573,8 +3578,48 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="brand_secondary_color",
         env_var="BRAND_SECONDARY_COLOR_OVERRIDE",
         value_type=SettingValueType.string,
-        default="#06b6d4",
+        default=DEFAULT_SECONDARY_HEX,
         label="Brand Secondary Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_semantic_positive_color",
+        env_var="BRAND_SEMANTIC_POSITIVE_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default=DEFAULT_SEMANTIC_COLORS["positive"],
+        label="Positive Status Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_semantic_info_color",
+        env_var="BRAND_SEMANTIC_INFO_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default=DEFAULT_SEMANTIC_COLORS["info"],
+        label="Informational Status Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_semantic_warning_color",
+        env_var="BRAND_SEMANTIC_WARNING_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default=DEFAULT_SEMANTIC_COLORS["warning"],
+        label="Warning Status Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_semantic_negative_color",
+        env_var="BRAND_SEMANTIC_NEGATIVE_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default=DEFAULT_SEMANTIC_COLORS["negative"],
+        label="Negative Status Colour",
+    ),
+    SettingSpec(
+        domain=SettingDomain.comms,
+        key="brand_semantic_neutral_color",
+        env_var="BRAND_SEMANTIC_NEUTRAL_COLOR_OVERRIDE",
+        value_type=SettingValueType.string,
+        default=DEFAULT_SEMANTIC_COLORS["neutral"],
+        label="Neutral Status Colour",
     ),
     SettingSpec(
         domain=SettingDomain.comms,

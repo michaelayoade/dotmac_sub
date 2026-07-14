@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from fastapi import HTTPException
 from sqlalchemy import case, func, select
@@ -744,7 +744,7 @@ class NetworkDevices(ListResponseMixin):
         device_status_chart = {
             "labels": ["Online", "Degraded", "Offline", "Maintenance"],
             "values": [online_count, degraded_count, offline_count, maintenance_count],
-            "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
+            "tones": ["positive", "warning", "negative", "neutral"],
         }
 
         # Alarm counts using SQL aggregation
@@ -822,28 +822,75 @@ class NetworkDevices(ListResponseMixin):
         from sqlalchemy import func as sa_func
         from sqlalchemy import or_ as sa_or
 
-        from app.models.network_monitoring import DeviceStatus as DStatus
         from app.models.network_monitoring import MetricType as MT
         from app.models.usage import AccountingStatus, RadiusAccountingSession
+        from app.services.device_operational_status import (
+            DEGRADED,
+            DOWN,
+            MAINTENANCE,
+            UP,
+            OperationalStatus,
+            annotate_operational_status,
+        )
 
         filter_value = (query or "").strip().lower()
 
         # ---- Device counts (always from all devices for accurate stats) ----
         base_query = db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True))
         devices = base_query.order_by(NetworkDevice.name).all()
-        olt_statuses = {DStatus.online, DStatus.degraded, DStatus.maintenance}
-        devices_online = sum(1 for d in devices if d.status in olt_statuses)
-        devices_offline = sum(1 for d in devices if d.status == DStatus.offline)
-
-        online_count = sum(1 for d in devices if d.status == DStatus.online)
-        degraded_count = sum(1 for d in devices if d.status == DStatus.degraded)
-        offline_count = devices_offline
-        maintenance_count = sum(1 for d in devices if d.status == DStatus.maintenance)
+        annotate_operational_status(devices)
+        operational_by_id = {
+            device.id: cast(
+                OperationalStatus,
+                cast(Any, device).operational,
+            )
+            for device in devices
+        }
+        online_count = len(
+            [
+                device
+                for device in devices
+                if operational_by_id[device.id].status == UP
+                and not operational_by_id[device.id].retry_pending
+            ]
+        )
+        degraded_count = len(
+            [
+                device
+                for device in devices
+                if operational_by_id[device.id].status == DEGRADED
+                and not operational_by_id[device.id].retry_pending
+            ]
+        )
+        offline_count = len(
+            [
+                device
+                for device in devices
+                if operational_by_id[device.id].status == DOWN
+                and not operational_by_id[device.id].retry_pending
+            ]
+        )
+        maintenance_count = len(
+            [
+                device
+                for device in devices
+                if operational_by_id[device.id].status == MAINTENANCE
+            ]
+        )
+        retry_pending_count = len(
+            [device for device in devices if operational_by_id[device.id].retry_pending]
+        )
 
         device_status_chart = {
-            "labels": ["Online", "Degraded", "Offline", "Maintenance"],
-            "values": [online_count, degraded_count, offline_count, maintenance_count],
-            "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
+            "labels": ["Up", "Degraded", "Down", "Refresh pending", "Maintenance"],
+            "values": [
+                online_count,
+                degraded_count,
+                offline_count,
+                retry_pending_count,
+                maintenance_count,
+            ],
+            "tones": ["positive", "warning", "negative", "warning", "neutral"],
         }
 
         # ---- Alarms ----
@@ -939,6 +986,7 @@ class NetworkDevices(ListResponseMixin):
 
         device_health = []
         for device in filtered_devices:
+            operational = operational_by_id[device.id]
             dm = metrics_by_device.get(str(device.id), {})
             cpu_m = dm.get(MT.cpu)
             mem_m = dm.get(MT.memory)
@@ -949,7 +997,9 @@ class NetworkDevices(ListResponseMixin):
                     "name": device.name,
                     "hostname": device.hostname,
                     "mgmt_ip": device.mgmt_ip,
-                    "status": device.status.value if device.status else "unknown",
+                    "status": operational.status,
+                    "status_reason": operational.reason,
+                    "status_presentation": operational.presentation,
                     "health_status": device.health_status.value
                     if device.health_status
                     else "unknown",
@@ -964,8 +1014,12 @@ class NetworkDevices(ListResponseMixin):
 
         return {
             "stats": {
-                "devices_online": devices_online,
-                "devices_offline": devices_offline,
+                "devices_total": len(devices),
+                "devices_online": online_count,
+                "devices_offline": offline_count,
+                "devices_degraded": degraded_count,
+                "devices_maintenance": maintenance_count,
+                "devices_retry_pending": retry_pending_count,
                 "alarms_open": alarms_open,
                 "subscribers_online": subscribers_online,
             },

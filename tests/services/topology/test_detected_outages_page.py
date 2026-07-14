@@ -83,6 +83,12 @@ def test_console_reads_persisted_confirmed_classifier_incident(db_session, monke
     rows = context["classifier_incidents"]
     row = next(r for r in rows if str(r["incident"].id) == str(inc.id))
     assert row["state"] == "confirmed"
+    assert row["status_presentation"].model_dump(mode="json") == {
+        "value": "confirmed",
+        "label": "Confirmed",
+        "tone": "negative",
+        "icon": "alert",
+    }
     assert row["detection_source"] == "classifier"
     assert row["affected_count"] == 7
     assert row["confidence"] == 0.88

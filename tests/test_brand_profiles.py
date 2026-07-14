@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.models.branding import BrandProfile
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.organization import Organization
@@ -69,6 +71,45 @@ def test_brand_profile_rejects_invalid_scope_and_colour(db_session):
         assert "6-digit hex" in str(exc)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("invalid colour accepted")
+
+
+def test_brand_profile_resolves_semantic_color_override(db_session):
+    upsert_brand_profile(
+        db_session,
+        scope_type="platform",
+        scope_id=None,
+        values={
+            "metadata_": {
+                "semantic_colors": {
+                    "positive": "#166534",
+                    "warning": "#92400e",
+                }
+            }
+        },
+    )
+    db_session.commit()
+
+    resolved = resolve_brand(db_session)
+
+    assert resolved.semantic_colors["positive"] == "#166534"
+    assert resolved.semantic_colors["warning"] == "#92400e"
+    assert set(resolved.semantic_colors) == {
+        "positive",
+        "info",
+        "warning",
+        "negative",
+        "neutral",
+    }
+
+
+def test_brand_profile_rejects_inaccessible_semantic_color(db_session):
+    with pytest.raises(ValueError, match="WCAG AA"):
+        upsert_brand_profile(
+            db_session,
+            scope_type="platform",
+            scope_id=None,
+            values={"metadata_": {"semantic_colors": {"positive": "#ffffff"}}},
+        )
 
 
 def test_legacy_branding_backfill_is_idempotent(db_session):

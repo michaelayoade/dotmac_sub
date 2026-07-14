@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:dotmac_portal/src/widgets/async_value_view.dart';
 import 'package:dotmac_portal/src/widgets/status_chip.dart';
+import 'package:dotmac_portal/src/models/status_presentation.dart';
 
 Widget _wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
 
@@ -14,9 +15,17 @@ void main() {
       expect(find.text('on hold'), findsOneWidget);
     });
 
-    testWidgets('invoice factory maps status to a label', (tester) async {
-      await tester.pumpWidget(_wrap(StatusChip.forInvoice('paid')));
-      expect(find.text('paid'), findsOneWidget);
+    testWidgets('renders the server-owned status presentation', (tester) async {
+      await tester.pumpWidget(_wrap(StatusChip.fromPresentation(
+        const StatusPresentation(
+          value: 'suspended',
+          label: 'Temporarily paused',
+          tone: StatusTone.warning,
+          icon: 'alert',
+        ),
+      )));
+      expect(find.text('Temporarily paused'), findsOneWidget);
+      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
     });
   });
 

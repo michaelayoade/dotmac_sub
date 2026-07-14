@@ -16,6 +16,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.status_presentation import StatusPresentation
+
 
 class ServiceStatusActionKind(StrEnum):
     """Semantic customer action; clients only map it to their own route."""
@@ -44,6 +46,7 @@ class ServiceStatusItem(BaseModel):
     subscription_id: UUID
     offer_name: str | None = None
     status: str
+    status_presentation: StatusPresentation
     billing_mode: str
     # Currently providing service (RADIUS/connectivity allowed).
     usable: bool

@@ -29,6 +29,8 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -39,10 +41,24 @@ from app.services.topology.customer_path import resolve_customer_path
 from app.services.topology.health_classifier import NODE_OUTAGE, localize_outage
 from app.services.topology.outage import open_incident_for_path
 
-# Overall states shown to the customer.
-STATE_CONNECTED = "connected"
-STATE_TROUBLE = "trouble"  # a per-customer last-mile problem
-STATE_OUTAGE = "outage"  # a known area outage above this customer
+if TYPE_CHECKING:
+    from app.schemas.status_presentation import StatusPresentation
+
+
+class ConnectionHealthState(StrEnum):
+    """Complete customer-safe connection-health vocabulary."""
+
+    connected = "connected"
+    trouble = "trouble"  # a per-customer last-mile problem
+    outage = "outage"  # a known area outage above this customer
+
+
+CONNECTION_HEALTH_STATE_VALUES = tuple(state.value for state in ConnectionHealthState)
+
+# Compatibility aliases for existing callers.
+STATE_CONNECTED = ConnectionHealthState.connected.value
+STATE_TROUBLE = ConnectionHealthState.trouble.value
+STATE_OUTAGE = ConnectionHealthState.outage.value
 
 # An area outage is only declared to the customer when at least this many
 # customers behind the dark node were online before (design §7.1 small-N: below
@@ -125,6 +141,15 @@ class Assessment:
     message: str
     advice: str | None
     checked_at: datetime
+
+    @property
+    def status_presentation(self) -> StatusPresentation:
+        """Cross-client semantics for the already-derived safe state."""
+        from app.services.status_presentation import (
+            connection_health_status_presentation,
+        )
+
+        return connection_health_status_presentation(self.state)
 
 
 def _area_outage_boundary(
@@ -226,11 +251,13 @@ def connection_status(
     Contains ONLY customer-facing fields — no node ids/names, no raw signal
     values, no verdict internals, nothing about other customers::
 
-        {state, headline, message, advice, medium, area_outage, checked_at}
+        {state, status_presentation, headline, message, advice, medium,
+         area_outage, checked_at}
     """
     a = assess(session, subscription, now=now)
     return {
         "state": a.state,
+        "status_presentation": a.status_presentation.model_dump(mode="json"),
         "headline": a.headline,
         "message": a.message,
         "advice": a.advice,

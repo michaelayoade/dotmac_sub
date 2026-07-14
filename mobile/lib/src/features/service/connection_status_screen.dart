@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/semantic_colors.dart';
 import '../../models/connection_status.dart';
 import '../../providers/data_providers.dart';
 import '../../widgets/async_value_view.dart';
 import '../../widgets/skeleton.dart';
+import '../../widgets/status_chip.dart';
 
 /// "What's wrong with my connection?" — the outage classifier's per-customer
 /// verdict (GET /me/connection-status). Shows the state, a plain-language
@@ -41,31 +41,6 @@ class ConnectionStatusScreen extends ConsumerWidget {
   }
 }
 
-/// State → (colour, icon). Kept next to the card so the screen and the slim
-/// Home banner render the same visual language.
-({Color color, IconData icon}) connectionVisual(
-  BuildContext context,
-  ConnectionHealth state,
-) {
-  final scheme = Theme.of(context).colorScheme;
-  final semantic = context.semantic;
-  return switch (state) {
-    ConnectionHealth.connected => (
-        color: semantic.success,
-        icon: Icons.check_circle_outline,
-      ),
-    ConnectionHealth.trouble => (
-        color: semantic.warning,
-        icon: Icons.error_outline,
-      ),
-    ConnectionHealth.outage => (color: scheme.error, icon: Icons.cloud_off),
-    ConnectionHealth.unknown => (
-        color: scheme.onSurfaceVariant,
-        icon: Icons.help_outline,
-      ),
-  };
-}
-
 class _ConnectionCard extends StatelessWidget {
   const _ConnectionCard({required this.status});
 
@@ -74,7 +49,7 @@ class _ConnectionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final visual = connectionVisual(context, status.state);
+    final visual = statusPresentationVisual(context, status.statusPresentation);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

@@ -95,7 +95,7 @@ class _LocationPinScreenState extends ConsumerState<LocationPinScreen> {
                     point: _selected,
                     width: 48,
                     height: 48,
-                    child: const Icon(
+                    child: Icon(
                       Icons.location_pin,
                       size: 44,
                       color: AppColors.accent,

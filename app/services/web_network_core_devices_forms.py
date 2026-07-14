@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import difflib
-import logging
 import re
 import uuid
 from collections.abc import Callable
@@ -40,15 +39,12 @@ from app.schemas.catalog import NasDeviceUpdate
 from app.services import nas as nas_service
 from app.services import network as network_service
 from app.services import ping as ping_service
-from app.services.device_operational_status import warmer_is_stale
-
-logger = logging.getLogger(__name__)
-
-_LIVE_STATUS_TO_DEVICE_STATUS = {
-    "up": DeviceStatus.online.value,
-    "problem": DeviceStatus.degraded.value,
-    "down": DeviceStatus.offline.value,
-}
+from app.services.brand_theme import DEFAULT_SEMANTIC_COLORS
+from app.services.device_operational_status import (
+    DEGRADED,
+    DOWN,
+    annotate_operational_status,
+)
 
 
 def _format_uptime_short(seconds: int | None) -> str | None:
@@ -64,29 +60,6 @@ def _format_uptime_short(seconds: int | None) -> str | None:
     if hours:
         return f"{hours}h {minutes}m"
     return f"{minutes}m"
-
-
-def _live_status_available() -> bool:
-    try:
-        return not warmer_is_stale()
-    except Exception:
-        logger.warning("live_status_warmer_check_failed", exc_info=True)
-        return True
-
-
-def _status_value(device: NetworkDevice) -> str:
-    return device.status.value if device.status else DeviceStatus.offline.value
-
-
-def _display_status_value(device: NetworkDevice, *, live_status_available: bool) -> str:
-    if device.status == DeviceStatus.maintenance:
-        return DeviceStatus.maintenance.value
-    if live_status_available:
-        live_status = str(device.live_status or "").strip().lower()
-        mapped = _LIVE_STATUS_TO_DEVICE_STATUS.get(live_status)
-        if mapped:
-            return mapped
-    return _status_value(device)
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -624,15 +597,9 @@ def list_page_data(
             | NetworkDevice.model.ilike(pattern)
         )
 
-    devices = db.scalars(stmt.order_by(NetworkDevice.name).limit(200)).all()
+    devices = list(db.scalars(stmt.order_by(NetworkDevice.name).limit(200)).all())
+    annotate_operational_status(devices)
     device_ids = [device.id for device in devices]
-    live_status_available = _live_status_available()
-    display_status_map = {
-        str(device.id): _display_status_value(
-            device, live_status_available=live_status_available
-        )
-        for device in devices
-    }
     pop_sites = pop_sites_for_forms(db)
     child_impacts: dict[str, dict[str, int | bool]] = {}
     parent_ids = [device.id for device in devices]
@@ -644,6 +611,7 @@ def list_page_data(
                 .where(NetworkDevice.is_active.is_(True))
             ).all()
         )
+        annotate_operational_status(children)
         for child in children:
             if not child.parent_device_id:
                 continue
@@ -652,12 +620,10 @@ def list_page_data(
                 key, {"total": 0, "offline": 0, "degraded": 0, "impacted": False}
             )
             bucket["total"] = int(bucket["total"]) + 1
-            child_status = _display_status_value(
-                child, live_status_available=live_status_available
-            )
-            if child_status == DeviceStatus.offline.value:
+            child_status = child.operational.status
+            if child_status == DOWN:
                 bucket["offline"] = int(bucket["offline"]) + 1
-            if child_status == DeviceStatus.degraded.value:
+            if child_status == DEGRADED:
                 bucket["degraded"] = int(bucket["degraded"]) + 1
             bucket["impacted"] = bool(
                 int(bucket["offline"]) > 0 or int(bucket["degraded"]) > 0
@@ -782,7 +748,6 @@ def list_page_data(
         "device_type_filter": device_type_filter,
         "device_type_options": [item.value for item in DeviceType],
         "child_impacts": child_impacts,
-        "display_status_map": display_status_map,
         "uptime_map": uptime_map,
         "ping_history_map": ping_history_map,
         "backup_map": backup_map,
@@ -810,6 +775,7 @@ def detail_page_data(
             .order_by(NetworkDevice.name)
         ).all()
     )
+    annotate_operational_status([device, *child_devices])
 
     lineage: list[NetworkDevice] = []
     ancestor = device.parent_device
@@ -821,13 +787,14 @@ def detail_page_data(
     lineage.reverse()
     child_status_summary = {
         "total": len(child_devices),
-        "offline": sum(1 for c in child_devices if c.status == DeviceStatus.offline),
-        "degraded": sum(1 for c in child_devices if c.status == DeviceStatus.degraded),
+        "offline": sum(1 for c in child_devices if c.operational.status == DOWN),
+        "degraded": sum(1 for c in child_devices if c.operational.status == DEGRADED),
     }
     child_status_summary["impacted"] = (
         child_status_summary["offline"] + child_status_summary["degraded"]
     ) > 0
     descendants_by_parent: dict[UUID, list[NetworkDevice]] = {}
+    descendant_devices: list[NetworkDevice] = []
     descendants_frontier = [device.id]
     descendants_visited: set[UUID] = set()
     while descendants_frontier:
@@ -844,11 +811,14 @@ def detail_page_data(
             if child.id in descendants_visited:
                 continue
             descendants_visited.add(child.id)
+            descendant_devices.append(child)
             if child.parent_device_id:
                 descendants_by_parent.setdefault(child.parent_device_id, []).append(
                     child
                 )
             descendants_frontier.append(child.id)
+
+    annotate_operational_status(descendant_devices)
 
     def _tree(parent_id: UUID, depth: int = 0) -> list[dict[str, object]]:
         nodes: list[dict[str, object]] = []
@@ -1160,9 +1130,10 @@ def add_bandwidth_graph_source(
     normalized_unit = value_unit.strip()
     if normalized_unit not in {"Bps", "bps", "pps"}:
         return False, "Value unit must be Bps, bps, or pps."
-    normalized_color = color_hex.strip() or "#22c55e"
+    default_graph_color = DEFAULT_SEMANTIC_COLORS["positive"]
+    normalized_color = color_hex.strip() or default_graph_color
     if not re.fullmatch(r"#[0-9a-fA-F]{6}", normalized_color):
-        return False, "Color must be a hex value like #22c55e."
+        return False, f"Color must be a hex value like {default_graph_color}."
 
     next_order = (
         db.scalar(

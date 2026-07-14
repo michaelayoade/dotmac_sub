@@ -130,7 +130,7 @@ class _TicketsScreenState extends ConsumerState<TicketsScreen> {
                   subtitle: Text(
                     '${t.number ?? t.id.substring(0, 8)} · ${Fmt.date(t.createdAt)}',
                   ),
-                  trailing: StatusChip.forTicket(t.status),
+                  trailing: StatusChip.fromPresentation(t.statusPresentation),
                   onTap: () => context.go('/support/${t.id}'),
                 ),
               );

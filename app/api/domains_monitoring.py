@@ -38,6 +38,20 @@ from app.services.auth_dependencies import require_permission
 router = APIRouter()
 
 
+def _with_device_operational_status(value):
+    """Attach the read-only NOC projection to device API responses."""
+    from app.services.device_operational_status import annotate_operational_status
+
+    if isinstance(value, dict):
+        devices = value.get("items", [])
+    elif value is None:
+        devices = []
+    else:
+        devices = [value]
+    annotate_operational_status(devices)
+    return value
+
+
 @router.post(
     "/uptime-reports",
     response_model=UptimeReportResponse,
@@ -125,8 +139,10 @@ def list_network_devices(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return monitoring_service.network_devices.list_response(
-        db, pop_site_id, is_active, order_by, order_dir, limit, offset
+    return _with_device_operational_status(
+        monitoring_service.network_devices.list_response(
+            db, pop_site_id, is_active, order_by, order_dir, limit, offset
+        )
     )
 
 
@@ -138,7 +154,9 @@ def list_network_devices(
     dependencies=[Depends(require_permission("monitoring:write"))],
 )
 def create_network_device(payload: NetworkDeviceCreate, db: Session = Depends(get_db)):
-    return monitoring_service.network_devices.create_committed(db, payload)
+    return _with_device_operational_status(
+        monitoring_service.network_devices.create_committed(db, payload)
+    )
 
 
 @router.get(
@@ -148,7 +166,9 @@ def create_network_device(payload: NetworkDeviceCreate, db: Session = Depends(ge
     dependencies=[Depends(require_permission("monitoring:read"))],
 )
 def get_network_device(device_id: str, db: Session = Depends(get_db)):
-    return monitoring_service.network_devices.get(db, device_id)
+    return _with_device_operational_status(
+        monitoring_service.network_devices.get(db, device_id)
+    )
 
 
 @router.patch(
@@ -160,7 +180,9 @@ def get_network_device(device_id: str, db: Session = Depends(get_db)):
 def update_network_device(
     device_id: str, payload: NetworkDeviceUpdate, db: Session = Depends(get_db)
 ):
-    return monitoring_service.network_devices.update_committed(db, device_id, payload)
+    return _with_device_operational_status(
+        monitoring_service.network_devices.update_committed(db, device_id, payload)
+    )
 
 
 @router.delete(

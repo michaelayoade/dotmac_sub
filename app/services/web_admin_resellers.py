@@ -40,6 +40,10 @@ from app.services.invoice_collectibility import (
     open_invoice_filters_for_accounts,
     overdue_debt_filters_for_accounts,
 )
+from app.services.status_presentation import (
+    invoice_status_presentation,
+    payment_status_presentation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -813,7 +817,15 @@ def get_reseller_detail_context(
         "payments_30d_count": payments_30d_count,
         "open_tickets": open_tickets,
         "recent_invoices": recent_invoices,
+        "invoice_status_presentations": {
+            str(invoice.id): invoice_status_presentation(invoice.status)
+            for invoice in recent_invoices
+        },
         "recent_payments": recent_payments,
+        "payment_status_presentations": {
+            str(payment.id): payment_status_presentation(payment.status)
+            for payment in recent_payments
+        },
         "recent_tickets": recent_tickets,
         "recent_subscriptions": recent_subscriptions,
         "explicit_available_offers": explicit_available_offers,

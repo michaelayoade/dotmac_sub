@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from fastapi import HTTPException
+
 from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
@@ -115,7 +118,7 @@ def test_apply_query_config_selects_only_visible_columns(db_session):
         user.id,
         "subscribers",
         {
-            "limit": "20",
+            "limit": "25",
             "offset": "0",
             "q": "example.com",
             "status": "active",
@@ -132,6 +135,15 @@ def test_apply_query_config_selects_only_visible_columns(db_session):
     assert items
     assert all("email" not in item for item in items)
     assert all("subscriber_name" in item for item in items)
+
+    sortable = {column.column_key for column in columns if column.sortable}
+    assert sortable == {
+        "subscriber_number",
+        "status",
+        "created_at",
+        "updated_at",
+        "subscriber_name",
+    }
 
 
 def test_resolution_hierarchy_user_then_system_then_registry(db_session):
@@ -253,7 +265,7 @@ def test_customers_table_returns_business_account_id_meta_for_org_rows(db_sessio
         user.id,
         "customers",
         {
-            "limit": "20",
+            "limit": "25",
             "offset": "0",
             "customer_type": "business",
             "sort_by": "created_at",
@@ -264,3 +276,127 @@ def test_customers_table_returns_business_account_id_meta_for_org_rows(db_sessio
     org_item = next(item for item in items if item["id"] == str(org_subscriber.id))
     assert org_item["customer_type"] == "business"
     assert org_item["business_account_id"] == str(org_subscriber.id)
+
+
+def test_customer_table_data_uses_canonical_scope_and_effective_offset(db_session):
+    user = _subscriber(db_session, "table-canonical-user@example.com")
+    customer = _subscriber(
+        db_session,
+        "table-canonical-customer@example.com",
+        first_name="Canonical",
+        user_type=UserType.customer,
+    )
+    reseller = _subscriber(
+        db_session,
+        "table-canonical-reseller@example.com",
+        first_name="Canonical",
+        user_type=UserType.reseller,
+    )
+
+    projection = TableConfigurationService.build_data_projection(
+        db_session,
+        user.id,
+        "customers",
+        {
+            "limit": "25",
+            "offset": "100",
+            "q": "Canonical",
+            "sort_by": "customer_name",
+            "sort_dir": "asc",
+        },
+    )
+
+    item_ids = {item["id"] for item in projection.items}
+    assert str(customer.id) in item_ids
+    assert str(reseller.id) not in item_ids
+    assert projection.count == 1
+    assert projection.limit == 25
+    assert projection.offset == 0
+
+
+def test_customer_table_data_rejects_legacy_scalar_filter_path(db_session):
+    user = _subscriber(db_session, "table-legacy-filter@example.com")
+
+    with pytest.raises(HTTPException, match="Unsupported customer list parameters"):
+        TableConfigurationService.apply_query_config(
+            db_session,
+            user.id,
+            "customers",
+            {"billing_enabled": "true"},
+        )
+
+
+def test_subscriber_table_data_is_read_only_for_missing_subscriber_number(db_session):
+    user = _subscriber(db_session, "subscriber-table-reader@example.com")
+    subscriber = _subscriber(
+        db_session,
+        "subscriber-without-number@example.com",
+        first_name="NoNumber",
+        user_type=UserType.customer,
+    )
+    assert subscriber.subscriber_number is None
+
+    projection = TableConfigurationService.build_data_projection(
+        db_session,
+        user.id,
+        "subscribers",
+        {
+            "limit": "25",
+            "offset": "0",
+            "q": "subscriber-without-number@example.com",
+            "sort_by": "subscriber_name",
+            "sort_dir": "asc",
+        },
+    )
+
+    row = next(item for item in projection.items if item["id"] == str(subscriber.id))
+    assert row["subscriber_number"] is None
+    db_session.refresh(subscriber)
+    assert subscriber.subscriber_number is None
+
+
+def test_subscriber_table_data_clamps_offset_and_excludes_system_users(db_session):
+    user = _subscriber(db_session, "subscriber-canonical-reader@example.com")
+    subscriber = _subscriber(
+        db_session,
+        "subscriber-canonical-customer@example.com",
+        first_name="SubscriberCanonical",
+        user_type=UserType.customer,
+    )
+    system_user = _subscriber(
+        db_session,
+        "subscriber-canonical-system@example.com",
+        first_name="SubscriberCanonical",
+        user_type=UserType.system_user,
+    )
+
+    projection = TableConfigurationService.build_data_projection(
+        db_session,
+        user.id,
+        "subscribers",
+        {
+            "limit": "25",
+            "offset": "100",
+            "q": "SubscriberCanonical",
+            "sort_by": "subscriber_name",
+            "sort_dir": "asc",
+        },
+    )
+
+    item_ids = {item["id"] for item in projection.items}
+    assert str(subscriber.id) in item_ids
+    assert str(system_user.id) not in item_ids
+    assert projection.count == 1
+    assert projection.offset == 0
+
+
+def test_subscriber_table_data_rejects_generic_scalar_filter_path(db_session):
+    user = _subscriber(db_session, "subscriber-legacy-filter@example.com")
+
+    with pytest.raises(HTTPException, match="Unsupported subscriber list parameters"):
+        TableConfigurationService.apply_query_config(
+            db_session,
+            user.id,
+            "subscribers",
+            {"billing_enabled": "true"},
+        )

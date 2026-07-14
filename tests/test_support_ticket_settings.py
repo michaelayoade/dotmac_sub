@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
+import pytest
+
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.ticket_workflow import TicketAssignmentRule
 from app.services import support_ticket_settings as support_ticket_settings_service
@@ -21,19 +23,17 @@ def test_ticket_settings_drive_support_ticket_form_context(db_session):
     team_id = str(uuid4())
     support_ticket_settings_service.update_options(
         db_session,
-        statuses=["open", "needs_vendor"],
+        statuses=["open", "pending"],
         priorities=["normal", "critical"],
         ticket_types=["incident", "network audit"],
         regions=["lagos", "abuja"],
         service_team_ids=[team_id],
         service_team_labels=["Field Ops"],
-        status_color_statuses=["open", "needs_vendor"],
-        status_color_values=["emerald", "violet"],
     )
 
     context = web_support_tickets_service.build_ticket_form_context(db_session)
 
-    assert context["all_statuses"] == ["open", "needs_vendor"]
+    assert context["all_statuses"] == ["open", "pending"]
     assert context["all_priorities"] == ["normal", "critical"]
     assert context["ticket_type_options"] == ["incident", "network audit"]
     assert context["region_options"] == ["abuja", "lagos"]
@@ -42,12 +42,22 @@ def test_ticket_settings_drive_support_ticket_form_context(db_session):
     assert context["prefill"]["priority"] == "normal"
 
 
-def test_ticket_settings_persist_routing_sla_and_status_colors(db_session):
+def test_ticket_settings_reject_statuses_outside_lifecycle_vocabulary(db_session):
+    with pytest.raises(ValueError, match="Unsupported ticket status: needs_vendor"):
+        support_ticket_settings_service.update_options(
+            db_session,
+            statuses=["open", "needs_vendor"],
+            priorities=["normal"],
+            ticket_types=["incident"],
+        )
+
+
+def test_ticket_settings_persist_routing_and_sla(db_session):
     team_id = str(uuid4())
     tech_id = str(uuid4())
     support_ticket_settings_service.update_options(
         db_session,
-        statuses=["open", "blocked"],
+        statuses=["open", "pending"],
         priorities=["normal"],
         ticket_types=["incident"],
         regions=["north"],
@@ -62,8 +72,6 @@ def test_ticket_settings_persist_routing_sla_and_status_colors(db_session):
         sla_response_hours=["2"],
         sla_resolution_hours=["12"],
         sla_aging_hours=["6"],
-        status_color_statuses=["open", "blocked"],
-        status_color_values=["emerald", "red"],
     )
 
     assert support_ticket_settings_service.auto_assign_enabled(db_session) is True
@@ -82,14 +90,9 @@ def test_ticket_settings_persist_routing_sla_and_status_colors(db_session):
         "resolution_hours": 12,
         "aging_hours": 6,
     }
-    assert support_ticket_settings_service.status_color_options(db_session) == {
-        "open": "emerald",
-        "blocked": "red",
-    }
-
     support_ticket_settings_service.update_options(
         db_session,
-        statuses=["open", "blocked"],
+        statuses=["open", "pending"],
         priorities=["normal"],
         ticket_types=["incident"],
         auto_assign_max_open_tickets="",

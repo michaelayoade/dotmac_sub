@@ -131,10 +131,12 @@ class InvoicesScreen extends ConsumerWidget {
                           return Card(
                             margin: EdgeInsets.zero,
                             child: ListTile(
-                              leading: const Icon(Icons.check_circle_outline),
+                              leading: const Icon(Icons.payments_outlined),
                               title: Text(Fmt.money(p.amount, p.currency)),
                               subtitle: Text(Fmt.dateTime(p.paidAt)),
-                              trailing: StatusChip(p.status),
+                              trailing: StatusChip.fromPresentation(
+                                p.statusPresentation,
+                              ),
                             ),
                           );
                         },
@@ -303,7 +305,7 @@ class _InvoiceTile extends StatelessWidget {
                   Text(Fmt.money(inv.total, inv.currency),
                       style: const TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 4),
-                  StatusChip.forInvoice(inv.isOverdue ? 'overdue' : inv.status),
+                  StatusChip.fromPresentation(inv.statusPresentation),
                 ],
               ),
               if (!inv.isPaid) ...[

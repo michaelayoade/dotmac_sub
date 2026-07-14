@@ -19,6 +19,7 @@ from app.schemas.field import FieldCompletionRequirements
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import mark_sub_authoritative
+from app.services.field.work_order_status import WorkOrderStatus
 
 _CLOCK_SKEW_FLAG_SECONDS = 15 * 60
 _UNABLE_REASONS = {
@@ -30,28 +31,35 @@ _UNABLE_REASONS = {
     "other",
 }
 
+_SCHEDULED = WorkOrderStatus.scheduled.value
+_DISPATCHED = WorkOrderStatus.dispatched.value
+_IN_PROGRESS = WorkOrderStatus.in_progress.value
+_PAUSED = WorkOrderStatus.paused.value
+_COMPLETED = WorkOrderStatus.completed.value
+_CANCELED = WorkOrderStatus.canceled.value
+
 _EVENT_TO_STATUS: dict[str, str | None] = {
     "accept": None,
-    "en_route": "dispatched",
+    "en_route": _DISPATCHED,
     "arrived": None,
-    "start": "in_progress",
-    "pause": "paused",
-    "hold": "paused",
-    "resume": "in_progress",
-    "complete": "completed",
-    "unable_to_complete": "canceled",
+    "start": _IN_PROGRESS,
+    "pause": _PAUSED,
+    "hold": _PAUSED,
+    "resume": _IN_PROGRESS,
+    "complete": _COMPLETED,
+    "unable_to_complete": _CANCELED,
 }
 
 _TRANSITION_ALLOWED_FROM: dict[str, set[str]] = {
-    "accept": {"scheduled", "dispatched"},
-    "en_route": {"scheduled", "dispatched", "paused"},
-    "arrived": {"scheduled", "dispatched", "in_progress", "paused"},
-    "start": {"scheduled", "dispatched"},
-    "pause": {"in_progress"},
-    "hold": {"in_progress"},
-    "resume": {"paused"},
-    "complete": {"in_progress"},
-    "unable_to_complete": {"scheduled", "dispatched", "in_progress", "paused"},
+    "accept": {_SCHEDULED, _DISPATCHED},
+    "en_route": {_SCHEDULED, _DISPATCHED, _PAUSED},
+    "arrived": {_SCHEDULED, _DISPATCHED, _IN_PROGRESS, _PAUSED},
+    "start": {_SCHEDULED, _DISPATCHED},
+    "pause": {_IN_PROGRESS},
+    "hold": {_IN_PROGRESS},
+    "resume": {_PAUSED},
+    "complete": {_IN_PROGRESS},
+    "unable_to_complete": {_SCHEDULED, _DISPATCHED, _IN_PROGRESS, _PAUSED},
 }
 
 

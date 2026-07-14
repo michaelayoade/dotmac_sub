@@ -728,8 +728,6 @@ def _get_device_health_page(
         NetworkDevice,
     )
     from app.services.device_operational_status import (
-        DEGRADED,
-        UP,
         derive_operational_status,
         warmer_is_stale,
     )
@@ -814,8 +812,9 @@ def _get_device_health_page(
             "name": device.name or str(device.id)[:8],
             "ip": str(device.mgmt_ip or ""),
             "mgmt_ip": str(device.mgmt_ip or ""),
-            "status": ("online" if operational.status in {UP, DEGRADED} else "offline"),
+            "status": operational.status,
             "status_reason": operational.reason,
+            "status_presentation": operational.presentation,
             "retry_pending": operational.retry_pending,
             "vendor": str(device.vendor or ""),
             "health_status": None,

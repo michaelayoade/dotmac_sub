@@ -202,24 +202,7 @@ def test_reseller_open_tickets_count_returns_none_when_crm_unavailable(
 # ── Customer Portal: Tickets (sourced from the local support module) ──────
 
 
-def test_ticket_display_maps_cover_native_sub_statuses_and_priorities() -> None:
-    for status in [
-        "new",
-        "open",
-        "pending",
-        "waiting_on_customer",
-        "lastmile_rerun",
-        "site_under_construction",
-        "on_hold",
-        "pending_confirmation",
-        "resolved",
-        "closed",
-        "canceled",
-        "merged",
-    ]:
-        assert status in crm_portal.TICKET_STATUS_DISPLAY
-        assert status in crm_portal.TICKET_STATUS_COLORS
-
+def test_ticket_portal_keeps_priority_display_maps_only() -> None:
     for priority in ["lower", "low", "medium", "normal", "high", "urgent"]:
         assert priority in crm_portal.TICKET_PRIORITY_DISPLAY
         assert priority in crm_portal.TICKET_PRIORITY_COLORS
@@ -237,6 +220,12 @@ def test_ticket_to_dict_includes_native_sla_resolution_timestamps() -> None:
     assert payload["due_at"] == "2026-01-03T00:00:00+00:00"
     assert payload["resolved_at"] == "2026-01-04T00:00:00+00:00"
     assert payload["closed_at"] == "2026-01-05T00:00:00+00:00"
+    assert payload["status_presentation"] == {
+        "value": "open",
+        "label": "Open",
+        "tone": "info",
+        "icon": "info",
+    }
 
 
 def test_tickets_list_context_skips_blank_subscriber_ids(monkeypatch) -> None:
@@ -272,7 +261,7 @@ def test_tickets_list_context_merges_multiple_allowed_accounts(monkeypatch) -> N
 
     assert sorted(t["id"] for t in context["tickets"]) == ["t-1", "t-2"]
     assert context["crm_error"] is False
-    assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
+    assert context["tickets"][0]["status_presentation"]["value"] == "open"
 
 
 def test_tickets_list_context_returns_error_context_on_failure(monkeypatch) -> None:
@@ -287,7 +276,7 @@ def test_tickets_list_context_returns_error_context_on_failure(monkeypatch) -> N
 
     assert context["tickets"] == []
     assert context["crm_error"] is True
-    assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
+    assert "status_display" not in context
 
 
 def test_ticket_detail_context_rejects_ticket_with_wrong_subscriber(
@@ -344,7 +333,7 @@ def test_ticket_detail_context_filters_internal_comments(monkeypatch) -> None:
 
     assert context["ticket"]["id"] == "ticket-1"
     assert [c["body"] for c in context["comments"]] == ["Visible"]
-    assert context["status_display"] == crm_portal.TICKET_STATUS_DISPLAY
+    assert context["ticket"]["status_presentation"]["value"] == "open"
 
 
 def test_ticket_create_context_exposes_priority_choices() -> None:

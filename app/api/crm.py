@@ -644,17 +644,13 @@ def list_outages(
     ``clearing``), plus anything resolved within ``resolved_within_hours``
     (default 24); ``suspected``/``discarded`` are excluded from the default. Each
     row carries scope (node/basestation/FDH + name), ``detection_source``
-    (operator vs classifier), ``state``, lifecycle timestamps, ``confidence`` and
-    ``mttr_seconds``. ``status_filter`` narrows to a single lifecycle state,
-    ``basestation_id`` and ``node_id`` narrow the scope."""
-    _valid_status = (
-        "open",
-        "resolved",
-        "suspected",
-        "confirmed",
-        "clearing",
-        "discarded",
-    )
+    (operator vs classifier), ``state``, ``status_presentation``, lifecycle
+    timestamps, ``confidence`` and ``mttr_seconds``. ``status_filter`` narrows to
+    a single lifecycle state, ``basestation_id`` and ``node_id`` narrow the
+    scope."""
+    from app.services.topology.outage import OUTAGE_STATUS_VALUES
+
+    _valid_status = OUTAGE_STATUS_VALUES
     if status_filter is not None and status_filter not in _valid_status:
         _error(
             status.HTTP_400_BAD_REQUEST,
