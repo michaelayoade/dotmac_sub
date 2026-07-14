@@ -19,6 +19,8 @@ Apply exactly one label when this PR changes deployable behavior or shipped arti
 ## UI / Design Review
 
 Complete this section for any UI-facing change. Use `N/A` where appropriate.
+Follow `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` for information depth,
+state provenance, table scope, and action ownership.
 
 - [ ] I reviewed `docs/DESIGN_REVIEW_CHECKLIST.md`.
 - [ ] I identified the screen's audience, job, decision, read owner, and action owner.

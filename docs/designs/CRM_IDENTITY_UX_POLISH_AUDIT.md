@@ -1,5 +1,7 @@
 # CRM sync & customer identity — UX-polish & operator-control audit
 
+> **Status: historical audit evidence.** Revalidate unresolved recommendations against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT before implementation.
+
 **Date:** 2026-06-29
 **Method:** 2-agent parallel read-only review: (a) CRM sync/tickets/webhook/
 dead-letter/duplicate-merge + the Syncs admin UI, (b) customer-identity

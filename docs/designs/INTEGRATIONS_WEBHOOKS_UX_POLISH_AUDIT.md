@@ -1,5 +1,7 @@
 # Integrations & webhooks — UX-polish & operator-control audit
 
+> **Status: historical audit evidence.** Revalidate unresolved recommendations against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT before implementation.
+
 **Date:** 2026-06-29
 **Method:** single-agent read-only review of integrations (connectors/hooks/webhook
 endpoints) + the system webhooks UI. (CRM sync/dead-letters and the WhatsApp *send*

@@ -1,5 +1,10 @@
 # UX-polish & operator-control audits — index
 
+> **Status: historical findings and remediation evidence.** Audit recommendations
+> do not override `docs/UI_INFORMATION_AND_ACTION_STANDARD.md`,
+> `docs/PRODUCTION_UI_BRIEF.md`, or a domain source-of-truth owner. Revalidate
+> unresolved findings before implementation; completed findings remain evidence.
+
 A whole-app, two-track audit of the admin/customer/partner surface, run as parallel
 read-only review agents per domain and synthesized into one doc per domain.
 

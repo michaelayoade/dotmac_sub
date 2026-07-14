@@ -1,5 +1,7 @@
 # Section 2: Selfcare Portal & Messaging
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT.
+
 ## Source: legacy BSS ISP Management Platform
 These screenshots document legacy BSS's tariff plan management (Internet plans, Recurring charges, One-time fees, Bundles) and messaging system (mass sending with advanced filters, rich-text editor, financial document attachments, and delivery history). The analysis below maps legacy BSS capabilities to feature improvements for DotMac Sub.
 

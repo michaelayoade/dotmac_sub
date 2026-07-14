@@ -1,5 +1,11 @@
 # DotMac Sub — UI/UX Master Plan
 
+> **Status: historical module inventory, not a current specification.** Page,
+> KPI, chart, table, card-grid, and action proposals below must be revalidated
+> against `UI_INFORMATION_AND_ACTION_STANDARD.md`, the current domain SOT, and
+> `PRODUCTION_UI_BRIEF.md` before implementation. This document does not
+> authorize a new metric, business calculation, action, or data owner.
+
 ## Architecture Principles
 
 ### Centralized Service Layer

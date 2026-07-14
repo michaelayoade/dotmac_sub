@@ -1,5 +1,7 @@
 # System / configuration / legal / GIS — UX-polish & operator-control audit
 
+> **Status: historical audit evidence.** Revalidate unresolved recommendations against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current domain SOT before implementation.
+
 **Date:** 2026-06-29
 **Method:** single-agent read-only review of the settings control plane + legal,
 GIS, whats-new, design-system, admin-hub. (The billing settings form is covered in

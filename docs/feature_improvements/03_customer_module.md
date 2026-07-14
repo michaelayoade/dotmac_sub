@@ -1,5 +1,7 @@
 # Section 3: legacy BSS Customer Module
 
+> **Status: historical product research, not an approved requirement.** Revalidate all UI proposals against `docs/UI_INFORMATION_AND_ACTION_STANDARD.md` and the current customer SOT.
+
 ## Source: legacy BSS ISP Management Platform
 
 This document analyzes 29 screenshots from the legacy BSS Customer Module and proposes feature improvements for DotMac Sub. The legacy BSS Customer Module covers the full customer lifecycle: profile management, service provisioning, billing configuration, usage statistics, documents, CPE management, and communication history.
