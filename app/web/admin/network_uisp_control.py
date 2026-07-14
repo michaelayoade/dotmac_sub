@@ -105,11 +105,18 @@ def uisp_control_detail(
     "/{intent_id}/apply",
     dependencies=[Depends(require_permission("network:cpe:write"))],
 )
-def uisp_control_apply(intent_id: UUID, db: Session = Depends(get_db)):
+def uisp_control_apply(
+    intent_id: UUID,
+    expected_revision: int = Form(..., ge=1),
+    db: Session = Depends(get_db),
+):
     intent = db.get(UispDeviceIntent, intent_id)
     if intent is None:
         raise HTTPException(status_code=404, detail="UISP intent not found")
-    request_apply(db, intent)
+    try:
+        request_apply(db, intent, expected_revision=expected_revision)
+    except uisp_control_plane.UispIntentError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return RedirectResponse(
         f"/admin/network/uisp-control/{intent_id}?notice=queued",
         status_code=303,
