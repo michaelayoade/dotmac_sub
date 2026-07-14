@@ -443,6 +443,16 @@ Dependency order:
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
    and it projects through `network.control_plane_intent`.
+12. `network.operation_ledger`: owns the tracked device operation lifecycle and
+   status vocabulary, the terminal-transition guard, correlation-key duplicate
+   suppression, stale-active reclamation, parent/child rollup, and whether an
+   operation may run, resume, or be re-executed. Celery is transport: tasks
+   report progress through the ledger and do not decide retry eligibility.
+   `app.services.task_reliability` declares each task's retry/idempotency/
+   visibility contract and is a *projection* of this owner, not a second
+   authority. A contract may only claim operator redrive
+   (`MANUAL_REDRIVE`/`ADMIN_REDRIVE`) once a redrive path exists in the ledger;
+   declaring an affordance that does not exist is drift, not policy.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support
