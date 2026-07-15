@@ -95,6 +95,32 @@ class TestSuspendSubscription:
         assert subscription.status == SubscriptionStatus.suspended
         assert subscriber.status == SubscriberStatus.suspended
 
+    def test_suspend_runs_connectivity_cleanup(self, db_session, monkeypatch):
+        """Suspension removes live network access through the canonical owner."""
+        cleaned: list[str] = []
+
+        def mock_cleanup(db, subscription_id):
+            cleaned.append(subscription_id)
+            return {}
+
+        monkeypatch.setattr(
+            "app.services.enforcement.cleanup_subscription_on_suspend", mock_cleanup
+        )
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+
+        suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="dunning_case:test-123",
+            emit=False,
+        )
+
+        assert cleaned == [str(subscription.id)]
+
     def test_idempotent_suspend_creates_second_lock(self, db_session):
         """Suspending twice creates two locks, subscription stays suspended."""
         subscriber = _make_subscriber(db_session)
@@ -120,6 +146,47 @@ class TestSuspendSubscription:
         assert lock1.is_active is True
         assert lock2.is_active is True
         assert subscription.status == SubscriptionStatus.suspended
+
+    def test_duplicate_lock_suspend_reapplies_status_and_cleanup(
+        self, db_session, monkeypatch
+    ):
+        """A duplicate lock still repairs active-status/network drift."""
+        cleaned: list[str] = []
+
+        def mock_cleanup(db, subscription_id):
+            cleaned.append(subscription_id)
+            return {}
+
+        monkeypatch.setattr(
+            "app.services.enforcement.cleanup_subscription_on_suspend", mock_cleanup
+        )
+
+        subscriber = _make_subscriber(db_session)
+        offer = _make_offer(db_session)
+        subscription = _make_subscription(db_session, subscriber, offer)
+
+        lock1 = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="dunning_case:1",
+            emit=False,
+        )
+        subscription.status = SubscriptionStatus.active
+        db_session.flush()
+        cleaned.clear()
+
+        lock2 = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.overdue,
+            source="dunning_case:1",
+            emit=False,
+        )
+
+        assert lock2.id == lock1.id
+        assert subscription.status == SubscriptionStatus.suspended
+        assert cleaned == [str(subscription.id)]
 
     def test_cannot_suspend_canceled_subscription(self, db_session):
         """Suspension of a terminal subscription raises ValueError."""
