@@ -130,7 +130,7 @@ void main() {
 
       final addons = await catalog.addons(subs.items.first.id);
       print('✅ /me/.../add-ons — available=${addons.available.length} '
-          'active=${addons.active.length} wallet=${addons.walletBalance}');
+          'active=${addons.active.length}');
     }
   }, timeout: const Timeout(Duration(seconds: 30)), skip: _user.isEmpty);
 
