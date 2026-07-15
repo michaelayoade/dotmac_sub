@@ -62,6 +62,20 @@ def emit_event(db, event_type, payload, **kwargs):  # noqa: ANN001, ANN201
     return _emit_event(db, event_type, payload, **kwargs)
 
 
+def _cleanup_suspended_connectivity(db: Session, subscription_id: str) -> None:
+    """Best-effort network cleanup for every accepted suspend command."""
+    try:
+        from app.services.enforcement import cleanup_subscription_on_suspend
+
+        cleanup_subscription_on_suspend(db, subscription_id)
+    except Exception as exc:
+        logger.warning(
+            "Failed to cleanup connectivity on suspend for subscription %s: %s",
+            subscription_id,
+            exc,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Allowed restorer triggers per enforcement reason
 # ---------------------------------------------------------------------------
@@ -300,6 +314,28 @@ def suspend_subscription(
             source,
             existing.id,
         )
+        if not was_already_suspended:
+            subscription.status = SubscriptionStatus.suspended
+            db.flush()
+            if emit:
+                emit_event(
+                    db,
+                    EventType.subscription_suspended,
+                    {
+                        "subscription_id": str(subscription.id),
+                        "reason": reason.value,
+                        "source": source,
+                        "from_status": prev_status.value if prev_status else None,
+                        "to_status": SubscriptionStatus.suspended.value,
+                        "offer_name": subscription.offer.name
+                        if subscription.offer
+                        else None,
+                    },
+                    subscription_id=subscription.id,
+                    account_id=subscription.subscriber_id,
+                )
+            compute_account_status(db, str(subscription.subscriber_id))
+        _cleanup_suspended_connectivity(db, str(subscription.id))
         return existing
 
     # Create the enforcement lock
@@ -320,6 +356,8 @@ def suspend_subscription(
         status_changed = True
 
     db.flush()
+
+    _cleanup_suspended_connectivity(db, str(subscription.id))
 
     if emit:
         if status_changed:

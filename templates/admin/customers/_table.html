@@ -230,7 +230,7 @@
                                         Activate service{{ 's' if customer.suspended_subscription_count != 1 else '' }}
                                     </button>
                                     {% endif %}
-                                    {% if can_suspend_subscriptions and customer.active_subscription_count %}
+                                    {% if can_tech_support_suspend_subscriptions and customer.active_subscription_count %}
                                     <button hx-post="{{ customer_path }}/suspend-services"
                                             hx-confirm="Suspend {{ customer.active_subscription_count }} active service{{ 's' if customer.active_subscription_count != 1 else '' }} for this customer?"
                                             hx-swap="none"

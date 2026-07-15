@@ -44,6 +44,7 @@ from app.services.auth_dependencies import (
     has_permission,
     require_any_permission,
     require_permission,
+    require_user_auth,
 )
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import resolve_customer_subscription
@@ -57,6 +58,7 @@ register_customer_portal_filters(templates)
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
 
 _NOTIFICATION_QUEUE_TASK = "app.tasks.notifications.deliver_notification_queue"
+_TECH_SUPPORT_ROLE = "Technical support"
 
 
 def _safe_form_error(exc: Exception) -> str:
@@ -146,12 +148,31 @@ def _subscription_action_permission_context(
 ) -> dict[str, bool]:
     auth = getattr(request.state, "auth", None) or {}
     can_write_catalog = bool(auth) and has_permission(auth, db, "catalog:write")
+    is_tech_support = _is_tech_support(auth)
     return {
         "can_activate_subscriptions": can_write_catalog
         or (bool(auth) and has_permission(auth, db, "subscription:activate")),
         "can_suspend_subscriptions": can_write_catalog
         or (bool(auth) and has_permission(auth, db, "subscription:suspend")),
+        "can_tech_support_suspend_subscriptions": is_tech_support,
     }
+
+
+def _is_tech_support(auth: Mapping[str, Any] | None) -> bool:
+    roles = {str(role).casefold() for role in ((auth or {}).get("roles") or [])}
+    return _TECH_SUPPORT_ROLE.casefold() in roles
+
+
+def _require_suspend_services_access(
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    if _is_tech_support(auth):
+        return auth
+    return require_any_permission("catalog:write", "subscription:suspend")(
+        auth=auth,
+        db=db,
+    )
 
 
 def _workflow_changed_count(result: Mapping[str, Any]) -> int:
@@ -1609,9 +1630,7 @@ def business_deactivate(
 @router.post(
     "/{customer_type}/{customer_id}/suspend-services",
     response_class=HTMLResponse,
-    dependencies=[
-        Depends(require_any_permission("catalog:write", "subscription:suspend"))
-    ],
+    dependencies=[Depends(_require_suspend_services_access)],
 )
 def customer_suspend_active_services(
     request: Request,
