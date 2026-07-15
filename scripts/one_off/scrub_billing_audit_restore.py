@@ -10,8 +10,9 @@ Safety is structural:
 * the database name must end in ``_audit``;
 * ``BILLING_AUDIT_EPHEMERAL=1`` and ``--execute`` are both required;
 * only PostgreSQL is accepted;
-* a schema scan rejects every new secret-looking column until it is explicitly
-  classified here;
+* a schema scan rejects every new secret-looking column, every unclassified
+  column in a sensitive table, and every new or changed integration table;
+* one declarative policy drives direct scrubs and their residual verification;
 * scrub, verification and financial fingerprints share one transaction, so any
   failure rolls the whole operation back.
 
@@ -50,9 +51,40 @@ class ColumnInfo:
 
 
 @dataclass(frozen=True)
-class SecretAction:
-    kind: Literal["null", "marker", "unique_marker"]
-    marker: str | None = None
+class ScrubAction:
+    """One reviewed mutation and the predicate that proves it completed."""
+
+    expression: str
+    residual_condition: str
+    category: Literal["secret", "identity", "opaque", "capability"]
+
+
+def _null_action(
+    category: Literal["secret", "identity", "opaque", "capability"],
+) -> ScrubAction:
+    return ScrubAction("NULL", "{column} IS NOT NULL", category)
+
+
+def _exact_action(
+    expression: str,
+    category: Literal["secret", "identity", "opaque", "capability"],
+) -> ScrubAction:
+    return ScrubAction(
+        expression,
+        f"{{column}} IS DISTINCT FROM ({expression})",
+        category,
+    )
+
+
+def _nullable_exact_action(
+    expression: str,
+    category: Literal["secret", "identity", "opaque", "capability"],
+) -> ScrubAction:
+    return ScrubAction(
+        f"CASE WHEN {{column}} IS NULL THEN NULL ELSE {expression} END",
+        f"{{column}} IS NOT NULL AND {{column}} IS DISTINCT FROM ({expression})",
+        category,
+    )
 
 
 SECRET_PATTERN = re.compile(
@@ -66,8 +98,6 @@ SECRET_METADATA_COLUMNS = {
     "is_secret",
     "must_change_password",
     "token_type",
-    "tokens_in",
-    "tokens_out",
     "from_credential",
 }
 SECRET_METADATA_SUFFIXES = (
@@ -83,56 +113,292 @@ SECRET_METADATA_SUFFIXES = (
 # Complete for the credential surface observed in the retained 2026-07-12 Sub
 # backup. A future secret-looking column is not guessed at: schema discovery
 # rejects it and requires review here.
-SECRET_ACTIONS: dict[tuple[str, str], SecretAction] = {
-    ("access_credentials", "secret_hash"): SecretAction("null"),
-    ("bank_accounts", "token"): SecretAction("null"),
-    ("campaign_recipients", "unsubscribe_token"): SecretAction("null"),
-    ("connectivity_state_backups", "credentials"): SecretAction("null"),
-    ("connector_configs", "auth_config"): SecretAction("null"),
-    ("integration_hooks", "auth_config"): SecretAction("null"),
-    ("jump_hosts", "ssh_password"): SecretAction("null"),
-    ("mfa_methods", "secret"): SecretAction("null"),
-    ("nas_devices", "shared_secret"): SecretAction("null"),
-    ("nas_devices", "ssh_password"): SecretAction("null"),
-    ("nas_devices", "api_password"): SecretAction("null"),
-    ("nas_devices", "api_token"): SecretAction("null"),
-    ("network_device_bandwidth_graphs", "public_token"): SecretAction("null"),
-    ("network_devices", "snmp_auth_secret"): SecretAction("null"),
-    ("network_devices", "snmp_priv_secret"): SecretAction("null"),
-    ("olt_devices", "ssh_password"): SecretAction("null"),
-    ("olt_devices", "api_password"): SecretAction("null"),
-    ("olt_devices", "api_token"): SecretAction("null"),
-    ("ont_assignments", "pppoe_password"): SecretAction("null"),
-    ("ont_assignments", "wifi_password"): SecretAction("null"),
-    ("ont_profile_wan_services", "pppoe_static_password"): SecretAction("null"),
-    ("ont_provisioning_profiles", "cr_password"): SecretAction("null"),
-    ("ont_wan_service_instances", "pppoe_password"): SecretAction("null"),
-    ("payment_methods", "token"): SecretAction("null"),
-    ("payment_providers", "webhook_secret_ref"): SecretAction("null"),
-    ("radius_clients", "shared_secret_hash"): SecretAction("unique_marker"),
-    ("radius_users", "secret_hash"): SecretAction("null"),
-    ("routers", "rest_api_password"): SecretAction(
-        "marker", "!scrubbed-not-a-password"
+SECRET_ACTIONS: dict[tuple[str, str], ScrubAction] = {
+    ("access_credentials", "secret_hash"): _null_action("secret"),
+    ("bank_accounts", "token"): _null_action("secret"),
+    ("campaign_recipients", "unsubscribe_token"): _null_action("secret"),
+    ("connectivity_state_backups", "credentials"): _null_action("secret"),
+    ("connector_configs", "auth_config"): _null_action("secret"),
+    ("integration_hooks", "auth_config"): _null_action("secret"),
+    ("jump_hosts", "ssh_password"): _null_action("secret"),
+    ("mfa_methods", "secret"): _null_action("secret"),
+    ("nas_devices", "shared_secret"): _null_action("secret"),
+    ("nas_devices", "ssh_password"): _null_action("secret"),
+    ("nas_devices", "api_password"): _null_action("secret"),
+    ("nas_devices", "api_token"): _null_action("secret"),
+    ("network_device_bandwidth_graphs", "public_token"): _null_action("secret"),
+    ("network_devices", "snmp_auth_secret"): _null_action("secret"),
+    ("network_devices", "snmp_priv_secret"): _null_action("secret"),
+    ("olt_devices", "ssh_password"): _null_action("secret"),
+    ("olt_devices", "api_password"): _null_action("secret"),
+    ("olt_devices", "api_token"): _null_action("secret"),
+    ("ont_assignments", "pppoe_password"): _null_action("secret"),
+    ("ont_assignments", "wifi_password"): _null_action("secret"),
+    ("ont_profile_wan_services", "pppoe_static_password"): _null_action("secret"),
+    ("ont_provisioning_profiles", "cr_password"): _null_action("secret"),
+    ("ont_wan_service_instances", "pppoe_password"): _null_action("secret"),
+    ("payment_methods", "token"): _null_action("secret"),
+    ("payment_providers", "webhook_secret_ref"): _null_action("secret"),
+    ("radius_clients", "shared_secret_hash"): _nullable_exact_action(
+        "'!scrubbed-' || id::text", "secret"
     ),
-    ("snmp_credentials", "auth_secret_hash"): SecretAction("null"),
-    ("snmp_credentials", "priv_secret_hash"): SecretAction("null"),
-    ("system_users", "device_login_secret"): SecretAction("null"),
-    ("tr069_acs_servers", "cwmp_password"): SecretAction("null"),
-    ("tr069_acs_servers", "connection_request_password"): SecretAction("null"),
-    ("user_credentials", "password_hash"): SecretAction(
-        "marker", "!scrubbed-not-a-valid-hash"
+    ("radius_users", "secret_hash"): _null_action("secret"),
+    ("routers", "rest_api_password"): _nullable_exact_action(
+        "'!scrubbed-not-a-password'", "secret"
     ),
-    ("vas_transactions", "token_encrypted"): SecretAction("null"),
-    ("webhook_endpoints", "secret"): SecretAction("null"),
-    ("wireguard_peers", "private_key"): SecretAction("null"),
-    ("wireguard_peers", "preshared_key"): SecretAction("null"),
-    ("wireguard_peers", "provision_token_hash"): SecretAction("null"),
-    ("wireguard_servers", "private_key"): SecretAction("null"),
+    ("snmp_credentials", "auth_secret_hash"): _null_action("secret"),
+    ("snmp_credentials", "priv_secret_hash"): _null_action("secret"),
+    ("system_users", "device_login_secret"): _null_action("secret"),
+    ("tr069_acs_servers", "cwmp_password"): _null_action("secret"),
+    ("tr069_acs_servers", "connection_request_password"): _null_action("secret"),
+    ("user_credentials", "password_hash"): _nullable_exact_action(
+        "'!scrubbed-not-a-valid-hash'", "secret"
+    ),
+    ("vas_transactions", "token_encrypted"): _null_action("secret"),
+    ("webhook_endpoints", "secret"): _null_action("secret"),
+    ("wireguard_peers", "private_key"): _null_action("secret"),
+    ("wireguard_peers", "preshared_key"): _null_action("secret"),
+    ("wireguard_peers", "provision_token_hash"): _null_action("secret"),
+    ("wireguard_servers", "private_key"): _null_action("secret"),
+}
+
+# Primary identity and direct customer/device identifiers. These actions replace
+# the previous hand-maintained UPDATE blocks. Each action carries the predicate
+# used to prove the value was actually rewritten.
+IDENTITY_ACTIONS: dict[tuple[str, str], ScrubAction] = {
+    ("subscribers", "first_name"): _exact_action("'Customer'", "identity"),
+    ("subscribers", "last_name"): _exact_action(
+        "substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("subscribers", "display_name"): _exact_action(
+        "'Customer ' || substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("subscribers", "avatar_url"): _null_action("identity"),
+    ("subscribers", "company_name"): _null_action("identity"),
+    ("subscribers", "legal_name"): _null_action("identity"),
+    ("subscribers", "tax_id"): _null_action("identity"),
+    ("subscribers", "domain"): _null_action("identity"),
+    ("subscribers", "website"): _null_action("identity"),
+    ("subscribers", "email"): _exact_action(
+        "'cust+' || replace(id::text, '-', '') || '@example.invalid'", "identity"
+    ),
+    ("subscribers", "email_verified"): _exact_action("false", "identity"),
+    ("subscribers", "phone"): _null_action("identity"),
+    ("subscribers", "nin"): _null_action("identity"),
+    ("subscribers", "date_of_birth"): _null_action("identity"),
+    ("subscribers", "gender"): _exact_action("'unknown'", "identity"),
+    ("subscribers", "preferred_contact_method"): _null_action("identity"),
+    ("subscribers", "address_line1"): _null_action("identity"),
+    ("subscribers", "address_line2"): _null_action("identity"),
+    ("subscribers", "postal_code"): _null_action("identity"),
+    ("subscribers", "subscriber_number"): _nullable_exact_action(
+        "'SUB-' || id::text", "identity"
+    ),
+    ("subscribers", "account_number"): _nullable_exact_action(
+        "'ACC-' || id::text", "identity"
+    ),
+    ("subscribers", "billing_name"): _exact_action(
+        "'Customer ' || substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("subscribers", "billing_address_line1"): _null_action("identity"),
+    ("subscribers", "billing_address_line2"): _null_action("identity"),
+    ("subscribers", "billing_postal_code"): _null_action("identity"),
+    ("subscribers", "notes"): _null_action("identity"),
+    ("subscribers", "crm_subscriber_id"): _null_action("identity"),
+    ("subscribers", "metadata"): _null_action("identity"),
+    ("system_users", "first_name"): _exact_action("'Staff'", "identity"),
+    ("system_users", "last_name"): _exact_action(
+        "substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("system_users", "display_name"): _exact_action(
+        "'Staff ' || substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("system_users", "email"): _exact_action(
+        "'staff+' || replace(id::text, '-', '') || '@example.invalid'", "identity"
+    ),
+    ("system_users", "phone"): _null_action("identity"),
+    ("system_users", "device_login_enabled"): _exact_action("false", "capability"),
+    ("resellers", "name"): _exact_action(
+        "'Reseller ' || substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("resellers", "code"): _nullable_exact_action(
+        "'RES-' || replace(id::text, '-', '')", "identity"
+    ),
+    ("resellers", "contact_email"): _nullable_exact_action(
+        "'reseller+' || substr(md5(id::text), 1, 12) || '@example.invalid'",
+        "identity",
+    ),
+    ("resellers", "contact_phone"): _null_action("identity"),
+    ("resellers", "notes"): _null_action("identity"),
+    ("reseller_users", "email"): _nullable_exact_action(
+        "'reseller-user+' || substr(md5(id::text), 1, 12) || '@example.invalid'",
+        "identity",
+    ),
+    ("reseller_users", "full_name"): _exact_action(
+        "'Reseller user ' || substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("organizations", "name"): _exact_action(
+        "'Organization ' || substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("organizations", "legal_name"): _null_action("identity"),
+    ("organizations", "tax_id"): _null_action("identity"),
+    ("organizations", "domain"): _null_action("identity"),
+    ("organizations", "website"): _null_action("identity"),
+    ("organizations", "phone"): _null_action("identity"),
+    ("organizations", "email"): _null_action("identity"),
+    ("organizations", "address_line1"): _null_action("identity"),
+    ("organizations", "address_line2"): _null_action("identity"),
+    ("organizations", "postal_code"): _null_action("identity"),
+    ("organizations", "erp_id"): _null_action("identity"),
+    ("organizations", "erpnext_id"): _null_action("identity"),
+    ("organizations", "notes"): _null_action("identity"),
+    ("organizations", "tags"): _null_action("identity"),
+    ("organizations", "metadata"): _null_action("identity"),
+    ("addresses", "label"): _null_action("identity"),
+    ("addresses", "address_line1"): _exact_action("'Redacted address'", "identity"),
+    ("addresses", "address_line2"): _null_action("identity"),
+    ("addresses", "postal_code"): _null_action("identity"),
+    ("addresses", "latitude"): _null_action("identity"),
+    ("addresses", "longitude"): _null_action("identity"),
+    ("addresses", "geom"): _null_action("identity"),
+    ("subscriber_channels", "address"): _exact_action(
+        "'redacted-' || substr(md5(id::text), 1, 12)", "identity"
+    ),
+    ("subscriber_channels", "label"): _null_action("identity"),
+    ("subscriber_channels", "is_verified"): _exact_action("false", "identity"),
+    ("subscriber_channels", "verified_at"): _null_action("identity"),
+    ("subscriber_channels", "metadata"): _null_action("identity"),
+    ("subscriber_contacts", "full_name"): _exact_action(
+        "'Contact ' || substr(md5(id::text), 1, 8)", "identity"
+    ),
+    ("subscriber_contacts", "phone"): _null_action("identity"),
+    ("subscriber_contacts", "email"): _null_action("identity"),
+    ("subscriber_contacts", "whatsapp"): _null_action("identity"),
+    ("subscriber_contacts", "facebook"): _null_action("identity"),
+    ("subscriber_contacts", "instagram"): _null_action("identity"),
+    ("subscriber_contacts", "x_handle"): _null_action("identity"),
+    ("subscriber_contacts", "telegram"): _null_action("identity"),
+    ("subscriber_contacts", "linkedin"): _null_action("identity"),
+    ("subscriber_contacts", "other_social"): _null_action("identity"),
+    ("subscriber_contacts", "notes"): _null_action("identity"),
+    ("subscriber_contacts", "receives_notifications"): _exact_action(
+        "false", "capability"
+    ),
+    ("subscriber_nin_verifications", "nin"): _exact_action("'00000000000'", "identity"),
+    ("subscriber_nin_verifications", "mono_response"): _null_action("opaque"),
+    ("subscriber_nin_verifications", "failure_reason"): _null_action("identity"),
+    ("mfa_methods", "label"): _null_action("identity"),
+    ("mfa_methods", "phone"): _null_action("identity"),
+    ("mfa_methods", "email"): _null_action("identity"),
+    ("mfa_methods", "enabled"): _exact_action("false", "capability"),
+    ("mfa_methods", "is_active"): _exact_action("false", "capability"),
+    ("user_credentials", "username"): _nullable_exact_action(
+        "'login-' || replace(id::text, '-', '')", "identity"
+    ),
+    ("user_credentials", "is_active"): _exact_action("false", "capability"),
+    ("access_credentials", "username"): _exact_action(
+        "'access-' || replace(id::text, '-', '')", "identity"
+    ),
+    ("access_credentials", "circuit_id"): _null_action("identity"),
+    ("access_credentials", "remote_id"): _null_action("identity"),
+    ("radius_users", "username"): _exact_action(
+        "'radius-' || replace(id::text, '-', '')", "identity"
+    ),
+    ("subscriptions", "login"): _nullable_exact_action(
+        "'service-' || replace(id::text, '-', '')", "identity"
+    ),
+    ("subscriptions", "ipv4_address"): _null_action("identity"),
+    ("subscriptions", "ipv6_address"): _null_action("identity"),
+    ("subscriptions", "last_seen_framed_ipv4"): _null_action("identity"),
+    ("subscriptions", "last_seen_framed_ipv6"): _null_action("identity"),
+    ("subscriptions", "mac_address"): _null_action("identity"),
+    ("payment_methods", "label"): _exact_action("'Redacted'", "identity"),
+    ("payment_methods", "last4"): _exact_action("'0000'", "identity"),
+    ("payment_methods", "brand"): _exact_action("'redacted'", "identity"),
+    ("payment_methods", "expires_month"): _null_action("identity"),
+    ("payment_methods", "expires_year"): _null_action("identity"),
+    ("bank_accounts", "account_last4"): _exact_action("'0000'", "identity"),
+    ("bank_accounts", "routing_last4"): _exact_action("'0000'", "identity"),
+}
+
+# Opaque collaboration payloads are not billing facts. Keeping their rows and
+# operational timestamps is useful for provenance, but no restored database
+# needs endpoints, free text, request/response bodies or executable config.
+INTEGRATION_ACTIONS: dict[tuple[str, str], ScrubAction] = {
+    ("connector_configs", "name"): _exact_action(
+        "'Connector ' || substr(md5(id::text), 1, 8)", "opaque"
+    ),
+    ("connector_configs", "base_url"): _null_action("opaque"),
+    ("connector_configs", "headers"): _null_action("opaque"),
+    ("connector_configs", "retry_policy"): _null_action("opaque"),
+    ("connector_configs", "metadata"): _null_action("opaque"),
+    ("connector_configs", "notes"): _null_action("opaque"),
+    ("connector_configs", "is_active"): _exact_action("false", "capability"),
+    ("integration_connectors", "name"): _exact_action(
+        "'Integration connector ' || substr(md5(id::text), 1, 8)", "opaque"
+    ),
+    ("integration_connectors", "configuration"): _null_action("opaque"),
+    ("integration_connectors", "status"): _exact_action("'disabled'", "capability"),
+    ("integration_hooks", "title"): _exact_action(
+        "'Integration hook ' || substr(md5(id::text), 1, 8)", "opaque"
+    ),
+    ("integration_hooks", "command"): _null_action("opaque"),
+    ("integration_hooks", "url"): _null_action("opaque"),
+    ("integration_hooks", "event_filters"): _null_action("opaque"),
+    ("integration_hooks", "notes"): _null_action("opaque"),
+    ("integration_hooks", "is_enabled"): _exact_action("false", "capability"),
+    ("integration_jobs", "name"): _exact_action(
+        "'Integration job ' || substr(md5(id::text), 1, 8)", "opaque"
+    ),
+    ("integration_jobs", "mapping_config"): _null_action("opaque"),
+    ("integration_jobs", "filter_config"): _null_action("opaque"),
+    ("integration_jobs", "notes"): _null_action("opaque"),
+    ("integration_jobs", "is_active"): _exact_action("false", "capability"),
+    ("integration_records", "local_id"): _null_action("opaque"),
+    ("integration_records", "remote_id"): _null_action("opaque"),
+    ("integration_records", "remote_number"): _null_action("opaque"),
+    ("integration_records", "reason"): _null_action("opaque"),
+    ("integration_records", "payload_snapshot"): _null_action("opaque"),
+    ("integration_runs", "requested_by"): _null_action("identity"),
+    ("integration_runs", "error"): _null_action("opaque"),
+    ("integration_runs", "metrics"): _null_action("opaque"),
+    ("integration_targets", "name"): _exact_action(
+        "'Integration target ' || substr(md5(id::text), 1, 8)", "opaque"
+    ),
+    ("integration_targets", "notes"): _null_action("opaque"),
+    ("integration_targets", "is_active"): _exact_action("false", "capability"),
+    ("payment_providers", "name"): _exact_action(
+        "'Payment provider ' || substr(md5(id::text), 1, 8)", "opaque"
+    ),
+    ("payment_providers", "notes"): _null_action("opaque"),
+    ("payment_providers", "is_active"): _exact_action("false", "capability"),
+    ("payment_webhook_dead_letters", "external_id"): _null_action("opaque"),
+    ("payment_webhook_dead_letters", "idempotency_key"): _nullable_exact_action(
+        "'dead-letter-' || replace(id::text, '-', '')", "opaque"
+    ),
+    ("payment_webhook_dead_letters", "payload"): _null_action("opaque"),
+    ("payment_webhook_dead_letters", "error"): _null_action("opaque"),
+    ("webhook_endpoints", "name"): _exact_action(
+        "'Webhook endpoint ' || substr(md5(id::text), 1, 8)", "opaque"
+    ),
+    ("webhook_endpoints", "url"): _exact_action(
+        "'https://example.invalid/scrubbed'", "opaque"
+    ),
+    ("webhook_endpoints", "is_active"): _exact_action("false", "capability"),
+    ("webhook_subscriptions", "is_active"): _exact_action("false", "capability"),
+}
+
+SCRUB_ACTIONS: dict[tuple[str, str], ScrubAction] = {
+    **SECRET_ACTIONS,
+    **IDENTITY_ACTIONS,
+    **INTEGRATION_ACTIONS,
 }
 
 # Rows in these tables are delivery/authentication capability, not audit facts.
 # Deleting the whole table also handles every secret-looking column it contains.
 DELETE_TABLES = (
+    "crm_webhook_deliveries",
+    "integration_hook_executions",
     "webhook_deliveries",
     "notification_deliveries",
     "notification_queue",
@@ -144,6 +410,425 @@ DELETE_TABLES = (
     "mfa_recovery_codes",
     "api_keys",
 )
+
+INTEGRATION_TABLE_PATTERN = re.compile(r"(^|_)(integration|connector|webhook)(_|$)")
+
+# Conditional value scrubs have row-dependent semantics and are verified by
+# ``_verification_residuals`` alongside the direct column actions.
+TYPED_VALUE_SCRUB_FILTERS: dict[str, str] = {
+    "domain_settings": "is_secret IS TRUE",
+    "subscription_engine_settings": "is_secret IS TRUE",
+    "subscriber_custom_fields": "TRUE",
+}
+CONDITIONAL_SCRUB_COLUMNS: dict[str, frozenset[str]] = {
+    table_name: frozenset({"value_text", "value_json"})
+    for table_name in TYPED_VALUE_SCRUB_FILTERS
+}
+
+# Every non-scrubbed column in a sensitive table is named here deliberately.
+# A column absent from both this map and SCRUB_ACTIONS is rejected before any
+# UPDATE. This is the PII/config schema-drift boundary; it does not guess from
+# names. Tables matching INTEGRATION_TABLE_PATTERN must also be present here or
+# be deleted wholesale above.
+SENSITIVE_TABLE_PRESERVED_COLUMNS: dict[str, frozenset[str]] = {
+    "subscribers": frozenset(
+        {
+            "id",
+            "locale",
+            "timezone",
+            "city",
+            "region",
+            "country_code",
+            "pop_site_id",
+            "account_start_date",
+            "status",
+            "lifecycle_override_status",
+            "lifecycle_override_reason",
+            "lifecycle_override_source",
+            "lifecycle_override_at",
+            "user_type",
+            "is_active",
+            "marketing_opt_in",
+            "reseller_id",
+            "tax_rate_id",
+            "policy_set_id",
+            "billing_enabled",
+            "captive_redirect_enabled",
+            "billing_city",
+            "billing_region",
+            "billing_country_code",
+            "payment_method",
+            "deposit",
+            "billing_mode",
+            "billing_day",
+            "payment_due_days",
+            "grace_period_days",
+            "min_balance",
+            "prepaid_low_balance_at",
+            "prepaid_deactivation_at",
+            "mrr_total",
+            "category",
+            "splynx_customer_id",
+            "party_status",
+            "organization_id",
+            "sales_order_id",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "system_users": frozenset(
+        {
+            "id",
+            "user_type",
+            "is_active",
+            "device_login_secret_set_at",
+            "device_login_revoked_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "resellers": frozenset(
+        {
+            "id",
+            "policy_set_id",
+            "is_active",
+            "is_house",
+            "restrict_to_assigned_offers",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "reseller_users": frozenset(
+        {
+            "id",
+            "person_id",
+            "reseller_id",
+            "is_active",
+            "last_login_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "organizations": frozenset(
+        {
+            "id",
+            "account_type",
+            "account_status",
+            "parent_id",
+            "primary_contact_id",
+            "owner_id",
+            "industry",
+            "employee_count",
+            "annual_revenue",
+            "source",
+            "city",
+            "region",
+            "country_code",
+            "commission_rate",
+            "is_active",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "addresses": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "tax_rate_id",
+            "address_type",
+            "city",
+            "region",
+            "country_code",
+            "is_primary",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "subscriber_channels": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "channel_type",
+            "is_primary",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "subscriber_contacts": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "relationship",
+            "contact_type",
+            "is_billing_contact",
+            "is_authorized",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "subscriber_nin_verifications": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "status",
+            "is_match",
+            "match_score",
+            "verified_at",
+            "created_at",
+        }
+    ),
+    "subscriber_custom_fields": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "key",
+            "value_type",
+            "is_active",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "mfa_methods": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "system_user_id",
+            "reseller_user_id",
+            "method_type",
+            "is_primary",
+            "verified_at",
+            "last_used_at",
+            "failed_attempts",
+            "locked_until",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "user_credentials": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "system_user_id",
+            "reseller_user_id",
+            "provider",
+            "radius_server_id",
+            "must_change_password",
+            "password_updated_at",
+            "failed_login_attempts",
+            "locked_until",
+            "last_login_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "access_credentials": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "subscription_id",
+            "is_active",
+            "last_auth_at",
+            "radius_profile_id",
+            "pre_throttle_radius_profile_id",
+            "connection_type",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "radius_users": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "subscription_id",
+            "access_credential_id",
+            "radius_profile_id",
+            "is_active",
+            "last_sync_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "subscriptions": frozenset(
+        {
+            "id",
+            "subscriber_id",
+            "offer_id",
+            "offer_version_id",
+            "service_address_id",
+            "bundle_id",
+            "provisioning_nas_device_id",
+            "radius_profile_id",
+            "status",
+            "access_state",
+            "billing_mode",
+            "contract_term",
+            "start_at",
+            "end_at",
+            "next_billing_at",
+            "canceled_at",
+            "cancel_reason",
+            "splynx_service_id",
+            "router_id",
+            "service_description",
+            "quantity",
+            "unit",
+            "unit_price",
+            "discount",
+            "discount_value",
+            "discount_type",
+            "discount_start_at",
+            "discount_end_at",
+            "discount_description",
+            "service_status_raw",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "payment_methods": frozenset(
+        {
+            "id",
+            "account_id",
+            "reseller_id",
+            "payment_channel_id",
+            "method_type",
+            "is_default",
+            "is_active",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "bank_accounts": frozenset(
+        {
+            "id",
+            "account_id",
+            "payment_method_id",
+            "bank_name",
+            "account_type",
+            "is_default",
+            "is_active",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "connector_configs": frozenset(
+        {
+            "id",
+            "connector_type",
+            "auth_type",
+            "timeout_sec",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "integration_connectors": frozenset(
+        {
+            "id",
+            "version",
+            "connector_type",
+            "last_sync_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "integration_hooks": frozenset(
+        {
+            "id",
+            "hook_type",
+            "http_method",
+            "auth_type",
+            "retry_max",
+            "retry_backoff_ms",
+            "timeout_seconds",
+            "last_triggered_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "integration_jobs": frozenset(
+        {
+            "id",
+            "target_id",
+            "job_type",
+            "schedule_type",
+            "interval_minutes",
+            "interval_seconds",
+            "adapter_key",
+            "action",
+            "entity_type",
+            "direction",
+            "trigger_mode",
+            "conflict_policy",
+            "last_run_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "integration_records": frozenset(
+        {
+            "id",
+            "run_id",
+            "entity_type",
+            "direction",
+            "action",
+            "status",
+            "created_at",
+        }
+    ),
+    "integration_runs": frozenset(
+        {
+            "id",
+            "job_id",
+            "status",
+            "started_at",
+            "finished_at",
+            "trigger",
+            "created_at",
+        }
+    ),
+    "integration_targets": frozenset(
+        {
+            "id",
+            "target_type",
+            "connector_config_id",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "payment_providers": frozenset(
+        {
+            "id",
+            "provider_type",
+            "connector_config_id",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "payment_webhook_dead_letters": frozenset(
+        {
+            "id",
+            "provider_type",
+            "event_type",
+            "status",
+            "retry_count",
+            "received_at",
+            "last_attempt_at",
+        }
+    ),
+    "webhook_endpoints": frozenset(
+        {
+            "id",
+            "connector_config_id",
+            "delivery_timeout_seconds",
+            "max_retries",
+            "retry_backoff_seconds",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "webhook_subscriptions": frozenset(
+        {"id", "endpoint_id", "event_type", "created_at", "updated_at"}
+    ),
+}
 
 REQUIRED_AUDIT_TABLES = {
     "subscribers",
@@ -208,10 +893,32 @@ def unknown_secret_columns(columns: Sequence[ColumnInfo]) -> list[ColumnInfo]:
             if SECRET_PATTERN.search(column.column_name)
             and not is_secret_metadata(column.column_name)
             and column.table_name not in deleted
-            and column.key not in SECRET_ACTIONS
+            and column.key not in SCRUB_ACTIONS
         ),
         key=lambda item: item.key,
     )
+
+
+def unknown_sensitive_columns(columns: Sequence[ColumnInfo]) -> list[ColumnInfo]:
+    """Reject unreviewed PII/config columns before the scrub writes anything."""
+    deleted = set(DELETE_TABLES)
+    unknown: list[ColumnInfo] = []
+    for column in columns:
+        if column.table_name in deleted:
+            continue
+        preserved = SENSITIVE_TABLE_PRESERVED_COLUMNS.get(column.table_name)
+        if preserved is None:
+            if INTEGRATION_TABLE_PATTERN.search(column.table_name):
+                unknown.append(column)
+            continue
+        conditional = CONDITIONAL_SCRUB_COLUMNS.get(column.table_name, frozenset())
+        if (
+            column.column_name not in preserved
+            and column.key not in SCRUB_ACTIONS
+            and column.column_name not in conditional
+        ):
+            unknown.append(column)
+    return sorted(unknown, key=lambda item: item.key)
 
 
 def incompatible_secret_actions(columns: Sequence[ColumnInfo]) -> list[ColumnInfo]:
@@ -221,7 +928,21 @@ def incompatible_secret_actions(columns: Sequence[ColumnInfo]) -> list[ColumnInf
             column
             for column in columns
             if column.key in SECRET_ACTIONS
-            and SECRET_ACTIONS[column.key].kind == "null"
+            and SECRET_ACTIONS[column.key].expression == "NULL"
+            and not column.nullable
+        ),
+        key=lambda item: item.key,
+    )
+
+
+def incompatible_scrub_actions(columns: Sequence[ColumnInfo]) -> list[ColumnInfo]:
+    """Return any configured NULL scrub that the restored schema rejects."""
+    return sorted(
+        (
+            column
+            for column in columns
+            if column.key in SCRUB_ACTIONS
+            and SCRUB_ACTIONS[column.key].expression == "NULL"
             and not column.nullable
         ),
         key=lambda item: item.key,
@@ -324,33 +1045,26 @@ def _financial_fingerprint(
     return fingerprint
 
 
-def _apply_secret_actions(
+def _apply_scrub_actions(
     connection: Connection,
     columns_by_table: Mapping[str, set[str]],
 ) -> None:
-    for (table_name, column_name), action in SECRET_ACTIONS.items():
-        if column_name not in columns_by_table.get(table_name, set()):
-            continue
-        table = _quote(connection, table_name)
-        column = _quote(connection, column_name)
-        if action.kind == "null":
-            connection.execute(
-                text(f"UPDATE {table} SET {column} = NULL WHERE {column} IS NOT NULL")
+    by_table: dict[str, list[tuple[str, ScrubAction]]] = {}
+    for (table_name, column_name), action in SCRUB_ACTIONS.items():
+        if column_name in columns_by_table.get(table_name, set()):
+            by_table.setdefault(table_name, []).append((column_name, action))
+
+    for table_name, actions in sorted(by_table.items()):
+        assignments = []
+        for column_name, action in sorted(actions):
+            column = _quote(connection, column_name)
+            expression = action.expression.format(column=column)
+            assignments.append(f"{column} = {expression}")
+        connection.execute(
+            text(
+                f"UPDATE {_quote(connection, table_name)} SET {', '.join(assignments)}"
             )
-        elif action.kind == "unique_marker":
-            connection.execute(
-                text(
-                    f"UPDATE {table} SET {column} = "
-                    f"'!scrubbed-' || id::text WHERE {column} IS NOT NULL"
-                )
-            )
-        else:
-            connection.execute(
-                text(
-                    f"UPDATE {table} SET {column} = :marker WHERE {column} IS NOT NULL"
-                ),
-                {"marker": action.marker},
-            )
+        )
 
 
 def _delete_capability_rows(
@@ -361,253 +1075,13 @@ def _delete_capability_rows(
             connection.execute(text(f"DELETE FROM {_quote(connection, table_name)}"))
 
 
-def _update_existing(
-    connection: Connection,
-    columns_by_table: Mapping[str, set[str]],
-    table_name: str,
-    assignments: Mapping[str, str],
-) -> None:
-    actual = columns_by_table.get(table_name)
-    if actual is None:
-        return
-    selected = [
-        f"{_quote(connection, column)} = {expression}"
-        for column, expression in assignments.items()
-        if column in actual
-    ]
-    if selected:
-        connection.execute(
-            text(f"UPDATE {_quote(connection, table_name)} SET {', '.join(selected)}")
-        )
-
-
-def _scrub_identity(
-    connection: Connection, columns_by_table: Mapping[str, set[str]]
-) -> None:
-    _update_existing(
-        connection,
-        columns_by_table,
-        "subscribers",
-        {
-            "first_name": "'Customer'",
-            "last_name": "substr(md5(id::text), 1, 8)",
-            "display_name": "'Customer ' || substr(md5(id::text), 1, 8)",
-            "email": ("'cust+' || replace(id::text, '-', '') || '@example.invalid'"),
-            "email_verified": "false",
-            "phone": "NULL",
-            "nin": "NULL",
-            "date_of_birth": "NULL",
-            "gender": "'unknown'",
-            "preferred_contact_method": "NULL",
-            "avatar_url": "NULL",
-            "company_name": "NULL",
-            "legal_name": "NULL",
-            "tax_id": "NULL",
-            "domain": "NULL",
-            "website": "NULL",
-            "address_line1": "NULL",
-            "address_line2": "NULL",
-            "postal_code": "NULL",
-            "subscriber_number": (
-                "CASE WHEN subscriber_number IS NULL THEN NULL ELSE "
-                "'SUB-' || id::text END"
-            ),
-            "account_number": (
-                "CASE WHEN account_number IS NULL THEN NULL ELSE 'ACC-' || id::text END"
-            ),
-            "billing_name": "'Customer ' || substr(md5(id::text), 1, 8)",
-            "billing_address_line1": "NULL",
-            "billing_address_line2": "NULL",
-            "billing_postal_code": "NULL",
-            "notes": "NULL",
-            "crm_subscriber_id": "NULL",
-            "metadata": "NULL",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "system_users",
-        {
-            "first_name": "'Staff'",
-            "last_name": "substr(md5(id::text), 1, 8)",
-            "display_name": "'Staff ' || substr(md5(id::text), 1, 8)",
-            "email": ("'staff+' || replace(id::text, '-', '') || '@example.invalid'"),
-            "phone": "NULL",
-            "device_login_enabled": "false",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "resellers",
-        {
-            "name": "'Reseller ' || substr(md5(id::text), 1, 8)",
-            "contact_email": (
-                "CASE WHEN contact_email IS NULL THEN NULL ELSE "
-                "'reseller+' || substr(md5(id::text), 1, 12) || '@example.invalid' END"
-            ),
-            "contact_phone": "NULL",
-            "notes": "NULL",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "reseller_users",
-        {
-            "email": (
-                "CASE WHEN email IS NULL THEN NULL ELSE "
-                "'reseller-user+' || substr(md5(id::text), 1, 12) || "
-                "'@example.invalid' END"
-            ),
-            "full_name": "'Reseller user ' || substr(md5(id::text), 1, 8)",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "organizations",
-        {
-            "name": "'Organization ' || substr(md5(id::text), 1, 8)",
-            "legal_name": "NULL",
-            "tax_id": "NULL",
-            "domain": "NULL",
-            "website": "NULL",
-            "phone": "NULL",
-            "email": "NULL",
-            "address_line1": "NULL",
-            "address_line2": "NULL",
-            "postal_code": "NULL",
-            "notes": "NULL",
-            "metadata": "NULL",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "addresses",
-        {
-            "label": "NULL",
-            "address_line1": "'Redacted address'",
-            "address_line2": "NULL",
-            "postal_code": "NULL",
-            "latitude": "NULL",
-            "longitude": "NULL",
-            "geom": "NULL",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "subscriber_channels",
-        {
-            "address": "'redacted-' || substr(md5(id::text), 1, 12)",
-            "label": "NULL",
-            "is_verified": "false",
-            "verified_at": "NULL",
-            "metadata": "NULL",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "subscriber_contacts",
-        {
-            "full_name": "'Contact ' || substr(md5(id::text), 1, 8)",
-            "phone": "NULL",
-            "email": "NULL",
-            "whatsapp": "NULL",
-            "facebook": "NULL",
-            "instagram": "NULL",
-            "x_handle": "NULL",
-            "telegram": "NULL",
-            "linkedin": "NULL",
-            "other_social": "NULL",
-            "notes": "NULL",
-            "receives_notifications": "false",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "subscriber_nin_verifications",
-        {
-            "nin": "'00000000000'",
-            "mono_response": "NULL",
-            "failure_reason": "NULL",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "mfa_methods",
-        {"phone": "NULL", "email": "NULL", "enabled": "false"},
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "user_credentials",
-        {
-            "username": (
-                "CASE WHEN username IS NULL THEN NULL ELSE "
-                "'login-' || replace(id::text, '-', '') END"
-            )
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "access_credentials",
-        {"username": "'access-' || replace(id::text, '-', '')"},
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "radius_users",
-        {"username": "'radius-' || replace(id::text, '-', '')"},
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "subscriptions",
-        {
-            "login": (
-                "CASE WHEN login IS NULL THEN NULL ELSE "
-                "'service-' || replace(id::text, '-', '') END"
-            ),
-            "ipv4_address": "NULL",
-            "ipv6_address": "NULL",
-            "last_seen_framed_ipv4": "NULL",
-            "last_seen_framed_ipv6": "NULL",
-            "mac_address": "NULL",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "payment_methods",
-        {
-            "label": "'Redacted'",
-            "last4": "'0000'",
-            "brand": "'redacted'",
-            "expires_month": "NULL",
-            "expires_year": "NULL",
-        },
-    )
-    _update_existing(
-        connection,
-        columns_by_table,
-        "bank_accounts",
-        {"account_last4": "'0000'", "routing_last4": "'0000'"},
-    )
-
-
 def _scrub_typed_settings(
     connection: Connection, columns_by_table: Mapping[str, set[str]]
 ) -> None:
-    for table_name in ("domain_settings", "subscription_engine_settings"):
-        required = {"value_type", "value_text", "value_json", "is_secret"}
+    for table_name, row_filter in TYPED_VALUE_SCRUB_FILTERS.items():
+        required = {"value_type", "value_text", "value_json"}
+        if "is_secret" in row_filter:
+            required.add("is_secret")
         if not required.issubset(columns_by_table.get(table_name, set())):
             continue
         table = _quote(connection, table_name)
@@ -619,21 +1093,7 @@ def _scrub_typed_settings(
                                          THEN NULL ELSE '!scrubbed' END,
                        value_json = CASE WHEN value_type::text = 'json'
                                          THEN '{{}}'::jsonb ELSE NULL END
-                 WHERE is_secret IS TRUE
-                """
-            )
-        )
-
-    custom_field_columns = columns_by_table.get("subscriber_custom_fields", set())
-    if {"value_type", "value_text", "value_json"}.issubset(custom_field_columns):
-        connection.execute(
-            text(
-                """
-                UPDATE subscriber_custom_fields
-                   SET value_text = CASE WHEN value_type::text = 'json'
-                                         THEN NULL ELSE '!scrubbed' END,
-                       value_json = CASE WHEN value_type::text = 'json'
-                                         THEN '{}'::jsonb ELSE NULL END
+                 WHERE {row_filter}
                 """
             )
         )
@@ -652,41 +1112,24 @@ def _scrub_typed_settings(
                 """
             )
         )
-    for table_name in (
-        "connector_configs",
-        "integration_hooks",
-        "webhook_endpoints",
-        "payment_providers",
-    ):
-        if "is_active" in columns_by_table.get(table_name, set()):
-            connection.execute(
-                text(f"UPDATE {_quote(connection, table_name)} SET is_active = false")
-            )
-    if "headers" in columns_by_table.get("connector_configs", set()):
-        connection.execute(text("UPDATE connector_configs SET headers = NULL"))
 
 
 def _verification_residuals(
     connection: Connection, columns_by_table: Mapping[str, set[str]]
 ) -> dict[str, int]:
     residuals: dict[str, int] = {}
-    for (table_name, column_name), action in SECRET_ACTIONS.items():
+    for (table_name, column_name), action in SCRUB_ACTIONS.items():
         if column_name not in columns_by_table.get(table_name, set()):
             continue
         table = _quote(connection, table_name)
         column = _quote(connection, column_name)
-        if action.kind == "null":
-            condition = f"{column} IS NOT NULL"
-        elif action.kind == "unique_marker":
-            condition = f"{column} <> '!scrubbed-' || id::text"
-        else:
-            condition = f"{column} IS NOT NULL AND {column} <> :marker"
+        condition = action.residual_condition.format(column=column)
         residuals[f"{table_name}.{column_name}"] = int(
             connection.execute(
-                text(f"SELECT count(*) FROM {table} WHERE {condition}"),
-                {"marker": action.marker},
+                text(f"SELECT count(*) FROM {table} WHERE {condition}")
             ).scalar_one()
         )
+
     for table_name in DELETE_TABLES:
         if table_name in columns_by_table:
             residuals[f"{table_name}.rows"] = int(
@@ -694,122 +1137,47 @@ def _verification_residuals(
                     text(f"SELECT count(*) FROM {_quote(connection, table_name)}")
                 ).scalar_one()
             )
-    identity_checks = (
-        (
-            "subscribers.identity",
-            "subscribers",
-            {"first_name", "email", "phone", "nin", "address_line1"},
-            "first_name <> 'Customer' OR email NOT LIKE '%@example.invalid' "
-            "OR phone IS NOT NULL OR nin IS NOT NULL OR address_line1 IS NOT NULL",
-        ),
-        (
-            "system_users.identity",
-            "system_users",
-            {"first_name", "email", "phone"},
-            "first_name <> 'Staff' OR email NOT LIKE '%@example.invalid' "
-            "OR phone IS NOT NULL",
-        ),
-        (
-            "resellers.identity",
-            "resellers",
-            {"contact_email", "contact_phone"},
-            "(contact_email IS NOT NULL AND contact_email NOT LIKE '%@example.invalid') "
-            "OR contact_phone IS NOT NULL",
-        ),
-        (
-            "reseller_users.identity",
-            "reseller_users",
-            {"email"},
-            "email IS NOT NULL AND email NOT LIKE '%@example.invalid'",
-        ),
-        (
-            "organizations.identity",
-            "organizations",
-            {"email", "phone", "address_line1", "legal_name", "tax_id"},
-            "email IS NOT NULL OR phone IS NOT NULL OR address_line1 IS NOT NULL "
-            "OR legal_name IS NOT NULL OR tax_id IS NOT NULL",
-        ),
-        (
-            "addresses.identity",
-            "addresses",
-            {"address_line1", "address_line2", "postal_code", "geom"},
-            "address_line1 <> 'Redacted address' OR address_line2 IS NOT NULL "
-            "OR postal_code IS NOT NULL OR geom IS NOT NULL",
-        ),
-        (
-            "subscriber_channels.identity",
-            "subscriber_channels",
-            {"address"},
-            "address NOT LIKE 'redacted-%'",
-        ),
-        (
-            "subscriber_contacts.identity",
-            "subscriber_contacts",
-            {"phone", "email", "whatsapp", "other_social"},
-            "phone IS NOT NULL OR email IS NOT NULL OR whatsapp IS NOT NULL "
-            "OR other_social IS NOT NULL",
-        ),
-        (
-            "mfa_methods.identity",
-            "mfa_methods",
-            {"phone", "email"},
-            "phone IS NOT NULL OR email IS NOT NULL",
-        ),
-        (
-            "user_credentials.identity",
-            "user_credentials",
-            {"username"},
-            "username IS NOT NULL AND username NOT LIKE 'login-%'",
-        ),
-        (
-            "access_credentials.identity",
-            "access_credentials",
-            {"username"},
-            "username NOT LIKE 'access-%'",
-        ),
-        (
-            "subscriptions.identity",
-            "subscriptions",
-            {"login", "ipv4_address", "ipv6_address", "mac_address"},
-            "(login IS NOT NULL AND login NOT LIKE 'service-%') "
-            "OR ipv4_address IS NOT NULL OR ipv6_address IS NOT NULL "
-            "OR mac_address IS NOT NULL",
-        ),
-    )
-    for name, table_name, required, condition in identity_checks:
+
+    for table_name, row_filter in TYPED_VALUE_SCRUB_FILTERS.items():
+        required = {"value_type", "value_text", "value_json"}
+        if "is_secret" in row_filter:
+            required.add("is_secret")
         if not required.issubset(columns_by_table.get(table_name, set())):
             continue
-        residuals[name] = int(
+        table = _quote(connection, table_name)
+        residuals[f"{table_name}.typed_values"] = int(
             connection.execute(
                 text(
-                    f"SELECT count(*) FROM {_quote(connection, table_name)} "
-                    f"WHERE {condition}"
+                    f"""
+                    SELECT count(*) FROM {table}
+                     WHERE {row_filter}
+                       AND NOT (
+                           (value_type::text = 'json'
+                            AND value_text IS NULL
+                            AND value_json::jsonb = '{{}}'::jsonb)
+                        OR (value_type::text <> 'json'
+                            AND value_text = '!scrubbed'
+                            AND value_json IS NULL)
+                       )
+                    """
                 )
             ).scalar_one()
         )
-    for table_name in ("domain_settings", "subscription_engine_settings"):
-        if {"value_type", "value_text", "value_json", "is_secret"}.issubset(
-            columns_by_table.get(table_name, set())
-        ):
-            table = _quote(connection, table_name)
-            residuals[f"{table_name}.secret_values"] = int(
-                connection.execute(
-                    text(
-                        f"""
-                        SELECT count(*) FROM {table}
-                         WHERE is_secret IS TRUE
-                           AND NOT (
-                               (value_type::text = 'json'
-                                AND value_text IS NULL
-                                AND value_json::jsonb = '{{}}'::jsonb)
-                            OR (value_type::text <> 'json'
-                                AND value_text = '!scrubbed'
-                                AND value_json IS NULL)
-                           )
-                        """
-                    )
-                ).scalar_one()
-            )
+
+    domain_columns = columns_by_table.get("domain_settings", set())
+    if {"domain", "is_active"}.issubset(domain_columns):
+        residuals["domain_settings.outbound_control"] = int(
+            connection.execute(
+                text(
+                    """
+                    SELECT count(*) FROM domain_settings
+                     WHERE domain::text IN
+                           ('notification', 'comms', 'integration', 'scheduler', 'vas')
+                       AND is_active IS TRUE
+                    """
+                )
+            ).scalar_one()
+        )
     return residuals
 
 
@@ -849,19 +1217,24 @@ def scrub_restore(
             f"{column.table_name}.{column.column_name}" for column in unknown
         )
         raise ScrubSafetyError("unclassified secret-looking columns: " + names)
-    incompatible = incompatible_secret_actions(columns)
+    unknown_sensitive = unknown_sensitive_columns(columns)
+    if unknown_sensitive:
+        names = ", ".join(
+            f"{column.table_name}.{column.column_name}" for column in unknown_sensitive
+        )
+        raise ScrubSafetyError("unclassified sensitive columns: " + names)
+    incompatible = incompatible_scrub_actions(columns)
     if incompatible:
         names = ", ".join(
             f"{column.table_name}.{column.column_name}" for column in incompatible
         )
         raise ScrubSafetyError(
-            "secret columns require a reviewed non-null scrub action: " + names
+            "scrub columns require a reviewed non-null action: " + names
         )
 
     before = _financial_fingerprint(connection, columns_by_table)
     _delete_capability_rows(connection, columns_by_table)
-    _apply_secret_actions(connection, columns_by_table)
-    _scrub_identity(connection, columns_by_table)
+    _apply_scrub_actions(connection, columns_by_table)
     _scrub_typed_settings(connection, columns_by_table)
     residuals = _verification_residuals(connection, columns_by_table)
     assert_no_residuals(residuals)

@@ -644,6 +644,36 @@ PostgreSQL rolled the operation back and no clone database remains. Therefore:
 - PostgreSQL template copying is correct but too I/O-heavy for routine use here;
 - the raw production backup must not be replayed per test.
 
+### Reuse-safety review and rollback rehearsal — 2026-07-15
+
+Review of draft PR #1301 found that the first accepted tool failed closed for
+new secret-named columns but not for a new PII column, and that its identity
+verification covered only a subset of the fields it rewrote. Those were not
+exposures in the completed 2026-07-14 run, but they were unsafe invariants for a
+reusable operator boundary.
+
+The scrubber now gives every column in a sensitive identity table one explicit
+classification: preserved, directly scrubbed, or conditionally scrubbed. An
+unknown column such as `subscribers.passport_number` stops the run before the
+first write. Every existing or future integration/connector/webhook table must
+also be fully classified or deleted wholesale. Opaque endpoint, header,
+configuration, payload, response and free-text fields are destroyed, and all
+outbound-capability fields are disabled. One declarative action map now drives
+both each direct mutation and its residual predicate; the previous independent
+identity-verification sample was removed. Typed settings and subscriber custom
+fields likewise share one conditional policy between mutation and verification.
+
+The current ORM schema and the retained `254_waiting_bulk_item_status` backup
+schema were both checked against the classification. The older backup's
+`subscribers.category` field was reviewed and explicitly preserved. A final
+no-network rehearsal mounted the sanitized volume into a transient PostGIS
+container and ran the full scrub from a transient Sub container over a shared
+Unix socket. All 204 generated checks passed and financial/service fingerprints
+matched. The wrapper then rolled the whole scrub transaction back. The database
+was restored to `ALLOW_CONNECTIONS=false`; the retained base is stopped with
+network mode `none`; and the transient containers, socket volume, network and
+files were removed and verified absent.
+
 ### Source-independent containment signal: known prepaid-runner invoices
 
 The read-only current-state check also found a cohort that does not depend on the

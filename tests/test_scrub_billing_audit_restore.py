@@ -8,13 +8,16 @@ import pytest
 
 from scripts.one_off import scrub_billing_audit_restore as scrub_module
 from scripts.one_off.scrub_billing_audit_restore import (
+    SCRUB_ACTIONS,
     ColumnInfo,
     ScrubSafetyError,
     assert_fingerprints_equal,
     assert_no_residuals,
+    incompatible_scrub_actions,
     incompatible_secret_actions,
     typed_secret_values,
     unknown_secret_columns,
+    unknown_sensitive_columns,
     validate_target,
 )
 
@@ -99,7 +102,58 @@ def test_current_model_schema_has_no_unclassified_secret_columns():
     ]
 
     assert unknown_secret_columns(columns) == []
+    assert unknown_sensitive_columns(columns) == []
     assert incompatible_secret_actions(columns) == []
+    assert incompatible_scrub_actions(columns) == []
+
+
+def test_new_subscriber_pii_column_fails_closed():
+    unknown = unknown_sensitive_columns(
+        [
+            _column("subscribers", "id", nullable=False),
+            _column("subscribers", "category"),
+            _column("subscribers", "passport_number"),
+        ]
+    )
+
+    assert [(item.table_name, item.column_name) for item in unknown] == [
+        ("subscribers", "passport_number")
+    ]
+
+
+def test_new_or_changed_integration_schema_fails_closed():
+    unknown = unknown_sensitive_columns(
+        [
+            _column("integration_hooks", "headers"),
+            _column("future_integration_adapter", "id", nullable=False),
+            _column("future_integration_adapter", "configuration"),
+        ]
+    )
+
+    assert [(item.table_name, item.column_name) for item in unknown] == [
+        ("future_integration_adapter", "configuration"),
+        ("future_integration_adapter", "id"),
+        ("integration_hooks", "headers"),
+    ]
+
+
+def test_every_direct_scrub_action_defines_its_verification():
+    assert SCRUB_ACTIONS
+    for key, action in SCRUB_ACTIONS.items():
+        assert action.expression, key
+        assert "{column}" in action.residual_condition, key
+
+
+def test_opaque_integration_payloads_are_scrubbed_explicitly():
+    expected = {
+        ("connector_configs", "headers"),
+        ("integration_connectors", "configuration"),
+        ("integration_hooks", "auth_config"),
+        ("integration_records", "payload_snapshot"),
+        ("payment_webhook_dead_letters", "payload"),
+    }
+
+    assert expected <= SCRUB_ACTIONS.keys()
 
 
 def test_non_null_secret_columns_have_explicit_marker_actions():
@@ -117,6 +171,9 @@ def test_nullable_scrub_action_fails_closed_if_schema_makes_column_required():
     columns = [_column("access_credentials", "secret_hash", nullable=False)]
 
     assert incompatible_secret_actions(columns) == columns
+
+    pii_columns = [_column("subscribers", "phone", nullable=False)]
+    assert incompatible_scrub_actions(pii_columns) == pii_columns
 
 
 @pytest.mark.parametrize(

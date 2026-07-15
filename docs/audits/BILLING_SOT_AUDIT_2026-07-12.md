@@ -88,6 +88,16 @@ replaying the raw backup for future read-only audits. A PostgreSQL template clon
 was canceled after roughly 20 minutes of sustained disk I/O and rolled back
 cleanly; write-capable test copies require a storage-level volume snapshot.
 
+The draft-PR reuse review then closed two gaps that did not affect that completed
+one-off run but would have allowed a later schema to under-scrub silently. Every
+column in a sensitive identity table is now explicitly preserved or scrubbed,
+and any new or changed integration table is rejected until fully classified.
+Direct mutation and residual verification are generated from the same policy;
+opaque integration endpoints, headers, configurations and payloads are scrubbed
+explicitly. A rollback-only rehearsal against the retained backup schema passed
+all 204 generated checks with unchanged financial/service fingerprints, then
+restored the base to its stopped, network-less and non-connectable state.
+
 The same review found a more fundamental flaw in the existing cutover invariant:
 although the runbook says "Splynx cutover balance + subsequent transactions -
 service consumed", the code starts from `subscribers.deposit` and subtracts
