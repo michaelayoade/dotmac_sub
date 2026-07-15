@@ -45,17 +45,3 @@ def fup_throttle_radius_profile_id(db: Session) -> str | None:
     )
     text = str(value or "").strip()
     return text or None
-
-
-def auto_suspend_on_overdue_enabled(db: Session) -> bool:
-    return _setting_bool(db, SettingDomain.billing, "auto_suspend_on_overdue", False)
-
-
-def suspension_grace_hours(db: Session) -> int:
-    value = settings_spec.resolve_value(
-        db, SettingDomain.billing, "suspension_grace_hours"
-    )
-    try:
-        return int(str(value or 48))
-    except (TypeError, ValueError):
-        return 48

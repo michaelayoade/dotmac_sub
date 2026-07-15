@@ -23,7 +23,6 @@ from app.models.network_monitoring import NetworkDevice
 from app.models.router_management import JumpHost, Router
 from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer
-from app.models.vas import VasTransaction
 from app.models.webhook import WebhookEndpoint
 from app.services.access_credential_secret import (
     is_one_way_access_credential_secret,
@@ -121,7 +120,6 @@ _MODEL_BY_NAME: dict[str, type[Any]] = {
     "WebhookEndpoint": WebhookEndpoint,
     "PaymentMethod": PaymentMethod,
     "BankAccount": BankAccount,
-    "VasTransaction": VasTransaction,
     "SystemUser": SystemUser,
     "Router": Router,
     "JumpHost": JumpHost,

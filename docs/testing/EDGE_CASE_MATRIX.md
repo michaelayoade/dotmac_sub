@@ -82,7 +82,6 @@ The 2 exceptions + 3 other issues are in **Findings** below.
 | 3.7 | Bank-transfer proof upload | ☐ | route not surfaced in nav |
 | 3.8 | Profile + MFA enable | ⚠️ | `/reseller/profile`, `/reseller/profile/mfa/setup` 200 |
 | 3.9 | Reseller pay on behalf of customer | ⚠️ | `/reseller/billing` 200; flow not driven |
-| 3.10 | VAS page | ❌ | **F5** — `/reseller/vas` **404** (nav link present) |
 
 ## 4. Admin & Network  (`/admin/...`)
 
@@ -141,13 +140,12 @@ The 2 exceptions + 3 other issues are in **Findings** below.
 | **F2** | Med | Reseller | ✅ **FIXED** — `/reseller/service-requests` → **500** | `app/services/web_reseller_routes.reseller_service_requests_page` omitted `current_user` from the template context; `layouts/reseller.html` derefs `current_user.initials` (StrictUndefined). **Fix:** add `"current_user": context["current_user"]`. Verified: page now **200**. | login `reseller@test.local` → Service Requests |
 | **F3** | Med | Admin / RBAC | ✅ **FIXED** — `support` & `finance` staff got **403 on `/admin/dashboard`** (their landing) | `app/web/admin/dashboard.py` required legacy broad `billing:read` (admin-only). **Fix:** `require_any_permission("billing:read","billing:invoice:read","customer:read")`. Verified: support & finance now → **200**. *(Reviewer note: this lets any staff with a basic read perm see the billing-KPI dashboard — tighten if billing figures must stay hidden from non-billing staff.)* | login `support@test.local` → `/admin/dashboard` |
 | **F4** | Low | Admin / Network | ✅ **FIXED** — Dead nav link `/admin/network/monitoring/alarms` → **404** | Link in `templates/admin/network/monitoring/index.html` pointed at the wrong path. **Fix:** → `/admin/network/alarms`. Verified 200, dead link gone. | admin → Network monitoring → Alarms link |
-| **F5** | Low | Reseller | ⏳ **documented (not fixed)** — `/reseller/vas` → **404** while the VAS nav link renders | `reseller_vas_page` raises 404 when `vas_wallet.is_enabled(db)` is False (off in test DB); the nav link in `layouts/reseller.html` always shows. **Recommended fix:** inject `vas_enabled` via the reseller branding context processor and gate the nav link — deferred (touches a perf-sensitive cached path for a cosmetic flag-off dead link). | login `reseller@test.local` → VAS |
 
 ### Suggested fixes
 - **F1:** in `validation_exception_handler`, sanitize `ctx` before serializing — `str()` any non-JSON-native values (Pydantic v2 puts the exception object in `ctx['error']`). One fix covers all endpoints.
 - **F2:** add `current_user` to the service-requests page context (mirror the other reseller page builders / the shared `require_reseller_context`).
 - **F3:** change the dashboard guard to a permission support/finance actually have (e.g. `customer:read` or an `any_of`), or give them a role-appropriate landing page.
-- **F4/F5:** fix or remove the dead nav links.
+- **F4:** fix or remove the dead nav link.
 
 ---
 

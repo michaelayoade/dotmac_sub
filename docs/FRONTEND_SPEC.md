@@ -797,12 +797,8 @@ This is the **richest detail page** in the system:
         "grace_period_days": int | None,
         "min_balance": float | None,
         "billing_enabled": bool,
-        "blocking_period_days": int,
-        "deactivation_period_days": int,
         "auto_create_invoices": bool,
         "send_billing_notifications": bool,
-        "next_block_at": datetime | None,
-        "next_block_label": str,
     },
 
     # ── Timeline ──
@@ -817,6 +813,17 @@ This is the **richest detail page** in the system:
     "active_page": "subscribers",
 }
 ```
+
+`dunning_cases` and subscriber/subscription status are read projections. The
+frontend must not infer that a case, payment, `blocked`, or `suspended` status
+permits suspension or restoration. Dunning actions and financial restoration
+consume the owner-produced `FinancialAccessConsequence` preview/result; RADIUS
+delivery state is a separate network projection. Financial cards consume the
+customer financial-position read model and do not recompute receivables,
+prepaid funding, or restoration amounts from the listed invoices/payments.
+Subscriber billing context does not calculate a future block date from balance,
+grace, or metadata; only a confirmed owner consequence may describe an access
+transition.
 
 ---
 
@@ -1535,7 +1542,7 @@ These are the ORM objects your templates receive. Access fields with dot notatio
 |-------|------|--------------|
 | `id` | UUID | |
 | `invoice_number` | str \| None | Human-readable |
-| `status` | InvoiceStatus | Enum: draft, issued, partially_paid, paid, void, overdue |
+| `status` | InvoiceStatus | Enum: draft, issued, partially_paid, paid, void, overdue, written_off. Terminal financial states are read-only outside owner preview/confirmation flows. |
 | `currency` | str | 3-char, default "NGN" |
 | `subtotal` | Decimal | `tabular-nums font-mono` |
 | `tax_total` | Decimal | |

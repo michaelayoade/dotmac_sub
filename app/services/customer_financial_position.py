@@ -29,6 +29,13 @@ from app.services.invoice_collectibility import (
 
 @dataclass(frozen=True)
 class CustomerFinancialPosition:
+    """Read projection whose financial meanings remain deliberately separate.
+
+    Invoice receivables and prepaid service funding are not netted into a
+    generic balance. Payment lifecycle and service-access state are owned by
+    their respective services and are intentionally absent from this value.
+    """
+
     account_id: object
     open_invoice_balance: Decimal
     due_invoice_balance: Decimal
@@ -55,10 +62,6 @@ class CustomerFinancialPosition:
     @property
     def has_collection_blocking_debt(self) -> bool:
         return self.collection_blocking_balance > Decimal("0.00")
-
-    @property
-    def net_prepaid_position(self) -> Decimal:
-        return self.prepaid_available_balance - self.open_invoice_balance
 
 
 def get_customer_financial_position(

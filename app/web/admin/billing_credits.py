@@ -78,11 +78,11 @@ def billing_credit_new(
 
 
 @router.post(
-    "/credits",
+    "/credits/preview",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:credit_note:create"))],
 )
-def billing_credit_create(
+def billing_credit_preview(
     request: Request,
     account_id: str = Form(...),
     amount: str = Form(...),
@@ -91,7 +91,7 @@ def billing_credit_create(
     db: Session = Depends(get_db),
 ):
     try:
-        web_billing_credits_service.create_credit_from_form(
+        state = web_billing_credits_service.preview_credit_from_form(
             db,
             account_id=account_id,
             amount=amount,
@@ -117,5 +117,67 @@ def billing_credit_create(
                 "sidebar_stats": get_sidebar_stats(db),
             },
             status_code=400,
+        )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/credit_issue_confirm.html",
+        {
+            "request": request,
+            **state,
+            "active_page": "credits",
+            "active_menu": "billing",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.post(
+    "/credits",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:credit_note:create"))],
+)
+def billing_credit_create(
+    request: Request,
+    account_id: str = Form(...),
+    amount: str = Form(...),
+    currency: str = Form("NGN"),
+    memo: str | None = Form(None),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_billing_credits_service.issue_credit_from_form(
+            db,
+            request=request,
+            actor_id=None,
+            account_id=account_id,
+            amount=amount,
+            currency=currency,
+            memo=memo,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as exc:
+        db.rollback()
+        from app.web.admin import get_current_user, get_sidebar_stats
+
+        return templates.TemplateResponse(
+            "admin/billing/credit_form.html",
+            {
+                "request": request,
+                **web_billing_credits_service.credit_form_context(
+                    db,
+                    account_id=account_id,
+                    error=str(exc),
+                ),
+                "active_page": "credits",
+                "active_menu": "billing",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=409,
         )
     return RedirectResponse(url="/admin/billing/credits", status_code=303)

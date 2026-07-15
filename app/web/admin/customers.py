@@ -171,7 +171,16 @@ def _load_tax_rates(db: Session):
 
 
 def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[str, str]:
-    return web_customer_actions_service.billing_form_defaults(customer)
+    values = web_customer_actions_service.billing_form_defaults(customer)
+    if customer is not None:
+        from app.services.collections.grace_policy import (
+            resolve_effective_grace_policy,
+        )
+
+        grace = resolve_effective_grace_policy(db, customer)
+        values["effective_grace_days"] = str(grace.days)
+        values["effective_grace_source"] = grace.source.replace("_", " ")
+    return values
 
 
 def _customer_audit_items(

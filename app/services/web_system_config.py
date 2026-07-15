@@ -203,13 +203,8 @@ BILLING_KEYS = [
     "use_creation_date",
     "payment_due_days",
     "customer_balance_notifications_enabled",
-    "auto_suspend_on_overdue",
-    "suspension_grace_hours",
     "expiry_reminder_days",
     "invoice_reminder_days",
-    "dunning_escalation_days",
-    "blocking_period_days",
-    "deactivation_period_days",
     "minimum_balance",
     "send_billing_notifications",
     "invoice_number_format",
@@ -248,12 +243,8 @@ def get_billing_config_context(db: Session) -> dict:
     if not billing.get("payment_due_days"):
         billing["payment_due_days"] = str(resolve_payment_due_days(db))
     defaults = {
-        "suspension_grace_hours": "48",
         "expiry_reminder_days": "7",
         "invoice_reminder_days": "7,1",
-        "dunning_escalation_days": "3,7,14,30",
-        "blocking_period_days": "0",
-        "deactivation_period_days": "0",
         "minimum_balance": "0",
     }
     for key, value in defaults.items():
@@ -352,7 +343,6 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         ("billing_enabled", "Billing Enabled"),
         ("use_creation_date", "Use Customer Creation Date"),
         ("customer_balance_notifications_enabled", "Customer Balance Notifications"),
-        ("auto_suspend_on_overdue", "Auto-Suspend on Overdue"),
         ("send_billing_notifications", "Send Billing Notifications"),
         ("proforma_enabled", "Proforma Invoices"),
         ("zero_total_invoices", "Zero-Total Invoices"),
@@ -382,10 +372,7 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
 
     for key, label in (
         ("payment_due_days", "Payment Due Days"),
-        ("suspension_grace_hours", "Suspension Grace Period"),
         ("expiry_reminder_days", "Expiry Reminder Days"),
-        ("blocking_period_days", "Blocking Period"),
-        ("deactivation_period_days", "Deactivation Period"),
         ("proforma_generation_day", "Proforma Generation Day"),
         ("prepaid_default_payment_due_days", "Prepaid Default Payment Due Days"),
         ("prepaid_default_grace_period_days", "Prepaid Default Grace Period Days"),
@@ -402,9 +389,6 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         _normalize_decimal_setting(normalized, key, label, minimum=Decimal("0"))
 
     _normalize_csv_days(normalized, "invoice_reminder_days", "Invoice Reminder Days")
-    _normalize_csv_days(
-        normalized, "dunning_escalation_days", "Dunning Escalation Days"
-    )
     return normalized
 
 

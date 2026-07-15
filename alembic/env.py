@@ -57,6 +57,22 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# VAS was retired in revision 291. These tables remain as immutable financial
+# history and must not be proposed for deletion merely because their active ORM
+# models were removed from the application.
+RETIRED_ARCHIVE_TABLES = frozenset(
+    {
+        "vas_wallets",
+        "vas_wallet_entries",
+        "vas_refund_requests",
+        "vas_services",
+        "vas_service_variations",
+        "vas_transactions",
+        "vas_rate_cards",
+        "vas_topup_intents",
+    }
+)
+
 
 def ensure_alembic_version_table(connection) -> None:
     """Use a wider revision column for this repo's descriptive revision IDs."""
@@ -76,8 +92,8 @@ def ensure_alembic_version_table(connection) -> None:
 
 
 def include_object(object, name, type_, reflected, compare_to):
-    """Exclude PostGIS system tables from autogenerate."""
-    if type_ == "table" and name in ("spatial_ref_sys",):
+    """Exclude system and intentionally archived tables from autogenerate."""
+    if type_ == "table" and name in {"spatial_ref_sys", *RETIRED_ARCHIVE_TABLES}:
         return False
     return True
 

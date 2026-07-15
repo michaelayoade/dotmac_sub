@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
 from app.models.subscriber import Subscriber
-from app.models.subscriber import SubscriberStatus as AccountStatus
 from app.services import enforcement_event_policy
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
@@ -18,7 +17,6 @@ from app.services.enforcement import (
     remove_subscription_address_list_block,
     update_subscription_sessions,
 )
-from app.services.events import emit_event
 from app.services.events.types import Event, EventType
 from app.services.radius_access_state import (
     derive_access_state,
@@ -95,8 +93,13 @@ class EnforcementHandler:
         subscriber = (
             db.get(Subscriber, sub.subscriber_id) if sub.subscriber_id else None
         )
-        captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
-        state = derive_access_state(sub.status, captive_redirect_enabled=captive)
+        from app.services.walled_garden_policy import resolve_subscription_restriction
+
+        restriction = resolve_subscription_restriction(db, sub, account=subscriber)
+        state = derive_access_state(
+            sub.status,
+            restriction_mode=(restriction.effective_mode if restriction else None),
+        )
         target = state.value if state else None
         if getattr(sub, "access_state", None) != target:
             sub.access_state = target
@@ -447,45 +450,39 @@ class EnforcementHandler:
         # suspension.
         fup_block_downgraded = False
 
+        fup_access_mode = None
         if action == "block":
-            # The soft captive walled-garden is opt-in per customer. A blocked
-            # customer who hasn't opted in gets a hard block (offline), not a
-            # captive redirect — fall through to the suspend path, which routes
-            # to Auth-Type := Reject via derive_access_state/populate.
+            from app.models.enforcement_lock import AccessRestrictionMode
             from app.models.subscriber import Subscriber
+            from app.services.walled_garden_policy import (
+                resolve_walled_garden_decision,
+            )
 
             subscriber = db.get(Subscriber, account_id)
-            captive = bool(getattr(subscriber, "captive_redirect_enabled", False))
-            if not captive:
-                action = "suspend"
-                # A FUP cap is becoming a full (offline) suspension rather than a
-                # captive walled-garden because this customer hasn't opted into
-                # captive redirect. Surface it: in subscription status this then
-                # looks like any other suspension, so make the FUP cause visible.
+            if subscriber is None:
+                return
+            decision = resolve_walled_garden_decision(
+                db,
+                subscriber,
+                requested_mode=AccessRestrictionMode.captive,
+            )
+            fup_access_mode = decision.effective_mode
+            action = "suspend"
+            fup_block_downgraded = fup_access_mode == AccessRestrictionMode.hard_reject
+            if fup_block_downgraded:
                 logger.warning(
                     "fup_block_downgraded_to_suspend subscription=%s account=%s "
-                    "rule=%s — captive redirect not enabled; applying full suspend",
+                    "rule=%s reason=%s",
                     subscription_id,
                     account_id,
                     rule_id,
+                    decision.reason,
                 )
-                fup_block_downgraded = True
-            else:
-                self._persist_fup_state(
-                    db,
-                    str(subscription_id),
-                    offer_id,
-                    rule_id,
-                    action_status="blocked",
-                    cap_resets_at=cap_resets_at_raw,
-                    notes="FUP captive redirect applied",
-                )
-                self._enqueue_subscription_session_cleanup(
-                    str(subscription_id), reason="fup_block"
-                )
-                return
         if action == "suspend":
-            from app.models.enforcement_lock import EnforcementReason
+            from app.models.enforcement_lock import (
+                AccessRestrictionMode,
+                EnforcementReason,
+            )
             from app.services.account_lifecycle import suspend_subscription
 
             fup_source = f"fup_rule:{rule_id}" if rule_id else "fup_exhausted"
@@ -495,6 +492,7 @@ class EnforcementHandler:
                     str(subscription_id),
                     reason=EnforcementReason.fup,
                     source=fup_source,
+                    access_mode=fup_access_mode or AccessRestrictionMode.hard_reject,
                     emit=False,  # prevent re-entrant dispatch
                 )
                 # Apply RADIUS enforcement directly (emit=False skips the
@@ -640,27 +638,12 @@ class EnforcementHandler:
             )
 
     def _handle_payment_received(self, db: Session, event: Event) -> None:
-        """Auto-reactivate suspended accounts when a payment is received.
-
-        Guarded so a partial payment cannot lift an overdue suspension: we
-        only restore when no overdue invoice retains an unpaid balance. This
-        guard naturally passes for prepaid-only suspensions (no overdue
-        invoice debt), so top-up driven prepaid restores keep working — the
-        top-up flow also calls ``restore_account_services`` directly.
-        """
+        """Submit payment observation to the financial-access reconciler."""
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             return
         try:
             from app.services import collections as collections_service
-
-            if collections_service.has_overdue_balance(db, str(account_id)):
-                logger.info(
-                    "Skipping auto-restore for account %s: overdue balance "
-                    "remains after payment",
-                    account_id,
-                )
-                return
 
             invoice_id = event.payload.get("invoice_id")
             restored = collections_service.restore_account_services(
@@ -684,121 +667,13 @@ class EnforcementHandler:
                 exc,
             )
 
-    @staticmethod
-    def _suspension_shield_reason(db: Session, account_id) -> str | None:
-        """Return why overdue auto-suspension should be skipped, or None.
-
-        Two cheap existence checks:
-        - an ACTIVE (admin-approved) payment arrangement for the subscriber;
-        - a bank-transfer payment proof still under review (submitted).
-        """
-        from app.models.payment_arrangement import (
-            ArrangementStatus,
-            PaymentArrangement,
-        )
-        from app.models.payment_proof import PaymentProof, PaymentProofStatus
-
-        arrangement_id = (
-            db.query(PaymentArrangement.id)
-            .filter(PaymentArrangement.subscriber_id == account_id)
-            .filter(PaymentArrangement.status == ArrangementStatus.active)
-            .filter(PaymentArrangement.is_active.is_(True))
-            .limit(1)
-            .scalar()
-        )
-        if arrangement_id:
-            return f"active payment arrangement {arrangement_id}"
-        proof_id = (
-            db.query(PaymentProof.id)
-            .filter(PaymentProof.account_id == account_id)
-            .filter(PaymentProof.status == PaymentProofStatus.submitted)
-            .limit(1)
-            .scalar()
-        )
-        if proof_id:
-            return f"payment proof {proof_id} pending review"
-        from app.services.service_extensions import extension_shield_reason
-
-        return extension_shield_reason(db, account_id)
-
     def _handle_invoice_overdue(self, db: Session, event: Event) -> None:
-        """Handle overdue warnings; dunning owns overdue service cuts."""
+        """Treat invoice-overdue as observation; dunning owns every action."""
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             return
-        try:
-            if not enforcement_event_policy.auto_suspend_on_overdue_enabled(db):
-                return
-
-            subscriber = db.get(Subscriber, account_id)
-            if not subscriber or subscriber.status != AccountStatus.active:
-                return
-
-            # Grace period: send warning first, suspend after N hours
-            grace_hours = enforcement_event_policy.suspension_grace_hours(db)
-
-            # Check if invoice just became overdue (within grace period)
-            invoice_id = event.invoice_id or event.payload.get("invoice_id")
-            if invoice_id and grace_hours > 0:
-                from app.models.billing import Invoice
-
-                invoice = db.get(Invoice, invoice_id)
-                if invoice and invoice.due_at:
-                    from datetime import UTC, datetime
-
-                    due_aware = invoice.due_at
-                    if due_aware.tzinfo is None:
-                        due_aware = due_aware.replace(tzinfo=UTC)
-                    hours_overdue = (
-                        datetime.now(UTC) - due_aware
-                    ).total_seconds() / 3600
-
-                    if hours_overdue < grace_hours:
-                        metadata = dict(invoice.metadata_ or {})
-                        if metadata.get("suspension_warning_sent_at"):
-                            return
-                        shield = self._suspension_shield_reason(db, subscriber.id)
-                        if shield:
-                            logger.info(
-                                "Skipping suspension warning for account %s: %s",
-                                account_id,
-                                shield,
-                            )
-                            return
-                        # Within grace period — emit warning, don't suspend yet
-                        emit_event(
-                            db,
-                            EventType.subscription_suspension_warning,
-                            {
-                                "invoice_id": str(invoice.id),
-                                "invoice_number": invoice.invoice_number or "",
-                                "amount": str(invoice.total or 0),
-                                "grace_hours": str(grace_hours),
-                                "reason": "invoice_overdue",
-                            },
-                            account_id=subscriber.id,
-                        )
-                        metadata["suspension_warning_sent_at"] = datetime.now(
-                            UTC
-                        ).isoformat()
-                        invoice.metadata_ = metadata
-                        db.flush()
-                        logger.info(
-                            "Sent suspension warning for account %s (%.1f hrs overdue, grace=%d hrs)",
-                            account_id,
-                            hours_overdue,
-                            grace_hours,
-                        )
-                        return
-
-            logger.info(
-                "Skipping direct overdue auto-suspension for account %s; "
-                "dunning policy owns overdue suspension",
-                account_id,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to handle overdue invoice event for account %s: %s",
-                account_id,
-                exc,
-            )
+        logger.info(
+            "Invoice overdue observed for account %s; dunning policy owns "
+            "notification, throttle, suspension, and rejection",
+            account_id,
+        )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from datetime import UTC, datetime
 from decimal import Decimal
 from html import escape
@@ -15,11 +16,13 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import CreditNote, CreditNoteStatus, Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.schemas.billing import (
+    CreditNoteApplicationPreviewRequest,
     CreditNoteApplyRequest,
+    InvoiceClosureConfirm,
     InvoiceCreate,
     InvoiceLineCreate,
     InvoiceLineUpdate,
@@ -616,24 +619,41 @@ def generate_invoice_from_subscription_web(
     return invoice
 
 
+def preview_credit_note_application(
+    db: Session,
+    *,
+    invoice_id: str,
+    credit_note_id: str,
+    amount: str | None,
+) -> object:
+    payload = CreditNoteApplicationPreviewRequest(
+        invoice_id=UUID(invoice_id),
+        amount=parse_decimal(amount, "amount") if amount else None,
+    )
+    return billing_service.credit_notes.preview_application(db, credit_note_id, payload)
+
+
 def apply_credit_note_to_invoice(
     db: Session,
     *,
     invoice_id: str,
     credit_note_id: str,
-    amount: Decimal | None,
+    amount: Decimal,
     memo: str | None,
-) -> dict[str, object] | None:
-    """Apply credit note to invoice and return audit metadata."""
-    before = billing_service.credit_notes.get(db=db, credit_note_id=credit_note_id)
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Execute one confirmed preview and return exact financial evidence."""
     payload = CreditNoteApplyRequest(
         invoice_id=UUID(invoice_id),
         amount=amount,
         memo=memo,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
     )
-    billing_service.credit_notes.apply(db, credit_note_id, payload)
-    after = billing_service.credit_notes.get(db=db, credit_note_id=credit_note_id)
-    return build_changes_metadata(before, after)
+    return billing_service.credit_notes.apply_with_evidence(
+        db, credit_note_id, payload, stage_audit=False
+    )
 
 
 def create_invoice_line_from_form(
@@ -724,19 +744,8 @@ def load_tax_rates(db: Session):
     )
 
 
-def load_credit_notes_for_account(db: Session, *, account_id):
-    stmt = (
-        select(CreditNote)
-        .where(CreditNote.account_id == account_id)
-        .where(CreditNote.is_active.is_(True))
-        .where(
-            CreditNote.status.in_(
-                [CreditNoteStatus.issued, CreditNoteStatus.partially_applied]
-            )
-        )
-        .order_by(CreditNote.created_at.desc())
-    )
-    return db.scalars(stmt).all()
+def load_credit_application_options(db: Session, *, invoice_id: str):
+    return billing_service.credit_notes.list_application_options(db, invoice_id)
 
 
 def build_invoice_activities(db: Session, *, invoice_id: str) -> list[dict]:
@@ -804,10 +813,20 @@ def load_invoice_detail_data(
     )
     return {
         "invoice": invoice,
+        "invoice_financial_summary": billing_service.invoices.financial_summary(
+            db, invoice_id
+        ),
         "invoice_status_presentation": invoice_status_presentation(invoice.status),
         "tax_rates": load_tax_rates(db),
-        "credit_notes": load_credit_notes_for_account(
-            db, account_id=invoice.account_id
+        "credit_application_options": load_credit_application_options(
+            db, invoice_id=invoice_id
+        ),
+        "credit_application_idempotency_key": secrets.token_urlsafe(24),
+        "invoice_void_capability": billing_service.invoices.void_capability(
+            db, invoice_id
+        ),
+        "invoice_write_off_capability": (
+            billing_service.invoices.write_off_capability(db, invoice_id)
         ),
         "activities": build_invoice_activities(db, invoice_id=invoice_id),
         "pdf_export": pdf_export,
@@ -851,23 +870,29 @@ def apply_credit_note_to_invoice_web(
     credit_note_id: str,
     amount: str | None,
     memo: str | None,
-) -> dict[str, object] | None:
-    metadata_payload = apply_credit_note_to_invoice(
+    preview_fingerprint: str,
+    idempotency_key: str,
+) -> dict[str, object]:
+    result = apply_credit_note_to_invoice(
         db,
         invoice_id=invoice_id,
         credit_note_id=credit_note_id,
-        amount=parse_decimal(amount, "amount") if amount else None,
+        amount=parse_decimal(amount, "amount"),
         memo=memo.strip() if memo else None,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
     )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="apply",
-        entity_type="credit_note",
-        entity_id=str(credit_note_id),
-        actor_id=actor_id,
-        metadata=metadata_payload,
-    )
+    metadata_payload = result.audit_metadata()
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="apply",
+            entity_type="credit_note",
+            entity_id=str(credit_note_id),
+            actor_id=actor_id,
+            metadata=metadata_payload,
+        )
     return metadata_payload
 
 
@@ -899,10 +924,39 @@ def void_invoice_web(
     actor_id: str | None,
     invoice_id: str,
 ) -> None:
-    # Actually void the invoice (reverse its debit ledger entries, set
-    # status=void, balance_due=0) via the canonical service — previously this
-    # only wrote an audit log and left the invoice untouched.
-    billing_service.invoices.void(db, invoice_id)
+    raise HTTPException(
+        status_code=409,
+        detail="Invoice void requires owner preview and confirmation",
+    )
+
+
+def preview_invoice_void_web(db: Session, *, invoice_id: str):
+    return billing_service.invoices.preview_void(db, invoice_id)
+
+
+def preview_invoice_write_off_web(db: Session, *, invoice_id: str):
+    return billing_service.invoices.preview_write_off(db, invoice_id)
+
+
+def confirm_invoice_void_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+    memo: str | None,
+):
+    result = billing_service.invoices.confirm_void(
+        db,
+        invoice_id,
+        InvoiceClosureConfirm(
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            memo=memo,
+        ),
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -910,4 +964,37 @@ def void_invoice_web(
         entity_type="invoice",
         entity_id=invoice_id,
         actor_id=actor_id,
+        metadata={"closure_id": str(result.closure.id)},
     )
+    return result
+
+
+def confirm_invoice_write_off_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+    memo: str | None,
+):
+    result = billing_service.invoices.confirm_write_off(
+        db,
+        invoice_id,
+        InvoiceClosureConfirm(
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            memo=memo,
+        ),
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="write_off",
+        entity_type="invoice",
+        entity_id=invoice_id,
+        actor_id=actor_id,
+        metadata={"closure_id": str(result.closure.id)},
+    )
+    return result

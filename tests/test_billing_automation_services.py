@@ -1648,15 +1648,14 @@ class TestRunInvoiceCycle:
         assert calls[-1][1]["invoice_number"] == "INV-REM-1"
         assert (invoice.metadata_ or {}).get("invoice_reminder_sent_7")
 
-    def test_run_invoice_cycle_skips_reminders_and_escalations_for_terminal_account(
+    def test_run_invoice_cycle_skips_reminders_for_terminal_account(
         self,
         db_session,
         subscriber,
         subscription,
         monkeypatch,
     ):
-        """Disabled/terminated service → no reminders or dunning escalations,
-        even with an open/overdue balance on the account."""
+        """Disabled/terminated service does not receive pre-due reminders."""
         from app.models.billing import Invoice, InvoiceStatus
         from app.models.catalog import SubscriptionStatus
         from app.models.domain_settings import DomainSetting, SettingDomain
@@ -1678,37 +1677,21 @@ class TestRunInvoiceCycle:
             )
         )
         db_session.add(
-            Invoice(
-                account_id=subscriber.id,
-                invoice_number="INV-DUN-TERM",
-                status=InvoiceStatus.overdue,
-                total=Decimal("200.00"),
-                balance_due=Decimal("200.00"),
-                due_at=run_at - timedelta(days=3),
-                metadata_={},
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="invoice_reminder_days",
+                value_type=SettingValueType.string,
+                value_text="7,1",
+                is_active=True,
             )
         )
-        for key, value in (
-            ("invoice_reminder_days", "7,1"),
-            ("dunning_escalation_days", "3,7,14"),
-        ):
-            db_session.add(
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key=key,
-                    value_type=SettingValueType.string,
-                    value_text=value,
-                    is_active=True,
-                )
-            )
         db_session.commit()
 
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
 
         assert summary["invoice_reminders_sent"] == 0
-        assert summary["dunning_escalations_sent"] == 0
 
-    def test_run_invoice_cycle_emits_dunning_escalation_for_configured_day(
+    def test_run_invoice_cycle_ignores_retired_dunning_escalation_setting(
         self,
         db_session,
         subscriber,
@@ -1759,10 +1742,9 @@ class TestRunInvoiceCycle:
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
         db_session.refresh(invoice)
 
-        assert summary["dunning_escalations_sent"] == 1
-        assert calls[-1][0] == EventType.invoice_overdue
-        assert calls[-1][1]["invoice_number"] == "INV-DUN-1"
-        assert (invoice.metadata_ or {}).get("dunning_escalation_sent_3")
+        assert "dunning_escalations_sent" not in summary
+        assert calls == []
+        assert not (invoice.metadata_ or {}).get("dunning_escalation_sent_3")
 
     def test_run_invoice_cycle_logs_structured_summary(
         self,
@@ -1817,10 +1799,6 @@ class TestRunInvoiceCycle:
         assert start_record.event == "billing_run"
         assert (
             complete_record.invoice_reminders_sent == summary["invoice_reminders_sent"]
-        )
-        assert (
-            complete_record.dunning_escalations_sent
-            == summary["dunning_escalations_sent"]
         )
 
 
@@ -2364,12 +2342,12 @@ class TestBillingRunResilience:
 
 
 # =============================================================================
-# mark_overdue_invoices — overdue checker & post-grace escalation
+# mark_overdue_invoices — observational overdue checker
 # =============================================================================
 
 
 class TestMarkOverdueInvoices:
-    """Hourly overdue checker: first emit, then a one-time post-grace re-emit."""
+    """Hourly overdue checker emits one observation per invoice."""
 
     def _make_invoice(self, db_session, subscriber, **kwargs):
         import uuid as _uuid
@@ -2392,12 +2370,16 @@ class TestMarkOverdueInvoices:
         return invoice
 
     def _capture_emits(self, monkeypatch):
+        import importlib
+
+        invoice_owner_module = importlib.import_module("app.services.billing.invoices")
+
         calls = []
 
         def _capture(db, event_type, payload, **kwargs):
             calls.append((event_type, dict(payload)))
 
-        monkeypatch.setattr(billing_automation, "emit_event", _capture)
+        monkeypatch.setattr(invoice_owner_module, "emit_event", _capture)
         return calls
 
     def test_first_run_marks_and_emits_once(self, db_session, subscriber, monkeypatch):
@@ -2410,81 +2392,21 @@ class TestMarkOverdueInvoices:
         db_session.refresh(invoice)
 
         assert result["marked_overdue"] == 1
-        assert result["escalated"] == 0
         assert invoice.status == InvoiceStatus.overdue
         assert (invoice.metadata_ or {}).get("overdue_event_sent")
         assert [c[0] for c in calls] == [EventType.invoice_overdue]
 
-        # Second run within grace: no re-emit, no hourly spam.
+        # Subsequent runs do not re-emit or infer an access consequence.
         result2 = billing_automation.mark_overdue_invoices(db_session)
         assert result2["marked_overdue"] == 0
-        assert result2["escalated"] == 0
         assert [c[0] for c in calls] == [EventType.invoice_overdue]
 
-    def test_post_grace_escalation_reemits_exactly_once(
+    def test_already_overdue_invoice_never_reemits_or_writes_access_metadata(
         self, db_session, subscriber, monkeypatch
     ):
-        """Warning sent + grace elapsed + subscriber active -> one re-emit."""
         from app.models.billing import InvoiceStatus
 
         invoice = self._make_invoice(
-            db_session,
-            subscriber,
-            status=InvoiceStatus.overdue,
-            due_at=datetime.now(UTC) - timedelta(hours=72),
-            metadata_={
-                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
-                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
-            },
-        )
-        calls = self._capture_emits(monkeypatch)
-
-        result = billing_automation.mark_overdue_invoices(db_session)
-        db_session.refresh(invoice)
-
-        assert result["escalated"] == 1
-        assert result["marked_overdue"] == 0
-        assert [c[0] for c in calls] == [EventType.invoice_overdue]
-        assert calls[0][1]["escalation"] == "post_grace_suspension"
-        assert calls[0][1]["invoice_id"] == str(invoice.id)
-        assert (invoice.metadata_ or {}).get("suspension_escalation_sent")
-
-        # Hourly runs after the escalation never re-emit again.
-        for _ in range(3):
-            result_n = billing_automation.mark_overdue_invoices(db_session)
-            assert result_n["escalated"] == 0
-        assert len(calls) == 1
-
-    def test_no_escalation_within_grace(self, db_session, subscriber, monkeypatch):
-        from app.models.billing import InvoiceStatus
-
-        invoice = self._make_invoice(
-            db_session,
-            subscriber,
-            status=InvoiceStatus.overdue,
-            due_at=datetime.now(UTC) - timedelta(hours=6),
-            metadata_={
-                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
-                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
-            },
-        )
-        calls = self._capture_emits(monkeypatch)
-
-        result = billing_automation.mark_overdue_invoices(db_session)
-        db_session.refresh(invoice)
-
-        assert result["escalated"] == 0
-        assert calls == []
-        assert not (invoice.metadata_ or {}).get("suspension_escalation_sent")
-
-    def test_no_escalation_without_warning_sent(
-        self, db_session, subscriber, monkeypatch
-    ):
-        """If no warning was ever sent (grace=0 path or auto-suspend disabled),
-        there is nothing to escalate."""
-        from app.models.billing import InvoiceStatus
-
-        self._make_invoice(
             db_session,
             subscriber,
             status=InvoiceStatus.overdue,
@@ -2494,38 +2416,14 @@ class TestMarkOverdueInvoices:
         calls = self._capture_emits(monkeypatch)
 
         result = billing_automation.mark_overdue_invoices(db_session)
+        db_session.refresh(invoice)
 
-        assert result["escalated"] == 0
+        assert result["marked_overdue"] == 0
         assert calls == []
+        assert not (invoice.metadata_ or {}).get("suspension_warning_sent_at")
+        assert not (invoice.metadata_ or {}).get("suspension_escalation_sent")
 
-    def test_no_escalation_when_subscriber_not_active(
-        self, db_session, subscriber, monkeypatch
-    ):
-        from app.models.billing import InvoiceStatus
-        from app.models.subscriber import SubscriberStatus
-
-        subscriber.status = SubscriberStatus.blocked
-        db_session.commit()
-        self._make_invoice(
-            db_session,
-            subscriber,
-            status=InvoiceStatus.overdue,
-            due_at=datetime.now(UTC) - timedelta(hours=72),
-            metadata_={
-                "overdue_event_sent": "2026-01-01T00:00:00+00:00",
-                "suspension_warning_sent_at": "2026-01-01T00:00:00+00:00",
-            },
-        )
-        calls = self._capture_emits(monkeypatch)
-
-        result = billing_automation.mark_overdue_invoices(db_session)
-
-        assert result["escalated"] == 0
-        assert calls == []
-
-    def test_paid_invoice_not_scanned_for_escalation(
-        self, db_session, subscriber, monkeypatch
-    ):
+    def test_paid_invoice_not_scanned(self, db_session, subscriber, monkeypatch):
         """Once the balance is cleared the invoice drops out of the sweep."""
         from app.models.billing import InvoiceStatus
 
@@ -2545,7 +2443,6 @@ class TestMarkOverdueInvoices:
         result = billing_automation.mark_overdue_invoices(db_session)
 
         assert result["scanned"] == 0
-        assert result["escalated"] == 0
         assert calls == []
 
 

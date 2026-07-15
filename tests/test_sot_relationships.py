@@ -53,6 +53,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.dunning") == (
         "financial.access_resolution",
         "financial.ledger",
+        "financial.payment_arrangements",
+        "financial.billing_health",
+        "access.subscription_lifecycle",
+        "access.walled_garden_policy",
+    )
+    assert sot_relationships.dependencies_for("access.subscription_lifecycle") == (
+        "events.dispatcher",
     )
     assert sot_relationships.dependencies_for("financial.access_resolution") == (
         "financial.billing_profile",
@@ -62,7 +69,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.billing_scheduled") == (
         "financial.ledger",
         "financial.access_resolution",
+        "financial.billing_health",
     )
+    financial_services = sot_relationships.service_names_for_domain("financial_access")
+    assert "financial.payment_arrangements" in financial_services
+    assert "financial.billing_health" in financial_services
     assert sot_relationships.dependencies_for("financial.collections_scheduled") == (
         "financial.dunning",
         "financial.access_resolution",
@@ -71,9 +82,6 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
         "financial.payment_provider_events",
     )
-    assert sot_relationships.dependencies_for("financial.vas_wallet") == (
-        "financial.payments",
-    )
     assert sot_relationships.dependencies_for("financial.payment_provider_events") == (
         "financial.payments",
     )
@@ -81,22 +89,31 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.ledger",
         "financial.payment_provider_events",
     )
-    assert sot_relationships.dependencies_for("financial.vas_operations") == (
-        "control.domain_settings",
-        "financial.vas_refunds",
-    )
-    assert sot_relationships.dependencies_for("financial.vas_refunds") == (
-        "control.domain_settings",
-    )
     assert sot_relationships.dependencies_for("customer.service_status") == (
         "financial.access_resolution",
         "customer.financial_position",
+        "financial.grace_policy",
     )
     assert sot_relationships.dependencies_for("customer.usage_summary") == (
         "sessions.radius_reconciliation",
     )
     assert sot_relationships.dependencies_for("financial.prepaid_plan_change") == (
+        "financial.account_adjustments",
+        "financial.credit_notes",
+        "customer.financial_position",
+    )
+    assert sot_relationships.dependencies_for("financial.account_adjustments") == (
         "financial.ledger",
+        "customer.financial_position",
+    )
+    assert sot_relationships.dependencies_for(
+        "financial.import_payment_batch_reversals"
+    ) == (
+        "financial.payments",
+        "customer.financial_position",
+    )
+    assert sot_relationships.dependencies_for("financial.addon_purchases") == (
+        "financial.account_adjustments",
         "customer.financial_position",
     )
     assert sot_relationships.dependencies_for("ui.customer_list_projection") == (
@@ -217,7 +234,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("access.radius_state") == (
         "access.control_resolution",
-        "access.event_policy",
+        "access.walled_garden_policy",
     )
     assert sot_relationships.dependencies_for("sessions.radius_resolution") == (
         "sessions.radius_reconciliation",
@@ -284,6 +301,18 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert invoice_lifecycle is not None
     assert invoice_lifecycle.name == "financial.invoices"
 
+    automation_invoice_owner = sot_relationships.owning_service_for(
+        "automation invoice creation and draft issuance"
+    )
+    assert automation_invoice_owner is not None
+    assert automation_invoice_owner.name == "financial.invoices"
+
+    overdue_invoice_owner = sot_relationships.owning_service_for(
+        "overdue invoice state and observation event"
+    )
+    assert overdue_invoice_owner is not None
+    assert overdue_invoice_owner.name == "financial.invoices"
+
     payment_presentation = sot_relationships.owning_service_for(
         "payment status labels, semantic tones, and icon keys"
     )
@@ -295,6 +324,66 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     )
     assert payment_lifecycle is not None
     assert payment_lifecycle.name == "financial.payments"
+
+    settlement_owner = sot_relationships.owning_service_for(
+        "confirmed payment settlement preview and evidence"
+    )
+    assert settlement_owner is not None
+    assert settlement_owner.name == "financial.payments"
+
+    consolidated_settlement_owner = sot_relationships.owning_service_for(
+        "consolidated payment settlement preview and confirmation"
+    )
+    assert consolidated_settlement_owner is not None
+    assert consolidated_settlement_owner.name == "financial.consolidated_payments"
+
+    consolidated_ledger_owner = sot_relationships.owning_service_for(
+        "exact consolidated-credit ledger links"
+    )
+    assert consolidated_ledger_owner is not None
+    assert consolidated_ledger_owner.name == "financial.consolidated_payments"
+
+    allocation_owner = sot_relationships.owning_service_for(
+        "settled account-credit allocation preview and confirmation"
+    )
+    assert allocation_owner is not None
+    assert allocation_owner.name == "financial.payments"
+
+    refund_owner = sot_relationships.owning_service_for(
+        "payment refund confirmation and exact ledger evidence"
+    )
+    assert refund_owner is not None
+    assert refund_owner.name == "financial.payments"
+
+    reversal_owner = sot_relationships.owning_service_for(
+        "payment reversal confirmation and exact ledger evidence"
+    )
+    assert reversal_owner is not None
+    assert reversal_owner.name == "financial.payments"
+
+    provider_reversal_owner = sot_relationships.owning_service_for(
+        "normalized provider reversal evidence"
+    )
+    assert provider_reversal_owner is not None
+    assert provider_reversal_owner.name == "financial.payments"
+
+    batch_reversal_owner = sot_relationships.owning_service_for(
+        "exact import-row-to-settlement-to-reversal ledger links"
+    )
+    assert batch_reversal_owner is not None
+    assert batch_reversal_owner.name == "financial.import_payment_batch_reversals"
+
+    account_adjustment_owner = sot_relationships.owning_service_for(
+        "exact account-adjustment ledger links"
+    )
+    assert account_adjustment_owner is not None
+    assert account_adjustment_owner.name == "financial.account_adjustments"
+
+    addon_purchase_owner = sot_relationships.owning_service_for(
+        "exact add-on entitlement-to-adjustment link"
+    )
+    assert addon_purchase_owner is not None
+    assert addon_purchase_owner.name == "financial.addon_purchases"
 
     semantic_palette = sot_relationships.owning_service_for(
         "brand primary, secondary, and semantic UI color roles"
@@ -392,20 +481,6 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert team_inbox_service is not None
     assert team_inbox_service.name == "communications.team_inbox"
     assert team_inbox_service.module == "app.services.team_inbox_commands"
-
-    vas_service = sot_relationships.owning_service_for(
-        "VAS refund-to-source eligibility"
-    )
-
-    assert vas_service is not None
-    assert vas_service.name == "financial.vas_refunds"
-    assert vas_service.module == "app.services.vas_refunds"
-
-    refund_reconciliation = sot_relationships.owning_service_for(
-        "VAS refund provider reconciliation"
-    )
-
-    assert refund_reconciliation is vas_service
 
 
 def test_domain_sot_relationship_modules_are_importable():

@@ -3,23 +3,44 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import logging
 import re
+import secrets
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import cast
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.billing import Payment, PaymentMethod, PaymentMethodType, PaymentStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    Payment,
+    PaymentMethod,
+    PaymentMethodType,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+)
 from app.models.domain_settings import SettingDomain
-from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
-from app.schemas.billing import PaymentCreate, PaymentMethodCreate, PaymentUpdate
+from app.schemas.billing import (
+    PaymentAllocationConfirm,
+    PaymentAllocationPreviewRequest,
+    PaymentCreate,
+    PaymentCreationConfirm,
+    PaymentCreationPreviewRequest,
+    PaymentMethodCreate,
+    PaymentRefundPreviewRequest,
+    PaymentRefundRequest,
+    PaymentReversalPreviewRequest,
+    PaymentReversalRequest,
+    PaymentUpdate,
+)
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import settings_spec
@@ -29,7 +50,6 @@ from app.services.audit_helpers import build_changes_metadata, log_audit_event
 from app.services.status_presentation import payment_status_presentation
 
 logger = logging.getLogger(__name__)
-MANUAL_PAYMENT_IDEMPOTENCY_SCOPE = "admin_manual_payment"
 _IDEMPOTENCY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,120}$")
 
 
@@ -199,10 +219,42 @@ def build_payment_detail_data(
     payment = billing_service.payments.get(db=db, payment_id=payment_id)
     if not payment:
         return None
+    allocation_available = billing_service.payment_allocations.available_amount(
+        db, payment_id
+    )
+    allocation_invoices: list[Invoice] = []
+    if payment.account_id is not None and allocation_available > Decimal("0.00"):
+        allocated_invoice_ids = {
+            allocation.invoice_id for allocation in payment.allocations
+        }
+        allocation_invoices = (
+            db.query(Invoice)
+            .filter(Invoice.account_id == payment.account_id)
+            .filter(Invoice.currency == payment.currency)
+            .filter(Invoice.is_active.is_(True))
+            .filter(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
+                )
+            )
+            .filter(Invoice.balance_due > Decimal("0.00"))
+            .filter(Invoice.id.notin_(allocated_invoice_ids))
+            .order_by(Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc())
+            .all()
+        )
     return {
         "payment": payment,
         "payment_status_presentation": payment_status_presentation(payment.status),
         "primary_invoice_id": payment_primary_invoice_id(payment),
+        "edit_capability": billing_service.payments.edit_capability(db, payment_id),
+        "refund_capability": billing_service.refunds.capability(db, payment_id),
+        "reversal_capability": billing_service.reversals.capability(db, payment_id),
+        "allocation_invoices": allocation_invoices,
+        "allocation_available": allocation_available,
         "active_page": "payments",
         "active_menu": "billing",
     }
@@ -222,6 +274,9 @@ def build_payment_edit_data(
     payment = billing_service.payments.get(db=db, payment_id=payment_id)
     if not payment:
         return None
+    edit_capability = billing_service.payments.edit_capability(db, payment_id)
+    if not edit_capability.allowed:
+        raise HTTPException(status_code=409, detail=edit_capability.reason)
     selected_account = payment.account
     primary_inv_id = payment_primary_invoice_id(payment)
     if not selected_account and payment.account_id:
@@ -280,77 +335,14 @@ def build_create_payload(
     )
 
 
-def _manual_payment_idempotency_key(token: str | None) -> str | None:
-    key = (token or "").strip()
-    if not key:
-        return None
-    if not _IDEMPOTENCY_TOKEN_RE.fullmatch(key):
+def _owner_payment_idempotency_key(token: str | None) -> str:
+    raw = (token or "").strip()
+    if not raw:
+        return f"admin-payment-{secrets.token_urlsafe(24)}"
+    if not _IDEMPOTENCY_TOKEN_RE.fullmatch(raw):
         raise ValueError("Invalid payment submission token")
-    return key
-
-
-def _reserve_manual_payment_key(
-    db: Session, *, key: str | None, account_id: UUID
-) -> tuple[IdempotencyKey | None, Payment | None]:
-    key = _manual_payment_idempotency_key(key)
-    if key is None:
-        return None, None
-
-    prior = db.scalars(
-        select(IdempotencyKey).where(
-            IdempotencyKey.scope == MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-            IdempotencyKey.key == key,
-        )
-    ).first()
-    if prior is not None:
-        if str(prior.account_id) != str(account_id):
-            raise ValueError("Payment submission token has already been used")
-        if prior.ref_id:
-            payment = billing_service.payments.get(db=db, payment_id=prior.ref_id)
-            return None, payment
-        raise ValueError("This payment is already being recorded. Please refresh.")
-
-    reservation = IdempotencyKey(
-        scope=MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-        key=key,
-        account_id=account_id,
-        ref_id=None,
-    )
-    db.add(reservation)
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        prior = db.scalars(
-            select(IdempotencyKey).where(
-                IdempotencyKey.scope == MANUAL_PAYMENT_IDEMPOTENCY_SCOPE,
-                IdempotencyKey.key == key,
-            )
-        ).first()
-        if prior and str(prior.account_id) == str(account_id) and prior.ref_id:
-            payment = billing_service.payments.get(db=db, payment_id=prior.ref_id)
-            return None, payment
-        raise ValueError(
-            "This payment is already being recorded. Please refresh."
-        ) from exc
-    return reservation, None
-
-
-def _release_manual_payment_key(
-    db: Session, reservation: IdempotencyKey | None
-) -> None:
-    if reservation is not None:
-        db.delete(reservation)
-        db.commit()
-
-
-def _commit_manual_payment_key(
-    db: Session, reservation: IdempotencyKey | None, payment_id: object
-) -> None:
-    if reservation is not None:
-        reservation.ref_id = str(payment_id)
-        db.add(reservation)
-        db.commit()
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return f"admin-payment-{digest}"
 
 
 def build_update_payload(
@@ -369,13 +361,19 @@ def build_update_payload(
     always submits the locked account, so including it here made every payment
     edit fail with a 400. The account is resolved/validated by the caller.
     """
-    return PaymentUpdate(
-        payment_method_id=payment_method_id,
-        amount=amount,
-        currency=currency.strip().upper(),
-        status=PaymentStatus(status) if status else PaymentStatus.pending,
-        memo=memo.strip() if memo else None,
-    )
+    owner_evidence_statuses = {"refunded", "partially_refunded", "reversed"}
+    if status in owner_evidence_statuses:
+        return PaymentUpdate(memo=memo.strip() if memo else None)
+    data: dict[str, object] = {
+        "payment_method_id": payment_method_id,
+        "amount": amount,
+        "currency": currency.strip().upper(),
+        "memo": memo.strip() if memo else None,
+    }
+    # Evidence-backed terminal/partial outcomes are owner projections. The
+    # generic edit adapter must neither set nor resend those statuses.
+    data["status"] = PaymentStatus(status) if status else PaymentStatus.pending
+    return PaymentUpdate(**data)
 
 
 def update_invoice_allocation_if_changed(
@@ -1063,7 +1061,7 @@ ACC-002,25000,NGN,TRF-002,2024-01-16
 """
 
 
-def process_payment_create(
+def _prepare_payment_create(
     db: Session,
     *,
     account_id: str | None,
@@ -1074,9 +1072,8 @@ def process_payment_create(
     collection_account_id: str | None,
     payment_method_id: str | None,
     memo: str | None,
-    idempotency_token: str | None = None,
 ) -> dict[str, object]:
-    """Validate inputs, create a payment, and return result dict."""
+    """Resolve adapter inputs into the canonical payment owner request."""
     from app.services import web_billing_payment_forms as forms_svc
 
     resolved_invoice = forms_svc.resolve_invoice(db, invoice_id)
@@ -1110,36 +1107,116 @@ def process_payment_create(
         memo=memo,
         invoice_id=invoice_id,
     )
-    reservation, replayed_payment = _reserve_manual_payment_key(
-        db, key=idempotency_token, account_id=parsed_account_id
-    )
-    if replayed_payment is not None:
-        return {
-            "payment": replayed_payment,
-            "resolved_invoice": resolved_invoice,
-            "balance_value": balance_value,
-            "balance_display": balance_display,
-            "idempotent_replay": True,
-            "audit_metadata": {
-                "amount": str(replayed_payment.amount),
-                "invoice_id": payment_primary_invoice_id(replayed_payment),
-            },
-        }
-    try:
-        payment = billing_service.payments.create(db, payload)
-    except Exception:
-        _release_manual_payment_key(db, reservation)
-        raise
-    _commit_manual_payment_key(db, reservation, payment.id)
     return {
-        "payment": payment,
+        "payload": payload,
         "resolved_invoice": resolved_invoice,
         "balance_value": balance_value,
         "balance_display": balance_display,
-        "audit_metadata": {
-            "amount": str(payment.amount),
-            "invoice_id": payment_primary_invoice_id(payment),
-        },
+    }
+
+
+def preview_payment_create(
+    db: Session,
+    *,
+    account_id: str | None,
+    amount: str,
+    currency: str,
+    status: str | None,
+    invoice_id: str | None,
+    collection_account_id: str | None,
+    payment_method_id: str | None,
+    memo: str | None,
+) -> dict[str, object]:
+    prepared = _prepare_payment_create(
+        db,
+        account_id=account_id,
+        amount=amount,
+        currency=currency,
+        status=status,
+        invoice_id=invoice_id,
+        collection_account_id=collection_account_id,
+        payment_method_id=payment_method_id,
+        memo=memo,
+    )
+    payload = cast(PaymentCreate, prepared["payload"])
+    preview = billing_service.payments.preview_creation(
+        db,
+        PaymentCreationPreviewRequest(
+            **payload.model_dump(),
+            auto_allocate=True,
+        ),
+    )
+    return {
+        **prepared,
+        "preview": preview,
+    }
+
+
+def process_payment_create(
+    db: Session,
+    *,
+    account_id: str | None,
+    amount: str,
+    currency: str,
+    status: str | None,
+    invoice_id: str | None,
+    collection_account_id: str | None,
+    payment_method_id: str | None,
+    memo: str | None,
+    idempotency_token: str | None = None,
+    preview_fingerprint: str | None = None,
+) -> dict[str, object]:
+    """Confirm a reviewed payment preview through the canonical owner."""
+    prepared = _prepare_payment_create(
+        db,
+        account_id=account_id,
+        amount=amount,
+        currency=currency,
+        status=status,
+        invoice_id=invoice_id,
+        collection_account_id=collection_account_id,
+        payment_method_id=payment_method_id,
+        memo=memo,
+    )
+    payload = cast(PaymentCreate, prepared["payload"])
+    owner_key = _owner_payment_idempotency_key(idempotency_token)
+    result = None
+    if preview_fingerprint is None:
+        replay = billing_service.payments.replay_creation_request(
+            db,
+            payload,
+            auto_allocate=True,
+            idempotency_key=owner_key,
+        )
+        if replay is not None:
+            result = replay
+        else:
+            preview = billing_service.payments.preview_creation(
+                db,
+                PaymentCreationPreviewRequest(
+                    **payload.model_dump(),
+                    auto_allocate=True,
+                ),
+            )
+            preview_fingerprint = preview.fingerprint
+    if preview_fingerprint is not None and result is None:
+        result = billing_service.payments.confirm_creation(
+            db,
+            PaymentCreationConfirm(
+                **payload.model_dump(),
+                auto_allocate=True,
+                preview_fingerprint=preview_fingerprint,
+                idempotency_key=owner_key,
+            ),
+        )
+    assert result is not None
+    return {
+        "payment": result.payment,
+        "resolved_invoice": prepared["resolved_invoice"],
+        "balance_value": prepared["balance_value"],
+        "balance_display": prepared["balance_display"],
+        "idempotent_replay": result.idempotent_replay,
+        "audit_metadata": result.audit_metadata(),
     }
 
 
@@ -1163,6 +1240,7 @@ def process_payment_create_with_audit(
     payment_method_id: str | None,
     memo: str | None,
     idempotency_token: str | None = None,
+    preview_fingerprint: str | None = None,
 ) -> dict[str, object]:
     result = process_payment_create(
         db,
@@ -1175,6 +1253,7 @@ def process_payment_create_with_audit(
         payment_method_id=payment_method_id,
         memo=memo,
         idempotency_token=idempotency_token,
+        preview_fingerprint=preview_fingerprint,
     )
     payment = cast(Payment, result["payment"])
     if not result.get("idempotent_replay"):
@@ -1287,22 +1366,150 @@ def process_payment_update_with_audit(
     return result
 
 
-def process_payment_refund_with_audit(db: Session, request, *, payment_id: str) -> None:
-    """Mark a succeeded payment as refunded and recompute the linked invoice(s).
+def preview_payment_refund(
+    db: Session,
+    *,
+    payment_id: str,
+    amount: str | None,
+    reason: str | None,
+) -> dict[str, object]:
+    """Build the owner-authored financial and access consequence preview."""
+    try:
+        parsed_amount = Decimal(amount) if amount and amount.strip() else None
+    except InvalidOperation as exc:
+        raise HTTPException(status_code=400, detail="Invalid refund amount") from exc
+    normalized_reason = reason.strip() if reason and reason.strip() else None
+    request = PaymentRefundPreviewRequest(
+        amount=parsed_amount,
+        reason=normalized_reason,
+    )
+    preview = billing_service.refunds.preview(db, payment_id, request)
+    return {
+        "preview": preview,
+        "reason": normalized_reason,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
 
-    Powers the one-click Refund button. mark_status recomputes the allocated
-    invoices, so the invoice reverts from paid to issued/overdue automatically.
-    """
-    from fastapi import HTTPException
 
-    payment = billing_service.payments.get(db=db, payment_id=payment_id)
-    if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
-    if payment.status != PaymentStatus.succeeded:
+def preview_payment_allocation(
+    db: Session,
+    *,
+    payment_id: str,
+    invoice_id: str,
+    amount: str,
+) -> dict[str, object]:
+    """Build the exact account-credit-to-receivable transfer preview."""
+    try:
+        parsed_amount = Decimal(amount)
+    except InvalidOperation as exc:
         raise HTTPException(
-            status_code=400, detail="Only succeeded payments can be refunded"
+            status_code=400, detail="Invalid allocation amount"
+        ) from exc
+    request = PaymentAllocationPreviewRequest(
+        payment_id=UUID(payment_id),
+        invoice_id=UUID(invoice_id),
+        amount=parsed_amount,
+    )
+    preview = billing_service.payment_allocations.preview(db, request)
+    return {
+        "preview": preview,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
+
+
+def process_payment_allocation_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    invoice_id: str,
+    amount: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Confirm a reviewed allocation transfer through its owner."""
+    result = billing_service.payment_allocations.confirm(
+        db,
+        PaymentAllocationConfirm(
+            payment_id=UUID(payment_id),
+            invoice_id=UUID(invoice_id),
+            amount=Decimal(amount),
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        ),
+    )
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="allocate",
+            entity_type="payment",
+            entity_id=payment_id,
+            actor_id=_actor_id(request),
+            metadata=result.audit_metadata(),
         )
-    billing_service.payments.mark_status(db, payment_id, PaymentStatus.refunded)
+    return result
+
+
+def preview_payment_settlement(db: Session, *, payment_id: str) -> dict[str, object]:
+    """Build the owner-authored pending-to-settled consequence preview."""
+    preview = billing_service.payments.preview_settlement(db, payment_id)
+    return {
+        "preview": preview,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
+
+
+def process_payment_settlement_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Confirm reviewed settlement through the canonical payment owner."""
+    result = billing_service.payments.settle(
+        db,
+        payment_id,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+        origin=PaymentSettlementOrigin.manual,
+    )
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="settle",
+            entity_type="payment",
+            entity_id=payment_id,
+            actor_id=_actor_id(request),
+            metadata=result.audit_metadata(),
+        )
+    return result
+
+
+def process_payment_refund_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    amount: str,
+    reason: str | None,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Confirm a previewed completed refund through the canonical owner."""
+    result = billing_service.refunds.process_with_evidence(
+        db,
+        payment_id,
+        PaymentRefundRequest(
+            amount=Decimal(amount),
+            reason=reason.strip() if reason and reason.strip() else None,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        ),
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -1310,7 +1517,56 @@ def process_payment_refund_with_audit(db: Session, request, *, payment_id: str) 
         entity_type="payment",
         entity_id=payment_id,
         actor_id=_actor_id(request),
+        metadata=result.audit_metadata(),
     )
+    return result
+
+
+def preview_payment_reversal(
+    db: Session,
+    *,
+    payment_id: str,
+    reason: str,
+) -> dict[str, object]:
+    """Build the owner-authored chargeback/bank-reversal preview."""
+    request = PaymentReversalPreviewRequest(reason=reason.strip())
+    preview = billing_service.reversals.preview(db, payment_id, request)
+    return {
+        "preview": preview,
+        "reason": request.reason,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
+
+
+def process_payment_reversal_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    reason: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    """Confirm a previewed payment reversal through its canonical owner."""
+    result = billing_service.reversals.process_with_evidence(
+        db,
+        payment_id,
+        PaymentReversalRequest(
+            reason=reason.strip(),
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        ),
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="reverse",
+        entity_type="payment",
+        entity_id=payment_id,
+        actor_id=_actor_id(request),
+        metadata=result.audit_metadata(),
+    )
+    return result
 
 
 def process_payment_import_payload_with_audit(

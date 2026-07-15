@@ -23,6 +23,9 @@ from app.models.billing import (
     CreditNote,
     CreditNoteStatus,
     Invoice,
+    InvoiceClosure,
+    InvoiceClosureOrigin,
+    InvoiceClosureType,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
@@ -49,6 +52,9 @@ INTERNAL_MEMO_PREFIXES = (
     "Reversal of prepaid opening",
     "Data repair 2026-06-29:",
     "Validated account credit consumed",
+    "Payment refund account-credit consumption:",
+    "Payment reversal account-credit consumption:",
+    "Payment allocation account-credit consumption:",
 )
 
 
@@ -223,6 +229,22 @@ def _invoice_event(invoice: Invoice) -> CustomerFinancialEvent:
     )
 
 
+def _invoice_writeoff_event(closure: InvoiceClosure) -> CustomerFinancialEvent:
+    invoice = closure.invoice
+    return CustomerFinancialEvent(
+        id=f"invoice-writeoff:{closure.id}",
+        account_id=invoice.account_id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.adjustment,
+        amount=_money(closure.amount),
+        currency=closure.currency or invoice.currency or "NGN",
+        memo=closure.reason
+        or f"Write-off invoice {invoice.invoice_number or invoice.id}",
+        occurred_at=_event_date(closure.created_at),
+        raw=closure,
+    )
+
+
 def _credit_note_event(note: CreditNote) -> CustomerFinancialEvent:
     return CustomerFinancialEvent(
         id=f"credit-note:{note.id}",
@@ -357,14 +379,23 @@ def list_customer_financial_events(
         db.query(Invoice)
         .filter(Invoice.account_id == account_uuid)
         .filter(Invoice.is_active.is_(True))
+        .outerjoin(InvoiceClosure, InvoiceClosure.invoice_id == Invoice.id)
         .filter(
-            Invoice.status.in_(
-                [
-                    InvoiceStatus.issued,
-                    InvoiceStatus.partially_paid,
-                    InvoiceStatus.overdue,
-                    InvoiceStatus.paid,
-                ]
+            or_(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                        InvoiceStatus.paid,
+                    ]
+                ),
+                and_(
+                    Invoice.status == InvoiceStatus.written_off,
+                    InvoiceClosure.closure_type == InvoiceClosureType.write_off,
+                    InvoiceClosure.origin
+                    != InvoiceClosureOrigin.historical_reconciliation,
+                ),
             )
         )
         .filter(Invoice.is_proforma.is_(False))
@@ -375,6 +406,22 @@ def list_customer_financial_events(
     if service_start is not None:
         invoice_query = invoice_query.filter(Invoice.created_at >= service_start)
     events.extend(_invoice_event(invoice) for invoice in invoice_query.all())
+
+    writeoff_query = (
+        db.query(InvoiceClosure)
+        .join(Invoice, Invoice.id == InvoiceClosure.invoice_id)
+        .filter(Invoice.account_id == account_uuid)
+        .filter(Invoice.is_active.is_(True))
+        .filter(InvoiceClosure.closure_type == InvoiceClosureType.write_off)
+        .filter(InvoiceClosure.origin != InvoiceClosureOrigin.historical_reconciliation)
+    )
+    if currency is not None:
+        writeoff_query = writeoff_query.filter(InvoiceClosure.currency == currency)
+    if service_start is not None:
+        writeoff_query = writeoff_query.filter(
+            InvoiceClosure.created_at >= service_start
+        )
+    events.extend(_invoice_writeoff_event(closure) for closure in writeoff_query.all())
 
     credit_note_query = (
         db.query(CreditNote)
@@ -429,10 +476,9 @@ def list_customer_financial_events(
                     LedgerEntry.source == LedgerSource.payment,
                     LedgerEntry.payment_id.is_(None),
                 ),
-                and_(
-                    LedgerEntry.source == LedgerSource.credit_note,
-                    LedgerEntry.payment_id.is_(None),
-                ),
+                # Credit-note documents are the customer-facing fact. Their
+                # funding, application-transfer, and void-reversal ledger rows
+                # are structural evidence and must not be counted a second time.
             )
         )
     )
@@ -586,14 +632,23 @@ def customer_financial_balances_by_currency(
         )
         .filter(Invoice.account_id.in_(account_uuids))
         .filter(Invoice.is_active.is_(True))
+        .outerjoin(InvoiceClosure, InvoiceClosure.invoice_id == Invoice.id)
         .filter(
-            Invoice.status.in_(
-                [
-                    InvoiceStatus.issued,
-                    InvoiceStatus.partially_paid,
-                    InvoiceStatus.overdue,
-                    InvoiceStatus.paid,
-                ]
+            or_(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                        InvoiceStatus.paid,
+                    ]
+                ),
+                and_(
+                    Invoice.status == InvoiceStatus.written_off,
+                    InvoiceClosure.closure_type == InvoiceClosureType.write_off,
+                    InvoiceClosure.origin
+                    != InvoiceClosureOrigin.historical_reconciliation,
+                ),
             )
         )
         .filter(Invoice.is_proforma.is_(False))
@@ -607,6 +662,28 @@ def customer_financial_balances_by_currency(
             )
         )
     add(invoice_query.group_by(Invoice.account_id, invoice_currency).all())
+
+    writeoff_currency = func.coalesce(InvoiceClosure.currency, "NGN")
+    writeoff_query = (
+        db.query(
+            Invoice.account_id,
+            writeoff_currency.label("currency"),
+            func.sum(InvoiceClosure.amount).label("balance"),
+        )
+        .join(Invoice, Invoice.id == InvoiceClosure.invoice_id)
+        .filter(Invoice.account_id.in_(account_uuids))
+        .filter(Invoice.is_active.is_(True))
+        .filter(InvoiceClosure.closure_type == InvoiceClosureType.write_off)
+        .filter(InvoiceClosure.origin != InvoiceClosureOrigin.historical_reconciliation)
+    )
+    if legacy_account_ids:
+        writeoff_query = writeoff_query.filter(
+            or_(
+                Invoice.account_id.notin_(legacy_account_ids),
+                InvoiceClosure.created_at >= SERVICE_ACTIVITY_AT,
+            )
+        )
+    add(writeoff_query.group_by(Invoice.account_id, writeoff_currency).all())
 
     note_currency = func.coalesce(CreditNote.currency, "NGN")
     note_query = (
@@ -665,10 +742,8 @@ def customer_financial_balances_by_currency(
                     LedgerEntry.source == LedgerSource.payment,
                     LedgerEntry.payment_id.is_(None),
                 ),
-                and_(
-                    LedgerEntry.source == LedgerSource.credit_note,
-                    LedgerEntry.payment_id.is_(None),
-                ),
+                # Credit-note ledger rows are structural evidence; the document
+                # query above owns their customer-position effect.
             )
         )
     )

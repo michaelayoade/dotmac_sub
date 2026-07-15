@@ -50,14 +50,8 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
     }
   }
 
-  String get _today {
-    final n = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${n.year}-${two(n.month)}-${two(n.day)}';
-  }
-
   Future<void> _confirm(PlanOffer offer) async {
-    // Prorated quote for the selected plan (empty/no-op for postpaid).
+    // Owner preview for the selected plan (explicit no-ledger result for postpaid).
     PlanChangeQuote? quote;
     bool quoteFailed = false;
     try {
@@ -65,8 +59,8 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
           .read(catalogRepositoryProvider)
           .planChangeQuote(_subId, offer.id);
     } catch (_) {
-      // The quote is optional, but a failure must not look like a confident
-      // ₦0 cost — flag it so the sheet warns and the confirm is less assertive.
+      // Confirmation is disabled without the owner fingerprint; a transport
+      // failure must never look like a confident zero-cost preview.
       quoteFailed = true;
     }
     if (!mounted) return;
@@ -81,11 +75,11 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
         billingMessage: _options?.billingMessage,
       ),
     );
-    if (ok != true) return;
-    await _submit(offer);
+    if (ok != true || quote == null || quote.previewFingerprint.isEmpty) return;
+    await _submit(offer, quote);
   }
 
-  Future<void> _submit(PlanOffer offer) async {
+  Future<void> _submit(PlanOffer offer, PlanChangeQuote quote) async {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     setState(() => _busy = true);
@@ -93,9 +87,9 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
       await ref.read(catalogRepositoryProvider).submitPlanChange(
             _subId,
             offerId: offer.id,
-            effectiveDate: _today,
+            previewFingerprint: quote.previewFingerprint,
           );
-      // A prepaid change debits the wallet — refresh balance + ledger too.
+      // A prepaid change posts an exact debit — refresh funding and ledger too.
       ref.invalidate(subscriptionsProvider);
       ref.invalidate(balanceProvider);
       ref.invalidate(ledgerProvider);
@@ -145,11 +139,11 @@ class _ChangePlanScreenState extends ConsumerState<ChangePlanScreen> {
                       '${Fmt.money(opts.currentOffer!.amount, opts.currentOffer!.currency)} ${opts.currentOffer!.periodLabel}'),
                 ),
               ),
-            if (opts.walletBalance != null)
+            if (opts.prepaidFunding != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(4, 12, 4, 4),
                 child: Text(
-                  'Wallet balance: ${Fmt.money(opts.walletBalance!, opts.currentOffer?.currency ?? 'NGN')}',
+                  'Prepaid funding: ${Fmt.money(opts.prepaidFunding!, opts.currentOffer?.currency ?? 'NGN')}',
                   style: theme.textTheme.bodySmall,
                 ),
               ),
@@ -247,10 +241,23 @@ class _ConfirmSheet extends StatelessWidget {
               const Divider(height: 24),
               _row(context, 'Prorated charge (${q.daysRemaining} days left)',
                   Fmt.money(q.chargeAmount, cur)),
-              _row(context, 'Wallet balance', Fmt.money(q.currentBalance, cur)),
+              _row(context, 'Prepaid funding',
+                  Fmt.money(q.prepaidFundingBefore, cur)),
+              _row(context, 'Postpaid receivables',
+                  Fmt.money(q.postpaidReceivables, cur)),
+              _row(context, 'Collection-blocking balance',
+                  Fmt.money(q.collectionBlockingBalance, cur)),
+              _row(context, 'Funding after change',
+                  Fmt.money(q.prepaidFundingAfter, cur)),
               const Divider(height: 16),
               _row(context, 'Payable now', Fmt.money(q.netAmount, cur),
                   bold: true),
+              _row(
+                context,
+                'Exact ledger result',
+                '${q.ledgerEntryType} / ${q.ledgerSource} / ${Fmt.money(q.ledgerAmount, cur)}',
+              ),
+              _row(context, 'Access consequence', q.accessConsequence),
               if (q.needsTopUp) ...[
                 const SizedBox(height: 10),
                 Container(
@@ -266,7 +273,7 @@ class _ConfirmSheet extends StatelessWidget {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Insufficient balance — top up ${Fmt.money(q.shortfall, cur)} to apply now.',
+                          'Insufficient prepaid funding — top up ${Fmt.money(q.shortfall, cur)} to apply now.',
                           style: TextStyle(
                               color: theme.colorScheme.onErrorContainer,
                               fontSize: 12),
@@ -276,6 +283,15 @@ class _ConfirmSheet extends StatelessWidget {
                   ),
                 ),
               ],
+            ],
+            if (q != null && !q.hasFinancialEffect) ...[
+              const Divider(height: 24),
+              _row(context, 'Exact ledger result', 'No ledger transaction'),
+              _row(context, 'Postpaid receivables',
+                  Fmt.money(q.postpaidReceivables, cur)),
+              _row(context, 'Collection-blocking balance',
+                  Fmt.money(q.collectionBlockingBalance, cur)),
+              _row(context, 'Access consequence', q.accessConsequence),
             ],
             if (quoteFailed) ...[
               const SizedBox(height: 12),
@@ -292,9 +308,8 @@ class _ConfirmSheet extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        "Couldn't calculate the exact cost right now. You can "
-                        'still switch — the final charge or proration will be '
-                        'applied to your account.',
+                        "Couldn't calculate the exact result right now. Reload "
+                        'the preview before confirming this plan change.',
                         style: TextStyle(
                             color: theme.colorScheme.onErrorContainer,
                             fontSize: 12),
@@ -320,8 +335,10 @@ class _ConfirmSheet extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: FilledButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    child: Text(quoteFailed ? 'Switch anyway' : 'Confirm'),
+                    onPressed: quoteFailed
+                        ? () => Navigator.pop(context, false)
+                        : () => Navigator.pop(context, true),
+                    child: Text(quoteFailed ? 'Close' : 'Confirm'),
                   ),
                 ),
               ],

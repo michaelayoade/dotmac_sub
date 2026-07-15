@@ -18,13 +18,20 @@ from pathlib import Path
 from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.models.billing import BillingAccount, Invoice, InvoiceStatus, PaymentStatus
+from app.models.billing import (
+    BillingAccount,
+    Invoice,
+    InvoiceStatus,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+)
 from app.models.payment_proof import (
     PaymentProof,
     PaymentProofStatus,
     WithholdingTaxRecord,
     WithholdingTaxStatus,
 )
+from app.services.billing.consolidated_payments import consolidated_settlement_key
 from app.services.common import apply_pagination, coerce_uuid, round_money, to_decimal
 
 logger = logging.getLogger(__name__)
@@ -443,7 +450,6 @@ def _verify_consolidated_proof(
     receivable rather than vanishing from the reseller's balance."""
     from sqlalchemy import select
 
-    from app.schemas.billing import PaymentCreate
     from app.services import billing as billing_service
 
     # Serialize concurrent reviews of this proof, then re-check its status under
@@ -526,23 +532,25 @@ def _verify_consolidated_proof(
             ),
         )
 
-    payment = billing_service.payments.create(
+    from app.schemas.billing import BillingAccountPaymentPreviewRequest
+
+    payment = billing_service.consolidated_payment_settlements.settle_verified(
         db,
-        PaymentCreate(
-            billing_account_id=ba.id,
+        str(ba.id),
+        BillingAccountPaymentPreviewRequest(
             amount=gross_value,
             currency=proof.currency,
-            status=PaymentStatus.succeeded,
             paid_at=proof.paid_at or datetime.now(UTC),
             external_id=(proof.reference or "")[:120] or None,
             memo=f"Reseller bank transfer (proof {proof.id})",
             allocations=None,
+            auto_allocate=False,
         ),
-        auto_allocate=False,
-        # The billing-account lock is only useful while it spans the proof state
-        # transition too. Commit payment + proof + WHT once, below.
+        idempotency_key=consolidated_settlement_key("payment-proof", str(proof.id)),
+        origin=PaymentSettlementOrigin.manual,
+        actor_id=str(verified_by),
         commit=False,
-    )
+    ).payment
     proof.status = PaymentProofStatus.verified
     proof.verified_amount = net_value
     proof.verified_by = str(verified_by)

@@ -137,7 +137,8 @@ class AccessState(enum.Enum):
     """Network access state — single source of truth for what RADIUS does
     with a subscriber. See docs/radius_state_refactor/phase0_state_model.md.
 
-    Derived from ``SubscriptionStatus`` + ``Subscriber.captive_redirect_enabled``
+    Derived from ``SubscriptionStatus`` + persisted enforcement locks through
+    the canonical walled-garden policy
     via ``app.services.radius_access_state.derive_access_state``. Stored as
     a string column rather than a PG enum so future states (e.g.
     ``throttled``, ``trial_expired``) can be added by code change alone.
@@ -776,7 +777,7 @@ class Subscription(Base):
         Enum(SubscriptionStatus), default=SubscriptionStatus.pending
     )
     # access_state is the RADIUS-facing state, derived from `status` +
-    # subscriber.captive_redirect_enabled. Nullable until phase 5 backfill.
+    # canonical persisted access restriction. Nullable until phase 5 backfill.
     # See docs/radius_state_refactor/phase0_state_model.md.
     access_state: Mapped[str | None] = mapped_column(String(20))
     billing_mode: Mapped[BillingMode] = mapped_column(
@@ -890,9 +891,20 @@ class SubscriptionAddOn(Base):
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    account_adjustment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("account_adjustments.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
+    purchase_preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    purchase_idempotency_key: Mapped[str | None] = mapped_column(String(120))
 
     subscription = relationship("Subscription", back_populates="add_ons")
     add_on = relationship("AddOn")
+    account_adjustment = relationship(
+        "AccountAdjustment", back_populates="subscription_add_on"
+    )
 
 
 class NasDevice(Base):

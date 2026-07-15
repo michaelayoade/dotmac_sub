@@ -69,7 +69,7 @@ def get_referral(referral_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("crm:lead:write"))],
 )
 def issue_referral_reward(referral_id: str, db: Session = Depends(get_db)):
-    """Pay the referrer's reward into their wallet (idempotent on
+    """Issue the referrer's reward as an account credit (idempotent on
     ``external_ref="referral:{id}"``) and mark the referral rewarded."""
     return referrals_service.issue_reward(db, referral_id)
 

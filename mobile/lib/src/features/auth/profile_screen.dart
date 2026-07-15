@@ -129,7 +129,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   child: ListTile(
                     leading: const Icon(Icons.card_giftcard_outlined),
                     title: const Text('Refer & Earn'),
-                    subtitle: const Text('Invite friends, earn wallet credit'),
+                    subtitle: const Text('Invite friends, earn account credit'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => context.push('/profile/refer-and-earn'),
                   ),

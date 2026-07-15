@@ -24,6 +24,7 @@ from app.models.collections import DunningActionLog, DunningCase, DunningCaseSta
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber
 from app.services.account_lifecycle import compute_account_status, restore_subscription
+from app.services.billing.invoices import Invoices
 
 COLLECTIBLE_BAD_STATUSES = {
     InvoiceStatus.draft,
@@ -481,14 +482,15 @@ def repair_prepaid_overlapping_invoices(
         )
         held += 1
         if candidate.action == "void_unpaid_invoice":
-            invoice.status = InvoiceStatus.void
-            invoice.balance_due = Decimal("0.00")
-            invoice.due_at = None
-            invoice.memo = (
-                f"{invoice.memo}\nVoided by prepaid overlap repair"
-                if invoice.memo
-                else "Voided by prepaid overlap repair"
+            Invoices.void_system(
+                db,
+                str(invoice.id),
+                reason="Voided by prepaid overlap repair",
+                idempotency_key=f"prepaid-overlap-void-{invoice.id}",
+                commit=False,
+                reconcile_access=False,
             )
+            invoice.due_at = None
             voided += 1
         else:
             manual_review += 1

@@ -18,7 +18,7 @@ batch.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -192,18 +192,6 @@ def _reconcile_low(
 
     # Already deactivated, or only just armed this run → nothing more to do.
     if account.prepaid_deactivation_at is not None or just_armed:
-        return result
-
-    # The stored timestamp is tz-aware on Postgres but tz-naive when read back
-    # on SQLite; normalise to UTC so the window comparison never crosses an
-    # aware/naive boundary.
-    low_at = account.prepaid_low_balance_at
-    if low_at.tzinfo is None:
-        low_at = low_at.replace(tzinfo=UTC)
-    if cfg.activation_at is not None and low_at < cfg.activation_at:
-        low_at = cfg.activation_at
-    due_at = low_at + timedelta(days=cfg.deactivation_days)
-    if now < due_at:
         return result
 
     if _deactivation_deferred(db, now, cfg):

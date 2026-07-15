@@ -99,8 +99,6 @@ DEFAULT_PERMISSIONS = [
     ("billing:import:write", "Import payment data"),
     ("billing:proof:read", "View submitted payment proofs"),
     ("billing:proof:verify", "Verify or reject submitted payment proofs"),
-    ("billing:vas:read", "View value-added-service administration"),
-    ("billing:vas:write", "Manage value-added-service administration"),
     # Catalog
     ("catalog:product:read", "View catalog products"),
     ("catalog:product:write", "Manage catalog products"),
@@ -399,8 +397,6 @@ ROLE_PERMISSIONS = {
         "billing:import:write",
         "billing:proof:read",
         "billing:proof:verify",
-        "billing:vas:read",
-        "billing:vas:write",
         "billing_account:read",
         "billing_account:write",
         "billing_account:distribute",

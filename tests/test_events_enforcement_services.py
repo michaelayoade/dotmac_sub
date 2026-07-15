@@ -84,6 +84,7 @@ class TestEventType:
         assert EventType.invoice_paid.value == "invoice.paid"
         assert EventType.payment_received.value == "payment.received"
         assert EventType.payment_failed.value == "payment.failed"
+        assert EventType.payment_reversed.value == "payment.reversed"
 
     def test_usage_events_exist(self):
         assert EventType.usage_recorded.value == "usage.recorded"
@@ -634,7 +635,7 @@ class TestEnforcementHandler:
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch("app.services.enforcement_event_policy.settings_spec")
-    def test_usage_exhausted_block_action_opted_in_applies_captive(
+    def test_usage_exhausted_raw_optin_without_policy_evidence_hard_blocks(
         self, mock_settings, mock_cleanup, db_session, subscription
     ):
         def settings_side_effect(db, domain, key):
@@ -643,7 +644,7 @@ class TestEnforcementHandler:
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
-        # Opted in → the FUP block applies the soft captive walled-garden.
+        # The raw flag is not decision evidence and therefore fails closed.
         from app.models.subscriber import Subscriber
 
         sub_obj = db_session.get(Subscriber, subscription.subscriber_id)
@@ -657,7 +658,9 @@ class TestEnforcementHandler:
             account_id=subscription.subscriber_id,
         )
         handler.handle(db_session, event)
-        mock_cleanup.assert_called_once_with(str(subscription.id), reason="fup_block")
+        mock_cleanup.assert_called_once_with(str(subscription.id), reason="fup_suspend")
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.suspended
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch("app.services.enforcement_event_policy.settings_spec")
@@ -992,6 +995,7 @@ class TestNotificationHandler:
             EventType.subscription_expired,
             EventType.invoice_paid,
             EventType.payment_refunded,
+            EventType.payment_reversed,
             EventType.service_order_created,
             EventType.service_order_assigned,
             EventType.service_order_completed,
@@ -1291,15 +1295,12 @@ class TestNotificationHandler:
 
         assert db_session.query(Notification).count() == 0
 
-    def test_handle_invoice_overdue_sends_warning_once_within_grace_period(
+    def test_handle_invoice_overdue_is_observation_only(
         self,
         db_session,
         subscriber,
         monkeypatch,
     ):
-        from app.models.domain_settings import DomainSetting, SettingDomain
-        from app.models.subscription_engine import SettingValueType
-
         subscriber.status = AccountStatus.active
         invoice = Invoice(
             account_id=subscriber.id,
@@ -1311,25 +1312,6 @@ class TestNotificationHandler:
             metadata_={},
         )
         db_session.add(invoice)
-        db_session.add_all(
-            [
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="auto_suspend_on_overdue",
-                    value_type=SettingValueType.boolean,
-                    value_text="true",
-                    value_json=True,
-                    is_active=True,
-                ),
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="suspension_grace_hours",
-                    value_type=SettingValueType.integer,
-                    value_text="48",
-                    is_active=True,
-                ),
-            ]
-        )
         db_session.commit()
 
         handler = EnforcementHandler()
@@ -1340,22 +1322,11 @@ class TestNotificationHandler:
             account_id=subscriber.id,
         )
 
-        emit_calls: list[EventType] = []
-
-        def _capture_emit(*args, **kwargs):
-            emit_calls.append(args[1])
-
-        monkeypatch.setattr(
-            "app.services.events.handlers.enforcement.emit_event",
-            _capture_emit,
-        )
-
         handler.handle(db_session, event)
         handler.handle(db_session, event)
         db_session.refresh(invoice)
 
-        assert emit_calls == [EventType.subscription_suspension_warning]
-        assert (invoice.metadata_ or {}).get("suspension_warning_sent_at")
+        assert not (invoice.metadata_ or {}).get("suspension_warning_sent_at")
 
     def test_handle_invoice_overdue_shield_suppresses_warning(
         self,
@@ -1363,9 +1334,6 @@ class TestNotificationHandler:
         subscriber,
         monkeypatch,
     ):
-        from app.models.domain_settings import DomainSetting, SettingDomain
-        from app.models.subscription_engine import SettingValueType
-
         subscriber.status = AccountStatus.active
         invoice = Invoice(
             account_id=subscriber.id,
@@ -1377,32 +1345,15 @@ class TestNotificationHandler:
             metadata_={},
         )
         db_session.add(invoice)
-        db_session.add_all(
-            [
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="auto_suspend_on_overdue",
-                    value_type=SettingValueType.boolean,
-                    value_text="true",
-                    value_json=True,
-                    is_active=True,
-                ),
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="suspension_grace_hours",
-                    value_type=SettingValueType.integer,
-                    value_text="48",
-                    is_active=True,
-                ),
-            ]
-        )
         db_session.commit()
 
-        # An in-force service extension (or arrangement/proof) shields the
-        # account: no scary suspension warning while the shield holds.
+        # The event adapter must not even resolve shields. Dunning owns both
+        # notification eligibility and service-access consequences.
         monkeypatch.setattr(
             "app.services.service_extensions.extension_shield_reason",
-            lambda _db, _account_id: "service extension test in force",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("event adapter resolved a dunning shield")
+            ),
         )
 
         handler = EnforcementHandler()
@@ -1413,16 +1364,9 @@ class TestNotificationHandler:
             account_id=subscriber.id,
         )
 
-        emit_calls: list[EventType] = []
-        monkeypatch.setattr(
-            "app.services.events.handlers.enforcement.emit_event",
-            lambda *args, **kwargs: emit_calls.append(args[1]),
-        )
-
         handler.handle(db_session, event)
         db_session.refresh(invoice)
 
-        assert emit_calls == []
         assert not (invoice.metadata_ or {}).get("suspension_warning_sent_at")
 
 
@@ -1432,7 +1376,7 @@ class TestNotificationHandler:
 
 
 class TestPaymentReceivedRestoreGuard:
-    """A partial payment must not lift an overdue suspension."""
+    """Payment events delegate eligibility to the access owner."""
 
     def _payment_event(self, account_id, invoice_id=None):
         payload = {"amount": "100.00", "status": "succeeded"}
@@ -1461,10 +1405,11 @@ class TestPaymentReceivedRestoreGuard:
         return invoice
 
     @patch("app.services.collections.restore_account_services")
-    def test_partial_payment_does_not_restore(
+    def test_partial_payment_is_submitted_to_owner(
         self, mock_restore, db_session, subscriber
     ):
-        """Overdue balance remains -> no auto-restore."""
+        """The event adapter never decides from its invoice snapshot."""
+        mock_restore.return_value = 0
         invoice = self._make_invoice(
             db_session, subscriber, total=50000, balance_due=49900
         )
@@ -1472,13 +1417,15 @@ class TestPaymentReceivedRestoreGuard:
         handler = EnforcementHandler()
         handler.handle(db_session, self._payment_event(subscriber.id, invoice.id))
 
-        mock_restore.assert_not_called()
+        mock_restore.assert_called_once_with(
+            db_session, str(subscriber.id), invoice_id=str(invoice.id)
+        )
 
     @patch("app.services.collections.restore_account_services")
-    def test_partial_payment_on_past_due_issued_invoice_does_not_restore(
+    def test_past_due_payment_is_submitted_to_owner(
         self, mock_restore, db_session, subscriber
     ):
-        """Past-due invoice not yet flipped to overdue status still blocks."""
+        mock_restore.return_value = 0
         invoice = self._make_invoice(
             db_session,
             subscriber,
@@ -1490,7 +1437,9 @@ class TestPaymentReceivedRestoreGuard:
         handler = EnforcementHandler()
         handler.handle(db_session, self._payment_event(subscriber.id, invoice.id))
 
-        mock_restore.assert_not_called()
+        mock_restore.assert_called_once_with(
+            db_session, str(subscriber.id), invoice_id=str(invoice.id)
+        )
 
     @patch("app.services.collections.restore_account_services")
     def test_full_clearance_restores(self, mock_restore, db_session, subscriber):
@@ -1575,13 +1524,10 @@ class TestPaymentReceivedRestoreGuard:
 # ---------------------------------------------------------------------------
 
 
-class TestInvoiceOverdueSuspensionShields:
-    """Active arrangements / pending payment proofs block auto-suspension."""
+class TestInvoiceOverdueObservationBoundary:
+    """Invoice-overdue delivery never decides a service-access consequence."""
 
     def _setup_overdue_account(self, db_session, subscriber, subscription):
-        from app.models.domain_settings import DomainSetting, SettingDomain
-        from app.models.subscription_engine import SettingValueType
-
         subscriber.status = AccountStatus.active
         subscriber.billing_mode = BillingMode.prepaid
         subscription.status = SubscriptionStatus.active
@@ -1595,25 +1541,6 @@ class TestInvoiceOverdueSuspensionShields:
             metadata_={"suspension_warning_sent_at": "2026-01-01T00:00:00+00:00"},
         )
         db_session.add(invoice)
-        db_session.add_all(
-            [
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="auto_suspend_on_overdue",
-                    value_type=SettingValueType.boolean,
-                    value_text="true",
-                    value_json=True,
-                    is_active=True,
-                ),
-                DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="suspension_grace_hours",
-                    value_type=SettingValueType.integer,
-                    value_text="48",
-                    is_active=True,
-                ),
-            ]
-        )
         db_session.commit()
         return invoice
 
@@ -1918,6 +1845,7 @@ class TestWebhookHandler:
         assert EventType.subscription_activated in EVENT_TYPE_TO_WEBHOOK
         assert EventType.invoice_paid in EVENT_TYPE_TO_WEBHOOK
         assert EventType.payment_received in EVENT_TYPE_TO_WEBHOOK
+        assert EventType.payment_reversed in EVENT_TYPE_TO_WEBHOOK
         assert EventType.provisioning_completed in EVENT_TYPE_TO_WEBHOOK
         assert EventType.custom in EVENT_TYPE_TO_WEBHOOK
 

@@ -1122,17 +1122,6 @@ def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
     }
 
 
-def _subscriber_captive_opted_in(db: Session, subscriber_id) -> bool:
-    """True if the subscriber opted into the soft captive walled-garden, so a
-    suspended sub gets the pay-page treatment instead of a hard reject."""
-    if not subscriber_id:
-        return False
-    from app.models.subscriber import Subscriber
-
-    subscriber = db.get(Subscriber, subscriber_id)
-    return bool(getattr(subscriber, "captive_redirect_enabled", False))
-
-
 def _external_sync_users(
     db: Session,
     config: dict,
@@ -1192,11 +1181,14 @@ def _external_sync_users(
             # block, which subscription.status alone misses (a blocked
             # customer with a stale-active subscription row must not get a
             # working password re-granted every sync).
+            from app.services.walled_garden_policy import (
+                resolve_subscription_restriction,
+            )
+
+            restriction = resolve_subscription_restriction(db, subscription)
             plan = plan_radius_projection(
                 subscription,
-                captive_redirect_enabled=_subscriber_captive_opted_in(
-                    db, subscription.subscriber_id
-                ),
+                restriction_mode=(restriction.effective_mode if restriction else None),
             )
 
             password_row = None

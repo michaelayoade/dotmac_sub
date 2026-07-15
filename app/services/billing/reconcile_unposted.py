@@ -59,6 +59,7 @@ from app.services.billing._common import (
     get_account_credit_balance,
     lock_account,
 )
+from app.services.billing.invoices import Invoices
 from app.services.billing.payments import _apply_payment_allocation
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.notification_suppression import suppress_notifications
@@ -445,10 +446,13 @@ def settle_prepaid_draft_invoices_from_credit(
     now = run_at or datetime.now(UTC)
 
     for invoice in _prepaid_draft_invoices(db, str(account_id)):
-        invoice.status = InvoiceStatus.issued
-        invoice.issued_at = now
-        invoice.due_at = now
-        db.flush()
+        Invoices.issue_draft_system(
+            db,
+            str(invoice.id),
+            issued_at=now,
+            due_at=now,
+            reason="reconcile_prepaid_draft_from_confirmed_credit",
+        )
 
         applied = settle_single_invoice_from_credit(db, invoice, only_if_full=True)
         db.flush()
@@ -478,10 +482,11 @@ def settle_prepaid_draft_invoices_from_credit(
             continue
 
         # Underfunded or raced by another consumer: restore the non-AR state.
-        invoice.status = InvoiceStatus.draft
-        invoice.issued_at = None
-        invoice.due_at = None
-        db.flush()
+        Invoices.return_unfunded_prepaid_to_draft_system(
+            db,
+            str(invoice.id),
+            reason="reconcile_prepaid_draft_underfunded",
+        )
         break
 
     return result

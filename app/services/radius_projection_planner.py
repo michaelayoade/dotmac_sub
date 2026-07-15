@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.models.catalog import AccessState
+from app.models.enforcement_lock import AccessRestrictionMode
 from app.services.access_resolution import (
     CustomerBillingAccessState,
     resolve_customer_access,
@@ -28,7 +29,7 @@ class RadiusProjectionPlan:
     radius_allowed: bool
     write_password: bool
     write_radreply: bool
-    captive_redirect_enabled: bool
+    captive: bool
     block_reason: str | None
     billing_access_state: CustomerBillingAccessState
 
@@ -36,11 +37,11 @@ class RadiusProjectionPlan:
 def plan_radius_projection(
     subscription,
     *,
-    captive_redirect_enabled: bool,
+    restriction_mode: AccessRestrictionMode | None = None,
 ) -> RadiusProjectionPlan:
     decision = resolve_customer_access(
         subscription,
-        captive_redirect_enabled=captive_redirect_enabled,
+        access_restriction_mode=restriction_mode,
     )
     state = decision.state
     mode = state.radius_mode
@@ -51,7 +52,7 @@ def plan_radius_projection(
         radius_allowed=state.radius_allowed,
         write_password=mode in {"active", "captive"},
         write_radreply=mode in {"active", "captive"},
-        captive_redirect_enabled=mode == "captive",
+        captive=mode == "captive",
         block_reason=state.access_block_reason,
         billing_access_state=state,
     )

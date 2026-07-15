@@ -2,7 +2,7 @@
 
 import logging
 import math
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func
@@ -872,9 +872,7 @@ def build_subscriber_detail_page_context(db: Session, subscriber_id):
         "subscriber": subscriber,
         **detail_snapshot,
         **enrichment,
-        "billing_config": _build_billing_config(
-            subscriber, detail_snapshot.get("stats") or {}
-        ),
+        "billing_config": _build_billing_config(subscriber),
         "subscriber_user_access": subscriber_user_access,
         "timeline": timeline,
         "offers": offers,
@@ -969,27 +967,10 @@ def _build_subscriber_enrichment(db: Session, subscriber) -> dict:
     return enrichment
 
 
-def _build_billing_config(subscriber, stats: dict) -> dict[str, object]:
+def _build_billing_config(subscriber) -> dict[str, object]:
     metadata = dict(getattr(subscriber, "metadata_", None) or {})
-    blocking_days = int(metadata.get("blocking_period_days") or 0)
-    deactivation_days = int(metadata.get("deactivation_period_days") or 0)
     auto_create = bool(metadata.get("auto_create_invoices", True))
     send_notifications = bool(metadata.get("send_billing_notifications", True))
-
-    next_block_at = None
-    next_block_label = "No block scheduled"
-    balance_due = float(stats.get("balance_due") or 0)
-    if balance_due > 0:
-        delay_days = max(
-            blocking_days, int(getattr(subscriber, "grace_period_days", 0) or 0)
-        )
-        next_block_at = datetime.now(UTC) + timedelta(days=delay_days)
-        if delay_days <= 0:
-            next_block_label = "Immediately"
-        elif delay_days <= 30:
-            next_block_label = f"In {delay_days} day(s)"
-        else:
-            next_block_label = next_block_at.strftime("%Y-%m-%d")
 
     return {
         "category": getattr(subscriber, "category", None),
@@ -998,12 +979,8 @@ def _build_billing_config(subscriber, stats: dict) -> dict[str, object]:
         "grace_period_days": getattr(subscriber, "grace_period_days", None),
         "min_balance": getattr(subscriber, "min_balance", None),
         "billing_enabled": bool(getattr(subscriber, "billing_enabled", True)),
-        "blocking_period_days": blocking_days,
-        "deactivation_period_days": deactivation_days,
         "auto_create_invoices": auto_create,
         "send_billing_notifications": send_notifications,
-        "next_block_at": next_block_at,
-        "next_block_label": next_block_label,
     }
 
 

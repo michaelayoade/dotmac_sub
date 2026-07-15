@@ -1,0 +1,59 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Confirm Credit Application - Admin{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/billing/invoices/{{ preview.invoice_id }}" class="hover:text-primary-600">Invoice {{ preview.invoice_number or preview.invoice_id }}</a>
+            <span aria-hidden="true">/</span>
+            <span class="text-slate-900 dark:text-white">Confirm credit application</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Confirm credit application</h1>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Review the owner-produced financial result before posting.</p>
+    </div>
+
+    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <dl class="divide-y divide-slate-200 dark:divide-slate-700">
+            <div class="grid gap-1 px-6 py-4 sm:grid-cols-2">
+                <dt class="text-sm text-slate-500 dark:text-slate-400">Credit note</dt>
+                <dd class="text-sm font-medium text-slate-900 dark:text-white">{{ preview.credit_number or preview.credit_note_id }}</dd>
+            </div>
+            <div class="grid gap-1 px-6 py-4 sm:grid-cols-2">
+                <dt class="text-sm text-slate-500 dark:text-slate-400">Exact ledger transaction</dt>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ preview.ledger_entry_type.value }} · {{ preview.ledger_source.value }} · {{ preview.currency }} {{ '{:,.2f}'.format(preview.apply_amount) }}</dd>
+            </div>
+            <div class="grid gap-1 px-6 py-4 sm:grid-cols-2">
+                <dt class="text-sm text-slate-500 dark:text-slate-400">Invoice receivable</dt>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ preview.currency }} {{ '{:,.2f}'.format(preview.invoice_receivable_before) }} → {{ preview.currency }} {{ '{:,.2f}'.format(preview.invoice_receivable_after) }}</dd>
+            </div>
+            <div class="grid gap-1 px-6 py-4 sm:grid-cols-2">
+                <dt class="text-sm text-slate-500 dark:text-slate-400">Credit-note balance</dt>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ preview.currency }} {{ '{:,.2f}'.format(preview.credit_available_before) }} → {{ preview.currency }} {{ '{:,.2f}'.format(preview.credit_available_after) }}</dd>
+            </div>
+            <div class="grid gap-1 px-6 py-4 sm:grid-cols-2">
+                <dt class="text-sm text-slate-500 dark:text-slate-400">Service access consequence</dt>
+                <dd class="text-sm text-slate-900 dark:text-white">
+                    {% if preview.settles_invoice %}
+                    Recheck through the access/lifecycle owner after settlement; restoration is not inferred from this credit.
+                    {% else %}
+                    None. The invoice remains receivable.
+                    {% endif %}
+                </dd>
+            </div>
+        </dl>
+
+        <form method="post" action="/admin/billing/invoices/{{ preview.invoice_id }}/apply-credit" class="flex flex-col-reverse gap-3 border-t border-slate-200 px-6 py-5 sm:flex-row sm:justify-end dark:border-slate-700" onsubmit="this.querySelector('button[type=submit]').disabled = true;">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="credit_note_id" value="{{ preview.credit_note_id }}">
+            <input type="hidden" name="amount" value="{{ preview.apply_amount }}">
+            <input type="hidden" name="memo" value="{{ memo or '' }}">
+            <input type="hidden" name="preview_fingerprint" value="{{ preview.fingerprint }}">
+            <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+            <a href="/admin/billing/invoices/{{ preview.invoice_id }}" class="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Cancel</a>
+            <button type="submit" class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Confirm and post ledger credit</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

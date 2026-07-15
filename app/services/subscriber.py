@@ -366,8 +366,13 @@ class Resellers(ListResponseMixin):
 
 
 def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
-    """Auto-populate billing_day, payment_due_days, grace_period_days,
-    min_balance from global settings based on subscriber's billing_mode."""
+    """Populate materialized billing defaults that are account-owned.
+
+    ``grace_period_days`` deliberately remains nullable: null means inherit the
+    canonical account -> policy -> billing-mode grace decision. Copying the
+    current default into every new subscriber would silently turn inheritance
+    into a permanent account override.
+    """
     from decimal import Decimal
 
     mode = subscriber.billing_mode.value  # "prepaid" or "postpaid"
@@ -390,13 +395,6 @@ def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
         )
         if val is not None:
             subscriber.payment_due_days = int(str(val))
-
-    if subscriber.grace_period_days is None:
-        val = settings_spec.resolve_value(
-            db, SettingDomain.billing, f"{prefix}_grace_period_days"
-        )
-        if val is not None:
-            subscriber.grace_period_days = int(str(val))
 
     if subscriber.min_balance is None:
         val = settings_spec.resolve_value(

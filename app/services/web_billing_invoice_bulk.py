@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import io
+import json
 import logging
 import zipfile
 from dataclasses import dataclass, field
@@ -14,11 +15,16 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus, PaymentStatus
-from app.schemas.billing import PaymentAllocationApply, PaymentCreate
+from app.schemas.billing import (
+    InvoiceClosureConfirm,
+    PaymentAllocationApply,
+    PaymentCreate,
+)
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services.audit_adapter import record_audit_event
+from app.services.billing.invoices import InvoiceClosurePreview
 from app.services.bulk_actions import membership_scope_token
 from app.services.object_storage import ObjectNotFoundError
 
@@ -259,9 +265,15 @@ def bulk_issue(db, invoice_ids_csv: str) -> list[str]:
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
             if invoice and invoice_bulk_action_ineligibility(invoice, "issue") is None:
-                invoice.status = InvoiceStatus.issued
-                invoice.issued_at = datetime.now(UTC)
-                db.commit()
+                billing_service.invoices.issue_draft_system(
+                    db,
+                    invoice_id,
+                    issued_at=datetime.now(UTC),
+                    due_at=invoice.due_at,
+                    reason="admin_bulk_issue",
+                    announce=True,
+                    commit=True,
+                )
                 updated.append(invoice_id)
         except Exception:
             logger.debug(
@@ -278,9 +290,15 @@ def bulk_issue_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
             if invoice and invoice_bulk_action_ineligibility(invoice, "issue") is None:
-                invoice.status = InvoiceStatus.issued
-                invoice.issued_at = datetime.now(UTC)
-                db.commit()
+                billing_service.invoices.issue_draft_system(
+                    db,
+                    invoice_id,
+                    issued_at=datetime.now(UTC),
+                    due_at=invoice.due_at,
+                    reason="admin_bulk_issue",
+                    announce=True,
+                    commit=True,
+                )
                 result.processed_ids.append(invoice_id)
             else:
                 result.skipped_ids.append(invoice_id)
@@ -366,7 +384,12 @@ def bulk_void(db, invoice_ids_csv: str) -> list[str]:
                 # Use the canonical void so debit ledger entries are reversed
                 # (previously bulk void only flipped the status, leaving the AR
                 # ledger out of sync).
-                billing_service.invoices.void(db, invoice_id)
+                billing_service.invoices.void_system(
+                    db,
+                    invoice_id,
+                    reason="Admin bulk invoice void",
+                    idempotency_key=f"admin-bulk-invoice-void-{invoice_id}",
+                )
                 updated.append(invoice_id)
         except Exception:
             logger.debug(
@@ -383,7 +406,12 @@ def bulk_void_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
             if invoice and invoice_bulk_action_ineligibility(invoice, "void") is None:
-                billing_service.invoices.void(db, invoice_id)
+                billing_service.invoices.void_system(
+                    db,
+                    invoice_id,
+                    reason="Admin bulk invoice void",
+                    idempotency_key=f"admin-bulk-invoice-void-{invoice_id}",
+                )
                 result.processed_ids.append(invoice_id)
             else:
                 result.skipped_ids.append(invoice_id)
@@ -400,6 +428,74 @@ def bulk_void_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
             db.rollback()
             logger.debug(
                 "Skipping invoice %s during bulk void", invoice_id, exc_info=True
+            )
+            result.failed_ids.append(invoice_id)
+    return result
+
+
+def preview_bulk_void(
+    db, invoice_ids_csv: str
+) -> tuple[list[InvoiceClosurePreview], list[str]]:
+    """Return owner previews and explicitly skipped ids for an admin batch."""
+    previews: list[InvoiceClosurePreview] = []
+    skipped: list[str] = []
+    for invoice_id in parse_ids_csv(invoice_ids_csv):
+        try:
+            previews.append(billing_service.invoices.preview_void(db, invoice_id))
+        except HTTPException as exc:
+            if exc.status_code < 500:
+                skipped.append(invoice_id)
+                continue
+            raise
+    return previews, skipped
+
+
+def confirm_bulk_void_result(
+    db,
+    *,
+    invoice_ids_csv: str,
+    preview_fingerprints_json: str,
+    batch_key: str,
+) -> BulkInvoiceActionResult:
+    """Confirm exactly the per-invoice owner previews shown to the operator."""
+    try:
+        raw = json.loads(preview_fingerprints_json)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid bulk void preview"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="Invalid bulk void preview")
+    fingerprints = {str(key): str(value) for key, value in raw.items()}
+    result = BulkInvoiceActionResult(selected_ids=parse_ids_csv(invoice_ids_csv))
+    for invoice_id in result.selected_ids:
+        fingerprint = fingerprints.get(invoice_id)
+        if not fingerprint:
+            result.skipped_ids.append(invoice_id)
+            continue
+        try:
+            billing_service.invoices.confirm_void(
+                db,
+                invoice_id,
+                InvoiceClosureConfirm(
+                    preview_fingerprint=fingerprint,
+                    idempotency_key=f"{batch_key}.{invoice_id}",
+                    memo="Admin bulk invoice void",
+                ),
+            )
+            result.processed_ids.append(invoice_id)
+        except HTTPException as exc:
+            if exc.status_code < 500:
+                result.skipped_ids.append(invoice_id)
+                continue
+            db.rollback()
+            result.failed_ids.append(invoice_id)
+        except Exception:
+            db.rollback()
+            logger.debug(
+                "Failed invoice %s during confirmed bulk void",
+                invoice_id,
+                exc_info=True,
             )
             result.failed_ids.append(invoice_id)
     return result

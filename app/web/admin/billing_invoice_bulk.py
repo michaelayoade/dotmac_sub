@@ -1,9 +1,18 @@
 """Admin billing invoice bulk action routes."""
 
+import json
+import secrets
 from typing import Any, cast
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
+from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -12,6 +21,7 @@ from app.services import web_billing_overview as web_billing_overview_service
 from app.services.auth_dependencies import require_permission
 
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+templates = Jinja2Templates(directory="templates")
 
 
 def _require_confirmed_invoice_scope(
@@ -119,31 +129,53 @@ def invoice_bulk_send(
 
 @router.post(
     "/invoices/bulk/void",
+    response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:delete"))],
 )
 def invoice_bulk_void(
     request: Request,
     invoice_ids: str = Form(...),
-    confirmed: bool = Form(False),
-    expected_count: int | None = Form(None),
-    expected_scope_token: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    _require_confirmed_invoice_scope(
-        db,
-        action="void",
-        invoice_ids=invoice_ids,
-        confirmed=confirmed,
-        expected_count=expected_count,
-        expected_scope_token=expected_scope_token,
+    previews, skipped_ids = web_billing_invoice_bulk_service.preview_bulk_void(
+        db, invoice_ids
     )
-    result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
+    return templates.TemplateResponse(
+        "admin/billing/invoice_bulk_void_confirm.html",
+        {
+            "request": request,
+            "previews": previews,
+            "selected_ids": web_billing_invoice_bulk_service.parse_ids_csv(invoice_ids),
+            "skipped_ids": skipped_ids,
+            "preview_fingerprints_json": json.dumps(
+                {str(preview.invoice_id): preview.fingerprint for preview in previews}
+            ),
+            "batch_key": f"admin-bulk-void-{secrets.token_urlsafe(18)}",
+        },
+    )
+
+
+@router.post(
+    "/invoices/bulk/void/confirm",
+    dependencies=[Depends(require_permission("billing:invoice:delete"))],
+)
+def invoice_bulk_void_confirm(
+    request: Request,
+    invoice_ids: str = Form(...),
+    preview_fingerprints_json: str = Form(...),
+    batch_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    result = web_billing_invoice_bulk_service.confirm_bulk_void_result(
         db,
-        request,
-        action="void",
         invoice_ids_csv=invoice_ids,
+        preview_fingerprints_json=preview_fingerprints_json,
+        batch_key=batch_key,
     )
-    return JSONResponse(result.as_response("Voided"))
+    return RedirectResponse(
+        url=f"/admin/billing/invoices?notice={quote(result.message('Voided'))}",
+        status_code=303,
+    )
 
 
 @router.post(

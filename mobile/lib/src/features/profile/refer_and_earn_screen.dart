@@ -9,7 +9,7 @@ import '../../widgets/async_value_view.dart';
 
 /// Refer & Earn — the customer's referral code, share link, earnings and
 /// history (served from the sub's local mirror), plus refer-a-friend. Rewards
-/// land in the VAS wallet.
+/// are issued as auditable account credits.
 class ReferAndEarnScreen extends ConsumerWidget {
   const ReferAndEarnScreen({super.key});
 

@@ -43,31 +43,31 @@
     </div>
     {% endif %}
 
-    {% if insufficient_balance %}
+    {% if insufficient_funding %}
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-5 dark:border-amber-900/40 dark:bg-amber-900/20">
-        <h2 class="text-sm font-semibold text-amber-900 dark:text-amber-100">Additional Wallet Balance Required</h2>
-        {% set quote = insufficient_balance.quote or {} %}
+        <h2 class="text-sm font-semibold text-amber-900 dark:text-amber-100">Additional Prepaid Funding Required</h2>
+        {% set quote = insufficient_funding.quote or {} %}
         <p class="mt-2 text-sm text-amber-800 dark:text-amber-200">
             Your current plan has {{ current_offer_summary.currency }} {{ '{:,.2f}'.format((quote.current_remaining_value if quote else 0) or 0) }} remaining value.
-            To upgrade today, an additional {{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_balance.shortfall or 0) or 0) }} is required.
+            To upgrade today, an additional {{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_funding.shortfall or 0) or 0) }} is required.
         </p>
         <div class="mt-4 grid gap-3 sm:grid-cols-3">
             <div class="rounded-lg bg-white/80 px-4 py-3 dark:bg-slate-900/30">
                 <p class="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Required</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_balance.required_amount or 0) or 0) }}</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_funding.required_amount or 0) or 0) }}</p>
             </div>
             <div class="rounded-lg bg-white/80 px-4 py-3 dark:bg-slate-900/30">
-                <p class="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Wallet Balance</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_balance.current_balance or 0) or 0) }}</p>
+                <p class="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Prepaid Funding</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_funding.prepaid_funding_before or 0) or 0) }}</p>
             </div>
             <div class="rounded-lg bg-white/80 px-4 py-3 dark:bg-slate-900/30">
                 <p class="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-300">Shortfall</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_balance.shortfall or 0) or 0) }}</p>
+                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format((insufficient_funding.shortfall or 0) or 0) }}</p>
             </div>
         </div>
         <div class="mt-4 flex flex-wrap gap-3">
             <a href="/portal/billing/topup" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">
-                Top Up Wallet
+                Add Prepaid Funding
             </a>
             <a href="/portal/billing" class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-transparent dark:text-amber-100 dark:hover:bg-amber-900/30">
                 View Billing
@@ -100,6 +100,8 @@
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="requested_offer_id" x-model="selectedOfferId">
         <input type="hidden" name="target_family" x-model="selectedOfferFamily">
+        <input type="hidden" name="preview_fingerprint" :value="changeQuote?.preview_fingerprint || ''">
+        <input type="hidden" name="idempotency_key" x-model="confirmationKey">
         <!-- Available Plans -->
         <div>
             <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Instant Plan Changes</h2>
@@ -194,7 +196,7 @@
         </div>
         {% endif %}
 
-        <template x-if="selectedOfferId && selectedChangeMode === 'instant' && changeQuote">
+        <template x-if="selectedOfferId && selectedChangeMode === 'instant' && changeQuote?.has_financial_effect">
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
@@ -207,7 +209,7 @@
                     Prepaid Upgrade
                 </div>
             </div>
-            <div class="mt-5 grid gap-3 md:grid-cols-4">
+            <div class="mt-5 grid gap-3 md:grid-cols-5">
                 <div class="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-700">
                     <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Remaining Value</p>
                     <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.current_remaining_value)"></span></p>
@@ -217,8 +219,12 @@
                     <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.required_amount)"></span></p>
                 </div>
                 <div class="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-700">
-                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Wallet Balance</p>
-                    <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.current_balance)"></span></p>
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Prepaid Funding</p>
+                    <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.prepaid_funding_before)"></span></p>
+                </div>
+                <div class="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-700">
+                    <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Postpaid Receivables</p>
+                    <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white"><span x-text="selectedOfferCurrency"></span> <span x-text="formatMoney(changeQuote.postpaid_receivables)"></span></p>
                 </div>
                 <div class="rounded-lg border border-slate-200 px-4 py-3 dark:border-slate-700">
                     <p class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Shortfall</p>
@@ -231,12 +237,12 @@
                     To upgrade today, an additional <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span> is required.
                 </span>
                 <span x-show="changeQuote.required_amount <= 0">
-                    This selection does not require an additional wallet charge today.
+                    This selection does not require an additional prepaid debit today.
                 </span>
             </p>
             <div class="mt-4" x-show="changeQuote && changeQuote.shortfall > 0">
                 <a href="/portal/billing/topup" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">
-                    Top Up Wallet
+                    Add Prepaid Funding
                 </a>
             </div>
         </div>
@@ -283,14 +289,21 @@
                     This plan is in a different family, so a support ticket will be created for review.
                 </p>
                 <p class="mt-4 text-sm text-slate-500 dark:text-slate-400" x-show="quoteLoading">Calculating prorated charges…</p>
-                <template x-if="selectedChangeMode === 'instant' && changeQuote">
+                <template x-if="selectedChangeMode === 'instant' && changeQuote?.has_financial_effect">
                 <div class="mt-4 rounded-xl bg-slate-50 p-4 text-left dark:bg-slate-900/40">
                     <p class="text-sm text-slate-700 dark:text-slate-200">Remaining value: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_remaining_value)"></span></p>
                     <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Required today: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.required_amount)"></span></p>
-                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Wallet balance: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.current_balance)"></span></p>
+                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Prepaid funding: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.prepaid_funding_before)"></span></p>
+                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Postpaid receivables: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.postpaid_receivables)"></span></p>
+                    <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">Collection-blocking balance: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.collection_blocking_balance)"></span></p>
+                    <p class="mt-2 border-t border-slate-200 pt-2 text-sm font-medium text-slate-800 dark:border-slate-700 dark:text-slate-100">Exact ledger result: <span x-text="`${changeQuote.ledger_entry_type} / ${changeQuote.ledger_source} / ${selectedOfferCurrency} ${formatMoney(changeQuote.ledger_amount)}`"></span></p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Access consequence: <span x-text="changeQuote.access_consequence"></span></p>
                     <p class="mt-1 text-sm text-amber-700 dark:text-amber-300" x-show="changeQuote.shortfall > 0">Shortfall: <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + formatMoney(changeQuote.shortfall)"></span></p>
                 </div>
                 </template>
+                <p class="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600 dark:bg-slate-900/40 dark:text-slate-300" x-show="selectedChangeMode === 'instant' && changeQuote && !changeQuote.has_financial_effect">
+                    Exact ledger result: no immediate financial transaction. Access consequence: <span x-text="changeQuote?.access_consequence || 'none_plan_change_only'"></span>.
+                </p>
                 <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">{{ billing_message }}</p>
                 <template x-if="priceDifference > 0">
                     <p class="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">
@@ -307,7 +320,7 @@
                 <button @click="showConfirm = false" class="flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                     Cancel
                 </button>
-                <button @click="submitForm()" class="flex-1 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
+                <button @click="submitForm()" :disabled="selectedChangeMode === 'instant' && (!changeQuote?.preview_fingerprint || !changeQuote?.can_apply_immediately || quoteLoading)" class="flex-1 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50">
                     <span x-text="selectedChangeMode === 'migration' ? 'Create Support Request' : 'Change Plan Now'">Change Plan Now</span>
                 </button>
             </div>
@@ -332,6 +345,12 @@ function changePlanPage() {
         changeQuote: null,
         quoteLoading: false,
         pendingForm: null,
+        confirmationKey: '',
+        newConfirmationKey() {
+            this.confirmationKey = self.crypto?.randomUUID
+                ? self.crypto.randomUUID()
+                : `plan-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        },
         formatMoney(value) {
             return Number(value || 0).toLocaleString('en-NG', {minimumFractionDigits: 2, maximumFractionDigits: 2});
         },
@@ -344,6 +363,7 @@ function changePlanPage() {
             this.selectedChangeMode = mode || 'instant';
             this.selectedOfferFamily = family || '';
             this.priceDifference = price - this.currentPrice;
+            this.newConfirmationKey();
             if (this.selectedChangeMode === 'migration') {
                 this.changeQuote = null;
                 this.quoteLoading = false;
@@ -368,6 +388,7 @@ function changePlanPage() {
         },
         confirmAndSubmit(event) {
             if (!this.selectedOfferName) return;
+            if (this.selectedChangeMode === 'instant' && (!this.changeQuote?.preview_fingerprint || !this.changeQuote?.can_apply_immediately || this.quoteLoading)) return;
             this.pendingForm = event.target;
             this.showConfirm = true;
         },

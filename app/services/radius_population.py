@@ -50,31 +50,13 @@ SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 
 def _captive_redirect_allowed(subscriber: object | None) -> bool:
-    """Return whether a blocked subscriber may enter captive quarantine.
-
-    Captive sessions expose Dotmac customer/payment portal paths. Keep reseller,
-    business/enterprise, system, uncategorized, and non-house accounts on the
-    safer hard-reject path.
-    """
+    """Compatibility adapter to the canonical captive eligibility owner."""
     if subscriber is None:
         return False
+    from app.models.subscriber import Subscriber
+    from app.services.walled_garden_policy import captive_account_eligible
 
-    from app.models.subscriber import SubscriberCategory, UserType
-
-    if getattr(subscriber, "user_type", None) != UserType.customer:
-        return False
-
-    metadata = getattr(subscriber, "metadata_", None) or {}
-    raw_category = metadata.get("subscriber_category")
-    if isinstance(raw_category, SubscriberCategory):
-        category = raw_category.value
-    else:
-        category = str(raw_category or "").strip().lower()
-    if category != SubscriberCategory.residential.value:
-        return False
-
-    reseller = getattr(subscriber, "reseller", None)
-    return bool(reseller is not None and getattr(reseller, "is_house", False))
+    return captive_account_eligible(cast(Subscriber, subscriber))
 
 
 def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | None:
@@ -387,15 +369,28 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 stats["skipped_no_password"] += 1
                 continue
 
-            requested_captive = bool(
-                getattr(sub.subscriber, "captive_redirect_enabled", False)
+            from app.models.enforcement_lock import AccessRestrictionMode
+            from app.services.walled_garden_policy import (
+                resolve_subscription_restriction,
             )
-            captive = requested_captive and _captive_redirect_allowed(sub.subscriber)
-            if requested_captive and not captive:
+
+            restriction = resolve_subscription_restriction(
+                db,
+                sub,
+                account=sub.subscriber,
+            )
+            captive = bool(
+                restriction
+                and restriction.effective_mode == AccessRestrictionMode.captive
+            )
+            if (
+                getattr(sub.subscriber, "captive_redirect_enabled", False)
+                and not captive
+            ):
                 stats["captive_ineligible_optins"] += 1
             projection = plan_radius_projection(
                 sub,
-                captive_redirect_enabled=captive,
+                restriction_mode=(restriction.effective_mode if restriction else None),
             )
             sub_blocked = projection.blocked
             eff_ipv4 = sub.ipv4_address

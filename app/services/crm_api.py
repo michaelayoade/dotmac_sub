@@ -37,6 +37,7 @@ from app.services.account_lifecycle import (
     cancel_subscription,
     transition_account_status,
 )
+from app.services.common import round_money
 from app.services.invoice_collectibility import (
     open_invoice_balance,
     open_invoice_filters_for_accounts,
@@ -1368,8 +1369,8 @@ def create_account_credit(
     when the subscriber does not exist.
     """
     from app.models.billing import CreditNote, CreditNoteStatus
-    from app.schemas.billing import CreditNoteCreate
-    from app.services import billing as billing_service
+    from app.schemas.billing import CreditNoteIssuePreviewRequest
+    from app.services.billing.credit_notes import CreditNotes
 
     sub_uuid = coerce_subscriber_id(str(subscriber_id))
     if sub_uuid is None:
@@ -1384,90 +1385,47 @@ def create_account_credit(
             db.query(CreditNote)
             .filter(CreditNote.account_id == sub_uuid)
             .filter(CreditNote.is_active.is_(True))
+            .filter(CreditNote.status == CreditNoteStatus.issued)
             .filter(CreditNote.memo.ilike(f"%{ref_marker}%"))
             .order_by(CreditNote.created_at.desc())
             .first()
         )
         if existing is not None:
+            if (
+                round_money(existing.total) != round_money(amount)
+                or existing.currency.upper() != currency.upper()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "external_ref was already used for a different account "
+                        "credit confirmation"
+                    ),
+                )
             return existing
 
     memo = (reason or "Referral reward").strip()
     if ref_marker:
         memo = f"{memo} {ref_marker}"
 
-    payload = CreditNoteCreate(
-        account_id=sub_uuid,
-        currency=currency,
-        subtotal=amount,
-        total=amount,
-        status=CreditNoteStatus.issued,
-        memo=memo,
+    operation_id = (
+        uuid.uuid5(uuid.NAMESPACE_URL, f"crm-account-credit:{external_ref}")
+        if external_ref
+        else uuid.uuid4()
     )
-    return billing_service.credit_notes.create(db, payload)
-
-
-def credit_referral_reward_to_wallet(
-    db: Session,
-    *,
-    subscriber_id: str,
-    amount: Decimal,
-    reason: str | None = None,
-    external_ref: str | None = None,
-    currency: str = "NGN",
-):
-    """Pay a referral reward into the subscriber's VAS wallet (a spendable
-    balance), not the billing account. Individual subscribers only — resellers
-    have a separate float wallet that referral rewards must never touch.
-
-    Idempotent on ``external_ref`` (stored as the wallet entry ``reference``,
-    which is unique): a repeat call returns the existing entry. Raises
-    ``LookupError`` when the subscriber does not exist or is inactive.
-    """
-    from app.models.vas import VasEntryCategory, VasWalletEntry
-    from app.services import vas_wallet
-
-    sub_uuid = coerce_subscriber_id(str(subscriber_id))
-    if sub_uuid is None:
-        raise LookupError("subscriber_not_found")
-    subscriber = db.get(Subscriber, sub_uuid)
-    if subscriber is None or not subscriber.is_active:
-        raise LookupError("subscriber_not_found")
-
-    if external_ref:
-        existing = (
-            db.query(VasWalletEntry)
-            .filter(VasWalletEntry.reference == external_ref)
-            .first()
-        )
-        if existing is not None:
-            return existing
-
-    wallet = vas_wallet.get_or_create_wallet(db, str(sub_uuid))
-    from sqlalchemy.exc import IntegrityError
-
-    try:
-        return vas_wallet.credit_wallet(
-            db,
-            wallet,
-            amount=amount,
-            category=VasEntryCategory.adjustment,
-            reference=external_ref,
-            memo=(reason or "Referral reward").strip(),
-        )
-    except IntegrityError:
-        # A concurrent duplicate lost the race on the unique wallet-entry
-        # `reference`. The credit is idempotent — roll back our losing insert
-        # and return the entry the winner wrote (never double-credit).
-        db.rollback()
-        if external_ref:
-            existing = (
-                db.query(VasWalletEntry)
-                .filter(VasWalletEntry.reference == external_ref)
-                .first()
-            )
-            if existing is not None:
-                return existing
-        raise
+    return CreditNotes.issue_system(
+        db,
+        CreditNoteIssuePreviewRequest(
+            account_id=sub_uuid,
+            currency=currency,
+            subtotal=amount,
+            total=amount,
+            memo=memo,
+            line_description=reason or "Referral reward",
+        ),
+        idempotency_key=f"crm-credit-{operation_id}",
+        commit=True,
+    ).credit_note
 
 
 def create_installation_invoice(

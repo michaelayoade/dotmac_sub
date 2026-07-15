@@ -411,7 +411,6 @@ def _seed_startup_settings() -> None:
         seed_tr069_settings,
         seed_usage_policy_settings,
         seed_usage_settings,
-        seed_vas_settings,
         seed_wireguard_settings,
     )
 
@@ -452,7 +451,6 @@ def _seed_startup_settings() -> None:
         seed_collections_settings(db)
         seed_collections_policy_settings(db)
         seed_geocoding_settings(db)
-        seed_vas_settings(db)
         seed_radius_settings(db)
         seed_radius_policy_settings(db)
         seed_scheduler_settings(db)
