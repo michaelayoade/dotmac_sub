@@ -70,16 +70,27 @@ def _tr181_wan_paths() -> Tr181WanParameterPaths:
 class _StubOltAdapter:
     """Records every call. Returns success unless ``fail_on`` matches."""
 
-    def __init__(self, *, fail_on: str | None = None, fail_message: str = "rejected"):
+    def __init__(
+        self,
+        *,
+        fail_on: str | None = None,
+        fail_message: str = "rejected",
+        error_code: str | None = None,
+        data: dict | None = None,
+    ):
         self.calls: list[tuple[str, tuple, dict]] = []
         self._fail_on = fail_on
         self._fail_message = fail_message
+        self._error_code = error_code
+        self._data = data or {}
 
     def _result(self, method: str):
         success = method != self._fail_on
         return SimpleNamespace(
             success=success,
             message="ok" if success else self._fail_message,
+            error_code=self._error_code,
+            data=self._data,
         )
 
     def authorize_ont(self, *args, **kwargs):
@@ -527,6 +538,34 @@ def test_olt_failure_halts_with_olt_write_rejected():
     assert result.actions_applied == ()  # authorize halted before completion
     # Subsequent reset never fired
     assert all(call[0] != "reboot_ont" for call in olt.calls)
+
+
+def test_olt_failure_retains_structured_adapter_evidence():
+    classifier = {"response_code": "unknown_command", "unsupported": True}
+    olt = _StubOltAdapter(
+        fail_on="authorize_ont",
+        fail_message="unsupported command",
+        error_code="unknown_command",
+        data={"huawei_cli_response": classifier},
+    )
+    result = apply_plan(
+        _plan(
+            OltAuthorize(
+                fsp="0/1/3",
+                ont_id=11,
+                line_profile_id=40,
+                service_profile_id=42,
+                serial_number="HWTC8535819A",
+                description="desc",
+            )
+        ),
+        _ctx(olt_adapter=olt),
+    )
+
+    assert result.halted_by.evidence == {
+        "error_code": "unknown_command",
+        "huawei_cli_response": classifier,
+    }
 
 
 def test_olt_modify_description_dispatches_to_set_ont_description():
@@ -1001,6 +1040,23 @@ def test_applied_actions_record_duration():
     plan = _plan(OltReset(fsp="0/1/3", ont_id=11))
     result = apply_plan(plan, ctx)
     assert result.actions_applied[0].duration_ms >= 0
+
+
+def test_successful_olt_action_retains_structured_adapter_evidence():
+    classifier = {"response_code": "already_exists", "idempotent_success": True}
+    olt = _StubOltAdapter(
+        error_code="already_exists",
+        data={"huawei_cli_response": classifier},
+    )
+    result = apply_plan(
+        _plan(OltReset(fsp="0/1/3", ont_id=11)),
+        _ctx(olt_adapter=olt),
+    )
+
+    assert result.actions_applied[0].evidence == {
+        "error_code": "already_exists",
+        "huawei_cli_response": classifier,
+    }
 
 
 # ── Passthrough secret resolver (default) ───────────────────────────────────

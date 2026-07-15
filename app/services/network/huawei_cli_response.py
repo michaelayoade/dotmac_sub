@@ -82,6 +82,20 @@ class HuaweiCliResponse:
             HuaweiCliErrorCode.TIMEOUT,
         }
 
+    def to_evidence(self) -> dict[str, object]:
+        """Return a JSON-safe, sanitized projection for operation history."""
+        return {
+            "classifier": "huawei_cli_response",
+            "schema_version": 1,
+            "response_code": self.error_code.value,
+            "accepted": self.accepted,
+            "has_error_marker": self.has_error_marker,
+            "idempotent_success": self.is_idempotent_success,
+            "resource_absent": self.is_absent,
+            "unsupported": self.is_unsupported,
+            "retryable": self.retryable,
+        }
+
 
 @dataclass(frozen=True)
 class _ResponsePattern:
@@ -252,6 +266,20 @@ def classify_huawei_cli_response(output: object) -> HuaweiCliResponse:
                 has_error_marker=candidate.has_error_marker,
             )
     return HuaweiCliResponse(output=text, error_code=HuaweiCliErrorCode.NONE)
+
+
+def project_huawei_result_evidence(result: object) -> dict[str, object] | None:
+    """Project sanitized classifier and transport codes from an adapter result."""
+    evidence: dict[str, object] = {}
+    error_code = getattr(result, "error_code", None)
+    if error_code:
+        evidence["error_code"] = str(error_code)
+    result_data = getattr(result, "data", None)
+    if isinstance(result_data, dict) and isinstance(
+        result_data.get("huawei_cli_response"), dict
+    ):
+        evidence["huawei_cli_response"] = dict(result_data["huawei_cli_response"])
+    return evidence or None
 
 
 def has_huawei_cli_error(output: object) -> bool:

@@ -17,25 +17,34 @@ _ADVISORY_LOCK_KEY = 0x6F_6E_74  # "ont"
 
 def _reconcile_payload(result: Any) -> dict[str, Any]:
     failure = result.failure
+    failure_payload = None
+    if failure is not None:
+        failure_payload = {
+            "reason": failure.reason,
+            "message": failure.message,
+        }
+        if failure.evidence is not None:
+            failure_payload["evidence"] = failure.evidence
+
+    actions = []
+    for action in result.actions_applied:
+        action_payload = {
+            "field": action.field,
+            "surface": action.surface,
+            "duration_ms": action.duration_ms,
+        }
+        if action.evidence is not None:
+            action_payload["evidence"] = action.evidence
+        actions.append(action_payload)
+
     return {
         "success": result.success,
         "sync_status": result.sync_status,
         "duration_ms": result.duration_ms,
-        "failure": (
-            {"reason": failure.reason, "message": failure.message}
-            if failure is not None
-            else None
-        ),
+        "failure": failure_payload,
         # Values can contain subscriber credentials. Operation history records
         # only which fields changed, not their old/new values.
-        "actions": [
-            {
-                "field": action.field,
-                "surface": action.surface,
-                "duration_ms": action.duration_ms,
-            }
-            for action in result.actions_applied
-        ],
+        "actions": actions,
         "drift_before": [drift.field for drift in result.drift_before],
         "drift_after": [drift.field for drift in result.drift_after],
     }
