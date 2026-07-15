@@ -512,11 +512,18 @@ Dependency order:
    lifecycle, control-plane target/revision identity, and vendor status
    projections. Vendor adapters project through this one
    desired-to-readback lifecycle.
-11. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+11. `network.huawei_cli_response`: owns Huawei CLI response classification,
+   stable error codes, expected-absence predicates, unsupported-command
+   detection, and idempotent response semantics. Huawei SSH sessions, protocol
+   adapters, readback verification, and web workflows consume these projections
+   and do not maintain firmware response string tables. A response classified
+   as accepted is transport evidence, not proof of convergence; write workflows
+   still require the control-plane intent readback contract.
+12. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
    and it projects through `network.control_plane_intent`.
-12. `network.operation_ledger`: owns the tracked device operation lifecycle and
+13. `network.operation_ledger`: owns the tracked device operation lifecycle and
    status vocabulary, the terminal-transition guard, correlation-key duplicate
    suppression, stale-active reclamation, parent/child rollup, and whether an
    operation may run, resume, or be re-executed. Celery is transport: tasks
