@@ -25,8 +25,39 @@ from app.services.whatsapp_notification_templates import (
     parse_provider_template_body,
     sync_whatsapp_registry_templates,
 )
+from app.web.admin import customers as customers_web
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_customer_bulk_message_preview_does_not_dispatch_delivery(monkeypatch):
+    preview_result = {
+        "success": True,
+        "preview": True,
+        "matched_count": 2,
+        "queued_count": 2,
+    }
+    dispatch_calls = []
+
+    monkeypatch.setattr(
+        customers_web.web_customer_actions_service,
+        "queue_bulk_message_from_payload",
+        lambda *, db, payload: preview_result,
+    )
+    monkeypatch.setattr(
+        customers_web,
+        "_kick_notification_delivery",
+        lambda result: dispatch_calls.append(result) or result,
+    )
+
+    result = customers_web.bulk_send_customer_message(
+        request=None,
+        data={"preview_only": True},
+        db=object(),
+    )
+
+    assert result is preview_result
+    assert dispatch_calls == []
 
 
 def test_customer_whatsapp_template_lookup_fetch_handles_non_json_errors():

@@ -2200,6 +2200,8 @@ def bulk_send_customer_message(
         result = web_customer_actions_service.queue_bulk_message_from_payload(
             db=db, payload=data
         )
+        if result.get("preview") is True:
+            return result
         return _kick_notification_delivery(result)
     except HTTPException:
         raise

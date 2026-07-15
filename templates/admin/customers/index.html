@@ -498,7 +498,7 @@
          x-cloak
          class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/65 p-4 backdrop-blur-sm"
          @click.self.prevent.stop="closeSendMessageModal()">
-        <div class="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-800" @click.stop>
+        <div class="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-slate-800" @click.stop>
             <div class="mb-5 flex items-start justify-between gap-4">
                 <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
@@ -516,7 +516,7 @@
                     <div class="grid gap-4 md:grid-cols-2">
                         <div>
                             <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Channel</label>
-                            <select x-model="sendMessageForm.channel" @change="$nextTick(() => syncTemplateForChannel())" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                            <select x-model="sendMessageForm.channel" @change="invalidateMessagePreview(); $nextTick(() => syncTemplateForChannel())" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
                                 <template x-for="channel in availableNotificationChannels" :key="channel.id">
                                     <option :value="channel.id" x-text="channel.label"></option>
                                 </template>
@@ -524,7 +524,7 @@
                         </div>
                         <div>
                             <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Template</label>
-                            <select x-model="sendMessageForm.templateId" @change="handleTemplateSelection()" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
+                            <select x-model="sendMessageForm.templateId" @change="invalidateMessagePreview(); handleTemplateSelection()" class="block w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 focus:border-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-white">
                                 <option value="">Select a template</option>
                                 <template x-for="template in templatesForSelectedChannel()" :key="template.id">
                                     <option :value="template.id" x-text="template.label || template.name"></option>
@@ -574,6 +574,7 @@
                             <div>
                                 <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300" x-text="variableLabel(variable)"></label>
                                 <select x-model="sendMessageForm.templateVariables[variable.key].source"
+                                        @change="invalidateMessagePreview()"
                                         class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-950 dark:text-white">
                                     <template x-for="option in whatsappVariableSourceOptions" :key="option.value">
                                         <option :value="option.value" x-text="option.label"></option>
@@ -581,6 +582,7 @@
                                 </select>
                                 <input x-show="sendMessageForm.templateVariables[variable.key].source === 'custom'"
                                        x-model="sendMessageForm.templateVariables[variable.key].custom_value"
+                                       @input="invalidateMessagePreview()"
                                        class="mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-950 dark:text-white"
                                        placeholder="Type a custom value">
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" x-show="sendMessageForm.templateVariables[variable.key].source && sendMessageForm.templateVariables[variable.key].source !== 'custom'">Resolved separately for each selected customer at send time.</p>
@@ -588,6 +590,45 @@
                         </template>
                     </div>
                     <p class="mt-3 text-sm text-slate-500 dark:text-slate-400" x-show="!whatsappTemplateLoading && !whatsappTemplateVariables.length && !whatsappTemplateError">This template has no body variables.</p>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-4 dark:border-slate-700 dark:bg-slate-900/60">
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <p class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">Delivery Preview</p>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review the resolved audience before queueing any messages.</p>
+                        </div>
+                        <span x-show="messagePreviewReady" x-cloak class="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Ready to queue</span>
+                    </div>
+                    <div x-show="selectedIds.length === 0" x-cloak class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+                        <strong>No individual rows are selected.</strong>
+                        This action covers all <span class="font-semibold" x-text="filteredTotal"></span> customers in the current filtered result.
+                    </div>
+                    <div x-show="messagePreviewLoading" x-cloak class="mt-4 flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-300">
+                        <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
+                        Resolving recipients and suppression rules...
+                    </div>
+                    <p x-show="messagePreviewError" x-cloak class="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300" x-text="messagePreviewError"></p>
+                    <p x-show="!messagePreviewLoading && !messagePreviewError && !messagePreviewReady" class="mt-4 text-sm text-slate-500 dark:text-slate-400">Preview the message to calculate recipient and suppression counts. Nothing is queued during preview.</p>
+                    <template x-if="messagePreviewReady && messagePreview">
+                        <div class="mt-4 space-y-4">
+                            <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                <div class="rounded-lg bg-white px-3 py-2 dark:bg-slate-950"><p class="text-xs text-slate-500 dark:text-slate-400">Matched</p><p class="text-lg font-semibold text-slate-900 dark:text-white" x-text="messagePreview.matched_count || 0"></p></div>
+                                <div class="rounded-lg bg-emerald-50 px-3 py-2 dark:bg-emerald-900/20"><p class="text-xs text-emerald-700 dark:text-emerald-300">Will queue</p><p class="text-lg font-semibold text-emerald-800 dark:text-emerald-200" x-text="messagePreview.queued_count || 0"></p></div>
+                                <div class="rounded-lg bg-white px-3 py-2 dark:bg-slate-950"><p class="text-xs text-slate-500 dark:text-slate-400">Missing contact</p><p class="text-lg font-semibold text-slate-900 dark:text-white" x-text="messagePreviewSkippedCount()"></p></div>
+                                <div class="rounded-lg bg-white px-3 py-2 dark:bg-slate-950"><p class="text-xs text-slate-500 dark:text-slate-400">Suppressed</p><p class="text-lg font-semibold text-slate-900 dark:text-white" x-text="messagePreview.suppressed_count || 0"></p></div>
+                                <div class="rounded-lg bg-white px-3 py-2 dark:bg-slate-950"><p class="text-xs text-slate-500 dark:text-slate-400">Open tickets</p><p class="text-lg font-semibold text-slate-900 dark:text-white" x-text="messagePreviewOpenTicketCount()"></p></div>
+                                <div class="rounded-lg bg-white px-3 py-2 dark:bg-slate-950"><p class="text-xs text-slate-500 dark:text-slate-400">Other suppressions</p><p class="text-lg font-semibold text-slate-900 dark:text-white" x-text="messagePreviewOtherSuppressionCount()"></p></div>
+                            </div>
+                            <div x-show="messagePreviewOtherReasons().length" class="rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+                                <p class="font-semibold text-slate-800 dark:text-slate-200">Other suppression reasons</p>
+                                <div class="mt-2 space-y-1 text-slate-600 dark:text-slate-400">
+                                    <template x-for="reason in messagePreviewOtherReasons()" :key="reason.code">
+                                        <div class="flex items-center justify-between gap-4"><span x-text="reason.label"></span><span class="font-semibold text-slate-900 dark:text-white" x-text="reason.count"></span></div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
                 </div>
                 <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
                     <div class="text-slate-500 dark:text-slate-400">
@@ -598,14 +639,18 @@
                     </div>
                 </div>
             </div>
-            <div class="mt-6 flex items-center justify-end gap-3">
+            <div class="mt-6 flex flex-wrap items-center justify-end gap-3">
                 <button type="button" @click.prevent.stop="resetSendMessageForm(); closeSendMessageModal()" class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">Cancel</button>
-                <button type="button" @click.prevent.stop="queueBulkMessage()" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!sendMessageForm.templateId || !hasRequiredWhatsAppMappings() || bulkLoading">
-                    <span x-show="!bulkLoading">Queue Message</span>
-                    <span x-show="bulkLoading" class="flex items-center gap-2">
+                <button type="button" @click.prevent.stop="queueBulkMessage()" class="inline-flex items-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-700 shadow-sm transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700 dark:bg-slate-900 dark:text-amber-300 dark:hover:bg-amber-900/20" :disabled="!sendMessageForm.templateId || !hasRequiredWhatsAppMappings() || messagePreviewLoading || bulkLoading">
+                    <span x-show="!messagePreviewLoading" x-text="messagePreviewReady ? 'Refresh Preview' : 'Preview Message'"></span>
+                    <span x-show="messagePreviewLoading" class="flex items-center gap-2">
                         <svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
-                        Queueing...
+                        Previewing...
                     </span>
+                </button>
+                <button type="button" x-show="messagePreviewReady" x-cloak @click.prevent.stop="queueConfirmedBulkMessage()" class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50" :disabled="bulkLoading || messagePreviewLoading">
+                    <span x-show="!bulkLoading">Queue Confirmed Message</span>
+                    <span x-show="bulkLoading" class="flex items-center gap-2"><svg class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>Queueing...</span>
                 </button>
             </div>
         </div>
@@ -635,6 +680,11 @@ function customersPage() {
         sendMessageModal: false,
         sendMessageSelectionSnapshot: null,
         bulkLoading: false,
+        messagePreview: null,
+        messagePreviewError: '',
+        messagePreviewLoading: false,
+        messagePreviewReady: false,
+        messagePreviewRequestId: 0,
         bulkUpdateForm: {
             accountStateEnabled: false,
             accountState: 'active',
@@ -1123,8 +1173,58 @@ function customersPage() {
                 templateId: '',
                 templateVariables: {}
             };
+            this.resetMessagePreview();
             this.resetWhatsappTemplateDetails();
             this.syncTemplateForChannel();
+        },
+
+        resetMessagePreview() {
+            this.messagePreviewRequestId += 1;
+            this.messagePreview = null;
+            this.messagePreviewError = '';
+            this.messagePreviewLoading = false;
+            this.messagePreviewReady = false;
+        },
+
+        invalidateMessagePreview() {
+            this.messagePreviewRequestId += 1;
+            this.messagePreview = null;
+            this.messagePreviewError = '';
+            this.messagePreviewLoading = false;
+            this.messagePreviewReady = false;
+        },
+
+        messagePreviewSkippedCount() {
+            return (this.messagePreview?.skipped || []).length;
+        },
+
+        messagePreviewOpenTicketCount() {
+            return (this.messagePreview?.suppressed || [])
+                .filter((item) => item.reason_code === 'open_ticket').length;
+        },
+
+        messagePreviewOtherSuppressionCount() {
+            return Math.max(
+                (this.messagePreview?.suppressed_count || 0) - this.messagePreviewOpenTicketCount(),
+                0
+            );
+        },
+
+        messagePreviewOtherReasons() {
+            const reasons = new Map();
+            (this.messagePreview?.suppressed || [])
+                .filter((item) => item.reason_code !== 'open_ticket')
+                .forEach((item) => {
+                    const code = item.reason_code || 'other';
+                    const reason = reasons.get(code) || {
+                        code,
+                        label: item.reason || this.titleCase(code),
+                        count: 0
+                    };
+                    reason.count += 1;
+                    reasons.set(code, reason);
+                });
+            return Array.from(reasons.values());
         },
 
         preferredMessageChannel() {
@@ -1230,6 +1330,7 @@ function customersPage() {
         },
 
         async handleTemplateSelection() {
+            this.invalidateMessagePreview();
             this.resetWhatsappTemplateDetails();
             const template = this.selectedTemplate();
             if (!template || this.sendMessageForm.channel !== 'whatsapp') return;
@@ -1322,12 +1423,9 @@ function customersPage() {
                 return;
             }
             this.rememberWhatsappMapping();
-
-            const msgScopeCount = this.selectedIds.length > 0 ? this.selectedIds.length : this.filteredTotal;
-            const msgScopeLabel = this.selectedIds.length > 0 ? 'selected customer(s)' : 'customer(s) in the current filtered result';
-            if (!confirm(`Queue "${template.name || 'this message'}" for ${msgScopeCount} ${msgScopeLabel}?`)) return;
-
-            this.bulkLoading = true;
+            this.invalidateMessagePreview();
+            const previewRequestId = this.messagePreviewRequestId;
+            this.messagePreviewLoading = true;
             try {
                 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
                 const basePayload = this.buildScopePayload({
@@ -1344,31 +1442,53 @@ function customersPage() {
                     },
                     body: JSON.stringify({ ...basePayload, preview_only: true })
                 });
+                if (previewRequestId !== this.messagePreviewRequestId) return;
                 if (!previewResponse.ok) {
                     const error = await previewResponse.json().catch(() => ({}));
-                    alert(error.detail || 'Failed to preview the message. Please try again.');
+                    this.messagePreviewError = error.detail || 'Failed to preview the message. Please try again.';
                     return;
                 }
                 const preview = await previewResponse.json();
-                const previewSuppressed = preview.suppressed || [];
-                const previewOpenTicketExcluded = previewSuppressed.filter((item) => item.reason_code === 'open_ticket');
-                const previewOtherSuppressed = Math.max((preview.suppressed_count || 0) - previewOpenTicketExcluded.length, 0);
-                const previewMessageParts = [
-                    `Matched ${preview.matched_count || 0} customer(s).`,
-                    `Queue ${preview.queued_count || 0} message(s).`
-                ];
-                if (previewOpenTicketExcluded.length) {
-                    previewMessageParts.push(`Exclude ${previewOpenTicketExcluded.length} customer(s) with open tickets.`);
+                if (previewRequestId !== this.messagePreviewRequestId) return;
+                if (preview.preview !== true) {
+                    this.messagePreviewError = 'The server did not return a valid preview. Nothing was queued.';
+                    return;
                 }
-                if (previewOtherSuppressed) {
-                    previewMessageParts.push(`Suppress ${previewOtherSuppressed} other customer(s).`);
+                this.messagePreview = preview;
+                this.messagePreviewReady = true;
+            } catch (error) {
+                if (previewRequestId !== this.messagePreviewRequestId) return;
+                console.error('Bulk message preview failed:', error);
+                this.messagePreviewError = 'An error occurred while previewing the message. Please try again.';
+            } finally {
+                if (previewRequestId === this.messagePreviewRequestId) {
+                    this.messagePreviewLoading = false;
                 }
-                if ((preview.skipped || []).length) {
-                    previewMessageParts.push(`Skip ${(preview.skipped || []).length} customer(s) with missing contact details.`);
-                }
-                const previewMessage = `${previewMessageParts.join(' ')} Continue?`;
-                if (!confirm(previewMessage)) return;
+            }
+        },
 
+        async queueConfirmedBulkMessage() {
+            if (!this.messagePreviewReady || !this.sendMessageForm.templateId) return;
+            const template = this.selectedTemplate();
+            if (!template) {
+                this.invalidateMessagePreview();
+                this.syncTemplateForChannel();
+                return;
+            }
+            if (!this.hasRequiredWhatsAppMappings()) {
+                this.invalidateMessagePreview();
+                alert('Select a source for every WhatsApp template field before queueing.');
+                return;
+            }
+            this.rememberWhatsappMapping();
+            this.bulkLoading = true;
+            try {
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
+                const basePayload = this.buildScopePayload({
+                    channel: this.sendMessageForm.channel,
+                    template_id: template.id,
+                    template_variables: this.sendMessageForm.templateVariables || {}
+                });
                 const response = await fetch('/admin/customers/bulk/send-message', {
                     method: 'POST',
                     headers: {
@@ -1407,7 +1527,7 @@ function customersPage() {
                     alert(error.detail || 'Failed to queue the message. Please try again.');
                 }
             } catch (error) {
-                console.error('Bulk send failed:', error);
+                console.error('Confirmed bulk send failed:', error);
                 alert('An error occurred. Please try again.');
             } finally {
                 this.bulkLoading = false;
