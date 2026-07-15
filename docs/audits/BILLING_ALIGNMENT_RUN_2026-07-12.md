@@ -6,12 +6,12 @@ business table was written.** The harness (`scripts/one_off/billing_alignment_au
 `--apply` path and rolls back its session in a `finally` block. The later
 2026-07-14 adjudication restored only ephemeral copies on an isolated Docker
 network, reconstructed the final legacy position and service schedule, ran the
-counterfactual comparison, and destroyed every temporary container, volume,
-network and file. A later D12 rehearsal used only session-local PostgreSQL
-temporary tables against seabone's staging-local database; it was rejected as
-current-production evidence. The accepted D12 pass then ran against the
-explicitly named Sub production host `selfcare.dotmac.io`; both passes destroyed
-their session-local tables and temporary files (§7).
+counterfactual comparison, and destroyed its temporary containers, volumes,
+network and working files. A later D12 rehearsal used only session-local
+PostgreSQL temporary tables against seabone's staging-local database; it was
+rejected as current-production evidence. The accepted D12 pass then ran against
+the explicitly named Sub production host `selfcare.dotmac.io`; both passes
+destroyed their session-local tables and temporary files (§7).
 
 ---
 
@@ -27,7 +27,7 @@ their session-local tables and temporary files (§7).
 | **Code SHA audited** | `81b7c35c` (= `origin/main` at run time) |
 | **Alembic head** | `268_sot_safety_closure` |
 | **Interpreter** | `/opt/venv/bin/python`, Python 3.12.13 |
-| **Harness SHA** | authored this session; not yet committed |
+| **Harness / audit merge** | `40b2739c` (#1286) |
 | **Static audit SHA** | `481a0a67` — findings re-verified against `81b7c35c` before this run |
 
 ### Code drift handled during the run
@@ -518,7 +518,7 @@ on that newly armed population. The next action is an explicit policy decision
 on warning/grace, followed by an independent-funding dry-run through the full
 owner planner before enabling the control.
 
-That safety slice is now implemented in draft PR #1284. It proposes a three-day
+That safety slice merged in `f45f4979` (#1284). It enforces a three-day
 minimum warning window, requires an explicit activation timestamp, floors old
 timers at activation, and lets the owner planner consume a named, timestamped
 funding snapshot without a local-money fallback. The audit-side bridge is
@@ -527,12 +527,152 @@ source replay and the canonical threshold owner, while the prepaid enforcement
 owner still selects the cohort and applies every non-money gate. The export is
 complete-or-error. Missing source baselines or incomplete replay provenance
 produce a UUID-only blocker manifest and no planner-consumable funding file.
-PR #1284 is CI-green but remains draft and is not deployed; this paragraph is
-implementation status, not authorization to enable enforcement.
+The merge is a safety boundary, not authorization to enable enforcement; the
+control remains off pending a complete independent-funding snapshot and the
+explicit policy/activation decision.
 
 No persistent production table, RADIUS table, lock, timer or setting was
 written. Every temporary file was deleted from the production container and
 verified absent.
+
+### Post-merge isolated export rehearsal — blocked safely
+
+Run `20260714T150902Z` exercised the merged exporter against a new isolated
+restore on `seabone`, not against a live application database. The fresh Sub
+restore used the retained 2026-07-12 backup at Alembic head
+`254_waiting_bulk_item_status`; the June 15 and final June 17 Splynx source
+states were restored separately on a Docker internal network with no published
+ports. The final source still reconciled exactly to its own deposit ledger.
+
+Before any source replay, the Sub restore was scrubbed in an all-or-nothing
+transaction. Three rehearsal failures were allowed to roll back rather than be
+worked around: `subscribers.gender` is non-null, local `user_credentials`
+require a non-null password hash, and broad key-name matching incorrectly
+classified the typed non-secret setting `api_key_rate_window_seconds`. The
+successful pass used `gender='unknown'`, invalid non-authenticating markers for
+required hashes, and scrubbed only settings explicitly marked `is_secret` while
+preserving their JSON/text alignment. Credential, primary-identity, session and
+delivery verification returned zero residuals, and billing/service row counts
+and money aggregates were unchanged.
+
+The exporter then selected 4,276 current candidates at the immutable Sub backup
+timestamp. It reconstructed 4,269 but reported 93 incomplete replays (92 source
+services lack a paid-through period; one post-legacy adjustment lacks
+provenance) and seven missing source baselines. Canonical thresholds were
+complete. Therefore it returned `ready=false` with exit code 2, wrote **no
+planner-consumable snapshot**, and retained only a mode-700 UUID/reason-code
+blocker manifest:
+
+`/home/dotmac/agent-work/billing-audit-output-20260714t150902z/prepaid-funding-blockers.json`
+
+SHA-256:
+`4fe345da29402e921a5e4ddebc19a8c4e9cfea69f235d3e22e52564b25322573`.
+The file contains no names, contact fields, credentials, free text or amounts.
+All restore containers, volumes, the internal network and the temporary code
+worktree were destroyed and verified absent. The retained source backups were
+unchanged. No production/staging business row, RADIUS row, enforcement lock,
+timer or setting was written.
+
+This is the intended fail-closed outcome: #1284 is merged, but activation is
+still blocked by provenance rather than treating unknown funding as zero. The
+reviewed restore scrub is now checked in as
+`scripts/one_off/scrub_billing_audit_restore.py`; it requires an `_audit`
+database name, `BILLING_AUDIT_EPHEMERAL=1`, and `--execute`, rejects newly
+discovered secret-looking columns, and commits only after identity/credential
+verification plus exact financial/service fingerprints pass in the same
+transaction.
+
+### Restore-scrub acceptance and reusable base — 2026-07-14
+
+Run `20260714T211057Z` executed that checked-in scrub against a second fresh
+restore of the retained Sub backup on the explicitly approved `seabone` host.
+The first restore attempt stopped before application data when the PostGIS image
+had already created the dump's `tiger` schema. The disposable database was
+dropped and recreated from `template0`; the retry restored the full schema,
+data, indexes and constraints with `ON_ERROR_STOP=1` and exit code 0.
+
+Pre-scrub fingerprints matched the retained-backup manifest exactly:
+
+| Check | Result |
+|---|---:|
+| Alembic head | `254_waiting_bulk_item_status` |
+| Subscribers | 15,286 |
+| Ledger entries | 224,573 |
+| Invoices | 126,585 |
+| Payments | 98,284 |
+| Local Splynx mirror rows | 0 |
+
+Scrub script SHA-256:
+`d7e86505b9bbc3d4e60987c2b08598799e39fef441aaa1224f9486e307926ac7`.
+The first app-container invocation did not import `app` because the mounted
+script ran from `/tmp`; it opened no database connection. Re-running with the
+image's `/app` directory on `PYTHONPATH` completed successfully:
+
+```text
+audit restore scrub committed; 62 credential/identity checks passed
+```
+
+The tool's before/after billing and service fingerprints matched exactly in the
+same transaction. No staging, production, RADIUS, timer, lock or enforcement
+setting was touched.
+
+Rather than pay the full raw-restore cost for every future read-only audit, the
+verified 5,539 MB sanitized database is retained on `seabone` as:
+
+| Control | Value |
+|---|---|
+| Container | `billing-audit-base-20260712` |
+| PostgreSQL database | `dotmac_sub_audit` |
+| State | stopped |
+| Docker network mode | `none` |
+| Published ports | none |
+| Database flags | `IS_TEMPLATE=true`, `ALLOW_CONNECTIONS=false` |
+| Data volume | `billing-scrub-acceptance-20260714t211057z` |
+
+The container carries labels for the source backup, Alembic head, run ID and
+scrub hash. The transient runner, transferred script and internal restore
+network were removed. The raw retained backup remains unchanged.
+
+A PostgreSQL `CREATE DATABASE ... TEMPLATE dotmac_sub_audit` copy was benchmarked
+for a write-capable test clone. On this host's storage it remained disk-bound
+after roughly 20 minutes, so it was canceled to stop unnecessary load.
+PostgreSQL rolled the operation back and no clone database remains. Therefore:
+
+- read-only audits may use the stopped sanitized base after attaching it only to
+  an isolated internal network;
+- write-capable tests require a disposable storage-level volume snapshot;
+- PostgreSQL template copying is correct but too I/O-heavy for routine use here;
+- the raw production backup must not be replayed per test.
+
+### Reuse-safety review and rollback rehearsal — 2026-07-15
+
+Review of draft PR #1301 found that the first accepted tool failed closed for
+new secret-named columns but not for a new PII column, and that its identity
+verification covered only a subset of the fields it rewrote. Those were not
+exposures in the completed 2026-07-14 run, but they were unsafe invariants for a
+reusable operator boundary.
+
+The scrubber now gives every column in a sensitive identity table one explicit
+classification: preserved, directly scrubbed, or conditionally scrubbed. An
+unknown column such as `subscribers.passport_number` stops the run before the
+first write. Every existing or future integration/connector/webhook table must
+also be fully classified or deleted wholesale. Opaque endpoint, header,
+configuration, payload, response and free-text fields are destroyed, and all
+outbound-capability fields are disabled. One declarative action map now drives
+both each direct mutation and its residual predicate; the previous independent
+identity-verification sample was removed. Typed settings and subscriber custom
+fields likewise share one conditional policy between mutation and verification.
+
+The current ORM schema and the retained `254_waiting_bulk_item_status` backup
+schema were both checked against the classification. The older backup's
+`subscribers.category` field was reviewed and explicitly preserved. A final
+no-network rehearsal mounted the sanitized volume into a transient PostGIS
+container and ran the full scrub from a transient Sub container over a shared
+Unix socket. All 204 generated checks passed and financial/service fingerprints
+matched. The wrapper then rolled the whole scrub transaction back. The database
+was restored to `ALLOW_CONNECTIONS=false`; the retained base is stopped with
+network mode `none`; and the transient containers, socket volume, network and
+files were removed and verified absent.
 
 ### Source-independent containment signal: known prepaid-runner invoices
 

@@ -28,6 +28,7 @@ incidence. It is **not** a claim that every finding remains live on current
 | F16 reseller proof | `8b235d9c` | locked, idempotent single credit |
 | F18 reseller bulk settlement | `150a6d71` | member invoices settle through the owner |
 | Access/lifecycle strays | `88abb7d3`, `8472a588` | precise reversible enforcement/lifecycle transitions |
+| Prepaid activation safety | `f45f4979` | independent funding required; incomplete provenance blocks export |
 | F22 CRM billing push | `b6d1accd` | writer deleted; finding struck |
 
 Do not re-open those forward-fix workstreams from the historical prose below
@@ -67,6 +68,35 @@ unrestricted password authentication and 492 have a recent open session. The
 owner fix is deployed, but the prepaid enforcement control is off via an active
 legacy database row; its zero-day policy would make a blind enablement unsafe.
 No customer debit is licensed without finance review.
+
+The merged activation slice was subsequently rehearsed against a fresh isolated
+restore on `seabone` (run `20260714T150902Z`). Of 4,276 owner-selected
+candidates, 4,269 had a source baseline, but 93 replays remained incomplete and
+seven candidates lacked a baseline. The exporter correctly returned
+`ready=false`, exit code 2, and emitted no planner input. It retained only a
+mode-700 UUID/reason-code blocker manifest. This is evidence that the activation
+boundary fails closed; it is not evidence that the blocked accounts are funded
+or unfunded. Enforcement remains unauthorized.
+
+The restore scrub was then accepted end to end on a second isolated restore
+(run `20260714T211057Z`): the full retained schema restored cleanly, all 62
+credential/identity checks passed, and exact billing/service fingerprints were
+unchanged. The resulting 5,539 MB sanitized database is retained on `seabone`
+as stopped, network-less container `billing-audit-base-20260712`, with no
+published ports and its database marked template/non-connectable. It replaces
+replaying the raw backup for future read-only audits. A PostgreSQL template clone
+was canceled after roughly 20 minutes of sustained disk I/O and rolled back
+cleanly; write-capable test copies require a storage-level volume snapshot.
+
+The draft-PR reuse review then closed two gaps that did not affect that completed
+one-off run but would have allowed a later schema to under-scrub silently. Every
+column in a sensitive identity table is now explicitly preserved or scrubbed,
+and any new or changed integration table is rejected until fully classified.
+Direct mutation and residual verification are generated from the same policy;
+opaque integration endpoints, headers, configurations and payloads are scrubbed
+explicitly. A rollback-only rehearsal against the retained backup schema passed
+all 204 generated checks with unchanged financial/service fingerprints, then
+restored the base to its stopped, network-less and non-connectable state.
 
 The same review found a more fundamental flaw in the existing cutover invariant:
 although the runbook says "Splynx cutover balance + subsequent transactions -
@@ -622,12 +652,13 @@ policy and independent-funding dry-run before enabling prepaid enforcement. D7
 correction design remains limited to the complete replay population and
 customer-debit cases still require finance approval.
 
-Draft PR #1284 now implements the activation/grace and independent-funding
-planner boundary. The audit exporter refuses to create an enforcement input
-until every owner-selected prepaid candidate has both a source-proven position
-and canonical threshold; incomplete and unmapped accounts remain blockers, not
-zero balances. The PR is CI-green but unmerged, and no enforcement setting has
-been changed.
+Merged commit `f45f4979` (#1284) implements the activation/grace and
+independent-funding planner boundary. The audit exporter refuses to create an
+enforcement input until every owner-selected prepaid candidate has both a
+source-proven position and canonical threshold; incomplete and unmapped accounts
+remain blockers, not zero balances. The isolated post-merge rehearsal blocked
+on 93 incomplete replays and seven missing baselines, wrote no planner snapshot,
+and changed no enforcement setting.
 
 The original ordering was by customer harm and monetary integrity. Each item is
 one coherent domain slice per the standard. **Every item ships with four parts:
