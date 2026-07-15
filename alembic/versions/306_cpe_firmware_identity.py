@@ -8,8 +8,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "293_cpe_firmware_identity"
-down_revision = "292_merge_lifecycle_schedules_and_tax_point_heads"
+revision = "306_cpe_firmware_identity"
+down_revision = "305_consolidated_payment_settlement"
 branch_labels = None
 depends_on = None
 
