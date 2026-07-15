@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 from app.models.network import OntFirmwareImage, OntUnit
 from app.models.network_operation import (
+    NetworkOperationDispatch,
+    NetworkOperationDispatchStatus,
     NetworkOperationStatus,
     NetworkOperationTargetType,
     NetworkOperationType,
@@ -48,16 +50,8 @@ def _task_session(db_session):
     return session
 
 
-def test_request_stages_operation_without_claiming_device_success(
-    db_session, monkeypatch
-):
+def test_request_stages_operation_without_claiming_device_success(db_session):
     ont, image = _inventory(db_session)
-    monkeypatch.setattr(
-        "app.services.network.ont_firmware.enqueue_task",
-        lambda *args, **kwargs: QueueDispatchResult(
-            queued=True, task_id="task-1", task_name=args[0]
-        ),
-    )
 
     result = request_firmware_upgrade(db_session, str(ont.id), str(image.id))
 
@@ -67,6 +61,14 @@ def test_request_stages_operation_without_claiming_device_success(
     operation = network_operations.get(db_session, result.data["operation_id"])
     assert operation.status == NetworkOperationStatus.pending
     assert operation.input_payload["target_version"] == "V1R2"
+    dispatch = db_session.get(
+        NetworkOperationDispatch,
+        result.data["dispatch_id"],
+    )
+    assert dispatch is not None
+    assert dispatch.operation_id == operation.id
+    assert dispatch.status == NetworkOperationDispatchStatus.pending
+    assert dispatch.args_payload == [str(ont.id), str(image.id), str(operation.id)]
     db_session.refresh(ont)
     assert ont.firmware_version == "V1R1"
 

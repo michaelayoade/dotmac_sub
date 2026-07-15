@@ -14,6 +14,7 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     "catalog:read",
     "catalog:write",
     "network:read",
+    "network:operation:redrive",
     "network:write",
     "provisioning:read",
     "provisioning:write",
@@ -118,6 +119,10 @@ DEFAULT_PERMISSIONS = [
     ("network:map:read", "View the comprehensive network map"),
     ("network:device:read", "View network devices"),
     ("network:device:write", "Manage network devices"),
+    (
+        "network:operation:redrive",
+        "Retry eligible failed network operations",
+    ),
     ("network:olt:read", "View OLT devices and operations"),
     ("network:olt:write", "Manage OLT devices and operations"),
     ("network:cpe:read", "View CPE devices"),

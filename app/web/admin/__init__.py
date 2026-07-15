@@ -69,6 +69,7 @@ from app.web.admin.network_onts_provisioning import (
     router as network_onts_provisioning_router,
 )
 from app.web.admin.network_onu_types import router as network_onu_types_router
+from app.web.admin.network_operations import router as network_operations_router
 from app.web.admin.network_pop_sites import router as network_pop_sites_router
 from app.web.admin.network_radius import router as network_radius_router
 from app.web.admin.network_speed_profiles import router as network_speed_profiles_router
@@ -306,6 +307,10 @@ router.include_router(
 )
 router.include_router(
     network_onts_inventory_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_operations_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(

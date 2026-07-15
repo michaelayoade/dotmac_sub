@@ -6,6 +6,8 @@ import inspect
 
 from app.models.network import OLTDevice, OltFirmwareImage
 from app.models.network_operation import (
+    NetworkOperationDispatch,
+    NetworkOperationDispatchStatus,
     NetworkOperationStatus,
     NetworkOperationTargetType,
     NetworkOperationType,
@@ -18,7 +20,6 @@ from app.services.network.olt_firmware import (
 )
 from app.services.network.parsers.firmware import FirmwareInfo
 from app.services.network_operations import network_operations
-from app.services.queue_adapter import QueueDispatchResult
 
 
 def _inventory(db_session):
@@ -44,17 +45,8 @@ def _inventory(db_session):
     return olt, image
 
 
-def test_request_stages_operation_without_claiming_device_success(
-    db_session, monkeypatch
-) -> None:
+def test_request_stages_operation_without_claiming_device_success(db_session) -> None:
     olt, image = _inventory(db_session)
-    monkeypatch.setattr(
-        olt_firmware,
-        "enqueue_task",
-        lambda *args, **kwargs: QueueDispatchResult(
-            queued=True, task_id="task-1", task_name=args[0]
-        ),
-    )
 
     result = request_firmware_upgrade(
         db_session, str(olt.id), str(image.id), initiated_by="operator"
@@ -68,28 +60,25 @@ def test_request_stages_operation_without_claiming_device_success(
     assert operation.status == NetworkOperationStatus.pending
     assert operation.input_payload["target_version"] == "V1R2"
     assert operation.initiated_by == "operator"
+    dispatch = db_session.query(NetworkOperationDispatch).one()
+    assert str(dispatch.id) == result.data["dispatch_id"]
+    assert dispatch.operation_id == operation.id
+    assert dispatch.status == NetworkOperationDispatchStatus.pending
+    assert dispatch.args_payload == [str(olt.id), str(image.id)]
+    assert dispatch.kwargs_payload == {"operation_id": str(operation.id)}
     db_session.refresh(olt)
     assert olt.firmware_version == "V1R1"
 
 
-def test_request_rejects_cross_model_image(db_session, monkeypatch) -> None:
+def test_request_rejects_cross_model_image(db_session) -> None:
     olt, image = _inventory(db_session)
     image.model = "MA5608T"
     db_session.commit()
-    queued = False
-
-    def _enqueue(*args, **kwargs):
-        nonlocal queued
-        queued = True
-        return QueueDispatchResult(queued=True)
-
-    monkeypatch.setattr(olt_firmware, "enqueue_task", _enqueue)
-
     result = request_firmware_upgrade(db_session, str(olt.id), str(image.id))
 
     assert result.success is False
     assert "does not match" in result.message
-    assert queued is False
+    assert db_session.query(NetworkOperationDispatch).count() == 0
 
 
 def test_upgrade_requires_exact_target_readback(db_session, monkeypatch) -> None:

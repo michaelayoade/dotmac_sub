@@ -1878,6 +1878,35 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(topology_metrics_seconds, 300),
         )
+        network_operation_metrics_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "network_operation_metrics_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="network_operation_metrics",
+            task_name="app.tasks.network_operations.publish_operation_metrics",
+            enabled=True,
+            interval_seconds=max(network_operation_metrics_seconds, 60),
+        )
+        network_operation_dispatch_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "network_operation_dispatch_interval_seconds",
+            10,
+        )
+        _sync_scheduled_task(
+            session,
+            name="network_operation_dispatch",
+            task_name=(
+                "app.tasks.network_operation_dispatch."
+                "publish_network_operation_dispatches"
+            ),
+            enabled=True,
+            interval_seconds=max(network_operation_dispatch_seconds, 5),
+        )
         dashboard_cache_seconds = _resolve_int(
             session,
             SettingDomain.network_monitoring,

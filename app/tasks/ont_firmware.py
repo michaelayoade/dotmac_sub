@@ -13,6 +13,7 @@ from app.services.network.ont_firmware import (
     operation_is_active,
     validate_image_compatibility,
 )
+from app.services.network_operation_dispatch import managed_network_operation_dispatch
 from app.services.network_operations import network_operations
 from app.services.queue_adapter import enqueue_task
 
@@ -51,10 +52,13 @@ def _queue_verification(operation, ont_id: str, firmware_image_id: str, attempt:
     soft_time_limit=540,
     time_limit=600,
 )
+@managed_network_operation_dispatch("app.tasks.ont_firmware.apply_huawei_ont_firmware")
 def apply_huawei_ont_firmware(
     ont_id: str,
     firmware_image_id: str,
     operation_id: str,
+    *,
+    _network_dispatch_id: str | None = None,
 ) -> dict[str, Any]:
     """Deliver the image, then hand ownership to the readback task."""
     from app.models.network import OntFirmwareImage, OntUnit

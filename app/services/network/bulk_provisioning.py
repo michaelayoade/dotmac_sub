@@ -232,6 +232,132 @@ def bulk_provision_onts(
     )
 
 
+def dispatch_bulk_provisioning_commands(
+    db: Session,
+    ont_ids: list[str],
+    *,
+    dry_run: bool = False,
+    initiated_by: str | None = None,
+    bulk_run_id: str | None = None,
+    allow_low_optical_margin: bool = False,
+) -> dict[str, Any]:
+    """Stage one tracked command per bulk item, or execute DB-only previews."""
+    bulk_items_by_ont_id: dict[str, BulkProvisioningItem] = {}
+    if bulk_run_id:
+        pending_items = list_pending_bulk_items(db, bulk_run_id)
+        bulk_items_by_ont_id = {
+            str(item.ont_unit_id): item for item in pending_items if item.ont_unit_id
+        }
+
+    unique_ont_ids = list(dict.fromkeys(str(ont_id) for ont_id in ont_ids if ont_id))
+    if bulk_items_by_ont_id:
+        unique_ont_ids = [
+            ont_id for ont_id in unique_ont_ids if ont_id in bulk_items_by_ont_id
+        ]
+    if not unique_ont_ids:
+        return {
+            "processed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "message": "No ONTs supplied.",
+            "tasks": [],
+        }
+
+    tasks: list[dict[str, Any]] = []
+    exceptions = 0
+    failed_results = 0
+    for ont_id in unique_ont_ids:
+        bulk_item = bulk_items_by_ont_id.get(ont_id)
+        item_correlation_key = (
+            bulk_item.correlation_key
+            if bulk_item is not None
+            else f"bulk_provision:{ont_id}"
+        )
+        bulk_item_id = str(bulk_item.id) if bulk_item is not None else None
+        try:
+            if dry_run:
+                from app.services.network.ont_provisioning_execution import (
+                    execute_ont_provisioning,
+                )
+
+                payload = execute_ont_provisioning(
+                    db,
+                    ont_id=ont_id,
+                    dry_run=True,
+                    initiated_by=initiated_by,
+                    correlation_key=item_correlation_key,
+                    bulk_run_id=bulk_run_id,
+                    bulk_item_id=bulk_item_id,
+                    allow_low_optical_margin=allow_low_optical_margin,
+                    operation_id=None,
+                )
+            else:
+                from app.services.network.ont_provisioning_commands import (
+                    request_ont_provisioning,
+                )
+
+                command = request_ont_provisioning(
+                    db,
+                    ont_id,
+                    initiated_by=initiated_by,
+                    correlation_key=item_correlation_key,
+                    bulk_run_id=bulk_run_id,
+                    bulk_item_id=bulk_item_id,
+                    allow_low_optical_margin=allow_low_optical_margin,
+                )
+                payload = {
+                    "success": command.accepted,
+                    "waiting": command.waiting,
+                    "message": command.message,
+                    "operation_id": command.operation_id,
+                    "dispatch_id": command.dispatch_id,
+                    "duplicate": command.duplicate,
+                }
+                if not command.accepted and bulk_item is not None:
+                    mark_bulk_item_failed(db, bulk_item.id, command.message)
+                    db.commit()
+            if not payload.get("success") and not payload.get("waiting"):
+                failed_results += 1
+            tasks.append(
+                {
+                    "ont_id": ont_id,
+                    "bulk_item_id": bulk_item_id or "",
+                    "correlation_key": item_correlation_key,
+                    "operation_id": payload.get("operation_id"),
+                    "dispatch_id": payload.get("dispatch_id"),
+                    "success": bool(payload.get("success")),
+                    "waiting": bool(payload.get("waiting")),
+                    "message": str(payload.get("message") or ""),
+                }
+            )
+        except Exception as exc:
+            db.rollback()
+            exceptions += 1
+            if bulk_item is not None:
+                mark_bulk_item_failed(db, bulk_item.id, str(exc))
+                db.commit()
+            tasks.append(
+                {
+                    "ont_id": ont_id,
+                    "bulk_item_id": bulk_item_id or "",
+                    "correlation_key": item_correlation_key,
+                    "success": False,
+                    "error": str(exc),
+                }
+            )
+
+    stats = {
+        "processed": len(tasks) - exceptions,
+        "errors": exceptions + failed_results,
+        "exceptions": exceptions,
+        "failed": failed_results,
+        "skipped": len(ont_ids) - len(unique_ont_ids),
+        "bulk_run_id": bulk_run_id,
+        "tasks": tasks,
+    }
+    return stats
+
+
 def list_pending_bulk_items(
     db: Session,
     run_id: str | uuid.UUID,

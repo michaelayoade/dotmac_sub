@@ -525,7 +525,54 @@ Dependency order:
    visibility contract and is a *projection* of this owner, not a second
    authority. A contract may only claim operator redrive
    (`MANUAL_REDRIVE`/`ADMIN_REDRIVE`) once a redrive path exists in the ledger;
-   declaring an affordance that does not exist is drift, not policy.
+   declaring an affordance that does not exist is drift, not policy. Recovery
+   requests require a reviewed current-state head, scoped idempotency key,
+   operator reason, retry limit, and a typed handler. The failed operation is
+   immutable; each approved attempt is a separate `redrive_of` operation.
+   `app.services.network_operation_recovery` is the ledger's typed recovery
+   boundary. It cannot dispatch task names or payloads supplied by a route.
+   The initial handler covers observation-only ONT status refresh. Firmware,
+   configuration, lifecycle, and other device writes remain ineligible until
+   their owning service provides current-state validation and replay safety.
+13. `network.operation_dispatch`: owns transactional staging and transport for
+   operation-backed network commands. The operation and its exact versioned
+   command are committed together in `network_operation_dispatches`; request
+   handlers never commit an operation and then publish its device task. The
+   scheduled publisher is the only broker writer for registered commands, and
+   every broker message enters a typed envelope that atomically claims the row
+   before device code runs. Duplicate envelopes therefore do not duplicate a
+   device command. Broker acceptance, worker acknowledgement, completed
+   delivery, exhausted publication, and reconciliation-needed execution are
+   transport evidence, not substitutes for operation/device outcome. Unknown
+   execution fails closed and requires current-state review before redrive.
+   The cutover covers ONT status refresh, ONT authorization and baseline repair,
+   TR-069 bootstrap verification attempts, ONT and OLT firmware entry commands,
+   and OLT-triggered ONT desired-state reconciliation. Firmware verification/
+   readback continuations retain their own state machines and are not parallel
+   command-origination paths.
+14. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
+   for ONT authorization, baseline repair, and bootstrap verification commands.
+   It commits each operation and typed dispatch atomically. Admin, API, and bulk
+   callers receive operation/dispatch identifiers and never publish the device
+   task themselves.
+15. `network.ont_provisioning_execution`: owns the tracked authorization,
+   baseline-repair, DB-only baseline preview, bootstrap retry, parent rollup,
+   and bulk-item transitions.
+   Celery workers claim an existing dispatch and delegate execution here; they
+   do not create operations or decide a parallel retry policy. Delayed bootstrap
+   attempts are separate immutable dispatch rows on the same child operation,
+   while Inform-driven completion uses the same parent projection.
+
+Provisioning dispatch authority migration: the retired path published Celery
+tasks from admin/API/bulk callers and created the operation inside the worker.
+The new command owner creates the operation and typed dispatch atomically before
+publication. The cutover gate is: migration `294` applied, the dispatch
+publisher enabled, and workers running code that claims dispatch envelopes.
+For broker-retention safety, an old envelope without a dispatch identifier may
+only re-submit its intent to `network.ont_provisioning_commands`; it cannot enter
+device code. Remove this compatibility adapter after one maximum broker-retention
+window has elapsed after production cutover. The old direct-publish and
+worker-owned-operation paths have no fallback authority and must not return.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support

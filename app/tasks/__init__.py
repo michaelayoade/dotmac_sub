@@ -84,7 +84,13 @@ from app.tasks.nas import (
     run_scheduled_backups,
     update_subscriber_counts,
 )
-from app.tasks.network_operations import cleanup_old_operations
+from app.tasks.network_operation_dispatch import (
+    publish_network_operation_dispatches,
+)
+from app.tasks.network_operations import (
+    cleanup_old_operations,
+    publish_operation_metrics,
+)
 from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
@@ -217,6 +223,8 @@ from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breache
 
 __all__ = [
     "cleanup_old_operations",
+    "publish_network_operation_dispatches",
+    "publish_operation_metrics",
     "sync_gis_sources",
     "run_batch_geocode_job",
     "run_vas_requery",

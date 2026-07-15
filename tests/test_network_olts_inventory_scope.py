@@ -8,6 +8,7 @@ from starlette.requests import Request
 from app.models.network import OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import UserType
+from app.services.network.ont_provisioning_commands import ProvisioningCommandResult
 
 
 def _request(*, htmx: bool = False) -> Request:
@@ -40,7 +41,11 @@ def test_direct_ont_authorize_rejects_mismatched_olt(monkeypatch) -> None:
     def _unexpected_queue(*_args, **_kwargs):
         raise AssertionError("mismatched direct ONT authorization must not authorize")
 
-    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _unexpected_queue)
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "request_ont_authorization",
+        _unexpected_queue,
+    )
 
     response = network_olts_inventory.olt_authorize_ont(
         _request(),
@@ -77,11 +82,15 @@ def test_returned_inventory_ont_authorize_allows_active_candidate(
 
     captured: dict[str, object] = {}
 
-    def _fake_enqueue(*_args, **kwargs):
-        captured.update(kwargs.get("kwargs") or {})
-        return SimpleNamespace(queued=True)
+    def _fake_request(*_args, **kwargs):
+        captured.update(kwargs)
+        return ProvisioningCommandResult(True, True, "accepted")
 
-    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _fake_enqueue)
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "request_ont_authorization",
+        _fake_request,
+    )
     monkeypatch.setattr(
         network_olts_inventory,
         "_authorization_detail_redirect_url",
@@ -148,11 +157,15 @@ def test_moved_ont_authorize_allows_active_candidate_with_previous_olt(
 
     captured: dict[str, object] = {}
 
-    def _fake_enqueue(*_args, **kwargs):
-        captured.update(kwargs.get("kwargs") or {})
-        return SimpleNamespace(queued=True)
+    def _fake_request(*_args, **kwargs):
+        captured.update(kwargs)
+        return ProvisioningCommandResult(True, True, "accepted")
 
-    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _fake_enqueue)
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "request_ont_authorization",
+        _fake_request,
+    )
     monkeypatch.setattr(
         network_olts_inventory,
         "_authorization_detail_redirect_url",
@@ -209,11 +222,15 @@ def test_returned_inventory_hex_ont_authorize_allows_ascii_candidate(
 
     captured: dict[str, object] = {}
 
-    def _fake_enqueue(*_args, **kwargs):
-        captured.update(kwargs.get("kwargs") or {})
-        return SimpleNamespace(queued=True)
+    def _fake_request(*_args, **kwargs):
+        captured.update(kwargs)
+        return ProvisioningCommandResult(True, True, "accepted")
 
-    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _fake_enqueue)
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "request_ont_authorization",
+        _fake_request,
+    )
     monkeypatch.setattr(
         network_olts_inventory,
         "_authorization_detail_redirect_url",
@@ -264,7 +281,11 @@ def test_reseller_authorize_without_scoped_ont_is_rejected(monkeypatch) -> None:
     def _unexpected_queue(*_args, **_kwargs):
         raise AssertionError("unscoped reseller authorization must not authorize")
 
-    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _unexpected_queue)
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "request_ont_authorization",
+        _unexpected_queue,
+    )
 
     request = _request()
     request.state.auth = {
@@ -292,7 +313,11 @@ def test_authorize_without_request_auth_is_rejected(monkeypatch) -> None:
     def _unexpected_queue(*_args, **_kwargs):
         raise AssertionError("missing-auth authorization must not authorize")
 
-    monkeypatch.setattr(network_olts_inventory, "enqueue_task", _unexpected_queue)
+    monkeypatch.setattr(
+        network_olts_inventory,
+        "request_ont_authorization",
+        _unexpected_queue,
+    )
 
     response = network_olts_inventory.olt_authorize_ont(
         _request(),

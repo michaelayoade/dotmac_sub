@@ -316,6 +316,16 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.network_operations.cleanup_old_operations": _c(
         "network", SWEEP, IDEMP, LOG
     ),
+    "app.tasks.network_operations.publish_operation_metrics": _c(
+        "network", SWEEP, IDEMP, HEALTH
+    ),
+    "app.tasks.network_operation_dispatch.publish_network_operation_dispatches": _c(
+        "network",
+        SWEEP,
+        STATEFUL,
+        STATUS,
+        "Transactional outbox publisher; row state owns retries and unknown delivery.",
+    ),
     "app.tasks.nin_tasks.verify_nin_task": _c("identity", AUTORETRY, GUARDED, STATUS),
     "app.tasks.notifications.deliver_notification_queue": _c(
         "notifications", STATE, GUARDED, STATUS
@@ -347,8 +357,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATE,
         STATEFUL,
         STATUS,
-        "The network operation ledger owns duplicate suppression, progress, and "
-        "terminal failure visibility.",
+        "The dispatch outbox owns single execution admission; the operation ledger "
+        "owns progress and terminal device outcome.",
     ),
     "app.tasks.ont_bulk.execute_bulk_action": _c("network", ITEMS, PER_ITEM, STATUS),
     "app.tasks.ont_firmware.apply_huawei_ont_firmware": _c(
@@ -356,8 +366,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATE,
         GUARDED,
         STATUS,
-        "The operation ledger guards duplicate delivery; redelivery after the "
-        "delivery-start marker switches to readback instead of reflashing.",
+        "The dispatch outbox admits one execution; the delivery-start marker also "
+        "switches recovery to readback instead of reflashing.",
     ),
     "app.tasks.ont_firmware.verify_huawei_ont_firmware": _c(
         "network",
@@ -383,8 +393,8 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATE,
         STATEFUL,
         STATUS,
-        "Durable parent/child network operations expose failure and gate duplicate "
-        "dispatch; failed convergence is retried by a new reconcile operation.",
+        "Durable parent/child operations expose failure; the dispatch outbox gates "
+        "duplicate execution and a new operation owns later convergence retries.",
     ),
     "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": _c(
         "network", SWEEP, IDEMP, HEALTH
@@ -393,7 +403,12 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "network", AUTORETRY, IDEMP, STATUS
     ),
     "app.tasks.ont_runtime_status.refresh_single_ont_status": _c(
-        "network", STATE, STATEFUL, STATUS
+        "network",
+        MANUAL,
+        STATEFUL,
+        REDRIVE,
+        "The dispatch outbox gates execution; eligible failures are redriven through "
+        "the reviewed network operation recovery owner.",
     ),
     "app.tasks.ont_signal_observations.record_ont_observations": _c(
         "network", SWEEP, IDEMP, HEALTH

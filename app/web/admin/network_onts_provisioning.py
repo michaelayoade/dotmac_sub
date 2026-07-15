@@ -423,27 +423,22 @@ def provision_ont_direct(
     # Device writes always run through the tracked worker lifecycle. A dry run
     # is DB-only and remains synchronous for immediate preview feedback.
     if not dry_run:
-        from app.services.queue_adapter import enqueue_task
+        from app.services.network.ont_provisioning_commands import (
+            request_ont_provisioning,
+        )
 
         initiated_by = actor_label(request)
-        dispatch = enqueue_task(
-            "app.tasks.ont_provisioning.provision_ont",
-            args=[ont_id],
-            kwargs={
-                "dry_run": False,
-                "initiated_by": initiated_by,
-                "correlation_key": f"provision:{ont_id}",
-            },
-            correlation_id=f"provision:{ont_id}",
-            source="admin_ont_provisioning",
-            actor_id=initiated_by,
+        command = request_ont_provisioning(
+            db,
+            ont_id,
+            initiated_by=initiated_by,
         )
-        if not dispatch.queued:
+        if not command.accepted:
             return _step_response(
                 StepResult(
                     "authorization_baseline",
                     False,
-                    f"Could not queue ONT provisioning: {dispatch.error or 'unknown queue error'}",
+                    f"Could not start ONT provisioning: {command.message}",
                 ),
                 request=request,
                 ont_id=ont_id,
@@ -455,16 +450,22 @@ def provision_ont_direct(
                 "ONT provisioning queued; waiting for device confirmation.",
                 waiting=True,
                 data={
-                    "task_id": dispatch.task_id,
+                    "operation_id": command.operation_id,
+                    "dispatch_id": command.dispatch_id,
                     "correlation_key": f"provision:{ont_id}",
                     "waiting_reason": "device_confirmation",
+                    "duplicate": command.duplicate,
                 },
             ),
             request=request,
             ont_id=ont_id,
         )
 
-    result = steps.apply_authorization_baseline(db, ont_id, dry_run=dry_run)
+    from app.services.network.ont_provisioning_execution import (
+        preview_ont_provisioning,
+    )
+
+    result = preview_ont_provisioning(db, ont_id)
 
     return _step_response(result, request=request, ont_id=ont_id)
 

@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network_operation_dispatch import managed_network_operation_dispatch
 from app.tasks._postgres_lock import postgres_session_advisory_lock
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,15 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
 
 
 @celery_app.task(name="app.tasks.ont_runtime_status.refresh_single_ont_status")
-def refresh_single_ont_status(ont_id: str, operation_id: str) -> dict[str, object]:
+@managed_network_operation_dispatch(
+    "app.tasks.ont_runtime_status.refresh_single_ont_status"
+)
+def refresh_single_ont_status(
+    ont_id: str,
+    operation_id: str,
+    *,
+    _network_dispatch_id: str | None = None,
+) -> dict[str, object]:
     """Run a user-requested OLT/TR-069 refresh and update its durable operation."""
     from app.services.network.ont_actions import OntActions
     from app.services.network_operations import network_operations

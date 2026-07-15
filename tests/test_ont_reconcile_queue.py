@@ -12,7 +12,7 @@ from app.services.network.reconcile.state import (
     Drift,
     ReconcileResult,
 )
-from app.services.queue_adapter import QueueDispatchResult
+from app.services.network_operation_dispatch import NetworkOperationCommand
 from app.tasks.ont_reconcile import _reconcile_payload, reconcile_huawei_ont
 
 
@@ -33,9 +33,8 @@ def test_queue_olt_acs_reconciliation_tracks_children_before_dispatch() -> None:
             "app.services.network.ont_reconcile_queue.network_operations.update_parent_status"
         ) as update_parent,
         patch(
-            "app.services.network.ont_reconcile_queue.enqueue_task",
-            return_value=QueueDispatchResult(queued=True, task_id="task-1"),
-        ) as enqueue,
+            "app.services.network.ont_reconcile_queue.stage_dispatch"
+        ) as stage_dispatch,
     ):
         result = queue_olt_acs_reconciliation(db, olt)
 
@@ -47,12 +46,11 @@ def test_queue_olt_acs_reconciliation_tracks_children_before_dispatch() -> None:
         "operation_id": str(parent.id),
     }
     assert start.call_count == 2
-    assert db.commit.call_count == 2
-    enqueue.assert_called_once_with(
-        "app.tasks.ont_reconcile.reconcile_huawei_ont",
-        args=[str(ont.id), str(child.id)],
-        correlation_id=f"ont_desired_reconcile:{ont.id}",
-        source="olt_acs_assignment",
+    assert db.commit.call_count == 1
+    stage_dispatch.assert_called_once_with(
+        db,
+        child,
+        NetworkOperationCommand.ont_desired_reconcile_v1,
     )
     update_parent.assert_called_once_with(db, str(parent.id))
 

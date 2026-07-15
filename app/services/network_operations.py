@@ -10,11 +10,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.models.network_operation import (
@@ -67,8 +69,18 @@ _EXPECTED_WARNING_PATTERNS = (
 )
 
 
+@dataclass(frozen=True)
+class NetworkOperationRedriveMetadata:
+    source_id: UUID
+    reason: str
+    reviewed_head: str
+    idempotency_key: str
+    retry_count: int
+    max_retries: int
+
+
 def _operation_extra(op: NetworkOperation) -> dict[str, object]:
-    return {
+    extra: dict[str, object] = {
         "event": "network_operation",
         "operation_id": str(op.id),
         "operation_type": op.operation_type.value,
@@ -78,8 +90,30 @@ def _operation_extra(op: NetworkOperation) -> dict[str, object]:
         "control_plane_phase": phase_for_network_operation(op.status).value,
         "correlation_key": op.correlation_key,
         "parent_id": str(op.parent_id) if op.parent_id else None,
+        "redrive_of_id": str(op.redrive_of_id) if op.redrive_of_id else None,
+        "is_redrive": op.redrive_of_id is not None,
+        "retry_count": int(op.retry_count or 0),
+        "max_retries": int(op.max_retries or 0),
         "initiated_by": op.initiated_by,
     }
+    now = datetime.now(UTC)
+    if op.created_at:
+        extra["operation_age_seconds"] = max(
+            0.0,
+            (now - _as_aware_utc(op.created_at)).total_seconds(),
+        )
+    if op.started_at:
+        end = _as_aware_utc(op.completed_at) if op.completed_at else now
+        extra["run_duration_seconds"] = max(
+            0.0,
+            (end - _as_aware_utc(op.started_at)).total_seconds(),
+        )
+    if op.redrive_source and op.redrive_source.completed_at:
+        extra["recovery_latency_seconds"] = max(
+            0.0,
+            (now - _as_aware_utc(op.redrive_source.completed_at)).total_seconds(),
+        )
+    return extra
 
 
 def _as_aware_utc(value: datetime) -> datetime:
@@ -187,6 +221,7 @@ class NetworkOperations(ListResponseMixin):
         input_payload: dict[str, Any] | None = None,
         parent_id: str | None = None,
         initiated_by: str | None = None,
+        redrive: NetworkOperationRedriveMetadata | None = None,
     ) -> NetworkOperation:
         """Create a new operation in pending status.
 
@@ -199,6 +234,8 @@ class NetworkOperations(ListResponseMixin):
             input_payload: Request parameters to record.
             parent_id: Parent operation UUID for composable workflows.
             initiated_by: Who triggered this (username or "system").
+            redrive: Ledger-owned recovery metadata. Routes and tasks must use
+                ``start_redrive`` rather than constructing this directly.
 
         Returns:
             The created NetworkOperation record.
@@ -261,6 +298,12 @@ class NetworkOperations(ListResponseMixin):
             correlation_key=correlation_key,
             input_payload=input_payload,
             initiated_by=initiated_by,
+            redrive_of_id=redrive.source_id if redrive else None,
+            redrive_reason=redrive.reason if redrive else None,
+            redrive_reviewed_head=redrive.reviewed_head if redrive else None,
+            redrive_idempotency_key=redrive.idempotency_key if redrive else None,
+            retry_count=redrive.retry_count if redrive else 0,
+            max_retries=redrive.max_retries if redrive else 3,
         )
         db.add(op)
         try:
@@ -289,15 +332,83 @@ class NetworkOperations(ListResponseMixin):
         return op
 
     @staticmethod
+    def start_redrive(
+        db: Session,
+        source: NetworkOperation,
+        *,
+        correlation_key: str,
+        input_payload: dict[str, Any],
+        reason: str,
+        reviewed_head: str,
+        idempotency_key: str,
+        initiated_by: str,
+    ) -> tuple[NetworkOperation, bool]:
+        """Create or replay one immutable, linked operation attempt.
+
+        The caller must lock and review ``source`` before invoking this method.
+        The composite idempotency key is scoped to that source operation, so a
+        browser retry returns the already-created attempt without redispatching
+        a second side effect.
+        """
+        existing = db.scalars(
+            select(NetworkOperation).where(
+                NetworkOperation.redrive_of_id == source.id,
+                NetworkOperation.redrive_idempotency_key == idempotency_key,
+            )
+        ).first()
+        if existing is not None:
+            return existing, True
+
+        retry_count = int(source.retry_count or 0) + 1
+        max_retries = int(source.max_retries or 0)
+        if retry_count > max_retries:
+            raise HTTPException(
+                status_code=409,
+                detail="Operation retry limit has been reached",
+            )
+
+        operation = NetworkOperations.start(
+            db,
+            source.operation_type,
+            source.target_type,
+            str(source.target_id),
+            correlation_key=correlation_key,
+            input_payload=input_payload,
+            initiated_by=initiated_by,
+            redrive=NetworkOperationRedriveMetadata(
+                source_id=source.id,
+                reason=reason,
+                reviewed_head=reviewed_head,
+                idempotency_key=idempotency_key,
+                retry_count=retry_count,
+                max_retries=max_retries,
+            ),
+        )
+        logger.info(
+            "Network operation redrive created",
+            extra={**_operation_extra(operation), "event": "network_operation_redrive"},
+        )
+        return operation, False
+
+    @staticmethod
     def mark_running(db: Session, operation_id: str) -> NetworkOperation:
         """Transition operation to running status."""
         op = _get_operation(db, operation_id)
+        first_start = op.started_at is None
         _transition_status(op, NetworkOperationStatus.running)
-        if not op.started_at:
+        if first_start:
             op.started_at = datetime.now(UTC)
         op.waiting_reason = None
         db.flush()
-        logger.info("Operation running", extra=_operation_extra(op))
+        extra = _operation_extra(op)
+        if first_start and op.created_at and op.started_at:
+            extra["queue_delay_seconds"] = max(
+                0.0,
+                (
+                    _as_aware_utc(op.started_at) - _as_aware_utc(op.created_at)
+                ).total_seconds(),
+            )
+        logger.info("Operation running", extra=extra)
         return op
 
     @staticmethod
@@ -598,6 +709,66 @@ class NetworkOperations(ListResponseMixin):
             parent.completed_at = None
         db.flush()
         return parent
+
+    @staticmethod
+    def health_snapshot(
+        db: Session,
+        *,
+        now: datetime | None = None,
+        window: timedelta = timedelta(hours=24),
+    ) -> dict[str, float]:
+        """Return a bounded aggregate for scheduled observability export."""
+        current = now or datetime.now(UTC)
+        cutoff = current - window
+        snapshot: dict[str, float] = {"window_seconds": window.total_seconds()}
+        for status in NetworkOperationStatus:
+            snapshot[f"operations_{status.value}"] = 0.0
+            snapshot[f"redrives_{status.value}"] = 0.0
+
+        status_rows = db.execute(
+            select(NetworkOperation.status, func.count(NetworkOperation.id))
+            .where(NetworkOperation.created_at >= cutoff)
+            .group_by(NetworkOperation.status)
+        ).all()
+        for status, count in status_rows:
+            value = (
+                status.value if isinstance(status, NetworkOperationStatus) else status
+            )
+            snapshot[f"operations_{value}"] = float(count)
+
+        redrive_rows = db.execute(
+            select(NetworkOperation.status, func.count(NetworkOperation.id))
+            .where(
+                NetworkOperation.created_at >= cutoff,
+                NetworkOperation.redrive_of_id.is_not(None),
+            )
+            .group_by(NetworkOperation.status)
+        ).all()
+        for status, count in redrive_rows:
+            value = (
+                status.value if isinstance(status, NetworkOperationStatus) else status
+            )
+            snapshot[f"redrives_{value}"] = float(count)
+
+        oldest_active = db.scalar(
+            select(func.min(NetworkOperation.created_at)).where(
+                NetworkOperation.status.in_(_ACTIVE_STATUSES)
+            )
+        )
+        snapshot["active_oldest_age_seconds"] = (
+            max(0.0, (current - _as_aware_utc(oldest_active)).total_seconds())
+            if oldest_active
+            else 0.0
+        )
+        snapshot["active"] = float(
+            db.scalar(
+                select(func.count(NetworkOperation.id)).where(
+                    NetworkOperation.status.in_(_ACTIVE_STATUSES)
+                )
+            )
+            or 0
+        )
+        return snapshot
 
 
 network_operations = NetworkOperations()

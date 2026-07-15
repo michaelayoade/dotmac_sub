@@ -91,9 +91,9 @@ class TestRouterRegistration:
 
 
 class TestAuthorizeEndpoint:
-    """Authorization endpoints execute OLT work synchronously."""
+    """Authorization endpoints submit durable network commands."""
 
-    def test_authorize_ont_runs_synchronously(self, monkeypatch):
+    def test_authorize_ont_submits_command(self, monkeypatch):
         from app.api import network_olt_ops
 
         captured = {}

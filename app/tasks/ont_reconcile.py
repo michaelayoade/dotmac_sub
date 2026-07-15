@@ -8,6 +8,7 @@ from typing import Any
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network_operation_dispatch import managed_network_operation_dispatch
 from app.tasks._postgres_lock import postgres_session_advisory_lock
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,13 @@ def _reconcile_payload(result: Any) -> dict[str, Any]:
     soft_time_limit=150,
     time_limit=180,
 )
-def reconcile_huawei_ont(ont_id: str, operation_id: str) -> dict[str, Any]:
+@managed_network_operation_dispatch("app.tasks.ont_reconcile.reconcile_huawei_ont")
+def reconcile_huawei_ont(
+    ont_id: str,
+    operation_id: str,
+    *,
+    _network_dispatch_id: str | None = None,
+) -> dict[str, Any]:
     """Run one tracked desired/observed reconcile and persist its outcome."""
     from app.services.network.reconcile.core import reconcile_ont
     from app.services.network_operations import network_operations

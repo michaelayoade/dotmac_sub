@@ -1,36 +1,19 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from app.services.network import olt_api_operations
+from app.services.network.ont_provisioning_commands import ProvisioningCommandResult
 
 
-def test_api_authorize_ont_returns_workflow_result(monkeypatch):
-    """API authorization returns the completed workflow result directly."""
-    failed_result = SimpleNamespace(
-        success=True,
-        status="warning",
-        message="ONT authorized, but OLT service baseline failed.",
-        ont_unit_id="ont-1",
-        ont_id_on_olt=7,
-        completed_authorization=True,
-        partial_success=True,
-        baseline_applied=False,
-        duration_ms=123,
-        steps=[
-            SimpleNamespace(
-                step=1,
-                name="Activate ONT",
-                success=True,
-                message="authorized",
-                duration_ms=10,
-            )
-        ],
-    )
-
+def test_api_authorize_ont_returns_durable_command_result(monkeypatch):
     monkeypatch.setattr(
-        "app.services.network.olt_api_operations.ont_authorization.authorize_ont",
-        lambda *args, **kwargs: failed_result,
+        "app.services.network.olt_api_operations.request_ont_authorization",
+        lambda *args, **kwargs: ProvisioningCommandResult(
+            True,
+            True,
+            "ONT authorization accepted.",
+            operation_id="operation-1",
+            dispatch_id="dispatch-1",
+        ),
     )
 
     response = olt_api_operations.authorize_ont(
@@ -41,22 +24,10 @@ def test_api_authorize_ont_returns_workflow_result(monkeypatch):
     )
 
     assert response.success is True
-    assert response.message == "ONT authorized, but OLT service baseline failed."
+    assert response.message == "ONT authorization accepted."
     assert response.data == {
-        "status": "warning",
-        "ont_unit_id": "ont-1",
-        "ont_id_on_olt": 7,
-        "completed_authorization": True,
-        "partial_success": True,
-        "baseline_applied": False,
-        "duration_ms": 123,
-        "steps": [
-            {
-                "step": 1,
-                "name": "Activate ONT",
-                "success": True,
-                "message": "authorized",
-                "duration_ms": 10,
-            }
-        ],
+        "operation_id": "operation-1",
+        "dispatch_id": "dispatch-1",
+        "waiting": True,
+        "duplicate": False,
     }

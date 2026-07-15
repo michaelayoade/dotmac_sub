@@ -23,6 +23,11 @@ from app.services.events.types import EventType
 from app.services.genieacs_service import genieacs_service
 from app.services.genieacs_service_intent import genieacs_service_intent
 from app.services.network.ont_actions import ActionResult, OntActions
+from app.services.network_operation_dispatch import (
+    NetworkOperationCommand,
+    NetworkOperationDispatchError,
+    stage_dispatch,
+)
 from app.services.network_operations import network_operations, run_tracked_action
 from app.services.web_network_ont_actions._common import (
     _log_action_audit,
@@ -128,7 +133,16 @@ def queue_refresh(
             input_payload={"action": "status_refresh"},
             initiated_by=initiated_by,
         )
+        dispatch = stage_dispatch(
+            db,
+            operation,
+            NetworkOperationCommand.ont_status_refresh_v1,
+        )
         db.commit()
+    except NetworkOperationDispatchError as exc:
+        db.rollback()
+        logger.exception("Failed to stage ONT status refresh for %s", ont_id)
+        return QueuedRefreshResult(False, False, exc.message)
     except HTTPException as exc:
         if exc.status_code != 409:
             raise
@@ -160,31 +174,16 @@ def queue_refresh(
             str(operation.id),
         )
 
-    try:
-        from app.tasks.ont_runtime_status import refresh_single_ont_status
-
-        refresh_single_ont_status.delay(ont_id, str(operation.id))
-    except Exception as exc:
-        network_operations.mark_failed(
-            db,
-            str(operation.id),
-            f"Unable to queue ONT status refresh: {exc}",
-        )
-        db.commit()
-        logger.exception("Failed to queue ONT status refresh for %s", ont_id)
-        return QueuedRefreshResult(
-            False,
-            False,
-            "Unable to queue ONT status refresh.",
-            str(operation.id),
-        )
-
     _log_action_audit(
         db,
         request=request,
         action="queue_refresh",
         ont_id=ont_id,
-        metadata={"operation_id": str(operation.id), "queued": True},
+        metadata={
+            "operation_id": str(operation.id),
+            "dispatch_id": str(dispatch.id),
+            "queued": True,
+        },
         status_code=202,
     )
     return QueuedRefreshResult(
