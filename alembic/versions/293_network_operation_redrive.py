@@ -81,34 +81,45 @@ def _seed_permission() -> None:
 
 
 def upgrade() -> None:
-    with op.batch_alter_table(_TABLE) as batch:
-        batch.add_column(
-            sa.Column(
-                "redrive_of_id",
-                postgresql.UUID(as_uuid=True),
-                nullable=True,
-            )
-        )
-        batch.add_column(sa.Column("redrive_reason", sa.Text(), nullable=True))
-        batch.add_column(
-            sa.Column("redrive_reviewed_head", sa.String(length=64), nullable=True)
-        )
-        batch.add_column(
-            sa.Column("redrive_idempotency_key", sa.String(length=160), nullable=True)
-        )
-        batch.create_foreign_key(
-            "fk_network_operations_redrive_of_id",
-            _TABLE,
-            ["redrive_of_id"],
-            ["id"],
-            ondelete="RESTRICT",
-        )
-        batch.create_index("ix_netops_redrive_of", ["redrive_of_id"])
-        batch.create_index(
-            "uq_netops_redrive_idempotency",
-            ["redrive_of_id", "redrive_idempotency_key"],
-            unique=True,
-        )
+    op.add_column(
+        _TABLE,
+        sa.Column(
+            "redrive_of_id",
+            postgresql.UUID(as_uuid=True),
+            nullable=True,
+        ),
+    )
+    op.add_column(
+        _TABLE,
+        sa.Column("redrive_reason", sa.Text(), nullable=True),
+    )
+    op.add_column(
+        _TABLE,
+        sa.Column("redrive_reviewed_head", sa.String(length=64), nullable=True),
+    )
+    op.add_column(
+        _TABLE,
+        sa.Column("redrive_idempotency_key", sa.String(length=160), nullable=True),
+    )
+    op.create_foreign_key(
+        "fk_network_operations_redrive_of_id",
+        _TABLE,
+        _TABLE,
+        ["redrive_of_id"],
+        ["id"],
+        ondelete="RESTRICT",
+    )
+    op.create_index(
+        "ix_netops_redrive_of",
+        _TABLE,
+        ["redrive_of_id"],
+    )
+    op.create_index(
+        "uq_netops_redrive_idempotency",
+        _TABLE,
+        ["redrive_of_id", "redrive_idempotency_key"],
+        unique=True,
+    )
     _seed_permission()
 
 
@@ -130,14 +141,14 @@ def downgrade() -> None:
             )
             bind.execute(permissions.delete().where(permissions.c.id == permission_id))
 
-    with op.batch_alter_table(_TABLE) as batch:
-        batch.drop_index("uq_netops_redrive_idempotency")
-        batch.drop_index("ix_netops_redrive_of")
-        batch.drop_constraint(
-            "fk_network_operations_redrive_of_id",
-            type_="foreignkey",
-        )
-        batch.drop_column("redrive_idempotency_key")
-        batch.drop_column("redrive_reviewed_head")
-        batch.drop_column("redrive_reason")
-        batch.drop_column("redrive_of_id")
+    op.drop_index("uq_netops_redrive_idempotency", table_name=_TABLE)
+    op.drop_index("ix_netops_redrive_of", table_name=_TABLE)
+    op.drop_constraint(
+        "fk_network_operations_redrive_of_id",
+        _TABLE,
+        type_="foreignkey",
+    )
+    op.drop_column(_TABLE, "redrive_idempotency_key")
+    op.drop_column(_TABLE, "redrive_reviewed_head")
+    op.drop_column(_TABLE, "redrive_reason")
+    op.drop_column(_TABLE, "redrive_of_id")

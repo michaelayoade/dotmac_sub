@@ -97,6 +97,11 @@ def _install_idempotent_schema_ops() -> None:
     and no-ops when the target is already in the desired state. Pre-existing
     production DBs (where the schema is the pre-squash incremental state)
     see exactly the same behavior as before.
+
+    Post-squash migrations must call the top-level ``op`` schema methods unless
+    they implement equivalent live-schema guards themselves.
+    ``op.batch_alter_table`` returns a separate BatchOperations object whose
+    methods do not pass through these central guards.
     """
     import sqlalchemy as sa  # noqa: PLC0415 — alembic env is import-time
 
