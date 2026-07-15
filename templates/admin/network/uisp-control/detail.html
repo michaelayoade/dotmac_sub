@@ -1,7 +1,9 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
 {% block title %}UISP Intent - Admin{% endblock %}
 {% block content %}
 {% set profile = capability_profile %}
+{% set identity = identity_view if identity_view is defined else none %}
 {% set writable = profile.writable_fields if profile else [] %}
 {% set busy = intent.status.value in ['applying', 'pending_readback'] %}
 <div class="space-y-6">
@@ -12,12 +14,16 @@
                 <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">{{ intent.target_type.value | upper }} {{ intent.uisp_device_id or intent.target_id }}</h1>
                 <p class="mt-1 text-sm text-slate-500">Revision {{ intent.desired_revision }} · {{ intent.status.value | replace('_', ' ') | title }}{% if profile %} · {{ profile.vendor }} {{ profile.model }} · {{ profile.transport | upper }}{% endif %}</p>
             </div>
-            {% if profile and profile.apply_ready and not busy and intent.status.value != 'verified' %}
-            <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/apply" data-confirm="Apply this desired-state revision to the device? Success requires device readback." data-confirm-variant="warning" data-confirm-label="Apply configuration">
+            {% set can_write = identity.write_allowed if identity else (profile and profile.apply_ready and not busy and intent.status.value != 'verified') %}
+            {% if can_write %}
+            {% set replan = identity and identity.binding_changed %}
+            <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/{{ 'replan' if replan else 'apply' }}" data-confirm="{{ 'Create a new plan against the currently observed device identity and apply it? Success requires device readback.' if replan else 'Apply this desired-state revision to the device? Success requires device readback.' }}" data-confirm-variant="warning" data-confirm-label="{{ 'Re-plan and apply' if replan else 'Apply configuration' }}">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="expected_revision" value="{{ intent.desired_revision }}">
-                <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Apply configuration</button>
+                <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">{{ 'Re-plan and apply' if replan else 'Apply configuration' }}</button>
             </form>
+            {% elif identity %}
+            <button type="button" disabled title="{{ identity.write_reason }}" class="cursor-not-allowed rounded-lg bg-slate-200 px-4 py-2 text-sm font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-400">Apply unavailable</button>
             {% endif %}
         </div>
     </header>
@@ -28,9 +34,36 @@
     <div class="border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-900/20 dark:text-amber-200">Desired-state revision staged.</div>
     {% elif request.query_params.get('notice') == 'pruned' %}
     <div class="border-l-4 border-emerald-500 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-200">Unsupported desired fields removed in a new revision.</div>
+    {% elif request.query_params.get('notice') == 'replanned' %}
+    <div class="border-l-4 border-blue-500 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:bg-blue-900/20 dark:text-blue-200">A new operation was pinned to the current device identity. Success still requires readback.</div>
     {% endif %}
     {% if request.query_params.get('error') %}
     <div class="border-l-4 border-red-500 bg-red-50 px-4 py-3 text-sm text-red-900 dark:bg-red-900/20 dark:text-red-200">{{ request.query_params.get('error') }}</div>
+    {% endif %}
+
+    {% if identity %}
+    <section class="border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+            <div>
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Device identity and write readiness</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ identity.write_reason }}</p>
+            </div>
+            {{ status_badge(identity.readiness_label, identity.readiness_tone, size="sm") }}
+        </div>
+        <dl class="grid gap-x-6 gap-y-3 px-4 py-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div><dt class="text-xs font-medium text-slate-500">Observed hardware</dt><dd class="mt-1 text-slate-900 dark:text-white">{{ identity.identity.vendor ~ ' ' ~ identity.identity.model if identity.identity else 'Unavailable' }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Observed software</dt><dd class="mt-1 font-mono text-xs text-slate-900 dark:text-white">{{ (identity.identity.firmware_version or identity.identity.software_version or 'Unknown') if identity.identity else 'Unknown' }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Current adapter</dt><dd class="mt-1 font-mono text-xs text-slate-900 dark:text-white">{{ identity.adapter_label }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Last observation</dt><dd class="mt-1 text-slate-900 dark:text-white">{{ identity.observed_at.strftime('%Y-%m-%d %H:%M:%S') if identity.observed_at else 'Never' }}<span class="block text-xs text-slate-500">{{ identity.observed_source }}</span></dd></div>
+            {% if identity.binding and identity.binding.capability_id %}
+            <div class="sm:col-span-2"><dt class="text-xs font-medium text-slate-500">Capability profile</dt><dd class="mt-1 font-mono text-xs text-slate-900 dark:text-white">{{ identity.binding.capability_id }} @ {{ identity.binding.capability_revision[:12] }}</dd></div>
+            {% endif %}
+            {% if identity.pinned_binding %}
+            {% set planned_identity = identity.pinned_binding.get('identity', {}) %}
+            <div class="sm:col-span-2"><dt class="text-xs font-medium text-slate-500">Last planned adapter and identity</dt><dd class="mt-1 font-mono text-xs {{ 'text-amber-700 dark:text-amber-300' if identity.binding_changed else 'text-slate-900 dark:text-white' }}">{{ identity.pinned_binding.get('adapter_name', 'Unknown') }}@{{ identity.pinned_binding.get('adapter_revision', 'unknown')[:12] }} · {{ planned_identity.get('vendor', 'Unknown') }} {{ planned_identity.get('model', 'Unknown') }} · {{ planned_identity.get('firmware_version') or planned_identity.get('software_version') or 'Unknown version' }}</dd></div>
+            {% endif %}
+        </dl>
+    </section>
     {% endif %}
 
     {% if capability_error %}

@@ -14,6 +14,7 @@ from app.db import get_db
 from app.models.uisp_control import UispDeviceIntent, UispIntentStatus
 from app.services import uisp_control_plane
 from app.services.auth_dependencies import require_permission
+from app.services.control_plane_identity_view import uisp_identity_view
 from app.services.uisp_control_plane import capabilities, request_apply
 from app.services.uisp_write_adapter import (
     UispWriteUnsupported,
@@ -58,6 +59,7 @@ def _detail_redirect(
 def uisp_control_list(
     request: Request,
     status: str | None = None,
+    health: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -68,12 +70,18 @@ def uisp_control_list(
             selected_status = UispIntentStatus(status)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid UISP status") from exc
-    total = uisp_control_plane.count_intents(db, status=selected_status)
+    if health not in {None, "", "drift", "stale", "unmapped"}:
+        raise HTTPException(status_code=400, detail="Invalid UISP health filter")
+    selected_health = health or None
+    total = uisp_control_plane.count_intents(
+        db, status=selected_status, health=selected_health
+    )
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = min(page, total_pages)
     intents = uisp_control_plane.list_intents(
         db,
         status=selected_status,
+        health=selected_health,
         limit=per_page,
         offset=(page - 1) * per_page,
     )
@@ -85,6 +93,7 @@ def uisp_control_list(
             "counts": counts,
             "capabilities": capabilities(),
             "status_filter": status,
+            "health_filter": selected_health,
             "pagination": {
                 "page": page,
                 "per_page": per_page,
@@ -124,6 +133,12 @@ def uisp_control_detail(
             "capabilities": capabilities(),
             "capability_profile": profile,
             "capability_error": capability_error,
+            "identity_view": uisp_identity_view(
+                db,
+                intent,
+                profile=profile,
+                capability_error=capability_error,
+            ),
         }
     )
     return templates.TemplateResponse("admin/network/uisp-control/detail.html", context)
@@ -146,6 +161,26 @@ def uisp_control_apply(
     except uisp_control_plane.UispIntentError as exc:
         return _detail_redirect(intent_id, error=str(exc))
     return _detail_redirect(intent_id, notice="queued")
+
+
+@router.post(
+    "/{intent_id}/replan",
+    dependencies=[Depends(require_permission("network:cpe:write"))],
+)
+def uisp_control_replan(
+    intent_id: UUID,
+    expected_revision: int = Form(..., ge=1),
+    db: Session = Depends(get_db),
+):
+    """Plan a new operation against the currently observed adapter identity."""
+    intent = db.get(UispDeviceIntent, intent_id)
+    if intent is None:
+        raise HTTPException(status_code=404, detail="UISP intent not found")
+    try:
+        request_apply(db, intent, expected_revision=expected_revision)
+    except uisp_control_plane.UispIntentError as exc:
+        return _detail_redirect(intent_id, error=str(exc))
+    return _detail_redirect(intent_id, notice="replanned")
 
 
 @router.post(

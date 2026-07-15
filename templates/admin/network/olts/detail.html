@@ -269,6 +269,22 @@
         </div>
     </details>
 
+    <section class="border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+            <div>
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Control plane identity</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ identity_view.write_reason }}</p>
+            </div>
+            {{ status_badge(identity_view.readiness_label, identity_view.readiness_tone, size="sm") }}
+        </div>
+        <dl class="grid gap-x-6 gap-y-3 px-5 py-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div><dt class="text-xs font-medium text-slate-500">Observed hardware</dt><dd class="mt-1 text-slate-900 dark:text-white">{{ identity_view.identity.vendor ~ ' ' ~ identity_view.identity.model if identity_view.identity else (olt.vendor or 'Unknown') ~ ' ' ~ (olt.model or 'Unknown') }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Observed firmware</dt><dd class="mt-1 font-mono text-xs text-slate-900 dark:text-white">{{ identity_view.identity.firmware_version if identity_view.identity and identity_view.identity.firmware_version else 'Unknown' }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Selected adapter</dt><dd class="mt-1 break-all font-mono text-xs text-slate-900 dark:text-white">{{ identity_view.adapter_label }}</dd></div>
+            <div><dt class="text-xs font-medium text-slate-500">Last observation</dt><dd class="mt-1 text-slate-900 dark:text-white">{{ identity_view.observed_at.strftime('%Y-%m-%d %H:%M:%S') if identity_view.observed_at else 'Never' }}<span class="block text-xs text-slate-500">{{ identity_view.observed_source }}</span></dd></div>
+        </dl>
+    </section>
+
     {# Firmware lifecycle #}
     <details class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <summary class="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-900 dark:text-white">Firmware lifecycle</summary>
@@ -303,7 +319,7 @@
                 {% include "components/forms/csrf_input.html" %}
                 <div>
                     <label for="olt-firmware-image" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Target image</label>
-                    <select id="olt-firmware-image" name="firmware_image_id" required {% if firmware_context.upgrade_active %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                    <select id="olt-firmware-image" name="firmware_image_id" required {% if firmware_context.upgrade_active or not identity_view.write_allowed %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                         <option value="">Select firmware</option>
                         {% for image in firmware_context.images %}
                         <option value="{{ image.id }}">{{ image.vendor }} {{ image.model or 'all models' }} v{{ image.version }}</option>
@@ -312,10 +328,10 @@
                 </div>
                 <div>
                     <label for="firmware-confirm-olt-name" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Type {{ olt.name }} to confirm</label>
-                    <input id="firmware-confirm-olt-name" name="confirm_olt_name" type="text" required autocomplete="off" {% if firmware_context.upgrade_active %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                    <input id="firmware-confirm-olt-name" name="confirm_olt_name" type="text" required autocomplete="off" {% if firmware_context.upgrade_active or not identity_view.write_allowed %}disabled{% endif %} class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                 </div>
-                <button type="submit" {% if firmware_context.upgrade_active %}disabled{% endif %} class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50">
-                    {{ 'Upgrade active' if firmware_context.upgrade_active else 'Queue upgrade' }}
+                <button type="submit" title="{{ identity_view.write_reason if not identity_view.write_allowed else '' }}" {% if firmware_context.upgrade_active or not identity_view.write_allowed %}disabled{% endif %} class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50">
+                    {{ 'Upgrade active' if firmware_context.upgrade_active else ('Mapping required' if not identity_view.write_allowed else 'Queue upgrade') }}
                 </button>
             </form>
             {% else %}

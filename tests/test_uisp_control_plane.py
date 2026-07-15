@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from app.models.catalog import AccessType, Subscription, SubscriptionStatus
@@ -14,8 +15,10 @@ from app.models.uisp_control import (
     UispIntentTargetType,
     UispSnapshotSource,
 )
+from app.services.control_plane_identity_view import uisp_identity_view
 from app.services.uisp_control_plane import (
     UispIntentError,
+    list_intents,
     observe_intent,
     prune_unsupported_desired,
     reconcile_inventory,
@@ -484,3 +487,85 @@ def test_hostname_only_model_renders_only_verified_control() -> None:
     assert 'name="remote_access_enabled"' not in html
     assert 'name="lifecycle_state"' not in html
     assert 'name="firmware_version"' not in html
+
+
+def test_attention_filters_separate_drift_stale_and_write_blocked(
+    db_session, subscriber, catalog_offer
+) -> None:
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    rows = []
+    for index in range(3):
+        cpe = _cpe(
+            db_session,
+            subscriber,
+            subscription,
+            uisp_id=f"uisp-filter-{index}",
+        )
+        rows.append(
+            stage_intent(
+                db_session,
+                target_type=UispIntentTargetType.cpe,
+                target_id=cpe.id,
+                desired_state={"name": f"radio-{index}"},
+            )
+        )
+
+    rows[0].status = UispIntentStatus.drifted
+    rows[0].last_observed_at = datetime.now(UTC)
+    rows[1].last_observed_at = datetime.now(UTC) - timedelta(days=2)
+    rows[2].status = UispIntentStatus.manual_required
+    rows[2].last_observed_at = datetime.now(UTC)
+    db_session.flush()
+
+    assert [row.id for row in list_intents(db_session, health="drift")] == [rows[0].id]
+    assert [row.id for row in list_intents(db_session, health="stale")] == [rows[1].id]
+    assert [row.id for row in list_intents(db_session, health="unmapped")] == [
+        rows[2].id
+    ]
+
+
+def test_identity_change_exposes_confirmed_replan_action(
+    db_session, subscriber, catalog_offer
+) -> None:
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    cpe = _cpe(db_session, subscriber, subscription, uisp_id="uisp-replan")
+    _capability(db_session, cpe, {"name": "/system/hostname"})
+    cpe.firmware_version = "8.7.19"
+    intent = stage_intent(
+        db_session,
+        target_type=UispIntentTargetType.cpe,
+        target_id=cpe.id,
+        desired_state={"name": "radio-replan"},
+    )
+    operation = request_apply(db_session, intent, enqueue=False)
+    operation.status = NetworkOperationStatus.failed
+    intent.status = UispIntentStatus.drifted
+    cpe.firmware_version = "8.7.20"
+    db_session.flush()
+    profile = capability_profile(db_session, intent)
+    identity = uisp_identity_view(
+        db_session,
+        intent,
+        profile=profile,
+        capability_error=None,
+    )
+
+    html = templates.env.get_template("admin/network/uisp-control/detail.html").render(
+        request=SimpleNamespace(
+            state=SimpleNamespace(csrf_token="csrf"), query_params={}
+        ),
+        current_user={"name": "Admin", "email": "admin@example.test"},
+        sidebar_stats={},
+        active_page="uisp-control",
+        active_menu="network",
+        intent=intent,
+        desired_redacted=intent.desired_state,
+        capability_profile=profile,
+        capability_error=None,
+        identity_view=identity,
+    )
+
+    assert identity.binding_changed is True
+    assert identity.write_allowed is True
+    assert f"/admin/network/uisp-control/{intent.id}/replan" in html
+    assert 'data-confirm-label="Re-plan and apply"' in html
