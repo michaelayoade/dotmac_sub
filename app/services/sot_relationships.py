@@ -1350,35 +1350,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
     DomainSOT(
-        domain="support_control_plane",
-        services=(
-            SOTService(
-                name="support.tickets",
-                module="app.services.support",
-                owns=(
-                    "support ticket lifecycle",
-                    "ticket assignment and comments",
-                    "ticket SLA events and satisfaction state",
-                ),
-                depends_on=(
-                    "customer.identity_scope",
-                    "events.dispatcher",
-                    "communications.staff_notifications",
-                ),
-            ),
-        ),
-        entrypoints=(
-            "app.api.support",
-            "app.web.admin.support",
-            "app.web.customer.routes",
-            "app.tasks.support",
-        ),
-        rule=(
-            "Support routes and jobs delegate ticket decisions and transitions "
-            "to the support service; notifications and events remain consequences."
-        ),
-    ),
-    DomainSOT(
         domain="feature_control_plane",
         services=(
             SOTService(
@@ -1558,15 +1529,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "access.control_resolution",
                     "access.walled_garden_policy",
                 ),
-            ),
-            SOTService(
-                name="access.radius_projection",
-                module="app.services.radius_population",
-                owns=(
-                    "authoritative radcheck and radreply projection",
-                    "RADIUS device-login authorization projection",
-                ),
-                depends_on=("access.radius_state", "network.identity"),
             ),
             SOTService(
                 name="access.radius_reject",

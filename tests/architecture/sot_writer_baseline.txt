@@ -3,7 +3,6 @@
 # require an explicit ownership review, and the architecture test requires
 # resolved/non-writing entries to be removed. Keep this file sorted.
 app.services.account_deletion
-app.services.account_lifecycle
 app.services.account_status_reconcile
 app.services.admin_alerts
 app.services.admin_whats_new
@@ -14,7 +13,6 @@ app.services.auth_flow
 app.services.autopay
 app.services.bandwidth
 app.services.billing.reconcile_unposted
-app.services.billing.tax
 app.services.billing.unwall_paid_accounts
 app.services.billing_automation
 app.services.billing_cleanup_remediation
@@ -47,7 +45,6 @@ app.services.crud
 app.services.customer_identity_resolution
 app.services.customer_location_requests
 app.services.customer_portal_contacts
-app.services.customer_portal_flow_addons
 app.services.customer_portal_flow_payment_methods
 app.services.customer_portal_flow_payments
 app.services.customer_portal_flow_services
@@ -111,12 +108,14 @@ app.services.network.cpe
 app.services.network.cpe_tr069
 app.services.network.device_operation
 app.services.network.fiber_services
+app.services.network.firmware_catalog
 app.services.network.imported_service_ports
 app.services.network.ip
 app.services.network.olt_autofind
 app.services.network.olt_baseline
 app.services.network.olt_config_pack_live_audit
 app.services.network.olt_device_crud
+app.services.network.olt_firmware
 app.services.network.olt_hardware_crud
 app.services.network.olt_lifecycle
 app.services.network.olt_operations
@@ -135,6 +134,7 @@ app.services.network.ont_authorization
 app.services.network.ont_config_snapshots
 app.services.network.ont_decommission
 app.services.network.ont_features
+app.services.network.ont_firmware
 app.services.network.ont_inventory
 app.services.network.ont_management_ipam
 app.services.network.ont_provision_steps
@@ -159,7 +159,6 @@ app.services.network.subscriber_wan_ipam
 app.services.network.tr069_seed
 app.services.network.vendor_capabilities
 app.services.network.zones
-app.services.network_operations
 app.services.network_subscriber_bridge
 app.services.network_topology
 app.services.network_vendor_polling
@@ -168,8 +167,6 @@ app.services.numbering
 app.services.olt_observed_state_adapter
 app.services.operational_escalation
 app.services.operational_escalation_delivery
-app.services.payment_arrangements
-app.services.payment_proofs
 app.services.payment_routing
 app.services.pppoe_credentials
 app.services.projects_mirror
@@ -204,7 +201,6 @@ app.services.subscription_changes
 app.services.subscription_engine
 app.services.subscription_lifecycle_events
 app.services.support_automation
-app.services.support_ticket_settings
 app.services.system_jobs
 app.services.table_config
 app.services.team_inbox_assignment
@@ -235,14 +231,12 @@ app.services.unit_of_work
 app.services.unmatched_radio_queue
 app.services.usage
 app.services.user_profile
-app.services.vas_purchases
 app.services.vendor_admin
 app.services.vendor_portal_operations
 app.services.vendor_purchase_invoices
 app.services.vpn_routing
 app.services.web_admin_resellers
 app.services.web_billing_invoice_batch
-app.services.web_billing_invoice_bulk
 app.services.web_billing_payments
 app.services.web_billing_reconciliation
 app.services.web_catalog_offers
@@ -265,6 +259,7 @@ app.services.web_network_olt_profiles
 app.services.web_network_ont_actions.config_setters
 app.services.web_network_ont_actions.db_config
 app.services.web_network_ont_actions.device_actions
+app.services.web_network_ont_actions.inventory
 app.services.web_network_ont_assignments
 app.services.web_network_ont_autofind
 app.services.web_network_onts_provisioning
@@ -282,7 +277,6 @@ app.services.web_provisioning_bulk_activate
 app.services.web_provisioning_migration
 app.services.web_reseller_routes
 app.services.web_subscriber_actions
-app.services.web_support_tickets
 app.services.web_system_api_key_forms
 app.services.web_system_api_key_mutations
 app.services.web_system_company_info
