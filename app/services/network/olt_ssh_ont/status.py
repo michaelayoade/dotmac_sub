@@ -121,22 +121,19 @@ def get_ont_info_detail(
         return False, err, None
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", None
 
     try:
-        channel.send("enable\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
 
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
         )
 
         cmd = get_huawei_command_profile(olt).display_ont_info(fsp, ont_id)
-        output = core._run_huawei_cmd(channel, cmd)
+        output = core._run_huawei_cmd(channel, cmd, prompt=prompt)
 
         if core.is_error_output(output):
             return False, f"OLT error: {output.strip()[-200:]}", None
@@ -165,22 +162,19 @@ def get_ont_status(
         return False, err, None
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", None
 
     try:
-        channel.send("enable\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
 
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
         )
 
         cmd = get_huawei_command_profile(olt).display_ont_info(fsp, ont_id)
-        output = core._run_huawei_cmd(channel, cmd)
+        output = core._run_huawei_cmd(channel, cmd, prompt=prompt)
 
         if core.is_error_output(output):
             return False, f"OLT error: {output.strip()[-200:]}", None
@@ -215,18 +209,17 @@ def get_registered_ont_serials(
     from app.services.network import olt_ssh as core
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
 
     try:
-        channel.send("enable\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
 
-        output = core._run_huawei_cmd(
-            channel, "display ont info summary all", prompt=r"#\s*$"
+        output = core._run_huawei_paged_cmd(
+            channel,
+            "display ont info summary all",
+            prompt=prompt,
         )
 
         entries: list[RegisteredOntEntry] = []
@@ -279,21 +272,18 @@ def find_ont_by_serial(
     normalized_serial = serial_number.replace("-", "").strip().upper()
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", None
 
     try:
-        channel.send("enable\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
 
         # Use direct serial lookup - much more reliable than parsing all ONTs
         output = core._run_huawei_cmd(
             channel,
             f"display ont info by-sn {normalized_serial}",
-            prompt=r"#\s*$",
+            prompt=prompt,
         )
 
         # Check for "not exist" or similar error

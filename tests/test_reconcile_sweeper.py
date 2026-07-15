@@ -283,6 +283,37 @@ def test_sweep_honors_batch_limit(two_onts, db_factory, monkeypatch):
     assert len(calls) == 1
 
 
+def test_sweep_defers_remaining_targets_when_wall_clock_budget_expires(
+    two_onts, db_factory, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.desired_from_ont_unit",
+        lambda db, ont: _make_desired(ont),
+    )
+    elapsed = {"seconds": 0.0}
+    monkeypatch.setattr(
+        "app.services.network.reconcile.sweeper.time.monotonic",
+        lambda: elapsed["seconds"],
+    )
+    calls: list[str] = []
+
+    def _slow_reconcile(db, ont_id, **kwargs):
+        calls.append(str(ont_id))
+        elapsed["seconds"] += 2.0
+        return _stub_result(True)
+
+    stats = run_sweep_once(
+        db_factory,
+        ping_function=lambda ip, count, timeout_sec: True,
+        reconcile_fn=_slow_reconcile,
+        max_duration_sec=1,
+    )
+
+    assert len(calls) == 1
+    assert stats.succeeded == 1
+    assert stats.deferred == 1
+
+
 def test_sweep_invokes_reconcile_for_reachable_onts(
     db_session, two_onts, db_factory, monkeypatch
 ):
