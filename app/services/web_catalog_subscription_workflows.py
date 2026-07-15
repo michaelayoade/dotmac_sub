@@ -30,6 +30,7 @@ from app.services.subscription_lifecycle import (
     SubscriptionLifecycleError,
     SubscriptionLifecycleState,
     preview_subscription_command,
+    resolve_subscription_lifecycle,
 )
 from app.services.subscription_lifecycle_batch import (
     SubscriptionBatchOutcome,
@@ -446,13 +447,39 @@ def handle_subscription_create_form(
         subscription.get("subscriber_id") or subscription.get("account_id") or ""
     )
     try:
-        core.create_subscription_with_audit(
+        created = core.create_subscription_with_audit(
             db,
             core.build_payload_data(subscription),
             form,
             request,
             actor_id,
         )
+        if form.get("activate_immediately") == "1":
+            snapshot = resolve_subscription_lifecycle(db, str(created.id))
+            command = SubscriptionLifecycleCommand(
+                subscription_id=str(created.id),
+                kind=SubscriptionCommandKind.activate,
+                source=f"admin:catalog:{actor_id or 'system'}",
+                reason="Activate after subscription creation",
+                expected_head=snapshot.head,
+                idempotency_key=f"admin-create-activate:{created.id}",
+            )
+            outcome = execute_subscription_command(
+                db,
+                command,
+                actor_id=actor_id,
+                actor_type=(AuditActorType.user if actor_id else AuditActorType.system),
+            )
+            if outcome.status not in {
+                SubscriptionCommandOutcomeStatus.applied,
+                SubscriptionCommandOutcomeStatus.skipped,
+            }:
+                return {
+                    "redirect_url": (
+                        f"/admin/catalog/subscriptions/{created.id}"
+                        f"?error={quote_plus(outcome.message)}"
+                    )
+                }
         redirect_url = (
             customer_detail_url_for_subscriber_id(db, subscriber_id)
             if subscriber_id
