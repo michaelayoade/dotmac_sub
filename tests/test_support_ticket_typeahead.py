@@ -170,7 +170,10 @@ def test_support_ticket_templates_use_staff_data_for_assignment_controls() -> No
 
     assert "staff_options" in form_template
     assert "staff_options" in index_template
-    assert "subscriber_options" in index_template
+    # Subscriber filtering on the ticket index converged into the code-native
+    # filter builder (ListDefinition subscriber_id is filterable); the standalone
+    # ``subscriber_options`` select was retired with the list convergence (#1305).
+    assert "data-filter-schema" in index_template
     assert "{% for person in staff_options %}" in detail_template
     assert "Type at least 2 characters to search technicians" in form_template
     assert "if (search.length < 2) return []" in form_template
