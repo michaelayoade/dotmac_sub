@@ -22,7 +22,7 @@ from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.billing import PaymentCreate, PaymentMethodCreate, PaymentUpdate
 from app.services import audit as audit_service
 from app.services import billing as billing_service
-from app.services import settings_spec
+from app.services import display_format, settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
@@ -31,24 +31,6 @@ from app.services.status_presentation import payment_status_presentation
 logger = logging.getLogger(__name__)
 MANUAL_PAYMENT_IDEMPOTENCY_SCOPE = "admin_manual_payment"
 _IDEMPOTENCY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,120}$")
-
-
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
 
 
 IMPORT_HANDLERS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -556,8 +538,17 @@ def build_payments_list_data(
 ) -> dict[str, object]:
     """Build list/stat data for payments page."""
 
+    default_currency = display_format.default_currency(db)
+
     def _empty_status_total() -> dict[str, object]:
-        return {"count": 0, "amount": 0.0, "amounts": {}, "display": "NGN 0.00"}
+        return {
+            "count": 0,
+            "amount": 0.0,
+            "amounts": {},
+            "display": display_format.format_currency_groups(
+                {}, empty_currency=default_currency
+            ),
+        }
 
     def _build_status_totals(filtered_subquery) -> dict[str, dict[str, object]]:  # type: ignore[no-untyped-def]
         summary: dict[str, dict[str, object]] = {
@@ -587,7 +578,7 @@ def build_payments_list_data(
             )
             if key not in summary:
                 summary[key] = _empty_status_total()
-            currency = _currency_code(currency_value)
+            currency = display_format.currency_code(currency_value)
             amount = Decimal(str(amount_value or 0))
             amounts = cast(dict[str, Decimal], summary[key]["amounts"])
             amounts[currency] = amounts.get(currency, Decimal("0")) + amount
@@ -596,8 +587,9 @@ def build_payments_list_data(
                 Decimal(str(summary[key]["amount"])) + amount
             )
         for item in summary.values():
-            item["display"] = _format_currency_groups(
-                cast(dict[str, Decimal], item["amounts"])
+            item["display"] = display_format.format_currency_groups(
+                cast(dict[str, Decimal], item["amounts"]),
+                empty_currency=default_currency,
             )
         all_amounts: dict[str, Decimal] = {}
         for item in summary.values():
@@ -607,7 +599,10 @@ def build_payments_list_data(
             "count": sum(int(item["count"]) for item in summary.values()),
             "amount": sum(float(item["amount"]) for item in summary.values()),
             "amounts": all_amounts,
-            "display": _format_currency_groups(all_amounts),
+            "display": display_format.format_currency_groups(
+                all_amounts,
+                empty_currency=default_currency,
+            ),
         }
         return summary
 
@@ -828,7 +823,7 @@ def render_payments_csv(payments: list[Payment]) -> str:
                 getattr(payment, "display_number", None) or "",
                 str(payment.account_id) if payment.account_id else "",
                 f"{Decimal(str(payment.amount or 0)):.2f}",
-                payment.currency or "NGN",
+                display_format.currency_code(payment.currency),
                 payment.status.value
                 if hasattr(payment.status, "value")
                 else str(payment.status or ""),
@@ -842,8 +837,7 @@ def render_payments_csv(payments: list[Payment]) -> str:
 
 
 def resolve_default_currency(db: Session) -> str:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-    return str(value) if value else "NGN"
+    return display_format.default_currency(db)
 
 
 def build_import_result_payload(
@@ -884,7 +878,7 @@ def process_payment_import_payload(
             amount = Decimal(str(row.get("amount", 0) or 0))
         except (TypeError, ValueError, InvalidOperation):
             continue
-        currency = _currency_code(row.get("currency") or default_currency)
+        currency = display_format.currency_code(row.get("currency") or default_currency)
         total_amount += amount
         currency_totals[currency] = currency_totals.get(currency, Decimal("0")) + amount
 
@@ -997,10 +991,14 @@ def list_payment_import_history_filtered(
         currency_totals: dict[str, Decimal] = {}
         if isinstance(raw_currency_totals, dict):
             for currency, amount in raw_currency_totals.items():
-                currency_totals[_currency_code(currency)] = Decimal(str(amount or 0))
+                currency_totals[display_format.currency_code(currency)] = Decimal(
+                    str(amount or 0)
+                )
         if not currency_totals:
             currency_totals[
-                _currency_code(metadata.get("currency") or default_currency)
+                display_format.currency_code(
+                    metadata.get("currency") or default_currency
+                )
             ] = total_amount
         rows.append(
             {
@@ -1015,7 +1013,10 @@ def list_payment_import_history_filtered(
                 "unmatched_count": errors,
                 "total_amount": float(total_amount),
                 "currency_totals": currency_totals,
-                "total_display": _format_currency_groups(currency_totals),
+                "total_display": display_format.format_currency_groups(
+                    currency_totals,
+                    empty_currency=default_currency,
+                ),
             }
         )
     return rows

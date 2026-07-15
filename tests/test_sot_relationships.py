@@ -27,6 +27,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "integration_control_plane",
         "ui_list_projection",
         "ui_bulk_actions",
+        "ui_display_formatting",
         "ui_semantic_presentation",
     ]
 

@@ -416,6 +416,58 @@ operations require explicit impact preview and confirmation. WCAG 2.2 AA labels,
 indeterminate state, selected-count announcements, and focus/keyboard behavior
 are part of the contract; hidden controls are never authorization enforcement.
 
+## UI Display Formatting
+
+1. `ui.display_formatting` / `app.services.display_format` owns the code-native
+   display rules for normalized currency codes, currency symbols, single-value
+   money, ordered multi-currency summaries, configured display timezone, and
+   timestamp strings. Missing scalar facts use one explicit em-dash marker;
+   only a caller-declared aggregate absence becomes zero.
+2. Financial, network, usage, and other domain owners retain the typed facts:
+   amount, ISO currency, unit, timestamp, and whether a value is zero, unknown,
+   stale, or unavailable. Formatting never changes or derives those facts.
+3. Single-currency values may use the declared symbol form. Mixed-currency
+   totals use explicit ISO-style codes, group normalized codes independently,
+   sort them deterministically, and never add unlike currencies together.
+4. `control.settings_spec` owns the configured billing default currency and
+   scheduler timezone. `ui.display_formatting` resolves those settings for
+   display; templates and mobile clients do not independently default to NGN or
+   Africa/Lagos when a projection declares another value.
+5. `mobile/lib/src/core/formatters.dart` is the existing platform renderer for
+   mobile layout and locale mechanics. It is not a second owner of currency,
+   timezone, missing-value, or unit facts.
+6. First adoption: billing overview/invoice/aging, payments/import history,
+   ledger, and reconciliation delegate their multi-currency summary strings to
+   `app.services.display_format`. Their former private currency-code, amount,
+   and grouped-total formatter copies are retired.
+
+Migration record:
+
+- Old owners: four billing web projection modules each carried equivalent
+  `_currency_code`, `_format_currency_amount`, and `_format_currency_groups`
+  implementations. Their behavior could drift independently from the existing
+  global money filter and configured display settings.
+- New owner: `app.services.display_format`; billing services still assemble
+  domain-owned totals and request a display projection from that owner.
+- Missing-state correction: the prior scalar `format_money` helper rendered
+  missing or invalid values as currency zero. It now renders the shared em-dash
+  marker; aggregate callers request zero explicitly through the grouped/amount
+  functions.
+- Verification phase: formatter behavior tests cover normalization, explicit
+  ISO labels, deterministic grouping, duplicate normalized codes, empty totals,
+  and setting resolution. Existing billing overview, payment import, ledger,
+  and reconciliation tests prove byte-compatible output.
+- Cutover gate: the four pilot modules import `display_format` and contain no
+  private currency normalization or formatter definitions.
+- Fallback retirement: the private formatter copies are removed. Other screens
+  migrate incrementally; no second shared formatter or template-local default
+  may be introduced.
+
+Rule: formatting projects authoritative facts; it does not repair missing data,
+convert currency, select business precision, or collapse unknown into zero.
+Callers must make aggregate-zero behavior explicit and keep unlike currencies
+separate.
+
 ## UI Semantic Presentation
 
 1. Account, subscription, invoice, payment, outage-incident, support-ticket, and

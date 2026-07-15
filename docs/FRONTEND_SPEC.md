@@ -1767,15 +1767,29 @@ lookups and include a non-color distinction.
 
 ### Data Formatting
 
-| Type | Template Pattern | Example |
-|------|-----------------|---------|
-| Currency | `{{ "%.2f"\|format(invoice.total) }}` | `5,000.00` |
-| Bandwidth | `{{ offer.speed_download_mbps }} Mbps` | `100 Mbps` |
-| IP address | `<span class="font-mono">{{ ip }}</span>` | `192.168.1.1` |
-| MAC address | `<span class="font-mono">{{ mac }}</span>` | `AA:BB:CC:DD:EE:FF` |
-| Date (recent) | Relative: `2 hours ago` | |
-| Date (older) | ISO: `2024-01-15` | |
-| Percentage | `{{ "%.1f"\|format(value) }}%` | `95.5%` |
+`app.services.display_format` is the code-native owner for currency-code
+normalization, money display, multi-currency summary ordering, configured
+display timezone, and timestamp strings. Web projection services provide the
+formatted value; migrated templates do not call Python number/date formatting
+or invent NGN/Africa-Lagos defaults.
+
+| Type | Owner-provided projection | Example |
+|------|---------------------------|---------|
+| Single-currency money | `display_format.format_money(amount, currency=code)` | `₦5,000.00` |
+| Mixed-currency total | `display_format.format_currency_groups(amounts)` | `NGN 5,000.00, USD 25.00` |
+| Timestamp | `display_format.format_timestamp(value, db)` | `2026-07-14 15:30 WAT` |
+| Missing scalar fact | Owner-provided missing state | `—` |
+| Bandwidth | Declared value plus declared unit | `100 Mbps` |
+| IP address | Owner-provided identifier, rendered `font-mono` | `192.168.1.1` |
+| MAC address | Owner-provided identifier, rendered `font-mono` | `AA:BB:CC:DD:EE:FF` |
+| Percentage | Owner-provided precision plus explicit `%` unit | `95.5%` |
+
+Domain services own the raw amount, ISO currency, unit, timestamp, and
+availability facts. Formatting must not convert currencies, sum unlike
+currencies, or turn unknown/stale/unavailable values into zero. Empty aggregates
+may explicitly project zero; missing scalar facts use the shared em-dash marker.
+The mobile `Fmt` helper is a platform renderer and
+must consume the same declared facts instead of becoming a parallel owner.
 
 ### Safe Filter Rules
 

@@ -24,34 +24,17 @@ from app.models.billing import (
 )
 from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Reseller, Subscriber
+from app.services import display_format
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
 
 logger = logging.getLogger(__name__)
 
 
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
-
-
 def _add_grouped_amount(
     amounts: dict[str, Decimal], *, currency: object | None, amount: object
 ) -> None:
-    code = _currency_code(currency)
+    code = display_format.currency_code(currency)
     amounts[code] = amounts.get(code, Decimal("0")) + Decimal(str(amount or 0))
 
 
@@ -130,7 +113,7 @@ def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
         entry_type=SimpleNamespace(value="debit"),
         source=SimpleNamespace(value="invoice"),
         amount=invoice.total,
-        currency=invoice.currency or "NGN",
+        currency=display_format.currency_code(invoice.currency),
         memo=label,
         effective_date=invoice.issued_at,
         created_at=invoice.created_at,
@@ -186,6 +169,7 @@ def build_ledger_entries_data(
     limit: int = 200,
 ) -> dict[str, object]:
     date_range = _parse_date_range(start_date, end_date)
+    default_currency = display_format.default_currency(db)
 
     account_ids = []
     if customer_ref:
@@ -402,14 +386,20 @@ def build_ledger_entries_data(
         "credit_count": len(credit_entries),
         "credit_total": credit_total,
         "credit_amounts": credit_amounts,
-        "credit_display": _format_currency_groups(credit_amounts),
+        "credit_display": display_format.format_currency_groups(
+            credit_amounts, empty_currency=default_currency
+        ),
         "debit_count": len(debit_entries),
         "debit_total": debit_total,
         "debit_amounts": debit_amounts,
-        "debit_display": _format_currency_groups(debit_amounts),
+        "debit_display": display_format.format_currency_groups(
+            debit_amounts, empty_currency=default_currency
+        ),
         "net_total": credit_total - debit_total,
         "net_amounts": net_amounts,
-        "net_display": _format_currency_groups(net_amounts),
+        "net_display": display_format.format_currency_groups(
+            net_amounts, empty_currency=default_currency
+        ),
     }
 
     return {
@@ -464,7 +454,7 @@ def render_ledger_csv(entries: list[LedgerEntry]) -> str:
                 getattr(getattr(entry, "source", None), "value", "") or "",
                 f"{amount:.2f}" if entry_type == "debit" else "",
                 f"{amount:.2f}" if entry_type == "credit" else "",
-                entry.currency or "NGN",
+                display_format.currency_code(entry.currency),
                 entry.memo or "",
                 entry_date.isoformat() if entry_date else "",
             ]
