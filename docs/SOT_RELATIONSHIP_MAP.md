@@ -62,6 +62,16 @@ that obscure business behavior.
    those transitions. Native invoice issuance is an authoritative billing fact
    but does not yet write a customer `ledger_entries` debit; invoice write-off,
    void, and credit-note paths own their adjustment/reversal postings.
+   A credit note becomes spendable only when its owner issues it after final
+   totals are known. Issuance posts one structurally linked, unallocated ledger
+   credit; application atomically consumes that credit with an account debit and
+   settles the invoice with a paired invoice credit, bounded by both the note's
+   unapplied amount and the account's locked spendable balance; void reverses the
+   issuance.
+   Issued notes and their lines are immutable. Customer financial position
+   counts the source CreditNote document and excludes these linked operational
+   postings, so allocation changes location, not net customer value. Migration
+   294 deliberately does not infer or backfill historical ledger links.
 3. `financial.tax_configuration` owns configurable tax-rate records and their
    active lifecycle. Inclusive, exclusive, or exempt treatment belongs to the
    invoice/credit-note line, not to a second tax-rate vocabulary.

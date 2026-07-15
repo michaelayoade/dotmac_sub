@@ -14,8 +14,6 @@ from app.models.billing import (
     BankAccountType,
     CollectionAccount,
     CreditNote,
-    CreditNoteLine,
-    CreditNoteStatus,
     Invoice,
     InvoiceLine,
     InvoiceStatus,
@@ -46,6 +44,8 @@ from app.schemas.billing import (
     BankAccountUpdate,
     CollectionAccountCreate,
     CollectionAccountUpdate,
+    CreditNoteCreate,
+    CreditNoteLineCreate,
     PaymentAllocationCreate,
     PaymentChannelAccountCreate,
     PaymentChannelAccountUpdate,
@@ -2557,44 +2557,42 @@ class Refunds:
         """
         if not payment.allocations:
             return None
+        if payment.account_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cannot issue one account credit note from a consolidated "
+                    "payment refund"
+                ),
+            )
+
+        from app.services.billing.credit_notes import CreditNoteLines, CreditNotes
 
         # Get the first allocated invoice as reference for linking
         reference_invoice = get_by_id(db, Invoice, payment.allocations[0].invoice_id)
 
-        credit_note = CreditNote(
-            account_id=payment.account_id,
-            invoice_id=reference_invoice.id if reference_invoice else None,
-            status=CreditNoteStatus.issued,
-            currency=payment.currency or "NGN",
-            subtotal=round_money(amount),
-            tax_total=Decimal("0.00"),
-            total=round_money(amount),
-            applied_total=Decimal("0.00"),
-            issued_at=datetime.now(UTC),
-            memo=reason or f"Credit note for refund of payment {payment.id}",
+        credit_note = CreditNotes.create(
+            db,
+            CreditNoteCreate(
+                account_id=payment.account_id,
+                invoice_id=reference_invoice.id if reference_invoice else None,
+                currency=payment.currency or "NGN",
+                memo=reason or f"Credit note for refund of payment {payment.id}",
+            ),
+            commit=False,
         )
-        db.add(credit_note)
-        db.flush()
-        # Create credit note line item
-        line = CreditNoteLine(
-            credit_note_id=credit_note.id,
-            description=reason or f"Refund of payment {payment.id}",
-            quantity=Decimal("1.000"),
-            unit_price=round_money(amount),
-            amount=round_money(amount),
+        CreditNoteLines.create(
+            db,
+            CreditNoteLineCreate(
+                credit_note_id=credit_note.id,
+                description=reason or f"Refund of payment {payment.id}",
+                quantity=Decimal("1.000"),
+                unit_price=round_money(amount),
+                amount=round_money(amount),
+            ),
+            commit=False,
         )
-        db.add(line)
-
-        # Create credit ledger entry
-        entry = LedgerEntry(
-            account_id=payment.account_id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.credit_note,
-            amount=round_money(amount),
-            currency=payment.currency or "NGN",
-            memo=f"Credit note {credit_note.id}",
-        )
-        db.add(entry)
+        CreditNotes.issue(db, str(credit_note.id), commit=False)
 
         return credit_note
 

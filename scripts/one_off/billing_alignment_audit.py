@@ -485,6 +485,10 @@ def _batch_customer_positions(
         _account_filter(LedgerEntry.account_id, account_ids),
         LedgerEntry.invoice_id.is_(None),
         LedgerEntry.is_active.is_(True),
+        # CreditNote documents are already counted above; their structurally
+        # linked ledger rows are the spendability projection, not a second
+        # customer financial event. Legacy unlinked rows remain in scope.
+        LedgerEntry.credit_note_id.is_(None),
         or_(
             LedgerEntry.source.in_([LedgerSource.adjustment, LedgerSource.other]),
             and_(

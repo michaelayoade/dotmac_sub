@@ -14,9 +14,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = PROJECT_ROOT / "app"
 
 LEDGER_ENTRY_CONSTRUCTION = re.compile(r"\bLedgerEntry\s*\(")
+CREDIT_NOTE_CONSTRUCTION = re.compile(r"\bCreditNote\s*\(")
+CREDIT_NOTE_LINE_CONSTRUCTION = re.compile(r"\bCreditNoteLine\s*\(")
 PAYMENT_ALLOCATION_CONSTRUCTION = re.compile(r"\bPaymentAllocation\s*\(")
 VAS_WALLET_ENTRY_CONSTRUCTION = re.compile(r"\bVasWalletEntry\s*\(")
 INVOICE_STATUS_WRITE = re.compile(r"\.status\s*(?<![=!<>])=(?!=)\s*InvoiceStatus\.")
+CREDIT_NOTE_STATUS_WRITE = re.compile(
+    r"\.status\s*(?<![=!<>])=(?!=)\s*CreditNoteStatus\."
+)
 
 APPROVED_LEDGER_WRITERS = {
     Path("app/services/billing/credit_notes.py"),
@@ -28,6 +33,12 @@ APPROVED_LEDGER_WRITERS = {
     Path("app/services/catalog/subscriptions.py"),
     Path("app/services/customer_portal_flow_addons.py"),
     Path("app/services/cutover_balance_audit.py"),
+}
+
+APPROVED_CREDIT_NOTE_WRITERS = {Path("app/services/billing/credit_notes.py")}
+APPROVED_CREDIT_NOTE_LIFECYCLE_WRITERS = {
+    Path("app/services/billing/_common.py"),
+    Path("app/services/billing/credit_notes.py"),
 }
 
 APPROVED_ALLOCATION_WRITERS = {
@@ -90,6 +101,27 @@ def test_only_the_payment_owner_allocates_payments() -> None:
     )
 
 
+def test_only_the_credit_note_owner_creates_credit_notes() -> None:
+    violations = _violations(CREDIT_NOTE_CONSTRUCTION, APPROVED_CREDIT_NOTE_WRITERS)
+    violations.extend(
+        _violations(CREDIT_NOTE_LINE_CONSTRUCTION, APPROVED_CREDIT_NOTE_WRITERS)
+    )
+    assert not violations, (
+        "CreditNote constructed outside the credit-note owner:\n  "
+        + "\n  ".join(violations)
+    )
+
+
+def test_only_the_credit_note_owner_transitions_status() -> None:
+    violations = _violations(
+        CREDIT_NOTE_STATUS_WRITE, APPROVED_CREDIT_NOTE_LIFECYCLE_WRITERS
+    )
+    assert not violations, (
+        "Credit-note status assigned outside the credit-note owner:\n  "
+        + "\n  ".join(violations)
+    )
+
+
 def test_only_the_wallet_owner_writes_wallet_entries() -> None:
     violations = _violations(VAS_WALLET_ENTRY_CONSTRUCTION, APPROVED_VAS_WALLET_WRITERS)
     assert not violations, (
@@ -111,6 +143,8 @@ def test_financial_writer_allowlists_do_not_contain_missing_paths() -> None:
         str(rel)
         for allowlist in (
             APPROVED_LEDGER_WRITERS,
+            APPROVED_CREDIT_NOTE_WRITERS,
+            APPROVED_CREDIT_NOTE_LIFECYCLE_WRITERS,
             APPROVED_ALLOCATION_WRITERS,
             APPROVED_VAS_WALLET_WRITERS,
             APPROVED_INVOICE_LIFECYCLE_WRITERS,

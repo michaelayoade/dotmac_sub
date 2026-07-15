@@ -403,6 +403,12 @@ def list_customer_financial_events(
         .filter(LedgerEntry.account_id == account_uuid)
         .filter(LedgerEntry.invoice_id.is_(None))
         .filter(LedgerEntry.is_active.is_(True))
+        # Native credit-note postings are the operational spendability
+        # projection of a CreditNote document already counted above. Excluding
+        # structurally linked rows keeps issuance, application consumption and
+        # void reversal from double-counting the same customer fact. Legacy
+        # credit-note ledger rows without provenance remain visible.
+        .filter(LedgerEntry.credit_note_id.is_(None))
         .filter(
             or_(
                 LedgerEntry.source.in_([LedgerSource.adjustment, LedgerSource.other]),
@@ -650,6 +656,7 @@ def customer_financial_balances_by_currency(
         .filter(LedgerEntry.account_id.in_(account_uuids))
         .filter(LedgerEntry.invoice_id.is_(None))
         .filter(LedgerEntry.is_active.is_(True))
+        .filter(LedgerEntry.credit_note_id.is_(None))
         .filter(
             or_(
                 LedgerEntry.source.in_([LedgerSource.adjustment, LedgerSource.other]),

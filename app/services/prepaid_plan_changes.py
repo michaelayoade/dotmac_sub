@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -27,9 +27,9 @@ from app.models.catalog import (
     PriceType,
     Subscription,
 )
-from app.models.domain_settings import SettingDomain
 from app.models.idempotency import IdempotencyKey
-from app.schemas.billing import LedgerEntryCreate
+from app.schemas.billing import CreditNoteCreate, LedgerEntryCreate
+from app.services.billing.credit_notes import CreditNotes
 from app.services.common import coerce_uuid, round_money
 from app.services.customer_financial_position import get_customer_financial_position
 
@@ -293,7 +293,6 @@ def prepare_immediate_prepaid_plan_change(
     This function does not commit. The caller must mutate the subscription and
     commit both changes together.
     """
-    from app.services import numbering
     from app.services.billing._common import lock_account
 
     account_id = str(subscription.subscriber_id)
@@ -408,30 +407,22 @@ def prepare_immediate_prepaid_plan_change(
             replayed=True,
         )
     credit_amount = abs(net_amount)
-    credit_note = CreditNote(
-        account_id=subscription.subscriber_id,
-        credit_number=numbering.generate_number(
-            db,
-            SettingDomain.billing,
-            "credit_note_number",
-            "credit_note_number_enabled",
-            "credit_note_number_prefix",
-            "credit_note_number_padding",
-            "credit_note_number_start",
+    credit_note = CreditNotes.create(
+        db,
+        CreditNoteCreate(
+            account_id=subscription.subscriber_id,
+            currency=decision.currency,
+            subtotal=credit_amount,
+            tax_total=Decimal("0.00"),
+            total=credit_amount,
+            status=CreditNoteStatus.issued,
+            memo=(
+                f"Plan change credit: {old_offer_name} -> {target_offer.name} "
+                f"({decision.proration.get('days_remaining', 0)} days remaining)"
+            ),
         ),
-        currency=decision.currency,
-        subtotal=credit_amount,
-        tax_total=Decimal("0.00"),
-        total=credit_amount,
-        status=CreditNoteStatus.issued,
-        issued_at=datetime.now(UTC),
-        memo=(
-            f"Plan change credit: {old_offer_name} -> {target_offer.name} "
-            f"({decision.proration.get('days_remaining', 0)} days remaining)"
-        ),
+        commit=False,
     )
-    db.add(credit_note)
-    db.flush()
     db.add(
         IdempotencyKey(
             scope=_CREDIT_SCOPE,

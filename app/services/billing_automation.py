@@ -38,7 +38,6 @@ from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.billing import (
-    _recalculate_credit_note_totals,
     _recalculate_invoice_totals,
 )
 from app.services.billing.invoice_classification import (
@@ -2222,8 +2221,8 @@ def generate_cancellation_credit(
     (has at least one invoice line). The credit covers the unused portion from
     cancellation date to next_billing_at.
     """
-    from app.models.billing import CreditNote, CreditNoteLine, CreditNoteStatus
-    from app.services import numbering
+    from app.schemas.billing import CreditNoteCreate, CreditNoteLineCreate
+    from app.services.billing.credit_notes import CreditNoteLines, CreditNotes
 
     # Check if proration is enabled
     proration_enabled = settings_spec.resolve_value(
@@ -2290,48 +2289,38 @@ def generate_cancellation_credit(
     if credit_amount <= Decimal("0.00"):
         return
 
-    credit_number = numbering.generate_number(
-        db,
-        SettingDomain.billing,
-        "credit_note_number",
-        "credit_note_number_enabled",
-        "credit_note_number_prefix",
-        "credit_note_number_padding",
-        "credit_note_number_start",
-    )
-
     offer_name = subscription.offer.name if subscription.offer else "Subscription"
-    credit = CreditNote(
-        account_id=subscription.subscriber_id,
-        invoice_id=last_line.invoice_id,
-        credit_number=credit_number,
-        currency=last_line.invoice.currency,
-        subtotal=credit_amount,
-        tax_total=Decimal("0"),
-        total=credit_amount,
-        status=CreditNoteStatus.issued,
-        issued_at=now,
-        memo=f"Cancellation credit: {offer_name} (unused {int(unused_seconds / 86400)} days)",
+    credit = CreditNotes.create(
+        db,
+        CreditNoteCreate(
+            account_id=subscription.subscriber_id,
+            invoice_id=last_line.invoice_id,
+            currency=last_line.invoice.currency,
+            memo=(
+                f"Cancellation credit: {offer_name} "
+                f"(unused {int(unused_seconds / 86400)} days)"
+            ),
+        ),
+        commit=False,
     )
-    db.add(credit)
-    db.flush()
-
-    credit_line = CreditNoteLine(
-        credit_note_id=credit.id,
-        description=f"Prorated credit for {offer_name}",
-        unit_price=credit_amount,
-        amount=credit_amount,
-        quantity=Decimal("1"),
-        tax_rate_id=last_line.tax_rate_id,
-        tax_application=last_line.tax_application,
+    CreditNoteLines.create(
+        db,
+        CreditNoteLineCreate(
+            credit_note_id=credit.id,
+            description=f"Prorated credit for {offer_name}",
+            unit_price=credit_amount,
+            amount=credit_amount,
+            quantity=Decimal("1"),
+            tax_rate_id=last_line.tax_rate_id,
+            tax_application=last_line.tax_application,
+        ),
+        commit=False,
     )
-    db.add(credit_line)
-    db.flush()
-    _recalculate_credit_note_totals(db, credit)
+    CreditNotes.issue(db, str(credit.id), commit=False)
 
     logger.info(
         "Generated cancellation credit %s for subscription %s: %s",
-        credit_number or credit.id,
+        credit.credit_number or credit.id,
         subscription.id,
         credit_amount,
     )
