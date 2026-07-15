@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Iterable
 from typing import cast
 
 import psycopg
@@ -506,7 +507,7 @@ def populate(
     # narrows. A requested username absent from `work` has no active/blocked
     # subscription and is deleted (removal), never reinserted.
     scoped = only_usernames is not None
-    if scoped:
+    if only_usernames is not None:
         work = [w for w in work if w[0] in only_usernames]
         stats["scoped_targets"] = len(only_usernames)
     stats["radcheck_upserts"] = len(work)
@@ -578,7 +579,9 @@ def populate(
     return stats
 
 
-def reconcile_usernames(usernames: object, dry_run: bool = True) -> dict[str, int]:
+def reconcile_usernames(
+    usernames: Iterable[str], dry_run: bool = True
+) -> dict[str, int]:
     """Scoped `access.radius_projection` reconcile for a bounded username set.
 
     Computes the same fleet-wide projection as the full sweep — so the
