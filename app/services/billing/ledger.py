@@ -146,13 +146,7 @@ class LedgerEntries(ListResponseMixin):
         return list(db.scalars(apply_pagination(stmt, limit, offset)).all())
 
     @staticmethod
-    def reverse(
-        db: Session,
-        entry_id: str,
-        memo: str | None = None,
-        *,
-        commit: bool = True,
-    ) -> LedgerEntry:
+    def reverse(db: Session, entry_id: str, memo: str | None = None) -> LedgerEntry:
         """Post a reversing entry. The original stays active.
 
         The ledger is append-only: an entry's effect is undone by posting its
@@ -231,7 +225,6 @@ class LedgerEntries(ListResponseMixin):
             account_id=original.account_id,
             invoice_id=original.invoice_id,
             payment_id=original.payment_id,
-            credit_note_id=original.credit_note_id,
             entry_type=reversed_type,
             source=original.source,
             amount=original.amount,
@@ -240,11 +233,8 @@ class LedgerEntries(ListResponseMixin):
             reversal_of_entry_id=original.id,
         )
         db.add(reversal)
-        if commit:
-            db.commit()
-            db.refresh(reversal)
-        else:
-            db.flush()
+        db.commit()
+        db.refresh(reversal)
         logger.info("Reversed ledger entry %s with new entry %s", entry_id, reversal.id)
         return reversal
 

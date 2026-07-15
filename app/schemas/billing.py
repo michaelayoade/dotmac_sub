@@ -805,8 +805,6 @@ class LedgerEntryRead(LedgerEntryBase):
     # amount inherits unbounded from LedgerEntryBase (create-only bound);
     # ledger amounts are inherently signed (debits/credits/reversals).
     id: UUID
-    credit_note_id: UUID | None = None
-    credit_note_application_id: UUID | None = None
     # Real-world date of the entry (invoice issue / payment / imported txn date).
     # NULL for native and unbackfilled rows; clients should prefer it over
     # created_at (the import instant) and fall back to created_at when NULL.

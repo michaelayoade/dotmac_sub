@@ -160,11 +160,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="financial.credit_notes",
                 module="app.services.billing.credit_notes",
-                owns=(
-                    "credit-note draft, issuance, application, and void lifecycle",
-                    "credit-note issuance, allocation, and reversal ledger postings",
-                    "credit-note spendability and posting idempotency",
-                ),
+                owns=("credit-note lifecycle", "credit-note ledger postings"),
                 depends_on=("financial.ledger", "financial.invoices"),
             ),
             SOTService(

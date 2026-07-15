@@ -411,7 +411,6 @@ class CreditNote(Base):
     invoice = relationship("Invoice")
     lines = relationship("CreditNoteLine", back_populates="credit_note")
     applications = relationship("CreditNoteApplication", back_populates="credit_note")
-    ledger_entries = relationship("LedgerEntry", back_populates="credit_note")
 
 
 class CreditNoteLine(Base):
@@ -475,9 +474,6 @@ class CreditNoteApplication(Base):
 
     credit_note = relationship("CreditNote", back_populates="applications")
     invoice = relationship("Invoice", back_populates="credit_note_applications")
-    ledger_entries = relationship(
-        "LedgerEntry", back_populates="credit_note_application"
-    )
 
 
 class InvoiceLine(Base):
@@ -843,42 +839,6 @@ class LedgerEntry(Base):
             "reversal_of_entry_id",
             unique=True,
         ),
-        Index(
-            "uq_ledger_entries_credit_note_issuance",
-            "credit_note_id",
-            unique=True,
-            postgresql_where=text(
-                "credit_note_id IS NOT NULL "
-                "AND credit_note_application_id IS NULL "
-                "AND reversal_of_entry_id IS NULL"
-            ),
-            sqlite_where=text(
-                "credit_note_id IS NOT NULL "
-                "AND credit_note_application_id IS NULL "
-                "AND reversal_of_entry_id IS NULL"
-            ),
-        ),
-        Index(
-            "uq_ledger_entries_credit_note_application_type",
-            "credit_note_application_id",
-            "entry_type",
-            unique=True,
-        ),
-        CheckConstraint(
-            "credit_note_id IS NULL "
-            "OR credit_note_application_id IS NOT NULL "
-            "OR reversal_of_entry_id IS NOT NULL "
-            "OR (source = 'credit_note' AND entry_type = 'credit' "
-            "AND invoice_id IS NULL)",
-            name="ck_ledger_entries_credit_note_issuance_shape",
-        ),
-        CheckConstraint(
-            "credit_note_application_id IS NULL OR "
-            "(credit_note_id IS NOT NULL AND source = 'credit_note' AND "
-            "((entry_type = 'debit' AND invoice_id IS NULL) OR "
-            "(entry_type = 'credit' AND invoice_id IS NOT NULL)))",
-            name="ck_ledger_entries_credit_note_application_shape",
-        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -892,16 +852,6 @@ class LedgerEntry(Base):
     )
     payment_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payments.id")
-    )
-    credit_note_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("credit_notes.id", ondelete="RESTRICT"),
-        index=True,
-    )
-    credit_note_application_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("credit_note_applications.id", ondelete="RESTRICT"),
-        index=True,
     )
     entry_type: Mapped[LedgerEntryType] = mapped_column(
         Enum(LedgerEntryType), nullable=False
@@ -953,10 +903,6 @@ class LedgerEntry(Base):
     account = relationship("Subscriber")
     invoice = relationship("Invoice", back_populates="ledger_entries")
     payment = relationship("Payment", back_populates="ledger_entries")
-    credit_note = relationship("CreditNote", back_populates="ledger_entries")
-    credit_note_application = relationship(
-        "CreditNoteApplication", back_populates="ledger_entries"
-    )
 
 
 class ServiceEntitlement(Base):

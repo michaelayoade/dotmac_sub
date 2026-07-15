@@ -35,17 +35,6 @@ Do not re-open those forward-fix workstreams from the historical prose below
 without a fresh regression. Their **historical repair** questions remain
 separate from their merged forward fixes.
 
-F4 is closed forward on the feature branch carrying this audit correction:
-credit-note drafts remain mutable and unspendable; issuance freezes the amount
-and posts one DB-unique, structurally linked account credit; application posts a
-linked account debit plus invoice credit, bounded by the locked spendable
-account balance; void posts an append-only reversal.
-All native writers now call that owner. Linked postings are excluded from the
-document-derived customer position because the CreditNote source document is
-already counted there. Migration 294 intentionally performs no historical
-backfill; the measured 339-note / ₦2,290,830 cohort remains a separate,
-dry-run-first repair decision.
-
 D2/D7/D12 were re-adjudicated on 2026-07-14 with the corrected method. The June
 15 Splynx ledger is the opening source and the retained June 29 snapshot proves
 that legacy financial activity ended on June 17. Both source snapshots reconcile
@@ -280,11 +269,6 @@ the target's `balance_due`; and the account-status/service restore. The old invo
 to the old invoice while the allocation points at the new one — a double-count.
 
 ### F4 — Credit notes visible to one balance, invisible to the other
-
-> **Forward disposition (2026-07-15): fixed on the F4 feature branch.** The
-> evidence below describes the pre-fix implementation. Historical notes are not
-> silently repaired or made spendable; apply/void fails closed until an issuance
-> posting has been reconciled.
 
 `catalog/subscriptions.py:1037` and `billing_automation.py:2301` create issued `CreditNote`
 rows with **no ledger entry** (only `CreditNotes.apply()` posts one, `credit_notes.py:278`).
@@ -633,10 +617,9 @@ uses*, not by collapsing them into one number. `financial.access_resolution` mus
 quantity it suspends on and which it restores on — F6/F8 exist because it currently uses one to
 suspend and a different, structurally-unfailable one to restore.
 
-**Decision recorded in `docs/SOT_RELATIONSHIP_MAP.md`:** a credit note becomes
-spendable at its owner-controlled issuance transition, after final totals are
-known. Drafts are unspendable; application moves issued credit from the account
-to an invoice without changing net customer value; void reverses issuance.
+**The ADR must explicitly decide when an issued credit note becomes spendable.** F4 is
+unresolvable without that decision: today an issued credit note is spendable against one balance
+definition and invisible to the other.
 
 ## 11. Cross-system synchronization contract
 
@@ -722,7 +705,6 @@ marked confirmed.
 | **F6/F8** | — | Gate the 4 restore sites on the quantity the sweep suspends on; drop `"payment"` from `ALLOWED_RESTORERS[prepaid]` | Find accounts restored with balance < threshold (still active, unfunded) | Underfunded top-up on suspended prepaid → assert **not** restored |
 | **F7** | — | Lift dunning's shield + health re-check into `_suspend_account` | Cross-check suspended accounts against active arrangements/proofs; restore wrongly-cut | Sweep an account with an active arrangement → assert **not** suspended |
 | **F1** | — | `reverse()` posts reversal only, leaves original active; drop `update()`/`delete()` + the DELETE route | **Audit rows where a reversal AND an inactive original coexist — each is a double-swing to correct** | Reverse a credit; assert balance moves by exactly the amount, once |
-| **F4** | Reject apply/void for historical issued notes with no issuance posting | Owner-controlled immutable issuance posts one linked credit; application posts linked account-debit/invoice-credit pair; void reverses issuance | Reconcile the measured 339-note / ₦2,290,830 cohort from source documents in a dry run; never infer links from memos | Issue/apply/void a note; assert spendable credit, invoice balance, net customer position, and DB uniqueness |
 | **F10** | — | Delete whole-subscriber RADIUS deleters; route through `refresh_radius_from_subs` | None (transient, self-heals on `populate()` sweep) | Suspend one of two subscriptions; assert the other keeps auth |
 | **F15** | — | Reuse `mark_status`'s transition table + `paid_at` stamp in `update()` | Find `succeeded` payments with NULL `paid_at` | `PATCH` pending→succeeded; assert `paid_at` set + event emitted |
 | **F17** | — | `_recalculate_invoice_totals` must count `partially_refunded` net of refund | Find invoices reverted to overdue by a partial refund | Partial-refund a paid invoice; assert it stays paid less the refund |

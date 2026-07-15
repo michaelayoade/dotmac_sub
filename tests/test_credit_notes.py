@@ -14,7 +14,6 @@ from app.schemas.billing import (
     TaxRateCreate,
 )
 from app.services import billing as billing_service
-from app.services.billing._common import lock_account as _real_lock_account
 from app.services.locking import lock_for_update as _real_lock_for_update
 from app.services.web_billing_credits import create_credit_from_form
 
@@ -54,8 +53,6 @@ def test_credit_note_owner_persists_first_issuance_timestamp(
             account_id=subscriber_account.id,
             status=CreditNoteStatus.draft,
             currency="NGN",
-            subtotal=Decimal("1.00"),
-            total=Decimal("1.00"),
         ),
     )
     assert draft.issued_at is None
@@ -105,7 +102,7 @@ def test_credit_note_apply_reduces_invoice_balance(db_session, subscriber_accoun
         db_session,
         CreditNoteCreate(
             account_id=subscriber_account.id,
-            status=CreditNoteStatus.draft,
+            status=CreditNoteStatus.issued,
             currency="USD",
         ),
     )
@@ -118,7 +115,6 @@ def test_credit_note_apply_reduces_invoice_balance(db_session, subscriber_accoun
             unit_price=Decimal("100.00"),
         ),
     )
-    billing_service.credit_notes.issue(db_session, str(credit_note.id))
     application = billing_service.credit_notes.apply(
         db_session,
         str(credit_note.id),
@@ -181,16 +177,10 @@ def test_apply_locks_credit_note_and_invoice_rows(db_session, subscriber_account
     credit_note, invoice = _issued_credit_note_and_invoice(
         db_session, subscriber_account.id, amount=Decimal("100.00")
     )
-    with (
-        patch(
-            "app.services.billing.credit_notes.lock_for_update",
-            wraps=_real_lock_for_update,
-        ) as spy,
-        patch(
-            "app.services.billing.credit_notes.lock_account",
-            wraps=_real_lock_account,
-        ) as account_lock,
-    ):
+    with patch(
+        "app.services.billing.credit_notes.lock_for_update",
+        wraps=_real_lock_for_update,
+    ) as spy:
         billing_service.credit_notes.apply(
             db_session,
             str(credit_note.id),
@@ -199,7 +189,6 @@ def test_apply_locks_credit_note_and_invoice_rows(db_session, subscriber_account
     locked_models = {call.args[1] for call in spy.call_args_list}
     assert CreditNote in locked_models
     assert Invoice in locked_models
-    account_lock.assert_called_once_with(db_session, str(subscriber_account.id))
 
 
 def test_apply_cannot_exceed_credit_note_balance(db_session, subscriber_account):
@@ -234,7 +223,7 @@ def test_credit_note_line_inclusive_tax_extracts_tax(
         db_session,
         CreditNoteCreate(
             account_id=subscriber_account.id,
-            status=CreditNoteStatus.draft,
+            status=CreditNoteStatus.issued,
             currency="USD",
         ),
     )
@@ -249,7 +238,6 @@ def test_credit_note_line_inclusive_tax_extracts_tax(
             tax_application=TaxApplication.inclusive,
         ),
     )
-    billing_service.credit_notes.issue(db_session, str(credit_note.id))
 
     refreshed_credit_note = billing_service.credit_notes.get(
         db_session, str(credit_note.id)
