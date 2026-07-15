@@ -575,14 +575,10 @@ timer or setting was written.
 
 This is the intended fail-closed outcome: #1284 is merged, but activation is
 still blocked by provenance rather than treating unknown funding as zero. The
-reviewed restore scrub is now checked in as
-`scripts/one_off/scrub_billing_audit_restore.py`; it requires an `_audit`
-database name, `BILLING_AUDIT_EPHEMERAL=1`, and `--execute`, rejects newly
-discovered secret-looking columns, and commits only after identity/credential
-verification plus exact financial/service fingerprints pass in the same
-transaction.
+full restored database used for this run was destroyed. The later attempt to
+make a full restore reusable by scrubbing known fields is invalidated below.
 
-### Restore-scrub acceptance and reusable base — 2026-07-14
+### Restore-scrub run and retained base — 2026-07-14
 
 Run `20260714T211057Z` executed that checked-in scrub against a second fresh
 restore of the retained Sub backup on the explicitly approved `seabone` host.
@@ -616,8 +612,7 @@ The tool's before/after billing and service fingerprints matched exactly in the
 same transaction. No staging, production, RADIUS, timer, lock or enforcement
 setting was touched.
 
-Rather than pay the full raw-restore cost for every future read-only audit, the
-verified 5,539 MB sanitized database is retained on `seabone` as:
+The 5,539 MB output was retained on `seabone` as:
 
 | Control | Value |
 |---|---|
@@ -631,48 +626,55 @@ verified 5,539 MB sanitized database is retained on `seabone` as:
 
 The container carries labels for the source backup, Alembic head, run ID and
 scrub hash. The transient runner, transferred script and internal restore
-network were removed. The raw retained backup remains unchanged.
+network were removed. The raw retained backup remains unchanged. The security
+review below later invalidated the claim that this full database was sanitized.
 
 A PostgreSQL `CREATE DATABASE ... TEMPLATE dotmac_sub_audit` copy was benchmarked
 for a write-capable test clone. On this host's storage it remained disk-bound
 after roughly 20 minutes, so it was canceled to stop unnecessary load.
-PostgreSQL rolled the operation back and no clone database remains. Therefore:
+PostgreSQL rolled the operation back and no clone database remains.
 
-- read-only audits may use the stopped sanitized base after attaching it only to
-  an isolated internal network;
-- write-capable tests require a disposable storage-level volume snapshot;
-- PostgreSQL template copying is correct but too I/O-heavy for routine use here;
-- the raw production backup must not be replayed per test.
+### Security correction: full-database scrubbing is not a trust boundary — 2026-07-15
 
-### Reuse-safety review and rollback rehearsal — 2026-07-15
+The follow-up review invalidated both the reusable-base decision and the claim
+that the retained database was sanitized. The scrubber classified selected
+identity, credential and integration tables; every other table passed through
+unless a column name matched its secret heuristic. Aggregate-only inspection of
+the retained restore then confirmed unclassified customer collaboration data:
 
-Review of draft PR #1301 found that the first accepted tool failed closed for
-new secret-named columns but not for a new PII column, and that its identity
-verification covered only a subset of the fields it rewrote. Those were not
-exposures in the completed 2026-07-14 run, but they were unsafe invariants for a
-reusable operator boundary.
+| Table | Rows | Unscrubbed fields observed (non-null counts) |
+|---|---:|---:|
+| `communication_logs` | 1,083,026 | body 195,179; metadata 3,768 |
+| `notifications` | 28,385 | body 28,385; recipient 28,385 |
+| `support_tickets` | 1,424 | description 1,331; metadata 1,424 |
+| `support_ticket_comments` | 3,927 | body 3,927; metadata 3,927 |
+| `splynx_archived_tickets` | 14,229 | body 5; metadata 14,229 |
+| `splynx_archived_ticket_messages` | 66,314 | sender name 66,314; body 66,314 |
 
-The scrubber now gives every column in a sensitive identity table one explicit
-classification: preserved, directly scrubbed, or conditionally scrubbed. An
-unknown column such as `subscribers.passport_number` stops the run before the
-first write. Every existing or future integration/connector/webhook table must
-also be fully classified or deleted wholesale. Opaque endpoint, header,
-configuration, payload, response and free-text fields are destroyed, and all
-outbound-capability fields are disabled. One declarative action map now drives
-both each direct mutation and its residual predicate; the previous independent
-identity-verification sample was removed. Typed settings and subscriber custom
-fields likewise share one conditional policy between mutation and verification.
+No field value was selected or printed during that confirmation. The retained
+base was returned to a stopped container with network mode `none`; its database
+has `ALLOW_CONNECTIONS=false`. It is **quarantined, not sanitized**, must not be
+copied or treated as a reusable test fixture, and remains only until Michael
+separately authorizes destruction.
 
-The current ORM schema and the retained `254_waiting_bulk_item_status` backup
-schema were both checked against the classification. The older backup's
-`subscribers.category` field was reviewed and explicitly preserved. A final
-no-network rehearsal mounted the sanitized volume into a transient PostGIS
-container and ran the full scrub from a transient Sub container over a shared
-Unix socket. All 204 generated checks passed and financial/service fingerprints
-matched. The wrapper then rolled the whole scrub transaction back. The database
-was restored to `ALLOW_CONNECTIONS=false`; the retained base is stopped with
-network mode `none`; and the transient containers, socket volume, network and
-files were removed and verified absent.
+The checked-in `scrub_billing_audit_restore.py` path is now a tombstone that
+opens no database connection and exits non-zero. Adding more denylist patterns
+is not an accepted fix. The controlled process is:
+
+1. Restore and run the read-only audit inside the explicitly approved trusted,
+   isolated host.
+2. Export only the positive-allowlisted evidence fields declared by
+   `billing_alignment_audit.EVIDENCE_SCHEMAS`. The writer refuses an unknown
+   detector, an unexpected field, mixed row schemas, symlink output and an
+   existing output file; evidence files are created mode 600.
+3. Transfer only those UUID/status/amount/timestamp result files or aggregate
+   summaries. Never transfer the full restore, free text, JSON, external
+   provider references, invoice numbers, contact data, network data or secrets.
+4. Destroy the isolated restore after the controlled audit is complete.
+
+Schema drift is safe under this model: a newly added source table or PII column
+is not selected. A new audit field cannot cross the boundary until its exact
+name is reviewed and added to the allowlist.
 
 ### Source-independent containment signal: known prepaid-runner invoices
 
