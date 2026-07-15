@@ -28,6 +28,9 @@ from app.models.network import (
 )
 from app.services.network._common import normalize_mac_address
 from app.services.network.equipment_identity import normalize_ont_equipment_id
+from app.services.network.huawei_cli_response import (
+    is_huawei_serial_already_registered,
+)
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.serial_utils import (
@@ -107,8 +110,7 @@ class AuthorizationWorkflowResult:
 
 
 def _is_serial_already_registered_message(message: str | None) -> bool:
-    lowered = str(message or "").lower()
-    return "sn already exists" in lowered or "serial already exists" in lowered
+    return is_huawei_serial_already_registered(message)
 
 
 def _build_initial_ont_description(serial_number: str) -> str:

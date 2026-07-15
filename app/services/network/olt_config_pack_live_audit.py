@@ -21,6 +21,10 @@ from app.models.network import (
     OltOnuTypeProfileMapping,
     OltServiceProfile,
 )
+from app.services.network.huawei_cli_response import (
+    HuaweiCliResource,
+    is_huawei_resource_absent,
+)
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.olt_profile_resolution import parse_line_profile_tr069_enabled
 from app.services.network.olt_ssh_profiles import (
@@ -134,12 +138,7 @@ def parse_tr069_profile_detail(
     output: str, *, profile_id: int
 ) -> LiveTr069ProfileDetail:
     """Parse Huawei TR-069 server profile detail enough to confirm existence."""
-    lowered = output.lower()
-    if (
-        "does not exist" in lowered
-        or "failure" in lowered
-        or "unknown command" in lowered
-    ):
+    if is_huawei_resource_absent(output, HuaweiCliResource.PROFILE):
         return LiveTr069ProfileDetail(profile_id=profile_id, exists=False)
 
     values = _parse_tr069_profile_detail(output)

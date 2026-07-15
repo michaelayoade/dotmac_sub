@@ -18,6 +18,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.services.adapters.base import AdapterResult
+from app.services.network.huawei_cli_response import (
+    HuaweiCliResource,
+    is_huawei_resource_absent,
+)
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
@@ -328,15 +332,9 @@ class OltProtocolAdapter:
                     ),
                     data={"verified_absent": False},
                 )
-            normalized = read_message.casefold()
-            absent = any(
-                marker in normalized
-                for marker in (
-                    "does not exist",
-                    "not exist",
-                    "not found",
-                    "unknown ont",
-                )
+            absent = is_huawei_resource_absent(
+                read_message,
+                HuaweiCliResource.ONT,
             )
             if not absent:
                 return OltOperationResult(
@@ -554,16 +552,11 @@ class OltProtocolAdapter:
             read_ok, read_message, entry = get_service_port_by_index(
                 self._olt, port_index
             )
-            normalized = read_message.casefold()
             absent = (read_ok and entry is None) or (
                 not read_ok
-                and any(
-                    marker in normalized
-                    for marker in (
-                        "does not exist",
-                        "not exist",
-                        "not found",
-                    )
+                and is_huawei_resource_absent(
+                    read_message,
+                    HuaweiCliResource.SERVICE_PORT,
                 )
             )
             if not absent:
