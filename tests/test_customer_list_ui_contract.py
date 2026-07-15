@@ -94,6 +94,27 @@ def test_customer_filter_form_keeps_canonical_query_state_in_browser_history():
     assert "/api/v1/tables/customers" not in template
 
 
+def test_customer_bulk_message_requires_in_modal_preview_before_queueing():
+    template = (PROJECT_ROOT / "templates/admin/customers/index.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "messagePreview: null" in template
+    assert "messagePreviewError: ''" in template
+    assert "messagePreviewLoading: false" in template
+    assert "messagePreviewReady: false" in template
+    assert "Delivery Preview" in template
+    assert "No individual rows are selected" in template
+    assert "preview_only: true" in template
+    assert "confirmed: true" in template
+    assert "confirm(previewMessage)" not in template
+    assert "queueConfirmedBulkMessage()" in template
+    assert "invalidateMessagePreview()" in template
+    assert '@change="invalidateMessagePreview()"' in template
+    assert '@input="invalidateMessagePreview()"' in template
+    assert "previewRequestId !== this.messagePreviewRequestId" in template
+
+
 def test_legacy_customer_data_api_delegates_to_customer_list_owner():
     table_service = (PROJECT_ROOT / "app/services/table_config.py").read_text(
         encoding="utf-8"
