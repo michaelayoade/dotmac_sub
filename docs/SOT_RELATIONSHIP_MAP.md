@@ -46,7 +46,8 @@ but equivalent state and actions resolve through the same backend owners.
 17. `service_intent_control_plane`
 18. `integration_control_plane`
 19. `ui_list_projection`
-20. `ui_semantic_presentation`
+20. `ui_bulk_actions`
+21. `ui_semantic_presentation`
 
 Rule: each PR should finish one domain slice: define the owner service, migrate
 the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
@@ -262,6 +263,12 @@ will reject.
 10. Legacy subscriber `q`, `status`/`activation_state`, `subscriber_type`,
     declared sorts, `limit`, and aligned `offset` inputs normalize into
     `ListQuery`; undeclared scalar filters and sorts fail closed with HTTP 400.
+11. `ui.invoice_list_projection` extends the existing
+    `app.services.web_billing_overview` invoice owner with declared searchable,
+    filterable, and sortable fields; stable ID tie-breaking; page clamping; and
+    an uncapped export scope. Full-page and HTMX reads render the same
+    `_invoices_list.html` and `_invoices_table.html` projections, so status
+    totals, filters, canonical URLs, pagination, and rows cannot diverge.
 
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
@@ -274,6 +281,72 @@ pagination patterns, with WCAG 2.2 AA as the accessibility floor. This is a
 behavior standard, not a Carbon visual-theme migration. Column-configuration
 responses derive their `sortable` flags from the corresponding resource owner
 rather than the legacy table-field registry.
+
+## UI Bulk Actions
+
+1. `ui.bulk_action_contracts` owns code-native selection modes and the
+   authorized presentation of bulk action label, description, semantic tone,
+   preview/confirmation requirements, execution mode, and result-reference
+   vocabulary. It does not own business eligibility or mutation.
+2. A bulk resource declares page select-all semantics and whether the list owner
+   supports an explicit all-filtered selection. Empty selected IDs never imply
+   a filtered cohort.
+3. `ui.customer_bulk_action_projection` is the first adopted resource. It
+   projects only customer actions authorized for the current principal and
+   depends on `ui.customer_list_projection` for filtered scope semantics.
+4. The customer table header checkbox selects the visible page. A separate
+   affordance promotes that selection to all rows matching the canonical search
+   and filters. Search, filter, or page-size changes clear the selection.
+5. `app.services.web_customer_actions` resolves selected IDs or the explicit
+   filtered query again at preview and execution. Mutations require the preview
+   count and exact-membership token in the confirmation request and fail with
+   HTTP 409 when the cohort has changed. Commands continue to re-check domain
+   state and return partial
+   outcomes or notification identifiers.
+6. `ui.invoice_bulk_action_projection` adopts the same interaction contract for
+   invoice issue, send, void, mark-paid, PDF-generation, and export actions.
+   `app.services.web_billing_invoice_bulk` remains the single eligibility and
+   command owner; the projection calls that policy rather than copying status
+   rules into Jinja or JavaScript.
+7. Invoice selection is page-only. Mutation and PDF-generation commands require
+   a server preview, exact resolved count, and impact token. The token covers
+   selected membership plus each row's eligibility outcome, so a status change
+   that expands or shrinks impact after preview fails with HTTP 409. Execution
+   re-checks eligibility and audits only processed invoice IDs.
+
+Migration record:
+
+- Old owners: customer Jinja/Alpine independently exposed the actions menu,
+  stored selected IDs, and interpreted an empty array as every row matching
+  submitted filters; the reusable data-grid selectable mode was a second local
+  ID collector without action capabilities. Invoice Jinja/Alpine independently
+  hardcoded actions and confirmation text, while its full-page and HTMX tables
+  rebuilt different filters, rows, and pagination.
+- New owners: `app.services.bulk_actions` owns the generic interaction contract,
+  `app.services.web_customer_bulk_actions` owns the customer projection,
+  `app.services.web_customer_lists` owns filtered customer cohort semantics,
+  `app.services.web_billing_overview` owns the invoice list/export scope,
+  `app.services.web_billing_invoice_bulk_actions` owns invoice action
+  presentation, and existing customer/invoice command services retain mutation
+  and consequence ownership.
+- Verification: contract, service, route/template architecture, selection,
+  explicit filtered-scope, list-query, preview, membership/eligibility drift,
+  and partial-outcome tests protect the boundary.
+- Cutover gate: no-selection requests fail closed; unauthorized actions and
+  selection controls are omitted; page selection and filtered promotion are
+  distinguishable; preview membership or eligibility drift prevents execution.
+- Fallback retirement: the customer page no longer exposes bulk actions before
+  selection, and `resolve_bulk_customer_scope` no longer falls through from an
+  empty ID list to filtered execution. The invoice page no longer hardcodes
+  action buttons, eligibility assumptions, manual query strings, or a second
+  HTMX-only table. Other resources remain unchanged until they adopt named list
+  and bulk projections.
+
+Rule: bulk controls appear only when a selection exists and a canonical command
+supports it. Filtered, customer-visible, financial, destructive, or fleet-wide
+operations require explicit impact preview and confirmation. WCAG 2.2 AA labels,
+indeterminate state, selected-count announcements, and focus/keyboard behavior
+are part of the contract; hidden controls are never authorization enforcement.
 
 ## UI Semantic Presentation
 

@@ -2876,8 +2876,10 @@ function customerDetail(config = {}) {
             try {
                 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || document.cookie.match(/csrf_token=([^;]+)/)?.[1] || '';
                 const payload = {
-                    customer_ids: [{ id: this.customerId, type: this.customerType }],
-                    filters: {},
+                    selection: {
+                        mode: 'selected',
+                        ids: [this.customerId]
+                    },
                     channel: this.sendMessageForm.channel,
                     template_id: template.id,
                     template_variables: this.sendMessageForm.templateVariables || {}
@@ -2922,7 +2924,15 @@ function customerDetail(config = {}) {
                         'X-Requested-With': 'XMLHttpRequest',
                         ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
                     },
-                    body: JSON.stringify({ ...payload, confirmed: true })
+                    body: JSON.stringify({
+                        ...payload,
+                        selection: {
+                            ...payload.selection,
+                            expected_count: preview.matched_count || 0,
+                            expected_scope_token: preview.scope_token
+                        },
+                        confirmed: true
+                    })
                 });
 
                 if (response.ok) {

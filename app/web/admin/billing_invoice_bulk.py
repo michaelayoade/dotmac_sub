@@ -2,7 +2,7 @@
 
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,51 @@ from app.services.auth_dependencies import require_permission
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 
+def _require_confirmed_invoice_scope(
+    db: Session,
+    *,
+    action: str,
+    invoice_ids: str,
+    confirmed: bool,
+    expected_count: int | None,
+    expected_scope_token: str | None,
+) -> None:
+    if not confirmed:
+        raise HTTPException(
+            status_code=400, detail="Invoice action confirmation required"
+        )
+    try:
+        web_billing_invoice_bulk_service.require_invoice_bulk_confirmation(
+            db,
+            action=action,
+            invoice_ids_csv=invoice_ids,
+            expected_count=expected_count,
+            expected_scope_token=expected_scope_token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/invoices/bulk/preview",
+    dependencies=[Depends(require_permission("billing:invoice:read"))],
+)
+def invoice_bulk_preview(
+    action: str = Form(...),
+    invoice_ids: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    try:
+        preview = web_billing_invoice_bulk_service.preview_invoice_bulk_action(
+            db,
+            action=action,
+            invoice_ids_csv=invoice_ids,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(preview.as_response())
+
+
 @router.post(
     "/invoices/bulk/issue",
     dependencies=[Depends(require_permission("billing:invoice:update"))],
@@ -21,8 +66,19 @@ router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 def invoice_bulk_issue(
     request: Request,
     invoice_ids: str = Form(...),
+    confirmed: bool = Form(False),
+    expected_count: int | None = Form(None),
+    expected_scope_token: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    _require_confirmed_invoice_scope(
+        db,
+        action="issue",
+        invoice_ids=invoice_ids,
+        confirmed=confirmed,
+        expected_count=expected_count,
+        expected_scope_token=expected_scope_token,
+    )
     result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
         db,
         request,
@@ -39,8 +95,19 @@ def invoice_bulk_issue(
 def invoice_bulk_send(
     request: Request,
     invoice_ids: str = Form(...),
+    confirmed: bool = Form(False),
+    expected_count: int | None = Form(None),
+    expected_scope_token: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    _require_confirmed_invoice_scope(
+        db,
+        action="send",
+        invoice_ids=invoice_ids,
+        confirmed=confirmed,
+        expected_count=expected_count,
+        expected_scope_token=expected_scope_token,
+    )
     result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
         db,
         request,
@@ -57,8 +124,19 @@ def invoice_bulk_send(
 def invoice_bulk_void(
     request: Request,
     invoice_ids: str = Form(...),
+    confirmed: bool = Form(False),
+    expected_count: int | None = Form(None),
+    expected_scope_token: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    _require_confirmed_invoice_scope(
+        db,
+        action="void",
+        invoice_ids=invoice_ids,
+        confirmed=confirmed,
+        expected_count=expected_count,
+        expected_scope_token=expected_scope_token,
+    )
     result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
         db,
         request,
@@ -75,8 +153,19 @@ def invoice_bulk_void(
 def invoice_bulk_mark_paid(
     request: Request,
     invoice_ids: str = Form(...),
+    confirmed: bool = Form(False),
+    expected_count: int | None = Form(None),
+    expected_scope_token: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    _require_confirmed_invoice_scope(
+        db,
+        action="mark_paid",
+        invoice_ids=invoice_ids,
+        confirmed=confirmed,
+        expected_count=expected_count,
+        expected_scope_token=expected_scope_token,
+    )
     result = web_billing_invoice_bulk_service.execute_audited_bulk_action_result(
         db,
         request,
@@ -93,8 +182,19 @@ def invoice_bulk_mark_paid(
 def invoice_bulk_generate_pdf(
     request: Request,
     invoice_ids: str = Form(...),
+    confirmed: bool = Form(False),
+    expected_count: int | None = Form(None),
+    expected_scope_token: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    _require_confirmed_invoice_scope(
+        db,
+        action="generate_pdf",
+        invoice_ids=invoice_ids,
+        confirmed=confirmed,
+        expected_count=expected_count,
+        expected_scope_token=expected_scope_token,
+    )
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request) or {}

@@ -101,6 +101,42 @@ column serialization. It is not backed by a separate live admin screen: the
 current subscriber-named web facade resolves to `/admin/customers`. Table reads
 must never generate subscriber numbers or commit any other domain mutation.
 
+### Bulk-action contract
+
+Production tables do not infer bulk scope or action availability in templates.
+`app.services.bulk_actions` declares selection behavior plus action label,
+description, semantic tone, preview/confirmation requirement, execution mode,
+and result-reference vocabulary. A resource web projection omits unauthorized
+actions; command routes still enforce permission and command services re-check
+scope and business eligibility.
+
+The customer list is the first pilot. Its header checkbox means the visible
+page only.
+After a full-page selection, an explicit second control may select all customers
+matching the canonical `ListQuery` search and filters. No selection means no
+bulk controls, and an empty ID array is invalid rather than an alias for all
+filtered rows. Search, filter, and page-size changes clear selection.
+
+Customer bulk update and message commands are preview-first. Confirmation sends
+the previewed matched count and exact-membership token; execution re-resolves
+the canonical cohort and returns HTTP 409 if it changed, including a same-count
+membership replacement. Responses report real matched/processed/skipped
+outcomes, while queued messaging exposes notification IDs as the durable result
+references. Selection counts use an `aria-live` status, checkboxes have record
+labels and an indeterminate page state, and filtered selection remains visually
+and textually distinct from selected IDs.
+
+The invoice list is the second adoption. Its existing
+`app.services.web_billing_overview` owner declares search, filters, stable sorts,
+page clamping, status summaries, and the uncapped CSV export scope through
+`ListQuery` and `PageMeta`. The full page and HTMX request share the same list
+and table partials. Invoice selection is page-only; permission-filtered actions
+carry server-owned row eligibility. Issue, send, void, mark-paid, and PDF
+generation preview exact eligible/skipped impact before confirmation. The
+confirmation token fingerprints both membership and eligibility, so execution
+returns HTTP 409 if status or scope drift changes the previewed impact. The
+invoice command service re-checks eligibility and audits only processed IDs.
+
 ### Semantic status contract
 
 Lifecycle services own raw account, subscription, invoice, payment, outage-incident,

@@ -209,10 +209,18 @@ def test_bulk_mark_paid_route_reports_skipped_count(db_session, monkeypatch):
         "execute_audited_bulk_action_result",
         _fake_execute_audited_bulk_action_result,
     )
+    monkeypatch.setattr(
+        bulk_routes,
+        "_require_confirmed_invoice_scope",
+        lambda *args, **kwargs: None,
+    )
 
     response = bulk_routes.invoice_bulk_mark_paid(
         request=None,
         invoice_ids="inv-1,inv-2,missing",
+        confirmed=True,
+        expected_count=3,
+        expected_scope_token="preview-token",
         db=db_session,
     )
     payload = json.loads(response.body)

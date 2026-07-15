@@ -47,6 +47,13 @@ class HuaweiCommandProfile:
             return f"display ont info {frame} {slot} all"
         return f"display ont info {frame} {slot} {port} all"
 
+    def display_ont_status_inventory(self, fsp: str) -> str:
+        """Return the bounded per-port status inventory command."""
+        frame, slot, port = _split_fsp(fsp)
+        if self.supports_slash_fsp_display:
+            return f"display ont info summary {frame}/{slot}/{port}"
+        return f"display ont info {frame} {slot} {port} all"
+
 
 def _split_fsp(
     fsp: str,
@@ -62,6 +69,7 @@ def _split_fsp(
 
 
 def get_huawei_command_profile(olt: OLTDevice) -> HuaweiCommandProfile:
+    model = str(getattr(olt, "model", None) or "").upper()
     firmware = getattr(olt, "firmware_version", None) or getattr(
         olt, "software_version", None
     )
@@ -77,7 +85,9 @@ def get_huawei_command_profile(olt: OLTDevice) -> HuaweiCommandProfile:
         adapter_revision=binding.adapter_revision if binding else None,
         identity_fingerprint=binding.identity.fingerprint if binding else None,
         requires_slow_send=capabilities.requires_slow_send,
-        supports_slash_fsp_display=capabilities.supports_slash_fsp_display,
+        supports_slash_fsp_display=(
+            capabilities.supports_slash_fsp_display or "MA5800" in model
+        ),
     )
 
 

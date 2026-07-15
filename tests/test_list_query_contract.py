@@ -81,6 +81,30 @@ def test_sort_change_resets_page_and_preserves_search_filters_and_page_size():
     assert params["status"] == ["active"]
 
 
+def test_filter_and_page_size_changes_reset_page_and_keep_canonical_state():
+    query = _definition().build_query(
+        search="needle",
+        filters={"status": "active"},
+        page=4,
+        per_page=25,
+    )
+
+    filtered = parse_qs(
+        urlsplit(
+            query.url(
+                "/admin/example",
+                filters={"status": None},
+                per_page=50,
+            )
+        ).query
+    )
+
+    assert "status" not in filtered
+    assert filtered["search"] == ["needle"]
+    assert filtered["page"] == ["1"]
+    assert filtered["per_page"] == ["50"]
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
