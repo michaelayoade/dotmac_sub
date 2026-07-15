@@ -78,25 +78,23 @@ mode-700 UUID/reason-code blocker manifest. This is evidence that the activation
 boundary fails closed; it is not evidence that the blocked accounts are funded
 or unfunded. Enforcement remains unauthorized.
 
-The restore scrub was then accepted end to end on a second isolated restore
-(run `20260714T211057Z`): the full retained schema restored cleanly, all 62
-credential/identity checks passed, and exact billing/service fingerprints were
-unchanged. The resulting 5,539 MB sanitized database is retained on `seabone`
-as stopped, network-less container `billing-audit-base-20260712`, with no
-published ports and its database marked template/non-connectable. It replaces
-replaying the raw backup for future read-only audits. A PostgreSQL template clone
-was canceled after roughly 20 minutes of sustained disk I/O and rolled back
-cleanly; write-capable test copies require a storage-level volume snapshot.
+The second restore run (`20260714T211057Z`) did preserve the checked financial
+fingerprints, but the later security review invalidated its acceptance as a
+sanitized or reusable database. The selected-table scrub policy silently left
+unclassified collaboration data in tables including `communication_logs`,
+`notifications`, `support_tickets`, `support_ticket_comments` and the archived
+Splynx ticket tables. Aggregate-only verification confirmed large non-null body,
+recipient, sender-name and metadata populations without selecting any values.
 
-The draft-PR reuse review then closed two gaps that did not affect that completed
-one-off run but would have allowed a later schema to under-scrub silently. Every
-column in a sensitive identity table is now explicitly preserved or scrubbed,
-and any new or changed integration table is rejected until fully classified.
-Direct mutation and residual verification are generated from the same policy;
-opaque integration endpoints, headers, configurations and payloads are scrubbed
-explicitly. A rollback-only rehearsal against the retained backup schema passed
-all 204 generated checks with unchanged financial/service fingerprints, then
-restored the base to its stopped, network-less and non-connectable state.
+The 5,539 MB retained database on `seabone` is therefore quarantined, not
+sanitized. Container `billing-audit-base-20260712` remains stopped and
+network-less, and the database remains non-connectable, pending separate
+destruction authorization. It must not be copied or used as a reusable test
+fixture. The old scrub command is now a fail-closed tombstone with no database
+capability. Future full restores stay inside the explicitly approved trusted
+host; only the audit runner's exact UUID/status/amount/timestamp evidence
+allowlist may leave that boundary. A new or changed source column is excluded by
+construction, and a new detector field blocks export until reviewed.
 
 The same review found a more fundamental flaw in the existing cutover invariant:
 although the runbook says "Splynx cutover balance + subsequent transactions -
