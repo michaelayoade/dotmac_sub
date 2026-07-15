@@ -166,6 +166,29 @@ class TestVerifyOntAbsent:
         assert result.success is False
         assert "still appears" in result.message
 
+    def test_unrecognized_readback_does_not_certify_absence(self, monkeypatch) -> None:
+        """An unreadable port must fail closed, never be scored as 'ONT gone'."""
+        from app.services.network.olt_write_reconciliation import verify_ont_absent
+
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.get_registered_ont_serials",
+            lambda *_args, **_kwargs: (
+                False,
+                "Huawei inventory response for 0/2/1 was not recognized",
+                [],
+            ),
+        )
+
+        result = verify_ont_absent(
+            _olt(),
+            fsp="0/2/1",
+            ont_id=7,
+            serial_number="HWTC-ABCD1234",
+        )
+
+        assert result.success is False
+        assert "readback failed" in result.message
+
 
 class TestVerifyServicePortPresent:
     def test_detects_missing_vlan_after_write(self, monkeypatch) -> None:

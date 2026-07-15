@@ -107,9 +107,11 @@ def refresh_huawei_olt_status(
 ) -> OltStatusRefreshStats:
     """Read all ONTs in one OLT command and persist matched observations.
 
-    An empty or unparsable response is a poll failure, never evidence that all
-    ONTs are offline. Inventory rows absent from the response retain their last
-    confirmed binary state and are retried by the next scheduled sweep.
+    An unrecognized or unparsable response is a poll failure, never evidence
+    that all ONTs are offline. A recognized response reporting zero ONTs is
+    authoritative and simply matches nothing. Either way, inventory rows absent
+    from the response retain their last confirmed binary state and are retried
+    by the next scheduled sweep.
     """
     from app.services.network.olt_ssh_ont.status import get_registered_ont_serials
 
@@ -131,17 +133,9 @@ def refresh_huawei_olt_status(
     if onts and not fsps:
         raise RuntimeError("Huawei ONT inventory has no pollable F/S/P locations")
 
-    ok, message, entries = get_registered_ont_serials(
-        olt,
-        sorted(fsps),
-        require_entries_per_fsp=True,
-    )
+    ok, message, entries = get_registered_ont_serials(olt, sorted(fsps))
     if not ok:
         raise RuntimeError(message)
-    if onts and not entries:
-        raise RuntimeError(
-            "Huawei ONT summary returned no parseable rows for a populated OLT"
-        )
 
     by_serial = {
         canonical(serial): ont

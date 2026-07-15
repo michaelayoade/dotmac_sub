@@ -20,6 +20,26 @@ logger = logging.getLogger(__name__)
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-_])")
 
+# A port read is "recognized" when the device accepted the inventory command and
+# answered with a known table header or an explicit empty marker, even when it
+# lists zero ONTs. This distinguishes an authoritative empty port (an ONT was
+# removed on the device but is still active in Sub inventory) from an unparsable
+# or truncated read. The former is trustworthy and must not abort the OLT poll;
+# the latter is a poll failure that must fail closed and be retried.
+_ONT_INVENTORY_RECOGNITION_RE = re.compile(
+    r"the total of ONTs are:"  # MA5800 `display ont info summary` banner
+    r"|ONT\s+SN\s+Type"  # MA5800 serial table header
+    r"|ONT\s+Run\s+Last"  # MA5800 run-state table header
+    r"|F/S/P\s+ONT-ID\s+SN"  # MA5608 legacy inventory header
+    r"|No\s+ONT",  # explicit "No ONT is configured" empty response
+    re.IGNORECASE,
+)
+
+
+def _ont_inventory_response_recognized(clean_output: str) -> bool:
+    """Whether the device returned a known inventory response (possibly empty)."""
+    return bool(_ONT_INVENTORY_RECOGNITION_RE.search(clean_output))
+
 
 def parse_registered_ont_inventory(
     output: str,
@@ -266,9 +286,16 @@ def get_registered_ont_serials(
     fsps: Iterable[str],
     *,
     timeout_sec: int = 180,
-    require_entries_per_fsp: bool = False,
 ) -> tuple[bool, str, list[RegisteredOntEntry]]:
-    """Query registered ONTs on explicit ports within one bounded SSH session."""
+    """Query registered ONTs on explicit ports within one bounded SSH session.
+
+    Returns ``ok=True`` only when every requested port returned a recognized
+    response — parsed ONT rows or an authoritative empty result. A port whose
+    output cannot be recognized (garbled, truncated, or an unknown format) makes
+    the whole call fail closed, so callers never mistake an unreadable port for
+    an empty one. A recognized-but-empty port contributes no rows and does not
+    fail the call: it is authoritative evidence that the port holds no ONTs.
+    """
     from app.services.network import olt_ssh as core
 
     normalized_fsps: list[str] = []
@@ -309,20 +336,29 @@ def get_registered_ont_serials(
                 prompt=prompt,
                 timeout_sec=max(1, min(30, int(remaining))),
             )
+            port_entries = parse_registered_ont_inventory(output, fsp)
+            if port_entries:
+                entries.extend(port_entries)
+                continue
+            # No rows parsed. A recognized inventory response (including an
+            # explicit empty one) is authoritative: the port simply holds no
+            # ONTs. Check recognition before the shared error scan so a customer
+            # description containing words like "error" or "invalid" in a data
+            # row cannot be misread as a device rejection.
+            clean_output = _ANSI_ESCAPE_RE.sub("", output)
+            if _ont_inventory_response_recognized(clean_output):
+                continue
             if core.is_error_output(output):
                 return (
                     False,
                     f"OLT rejected inventory read for {fsp}: {output.strip()[-200:]}",
                     [],
                 )
-            port_entries = parse_registered_ont_inventory(output, fsp)
-            if require_entries_per_fsp and not port_entries:
-                return (
-                    False,
-                    f"Huawei inventory returned no parseable rows for populated port {fsp}",
-                    [],
-                )
-            entries.extend(port_entries)
+            return (
+                False,
+                f"Huawei inventory response for {fsp} was not recognized",
+                [],
+            )
         return (
             True,
             f"Found {len(entries)} registered ONTs on {len(normalized_fsps)} ports",

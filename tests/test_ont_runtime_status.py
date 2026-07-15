@@ -100,9 +100,7 @@ def test_bulk_huawei_refresh_persists_only_matched_observations(
     assert olt.last_successful_ssh_at == NOW
 
 
-def test_bulk_huawei_refresh_retries_empty_parse_without_mass_offline(
-    db_session, monkeypatch
-):
+def _huawei_olt_with_online_ont(db_session):
     olt = OLTDevice(name="Huawei empty test", vendor="Huawei")
     db_session.add(olt)
     db_session.flush()
@@ -116,12 +114,45 @@ def test_bulk_huawei_refresh_retries_empty_parse_without_mass_offline(
     )
     db_session.add(ont)
     db_session.flush()
+    return olt, ont
+
+
+def test_bulk_huawei_refresh_recognized_empty_is_not_mass_offline(
+    db_session, monkeypatch
+):
+    """A recognized empty read is authoritative: no raise, no mass-offline.
+
+    The port genuinely holds no ONTs (an ONT was removed on the device but is
+    still active in Sub). Absent inventory rows retain their last confirmed
+    state instead of being flipped offline or aborting the whole OLT poll.
+    """
+    olt, ont = _huawei_olt_with_online_ont(db_session)
     monkeypatch.setattr(
         "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
         lambda _olt, _fsps, **_kwargs: (True, "Found 0 registered ONTs", []),
     )
 
-    with pytest.raises(RuntimeError, match="no parseable rows"):
+    refresh_huawei_olt_status(db_session, olt, now=NOW)
+
+    assert ont.olt_status == OnuOnlineStatus.online
+    assert ont.olt_status_seen_at == NOW
+
+
+def test_bulk_huawei_refresh_unrecognized_read_fails_closed_without_mass_offline(
+    db_session, monkeypatch
+):
+    """An unrecognized read is a poll failure: raise and retry, retain state."""
+    olt, ont = _huawei_olt_with_online_ont(db_session)
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
+        lambda _olt, _fsps, **_kwargs: (
+            False,
+            "Huawei inventory response for 0/1/0 was not recognized",
+            [],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="not recognized"):
         refresh_huawei_olt_status(db_session, olt, now=NOW)
 
     assert ont.olt_status == OnuOnlineStatus.online

@@ -128,7 +128,7 @@ def test_registered_inventory_rejects_cli_errors(monkeypatch) -> None:
     assert entries == []
 
 
-def test_populated_port_rejects_empty_parse(monkeypatch) -> None:
+def _huawei_reader(monkeypatch, output):
     class _Transport:
         def close(self) -> None:
             pass
@@ -147,20 +147,52 @@ def test_populated_port_rejects_empty_parse(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_paged_cmd",
-        lambda *_args, **_kwargs: "No ONT is configured\nMA5800-X2#",
+        lambda *_args, **_kwargs: output,
     )
+
+
+def test_recognized_empty_port_is_authoritative_not_a_failure(monkeypatch) -> None:
+    """A device that reports no ONTs is trusted, not treated as a broken read."""
+    _huawei_reader(monkeypatch, "No ONT is configured\nMA5800-X2#")
 
     ok, message, entries = get_registered_ont_serials(
         OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"),
         ["0/2/1"],
-        require_entries_per_fsp=True,
+    )
+
+    assert ok is True
+    assert entries == []
+    assert message == "Found 0 registered ONTs on 1 ports"
+
+
+def test_unrecognized_inventory_response_fails_closed(monkeypatch) -> None:
+    """Output with no known table header or empty marker cannot be trusted."""
+    _huawei_reader(monkeypatch, "garbled partial line without a header\nMA5800-X2#")
+
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"),
+        ["0/2/1"],
     )
 
     assert ok is False
-    assert message == (
-        "Huawei inventory returned no parseable rows for populated port 0/2/1"
-    )
+    assert "was not recognized" in message
     assert entries == []
+
+
+def test_ont_description_containing_error_word_is_not_rejected(monkeypatch) -> None:
+    """A customer description with 'error'/'invalid' must not fail the read."""
+    output = MA5800_SUMMARY.replace("Customer A", "Error Systems Ltd").replace(
+        "Customer B", "Invalid Address Holdings"
+    )
+    _huawei_reader(monkeypatch, output)
+
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"),
+        ["0/2/1"],
+    )
+
+    assert ok is True
+    assert len(entries) == 3
 
 
 def test_paged_reader_has_one_cumulative_deadline(monkeypatch) -> None:
