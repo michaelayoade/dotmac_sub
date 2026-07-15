@@ -188,6 +188,46 @@ def _radreply_attrs(
     return attrs
 
 
+def _write_radius_projection(cur, work, delete_usernames) -> None:
+    """Idempotent radcheck/radreply write for a bounded set of usernames.
+
+    The single reusable write primitive of `access.radius_projection`. Deletes
+    `delete_usernames` from radcheck/radreply, then reinserts rows from `work`:
+    non-rejected users authenticate with their Cleartext-Password (active
+    normally, opted-in-blocked into the captive walled-garden via radreply);
+    hard-rejected users get a single `Auth-Type := Reject` row so FreeRADIUS
+    refuses them — no password, fully offline — and no radreply (they never
+    authenticate).
+
+    `delete_usernames` is passed explicitly (rather than derived from `work`) so
+    a scoped reconcile can remove a now-inactive username that has no `work` row.
+    For the full sweep it is exactly the `work` usernames. `work` items are the
+    ``(login, cleartext, attrs, blocked, status, mode)`` tuples built by the
+    projection loop.
+    """
+    delete_list = list(delete_usernames)
+    cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (delete_list,))
+    password_rows = [(w[0], w[1]) for w in work if w[5] != "reject"]
+    reject_rows = [(w[0],) for w in work if w[5] == "reject"]
+    if password_rows:
+        cur.executemany(
+            "INSERT INTO radcheck (username, attribute, op, value) "
+            "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+            password_rows,
+        )
+    if reject_rows:
+        cur.executemany(
+            "INSERT INTO radcheck (username, attribute, op, value) "
+            "VALUES (%s, 'Auth-Type', ':=', 'Reject')",
+            reject_rows,
+        )
+    cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (delete_list,))
+    cur.executemany(
+        "INSERT INTO radreply (username, attribute, op, value) VALUES (%s, %s, %s, %s)",
+        [(w[0], a, o, v) for w in work if w[5] != "reject" for (a, o, v) in w[2]],
+    )
+
+
 def populate(dry_run: bool = True) -> dict[str, int]:
     # Single authority (shared with radius.py's event-time sync) so both writers
     # target the same radius DB and cannot split-brain.
@@ -472,37 +512,7 @@ def populate(dry_run: bool = True) -> dict[str, int]:
     try:
         with rconn.cursor() as cur:
             usernames = [w[0] for w in work]
-            cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (usernames,))
-            # Non-rejected users authenticate with their Cleartext-Password
-            # (active normally, opted-in-blocked into the captive walled-garden
-            # via radreply). Hard-rejected users get a single Auth-Type := Reject
-            # row so FreeRADIUS refuses them — no password, fully offline.
-            password_rows = [(w[0], w[1]) for w in work if w[5] != "reject"]
-            reject_rows = [(w[0],) for w in work if w[5] == "reject"]
-            if password_rows:
-                cur.executemany(
-                    "INSERT INTO radcheck (username, attribute, op, value) "
-                    "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-                    password_rows,
-                )
-            if reject_rows:
-                cur.executemany(
-                    "INSERT INTO radcheck (username, attribute, op, value) "
-                    "VALUES (%s, 'Auth-Type', ':=', 'Reject')",
-                    reject_rows,
-                )
-            cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (usernames,))
-            # Hard-rejected users get no radreply (they never authenticate).
-            cur.executemany(
-                "INSERT INTO radreply (username, attribute, op, value) "
-                "VALUES (%s, %s, %s, %s)",
-                [
-                    (w[0], a, o, v)
-                    for w in work
-                    if w[5] != "reject"
-                    for (a, o, v) in w[2]
-                ],
-            )
+            _write_radius_projection(cur, work, usernames)
 
             # --- orphan cleanup: drop radcheck/radreply rows whose username ---
             # is not in the active+blocked set (e.g. subs that have since been
