@@ -62,19 +62,23 @@ def test_bulk_huawei_refresh_persists_only_matched_observations(
         serial_number="HWTCABEF7A70",
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.offline,
+        board="0/1",
+        port="0",
     )
     absent = OntUnit(
         serial_number="HWTC00000001",
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.online,
         olt_status_seen_at=NOW - timedelta(hours=1),
+        board="0/1",
+        port="0",
     )
     db_session.add_all([online, absent])
     db_session.flush()
 
     monkeypatch.setattr(
         "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
-        lambda _olt: (
+        lambda _olt, _fsps, **_kwargs: (
             True,
             "ok",
             [RegisteredOntEntry("0/1/0", 1, "48575443ABEF7A70", "online")],
@@ -107,12 +111,14 @@ def test_bulk_huawei_refresh_retries_empty_parse_without_mass_offline(
         olt_device_id=olt.id,
         olt_status=OnuOnlineStatus.online,
         olt_status_seen_at=NOW,
+        board="0/1",
+        port="0",
     )
     db_session.add(ont)
     db_session.flush()
     monkeypatch.setattr(
         "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
-        lambda _olt: (True, "Found 0 registered ONTs", []),
+        lambda _olt, _fsps, **_kwargs: (True, "Found 0 registered ONTs", []),
     )
 
     with pytest.raises(RuntimeError, match="no parseable rows"):

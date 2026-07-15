@@ -121,7 +121,21 @@ def refresh_huawei_olt_status(
             )
         ).all()
     )
-    ok, message, entries = get_registered_ont_serials(olt)
+    fsps: set[str] = set()
+    invalid_locations = 0
+    for inventory_ont in onts:
+        try:
+            fsps.add(_ont_fsp(db, inventory_ont))
+        except ValueError:
+            invalid_locations += 1
+    if onts and not fsps:
+        raise RuntimeError("Huawei ONT inventory has no pollable F/S/P locations")
+
+    ok, message, entries = get_registered_ont_serials(
+        olt,
+        sorted(fsps),
+        require_entries_per_fsp=True,
+    )
     if not ok:
         raise RuntimeError(message)
     if onts and not entries:
@@ -136,7 +150,8 @@ def refresh_huawei_olt_status(
         if canonical(serial)
     }
     observed_at = now or datetime.now(UTC)
-    online = offline = unmatched = invalid = 0
+    online = offline = unmatched = 0
+    invalid = invalid_locations
     matched_ids: set[object] = set()
     for entry in entries:
         ont = by_serial.get(canonical(entry.real_serial))

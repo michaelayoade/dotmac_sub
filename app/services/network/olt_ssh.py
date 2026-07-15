@@ -495,27 +495,41 @@ def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> s
 def _run_huawei_paged_cmd(
     channel: Channel, command: str, prompt: str = r"#\s*$", *, timeout_sec: int = 60
 ) -> str:
-    """Send a command and handle pagination (---- More ----) prompts."""
+    """Send a paged command within one cumulative deadline."""
     logger.debug("OLT paged command: %r", command)
     _send_huawei_command(channel, command)
     output_parts: list[str] = []
     pager_pattern = r"---- More(?:\s*\([^)]*\)\s*)?----|<cr>|Press any key"
     combined_pattern = rf"{prompt}|{pager_pattern}"
+    deadline = time.monotonic() + max(float(timeout_sec), 0.1)
 
     while True:
-        chunk = _read_until_prompt(channel, combined_pattern, timeout_sec=timeout_sec)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Huawei command did not return a shell prompt within {timeout_sec}s"
+            )
+        chunk = _read_until_prompt(
+            channel,
+            combined_pattern,
+            timeout_sec=remaining,
+        )
         output_parts.append(chunk)
 
-        # Check if we hit a pager prompt
-        if "---- More" in chunk or "Press any key" in chunk:
+        # A single recv can contain an earlier continuation marker and the final
+        # prompt. The anchored shell prompt is authoritative when both appear.
+        if re.search(prompt, chunk):
+            break
+        elif "---- More" in chunk or "Press any key" in chunk:
             channel.send(" ")  # Send space to continue
             continue
         elif "<cr>" in chunk:
             channel.send("\n")
             continue
         else:
-            # Hit the shell prompt - we're done
-            break
+            raise TimeoutError(
+                f"Huawei command output ended before the shell prompt within {timeout_sec}s"
+            )
 
     return "".join(output_parts)
 
