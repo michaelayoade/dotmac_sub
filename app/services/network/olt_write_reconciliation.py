@@ -62,7 +62,7 @@ def verify_ont_authorized(
     def _registered_scan_verification(
         reason: str, serial_lookup_failure: str | None = None
     ) -> OltWriteVerification | None:
-        ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt)
+        ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt, [fsp])
         if not ok:
             detail = (
                 f"{serial_lookup_failure}; registered serial scan failed: {msg}"
@@ -190,7 +190,7 @@ def verify_ont_absent(
     from app.services.network import olt_ssh_ont
 
     if serial_number:
-        ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt)
+        ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt, [fsp])
         if not ok:
             return OltWriteVerification(
                 False,
