@@ -94,9 +94,9 @@ def _critical_notification_filter():
 
 def notification_delivery_health(db: Session) -> EnforcementHealth:
     """Return whether critical billing notifications are drainable."""
-    if not _setting_bool(
-        db, SettingDomain.notification, "notification_queue_enabled", default=True
-    ):
+    from app.services import control_registry
+
+    if not control_registry.is_enabled(db, "notifications.queue"):
         return EnforcementHealth(
             ok=False,
             reasons=["notification_queue_disabled"],

@@ -89,7 +89,7 @@
                 {% for option in [7, 14, 30] %}
                 {% if option <= max_days %}
                 <label class="cursor-pointer">
-                    <input class="peer sr-only" type="radio" name="days_preset" value="{{ option }}" {% if loop.first %}checked{% endif %} @change="selectedDays = {{ option }}">
+                    <input class="peer sr-only" type="radio" name="days_preset" data-form-consumer="client" value="{{ option }}" {% if loop.first %}checked{% endif %} @change="selectedDays = {{ option }}">
                     <div class="rounded-xl border-2 border-stone-200 bg-stone-50 px-4 py-4 text-center text-sm font-semibold text-stone-700 transition peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-50)] peer-checked:text-[var(--color-brand-700)] dark:border-stone-700 dark:bg-stone-900/40 dark:text-stone-300 dark:peer-checked:border-[var(--color-brand-400)] dark:peer-checked:bg-[var(--color-brand-900)]/20 dark:peer-checked:text-[var(--color-brand-300)]">
                         {{ option }} days
                     </div>

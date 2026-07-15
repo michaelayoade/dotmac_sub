@@ -255,6 +255,16 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "access.control_resolution",
         "access.walled_garden_policy",
     )
+    assert sot_relationships.dependencies_for("access.radius_projection") == (
+        "access.radius_state",
+        "access.radius_reject",
+    )
+    assert sot_relationships.dependencies_for("communications.intents") == (
+        "communications.channel_policy",
+        "communications.customer_policy",
+        "communications.eligibility",
+        "communications.notification_service",
+    )
     assert sot_relationships.dependencies_for("sessions.radius_resolution") == (
         "sessions.radius_reconciliation",
         "network.identity",

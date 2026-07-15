@@ -667,13 +667,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.notification,
-        key="notification_category_preferences_enabled",
-        env_var="NOTIFICATION_CATEGORY_PREFERENCES_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
         key="notification_channel_policy",
         env_var=None,
         value_type=SettingValueType.json,
@@ -2301,27 +2294,11 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
-        key="default_account_status",
-        env_var="SUBSCRIBER_DEFAULT_ACCOUNT_STATUS",
-        value_type=SettingValueType.string,
-        default="active",
-        allowed={"active", "suspended", "canceled", "delinquent"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.subscriber,
         key="default_address_type",
         env_var="SUBSCRIBER_DEFAULT_ADDRESS_TYPE",
         value_type=SettingValueType.string,
         default="service",
         allowed={"service", "billing", "mailing"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.subscriber,
-        key="default_contact_role",
-        env_var="SUBSCRIBER_DEFAULT_CONTACT_ROLE",
-        value_type=SettingValueType.string,
-        default="primary",
-        allowed={"primary", "billing", "technical", "support"},
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
@@ -2415,33 +2392,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
-        key="account_number_enabled",
-        env_var="SUBSCRIBER_ACCOUNT_NUMBER_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-    ),
-    SettingSpec(
-        domain=SettingDomain.subscriber,
         key="account_number_prefix",
         env_var="SUBSCRIBER_ACCOUNT_NUMBER_PREFIX",
         value_type=SettingValueType.string,
         default="ACC-",
-    ),
-    SettingSpec(
-        domain=SettingDomain.subscriber,
-        key="account_number_padding",
-        env_var="SUBSCRIBER_ACCOUNT_NUMBER_PADDING",
-        value_type=SettingValueType.integer,
-        default=6,
-        min_value=0,
-    ),
-    SettingSpec(
-        domain=SettingDomain.subscriber,
-        key="account_number_start",
-        env_var="SUBSCRIBER_ACCOUNT_NUMBER_START",
-        value_type=SettingValueType.integer,
-        default=1,
-        min_value=1,
     ),
     SettingSpec(
         domain=SettingDomain.usage,
@@ -2606,22 +2560,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Customer ONT Reboot Cooldown (seconds)",
     ),
     SettingSpec(
-        domain=SettingDomain.network,
-        key="hotspot_walled_garden",
-        env_var="NETWORK_HOTSPOT_WALLED_GARDEN",
-        value_type=SettingValueType.string,
-        default=None,
-        label="Hotspot Walled Garden Domains (comma-separated)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.network,
-        key="hotspot_redirect_url",
-        env_var="NETWORK_HOTSPOT_REDIRECT_URL",
-        value_type=SettingValueType.string,
-        default=None,
-        label="Hotspot Login Redirect URL",
-    ),
-    SettingSpec(
         domain=SettingDomain.collections,
         key="default_dunning_case_status",
         env_var="COLLECTIONS_DEFAULT_DUNNING_CASE_STATUS",
@@ -2743,14 +2681,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network,
-        key="default_olt_port_type",
-        env_var="NETWORK_DEFAULT_OLT_PORT_TYPE",
-        value_type=SettingValueType.string,
-        default="pon",
-        allowed={"pon", "uplink", "ethernet", "mgmt"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.network,
         key="default_fiber_strand_status",
         env_var="NETWORK_DEFAULT_FIBER_STRAND_STATUS",
         value_type=SettingValueType.string,
@@ -2762,22 +2692,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
             "damaged",
             "retired",
         },
-    ),
-    SettingSpec(
-        domain=SettingDomain.network,
-        key="default_splitter_input_ports",
-        env_var="NETWORK_DEFAULT_SPLITTER_INPUT_PORTS",
-        value_type=SettingValueType.integer,
-        default=1,
-        min_value=1,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network,
-        key="default_splitter_output_ports",
-        env_var="NETWORK_DEFAULT_SPLITTER_OUTPUT_PORTS",
-        value_type=SettingValueType.integer,
-        default=8,
-        min_value=1,
     ),
     SettingSpec(
         domain=SettingDomain.network,
@@ -2840,29 +2754,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=300,
         min_value=60,
         label="OLT Profile Sync Interval (seconds)",
-    ),
-    SettingSpec(
-        domain=SettingDomain.network,
-        key="vendor_quote_approval_threshold",
-        env_var="NETWORK_VENDOR_QUOTE_APPROVAL_THRESHOLD",
-        value_type=SettingValueType.string,
-        default="5000",
-    ),
-    SettingSpec(
-        domain=SettingDomain.network,
-        key="vendor_quote_validity_days",
-        env_var="NETWORK_VENDOR_QUOTE_VALIDITY_DAYS",
-        value_type=SettingValueType.integer,
-        default=30,
-        min_value=1,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network,
-        key="vendor_bid_minimum_days",
-        env_var="NETWORK_VENDOR_BID_MINIMUM_DAYS",
-        value_type=SettingValueType.integer,
-        default=7,
-        min_value=1,
     ),
     SettingSpec(
         domain=SettingDomain.network_monitoring,
@@ -3182,56 +3073,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network_monitoring,
-        key="olt_polling_interval_minutes",
-        label="OLT Signal Polling Interval (minutes)",
-        env_var="OLT_POLLING_INTERVAL_MINUTES",
-        value_type=SettingValueType.integer,
-        default=5,
-        min_value=1,
-        max_value=60,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network_monitoring,
-        key="core_device_ping_interval_seconds",
-        label="Core Device Ping Refresh Interval (seconds)",
-        env_var="CORE_DEVICE_PING_INTERVAL_SECONDS",
-        value_type=SettingValueType.integer,
-        default=120,
-        min_value=10,
-        max_value=3600,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network_monitoring,
-        key="core_device_snmp_walk_interval_seconds",
-        label="Core Device SNMP Walk Interval (seconds)",
-        env_var="CORE_DEVICE_SNMP_WALK_INTERVAL_SECONDS",
-        value_type=SettingValueType.integer,
-        default=300,
-        min_value=30,
-        max_value=3600,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network_monitoring,
-        key="pon_outage_min_offline_onus",
-        label="PON Outage Min Offline ONUs",
-        env_var="PON_OUTAGE_MIN_OFFLINE_ONUS",
-        value_type=SettingValueType.integer,
-        default=2,
-        min_value=1,
-        max_value=100,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network_monitoring,
-        key="ont_offline_poll_threshold",
-        label="ONT Offline Poll Threshold",
-        env_var="ONT_OFFLINE_POLL_THRESHOLD",
-        value_type=SettingValueType.integer,
-        default=2,
-        min_value=1,
-        max_value=10,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network_monitoring,
         key="topology_metrics_interval_seconds",
         label="Topology Metrics Export Interval (seconds)",
         env_var="TOPOLOGY_METRICS_INTERVAL_SECONDS",
@@ -3276,22 +3117,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="running",
         allowed={"running", "success", "failed"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.inventory,
-        key="default_reservation_status",
-        env_var="INVENTORY_DEFAULT_RESERVATION_STATUS",
-        value_type=SettingValueType.string,
-        default="active",
-        allowed={"active", "released", "consumed"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.inventory,
-        key="default_material_status",
-        env_var="INVENTORY_DEFAULT_MATERIAL_STATUS",
-        value_type=SettingValueType.string,
-        default="required",
-        allowed={"required", "reserved", "used"},
     ),
     SettingSpec(
         domain=SettingDomain.lifecycle,
@@ -3465,27 +3290,11 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.comms,
-        key="meta_oauth_redirect_uri",
-        env_var="META_OAUTH_REDIRECT_URI",
-        value_type=SettingValueType.string,
-        default=None,
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
         key="meta_graph_api_version",
         env_var="META_GRAPH_API_VERSION",
         value_type=SettingValueType.string,
         default="v21.0",
         label="Meta Graph API Version",
-    ),
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="meta_access_token_override",
-        env_var="META_ACCESS_TOKEN_OVERRIDE",
-        value_type=SettingValueType.string,
-        default=None,
-        label="Meta Access Token (Override)",
-        is_secret=True,
     ),
     SettingSpec(
         domain=SettingDomain.comms,
@@ -3653,22 +3462,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.auth,
-        key="vendor_session_ttl_seconds",
-        env_var="VENDOR_SESSION_TTL_SECONDS",
-        value_type=SettingValueType.integer,
-        default=86400,
-        min_value=60,
-    ),
-    SettingSpec(
-        domain=SettingDomain.auth,
-        key="vendor_remember_ttl_seconds",
-        env_var="VENDOR_REMEMBER_TTL_SECONDS",
-        value_type=SettingValueType.integer,
-        default=2592000,
-        min_value=86400,
-    ),
-    SettingSpec(
-        domain=SettingDomain.auth,
         key="password_reset_expiry_minutes",
         env_var="PASSWORD_RESET_EXPIRY_MINUTES",
         value_type=SettingValueType.integer,
@@ -3684,14 +3477,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=5,
     ),
     # ============== Comms Domain: External API Timeouts ==============
-    SettingSpec(
-        domain=SettingDomain.comms,
-        key="meta_api_timeout_seconds",
-        env_var="META_API_TIMEOUT_SECONDS",
-        value_type=SettingValueType.integer,
-        default=30,
-        min_value=1,
-    ),
     SettingSpec(
         domain=SettingDomain.comms,
         key="whatsapp_api_timeout_seconds",
@@ -4095,6 +3880,48 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Referrals: native read path (Phase 3 read-flip flag)",
     ),
+]
+
+# Tombstone the settings-registry surfaces whose decisions moved to canonical
+# feature controls. Keeping the identities together makes the cutover boundary
+# reviewable while ensuring forms, API validation, env fallback, and seed
+# discovery cannot expose them as a second writer. ``billing.billing_enabled``
+# is deliberately absent: it remains the independent cross-feature master.
+_RETIRED_FEATURE_ALIAS_SPECS = frozenset(
+    {
+        (SettingDomain.gis, "sync_enabled"),
+        (SettingDomain.notification, "notification_queue_enabled"),
+        (SettingDomain.usage, "radius_accounting_import_enabled"),
+        (SettingDomain.usage, "radius_session_reap_enabled"),
+        (SettingDomain.usage, "usage_warning_enabled"),
+        (SettingDomain.usage, "fup_submonthly_rules_enabled"),
+        (SettingDomain.collections, "dunning_enabled"),
+        (SettingDomain.collections, "billing_notifications_hourly_enabled"),
+        (SettingDomain.collections, "prepaid_balance_enforcement_enabled"),
+        (SettingDomain.scheduler, "crm_ticket_pull_enabled"),
+        (SettingDomain.scheduler, "crm_work_order_pull_enabled"),
+        (SettingDomain.radius, "coa_enabled"),
+        (SettingDomain.billing, "prepaid_monthly_invoicing_enabled"),
+        (SettingDomain.billing, "overdue_check_enabled"),
+        (SettingDomain.billing, "direct_bank_transfer_enabled"),
+        (SettingDomain.catalog, "subscription_expiration_enabled"),
+        (SettingDomain.network, "mikrotik_session_kill_enabled"),
+        (SettingDomain.network, "mikrotik_api_session_kick_enabled"),
+        (SettingDomain.network, "address_list_block_enabled"),
+        (SettingDomain.network, "olt_profile_sync_worker_enabled"),
+        (SettingDomain.network, "wireguard_log_cleanup_enabled"),
+        (SettingDomain.network, "wireguard_token_cleanup_enabled"),
+        (SettingDomain.projects, "quotes_native_write_enabled"),
+        (SettingDomain.projects, "crm_phase3_native_sync_enabled"),
+        (SettingDomain.projects, "projects_native_read_enabled"),
+        (SettingDomain.projects, "quotes_native_read_enabled"),
+        (SettingDomain.projects, "referrals_native_read_enabled"),
+    }
+)
+SETTINGS_SPECS = [
+    spec
+    for spec in SETTINGS_SPECS
+    if (spec.domain, spec.key) not in _RETIRED_FEATURE_ALIAS_SPECS
 ]
 
 DOMAIN_SETTINGS_SERVICE = {

@@ -299,9 +299,7 @@ class TestSubscriptionActivation:
         )
         expect(provisioning_nas_value).not_to_have_value("")
         expect(
-            page.locator(
-                "input[name='provisioning_nas_device_search'][data-typeahead-input]"
-            )
+            page.locator("input#provisioning_nas_device_id[data-typeahead-input]")
         ).not_to_have_value("")
         page.locator("#ipv4_method").select_option("dynamic")
 

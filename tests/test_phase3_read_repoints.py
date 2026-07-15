@@ -78,18 +78,13 @@ def test_native_read_flags_default_off(db_session):
     assert referrals_service.native_read_enabled(db_session) is False
 
 
-def test_read_flags_registered_in_settings_spec():
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
+def test_read_flags_registered_as_canonical_controls_only():
+    from app.services import control_registry
 
-    for key in (
-        "projects_native_read_enabled",
-        "quotes_native_read_enabled",
-        "referrals_native_read_enabled",
-    ):
-        spec = settings_spec.get_spec(SettingDomain.projects, key)
-        assert spec is not None, key
-        assert spec.default is False
+    controls = {control.key: control for control in control_registry.all_controls()}
+    for key in ("projects.native_read", "quotes.native_read", "referrals.native_read"):
+        assert controls[key].default is False
+        assert controls[key].on_missing is False
 
 
 # ── GET /me/projects ──────────────────────────────────────────────────────────

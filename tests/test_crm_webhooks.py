@@ -125,7 +125,12 @@ def _http_app(db_session) -> FastAPI:
 
 
 def test_valid_ticket_created_enqueues_sync(monkeypatch, db_session):
-    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "true")
+    from app.services import control_registry
+
+    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "false")
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": True}
+    )
     body = {"ticket_id": "abc-123"}
     raw = json.dumps(body).encode()
     with (
@@ -141,7 +146,12 @@ def test_valid_ticket_created_enqueues_sync(monkeypatch, db_session):
 
 def test_ticket_event_noop_when_pull_disabled(monkeypatch, db_session):
     """Flip kill switch: crm.ticket_pull off -> 200 ack, nothing enqueued."""
-    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "false")
+    from app.services import control_registry
+
+    monkeypatch.setenv("CRM_TICKET_PULL_ENABLED", "true")
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": False}
+    )
     body = {"ticket_id": "abc-123"}
     raw = json.dumps(body).encode()
     with (
@@ -174,19 +184,13 @@ def test_ticket_event_noop_when_pull_setting_missing(monkeypatch, db_session):
     enqueue.assert_not_called()
 
 
-def test_ticket_branch_gated_by_scheduler_db_row(monkeypatch, db_session):
-    """The exact flip lever: the legacy scheduler.crm_ticket_pull_enabled DB row
-    turns the branch on and off (no env, no deploy)."""
-    from app.models.domain_settings import DomainSetting, SettingDomain
+def test_ticket_branch_gated_by_canonical_control(monkeypatch, db_session):
+    from app.services import control_registry
 
     monkeypatch.delenv("CRM_TICKET_PULL_ENABLED", raising=False)
-    row = DomainSetting(
-        domain=SettingDomain.scheduler,
-        key="crm_ticket_pull_enabled",
-        value_text="true",
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": True}
     )
-    db_session.add(row)
-    db_session.commit()
 
     body = {"ticket_id": "abc-123"}
     raw = json.dumps(body).encode()
@@ -198,8 +202,9 @@ def test_ticket_branch_gated_by_scheduler_db_row(monkeypatch, db_session):
     assert resp.json()["status"] == "queued"
     enqueue.assert_called_once()
 
-    row.value_text = "false"
-    db_session.commit()
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": False}
+    )
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,

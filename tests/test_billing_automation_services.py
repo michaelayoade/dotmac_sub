@@ -911,8 +911,8 @@ class TestRunInvoiceCycle:
         db_session.add_all(
             [
                 DomainSetting(
-                    domain=SettingDomain.billing,
-                    key="prepaid_monthly_invoicing_enabled",
+                    domain=SettingDomain.modules,
+                    key="billing_prepaid_monthly_invoicing",
                     value_text="true",
                 ),
                 OfferPrice(
@@ -2831,8 +2831,8 @@ class TestPrepaidDraftUntilFunded:
         subscriber_account.status = AccountStatus.active
         settings = [
             DomainSetting(
-                domain=SettingDomain.billing,
-                key="prepaid_monthly_invoicing_enabled",
+                domain=SettingDomain.modules,
+                key="billing_prepaid_monthly_invoicing",
                 value_text="true",
             ),
             OfferPrice(

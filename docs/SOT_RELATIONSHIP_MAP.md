@@ -37,8 +37,8 @@ but equivalent state and actions resolve through the same backend owners.
 8. `events_webhooks`
 9. `runtime_infrastructure`
 10. `observability`
-11. `support_operations`
-12. `provisioning_operations`
+11. `provisioning_operations`
+12. `support_operations`
 13. `feature_control_plane`
 14. `authorization_control_plane`
 15. `scheduler_control_plane`
@@ -52,6 +52,20 @@ but equivalent state and actions resolve through the same backend owners.
 Rule: each PR should finish one domain slice: define the owner service, migrate
 the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
 that obscure business behavior.
+
+Architecture liveness is checked in both directions. Every declared owner must
+have a real application/operator caller, and every new service module with a
+persistence-like mutation must name a declared owner. The 297 existing
+undeclared writer-like modules are an explicit shrink-only migration baseline,
+not approved parallel writers; resolving an owner or removing its write requires
+deleting the baseline entry. Adding an entry requires an explicit ownership
+review.
+
+The reverse-liveness burn-down names `observability.audit_log` as the canonical
+audit-event writer, `control.settings_bootstrap` as the startup
+default-materialization owner, and `secrets.settings_migration` as the live
+OpenBao settings migration boundary. Bootstrap writes defaults through
+`control.domain_settings`; it does not create a second runtime settings writer.
 
 ## Financial and Access
 
@@ -1043,6 +1057,9 @@ one of those roles locally.
    declared encrypted database-field inventory.
 4. Scheduled rotation stages current and previous keys, converges stored
    ciphertext, and retires the previous key only after the grace period.
+5. `secrets.settings_migration` is the sole migration boundary for replacing
+   noncanonical secret-setting values with OpenBao references. Its operator
+   command is dry-run by default and never prints secret values.
 
 Rule: callers request a secret or credential outcome from the owning service.
 They do not choose fallback precedence, store plaintext, reveal existing values
@@ -1053,21 +1070,25 @@ in forms, or rotate key material directly.
 1. Notification channel policy owns channel eligibility and preferences.
 2. Event notification policy owns event enablement and balance-notification
    suppression.
-3. Notification service owns notification rows and delivery lifecycle.
-4. Staff notification service owns internal/admin notification creation.
-5. `communications.customer_read_state` owns customer notification read/unread
+3. `communications.eligibility` owns the recipient suppression ledger and the
+   transactional-versus-marketing send decision.
+4. `communications.intents` owns communication intent lifecycle, recipient and
+   channel expansion, and delivery-outcome projection.
+5. Notification service owns notification rows and delivery lifecycle.
+6. Staff notification service owns internal/admin notification creation.
+7. `communications.customer_read_state` owns customer notification read/unread
    state and unread counts across the web portal and mobile app. Subscriber
    metadata is its bounded persistence mechanism; `/me/notifications` projects
    that state, and `/me/notifications/read` is the self-scoped mutation
    boundary. Device storage is only a one-way legacy migration input. The
    identity-cleared GET response cache may render last-known state offline but
    never accepts read decisions.
-6. `communications.team_inbox` owns conversation notes, assignment, replies,
+8. `communications.team_inbox` owns conversation notes, assignment, replies,
    contact-linking, widget writes, inbound-channel ingestion, collaboration,
    and admin mutation transactions. `app.services.team_inbox_commands` is the
    committed admin command boundary; `app.web.admin.inbox` only translates HTTP
    inputs and outcomes.
-7. Campaign services own marketing audience, sequence, and content decisions.
+9. Campaign services own marketing audience, sequence, and content decisions.
    They request a canonical sender key; email delivery alone resolves that key
    to SMTP identity and credentials.
 
@@ -1196,6 +1217,10 @@ Rule: routes authenticate and authorize, but session lifecycle and revocation
 policy belongs in session services. Do not duplicate cookie/session mutation
 logic in route handlers.
 
+The read-only admin control-plane projection may aggregate database-session
+counts and Redis health, but it does not enumerate Redis keys or become a
+session writer.
+
 ## Runtime Infrastructure
 
 Dependency order:
@@ -1246,18 +1271,47 @@ Work-order API projections carry server-owned status labels, tones, and icons;
 field clients retain the raw value for transitions and filtering, but do not
 reinterpret its presentation.
 
+## Support Control Plane
+
+1. `support.tickets` owns ticket lifecycle, assignment, comments, SLA events,
+   and satisfaction state.
+
+Rule: support routes and jobs translate requests and delegate ticket decisions
+to `app.services.support`. Events and notifications are consequences requested
+by that owner, not alternate ticket writers.
+
 ## Control Planes
 
 Feature controls:
 
 1. `control.module_manager`: owns product module enablement.
 2. `control.domain_settings`: owns stored setting mutation.
-3. `control.settings_spec`: owns setting schema, coercion, and env fallback.
-4. `control.feature_registry`: composes module, feature, safety, canonical, and
-   legacy flag resolution.
+3. `control.settings_spec`: owns setting schema, coercion, and defaults;
+   environment values seed stored settings at bootstrap.
+4. `control.settings_bootstrap`: materializes startup defaults and notification
+   templates through `control.domain_settings`; it does not own runtime policy.
+5. `control.feature_registry`: composes module and canonical feature decisions,
+   keeps safety gates separate, and validates canonical override requests.
+6. `control.effective_state`: is the read-only admin projection implemented by
+   `app/services/web_control_plane.py`. It reports the decision and provenance
+   from each owner; it is never a mutation path or a second policy resolver.
 
 Rule: task and feature gates should call the feature registry. Callers should
 not separately read env vars, domain settings, module state, and legacy flags.
+The module manager is the canonical writer UX for registered feature controls:
+`Inherit` deactivates the canonical row, while `On` and `Off` persist an explicit
+`modules.<canonical_key>` override through `control.domain_settings`. The page
+shows stored and effective state separately because an owner module can mask a
+feature. Every canonical feature change is audited. Michael approved immediate
+alias cutoff on 2026-07-15: registered controls resolve only from an active
+canonical modules row or their registry default. Migration 284 materializes
+legacy database decisions before deleting retired rows; environment-only values
+must be materialized before deployment because a database migration cannot see
+deployment configuration. The operational gate and rollback are documented in
+`docs/runbooks/legacy-feature-alias-retirement.md`. Retired settings forms, API
+fields, seeds, specs, and direct consumers must not recreate a parallel writer.
+`billing.billing_enabled` remains the independent cross-feature billing master,
+not an alias writer for `billing.invoicing`.
 Registered capability gates include billing capture/collections/payment
 options, prepaid monthly invoicing, RADIUS/session enforcement,
 usage/FUP emission gates, CRM/native transition flags, and GIS/network worker
@@ -1272,6 +1326,9 @@ Authorization:
 
 Rule: routes declare permissions and business services receive an authorized
 principal. RBAC mutation stays inside RBAC services.
+Every literal route permission must exist in the seed catalogue; the
+architecture parity test makes an absent, therefore ungrantable, permission a
+build failure. The effective-state projection reads roles and grants only.
 
 Scheduler:
 
@@ -1282,6 +1339,8 @@ Scheduler:
 
 Rule: task cadence and enablement flow through scheduler config and the feature
 control plane. Task bodies execute work and report status.
+The effective-state projection reads `ScheduledTask` state and run timestamps;
+it never changes cadence, enablement, or dispatch state.
 
 Network access:
 
@@ -1341,3 +1400,6 @@ Integrations:
 
 Rule: integration routes/webhooks validate and enqueue. Connector behavior,
 sync lifecycle, and hook delivery stay inside integration services.
+The effective-state projection derives connector/webhook health from runs and
+deliveries and reads OpenBao metadata without reading secret values. It does
+not own connector, subscription, delivery, or credential decisions.

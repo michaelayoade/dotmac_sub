@@ -316,7 +316,12 @@ def test_cold_read_stays_synchronous_and_does_not_enqueue(db_session):
 def test_read_serves_local_only_when_pull_disabled(monkeypatch, db_session):
     """Phase 2 flip: crm.work_order_pull off -> never contact the CRM (no cold
     fetch, no lazy refresh) and serve whatever the local store holds."""
-    monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "false")
+    from app.services import control_registry
+
+    monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "true")
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.work_order_pull": False}
+    )
     sub = _subscriber(db_session, crm_id=uuid.uuid4())
     db_session.add(
         WorkOrderMirror(

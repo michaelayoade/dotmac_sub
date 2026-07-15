@@ -7,7 +7,18 @@ from unittest.mock import MagicMock, patch
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.models.subscription_engine import SettingValueType
-from app.services import scheduler_config
+from app.services import control_registry, scheduler_config
+
+
+def _control_overrides(values: dict[str, bool]):
+    """Patch selected canonical controls while preserving all other defaults."""
+    original = control_registry.is_enabled
+    return patch.object(
+        control_registry,
+        "is_enabled",
+        side_effect=lambda db, key: values.get(key, original(db, key)),
+    )
+
 
 # =============================================================================
 # Environment Variable Helper Tests
@@ -630,8 +641,7 @@ class TestBuildBeatSchedule:
         assert row.enabled is True
         assert row.interval_seconds == 900
 
-    def test_excludes_gis_sync_when_disabled(self, monkeypatch):
-        """Test excludes GIS sync schedule when disabled."""
+    def test_excludes_gis_sync_when_canonical_control_disabled(self, monkeypatch):
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
         monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
         monkeypatch.delenv("DUNNING_ENABLED", raising=False)
@@ -641,7 +651,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -710,9 +723,7 @@ class TestBuildBeatSchedule:
 
         assert "integration_job_crm-job-123" not in schedule
 
-    def test_work_order_mirror_reconcile_gated_by_pull_flag(self, monkeypatch):
-        """Phase 2 flip: CRM_WORK_ORDER_PULL_ENABLED=false disables the
-        work_order_mirror_reconcile beat entry (and only that entry here)."""
+    def test_work_order_mirror_reconcile_gated_by_canonical_control(self, monkeypatch):
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
         monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "false")
         monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
@@ -723,7 +734,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False, "crm.work_order_pull": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -754,7 +768,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -791,7 +808,10 @@ class TestBuildBeatSchedule:
         ]
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -904,7 +924,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",
@@ -965,7 +988,10 @@ class TestBuildBeatSchedule:
         mock_session.query.return_value.filter.return_value.all.return_value = []
         mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
 
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
+        with (
+            _control_overrides({"gis.sync": False, "network.olt_profile_sync": True}),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+        ):
             with patch.object(
                 scheduler_config.integration_service,
                 "list_interval_jobs",

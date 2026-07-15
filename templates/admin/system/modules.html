@@ -1,12 +1,42 @@
 {% extends "layouts/admin.html" %}
 
+{% macro feature_control(feature) %}
+<div class="space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+    <div class="flex items-start justify-between gap-3">
+        <div>
+            <p class="text-xs font-medium text-slate-800 dark:text-slate-200">{{ feature.label }}</p>
+            <p class="mt-0.5 font-mono text-[10px] text-slate-400">{{ feature.key }}</p>
+        </div>
+        <select name="control__{{ feature.key }}" class="rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <option value="inherit" {% if feature.stored == 'inherit' %}selected{% endif %}>Inherit</option>
+            <option value="on" {% if feature.stored == 'on' %}selected{% endif %}>On</option>
+            <option value="off" {% if feature.stored == 'off' %}selected{% endif %}>Off</option>
+        </select>
+    </div>
+    {% if feature.description %}<p class="text-xs text-slate-500 dark:text-slate-400">{{ feature.description }}</p>{% endif %}
+    <dl class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
+        <dt class="text-slate-400">Effective</dt>
+        <dd class="font-medium {% if feature.effective %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">{{ 'On' if feature.effective else 'Off' }}</dd>
+        <dt class="text-slate-400">Source</dt>
+        <dd class="text-slate-600 dark:text-slate-300">{{ feature.source }}</dd>
+        <dt class="text-slate-400">Scope</dt>
+        <dd class="text-slate-600 dark:text-slate-300">{{ feature.affected_scope }}</dd>
+        <dt class="text-slate-400">Precedence</dt>
+        <dd class="text-slate-600 dark:text-slate-300">{{ feature.precedence }}</dd>
+        <dt class="text-slate-400">Canonical change</dt>
+        <dd class="text-slate-600 dark:text-slate-300">{{ feature.updated_at.strftime('%Y-%m-%d %H:%M') if feature.updated_at else 'No canonical override' }}</dd>
+    </dl>
+</div>
+{% endmacro %}
+
 {% block title %}Module Manager - Admin{% endblock %}
 
 {% block content %}
 <div class="space-y-6">
     <div>
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Module Manager</h1>
-        <p class="text-sm text-slate-500 dark:text-slate-400">Enable/disable major modules and granular sub-features.</p>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Manage product modules and canonical capability controls. Use Inherit to follow the registry default.</p>
+        <p class="mt-1 text-xs text-slate-400">Canonical controls take effect immediately; retired environment variables and legacy setting rows are not value sources.</p>
     </div>
 
     {% if save_success %}
@@ -28,13 +58,7 @@
                 {% if card.features %}
                 <div class="space-y-2">
                     {% for feature in card.features %}
-                    <div class="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-2 py-1.5 dark:border-slate-700">
-                        <span class="text-xs text-slate-700 dark:text-slate-300">{{ feature.label }}</span>
-                        <select name="feature__{{ feature.name }}" class="rounded border border-slate-300 px-1.5 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="true" {% if feature.enabled %}selected{% endif %}>On</option>
-                            <option value="false" {% if not feature.enabled %}selected{% endif %}>Off</option>
-                        </select>
-                    </div>
+                    {{ feature_control(feature) }}
                     {% endfor %}
                 </div>
                 {% else %}
@@ -43,6 +67,19 @@
             </div>
             {% endfor %}
         </div>
+        {% if independent_features %}
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="mb-3">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Independent Capabilities</h2>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Controls whose behavior is not composed with a product module.</p>
+            </div>
+            <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {% for feature in independent_features %}
+                {{ feature_control(feature) }}
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
         {% if payment_providers %}
         <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="mb-3">
@@ -63,7 +100,7 @@
         </div>
         {% endif %}
         <div class="flex justify-end">
-            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Module Settings</button>
+            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Save Controls</button>
         </div>
     </form>
 </div>

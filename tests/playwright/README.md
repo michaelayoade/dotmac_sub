@@ -10,18 +10,24 @@
 
 ## Prerequisites
 
-1. Run the app locally (default expects `http://localhost:8000`).
-2. Seed RBAC roles and an admin user if needed:
+1. Use an isolated checkout on the explicitly named `seabone` test server. Do not
+   run this suite from the live staging checkout.
+2. Run the app against a disposable database (the default browser URL is
+   `http://localhost:8000` on `seabone`).
+3. Seed the RBAC catalogue, then create the canonical system admin if needed:
 
 ```bash
-poetry run python scripts/seed_rbac.py --admin-email admin@example.com
-poetry run python scripts/seed_admin.py \
+poetry run python -m scripts.seed.seed_rbac
+poetry run python -m scripts.seed.seed_admin \
   --email admin@example.com \
   --first-name Admin \
   --last-name User \
-  --username admin \
-  --password 'AdminPass123!'
+  --username admin
 ```
+
+The admin seeder prompts for the password without echoing it. It creates a
+`SystemUser`, its local credential, and a global admin-role assignment in one
+transaction; it never creates a customer `Subscriber`.
 
 ## Environment Variables
 
@@ -56,14 +62,17 @@ The suite will create agent/user identities via the admin API when they do not e
 
 ```bash
 PLAYWRIGHT_BROWSER=firefox \
-E2E_ADMIN_USERNAME=admin \
-E2E_ADMIN_PASSWORD='AdminPass123!' \
+E2E_ADMIN_USERNAME=admin@example.com \
 poetry run pytest tests/playwright/e2e
 ```
 
+Load `E2E_ADMIN_PASSWORD` from the approved test-secret source before running the
+command; do not place the value in shell history or checked-in files.
+
 ## What’s Covered
 
-- Authentication for admin/agent/user via `/api/v1/auth/login`
+- Admin authentication through the real `/auth/login` web flow and session cookie
+- Agent/user authentication via `/api/v1/auth/login`
 - Role-based access checks (admin-only APIs, impersonation permission)
 - Portal smoke coverage for admin, customer, reseller, and auth pages
 - Smoke coverage for internal links in admin, customer portal, and public pages
@@ -72,5 +81,7 @@ poetry run pytest tests/playwright/e2e
 
 - MFA must be disabled for E2E users.
 - Storage states are generated at runtime under `tests/playwright/.auth/`.
-- The admin portal does not enforce web auth yet, so the suite uses API tokens plus storageState to model login sessions.
+- Admin storage state is captured only after an external browser login succeeds and
+  redirects to `/admin/dashboard`; the fixture does not mint sessions by calling
+  application internals or opening the application database.
 - Some legacy journey specs still reference page objects that are not currently implemented; keep documentation and tests in sync before enabling them in CI.

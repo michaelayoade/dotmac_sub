@@ -37,8 +37,8 @@ def _enable(db) -> None:
     db.add_all(
         [
             DomainSetting(
-                domain=SettingDomain.collections,
-                key="prepaid_balance_enforcement_enabled",
+                domain=SettingDomain.modules,
+                key="collections_prepaid_balance_enforcement",
                 value_type=SettingValueType.boolean,
                 value_text="true",
                 value_json=True,

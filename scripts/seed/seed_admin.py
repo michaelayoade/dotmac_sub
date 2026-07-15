@@ -1,10 +1,13 @@
 import argparse
+from datetime import UTC, datetime
+from getpass import getpass
 
 from dotenv import load_dotenv
 
 from app.db import SessionLocal
 from app.models.auth import AuthProvider, UserCredential
-from app.models.subscriber import Subscriber
+from app.models.rbac import Role, SystemUserRole
+from app.models.system_user import SystemUser
 from app.services.auth_flow import hash_password
 
 
@@ -14,7 +17,10 @@ def parse_args():
     parser.add_argument("--first-name", required=True)
     parser.add_argument("--last-name", required=True)
     parser.add_argument("--username", required=True)
-    parser.add_argument("--password", required=True)
+    parser.add_argument(
+        "--password",
+        help="Admin password. Omit to enter it through a non-echoing prompt.",
+    )
     parser.add_argument("--force-reset", action="store_true")
     return parser.parse_args()
 
@@ -29,48 +35,102 @@ def seed_admin_user(
     password: str,
     force_reset: bool = False,
 ) -> str:
-    subscriber = db.query(Subscriber).filter(Subscriber.email == email).first()
-    if not subscriber:
-        subscriber = Subscriber(
+    admin_role = (
+        db.query(Role).filter(Role.name == "admin", Role.is_active.is_(True)).first()
+    )
+    if admin_role is None:
+        raise RuntimeError(
+            "Active admin role not found. Run `python -m scripts.seed.seed_rbac` "
+            "before seeding an admin user."
+        )
+
+    system_user = db.query(SystemUser).filter(SystemUser.email == email).first()
+    username_owner = (
+        db.query(UserCredential)
+        .filter(UserCredential.provider == AuthProvider.local)
+        .filter(UserCredential.username == username)
+        .first()
+    )
+    if username_owner is not None and (
+        system_user is None or username_owner.system_user_id != system_user.id
+    ):
+        raise ValueError("Admin username is already assigned to another principal.")
+
+    if system_user is None:
+        system_user = SystemUser(
             first_name=first_name,
             last_name=last_name,
+            display_name=f"{first_name} {last_name}",
             email=email,
+            is_active=True,
         )
-        db.add(subscriber)
-        db.commit()
-        db.refresh(subscriber)
+        db.add(system_user)
+        db.flush()
+    else:
+        system_user.first_name = first_name
+        system_user.last_name = last_name
+        system_user.display_name = f"{first_name} {last_name}"
+        system_user.is_active = True
 
     credential = (
         db.query(UserCredential)
-        .filter(UserCredential.subscriber_id == subscriber.id)
+        .filter(UserCredential.system_user_id == system_user.id)
         .filter(UserCredential.provider == AuthProvider.local)
         .first()
     )
+    created = credential is None
+    password_updated_at = datetime.now(UTC)
     if credential:
         credential.username = username
         credential.password_hash = hash_password(password)
+        credential.password_updated_at = password_updated_at
         credential.must_change_password = force_reset
         credential.is_active = True
         credential.failed_login_attempts = 0
         credential.locked_until = None
-        db.commit()
-        return "Admin user updated."
+    else:
+        credential = UserCredential(
+            system_user_id=system_user.id,
+            provider=AuthProvider.local,
+            username=username,
+            password_hash=hash_password(password),
+            password_updated_at=password_updated_at,
+            must_change_password=force_reset,
+            is_active=True,
+        )
+        db.add(credential)
 
-    credential = UserCredential(
-        subscriber_id=subscriber.id,
-        provider=AuthProvider.local,
-        username=username,
-        password_hash=hash_password(password),
-        must_change_password=force_reset,
+    role_link = (
+        db.query(SystemUserRole)
+        .filter(
+            SystemUserRole.system_user_id == system_user.id,
+            SystemUserRole.role_id == admin_role.id,
+            SystemUserRole.scope_type == "",
+            SystemUserRole.scope_id == "",
+        )
+        .first()
     )
-    db.add(credential)
+    if role_link is None:
+        db.add(
+            SystemUserRole(
+                system_user_id=system_user.id,
+                role_id=admin_role.id,
+                scope_type="",
+                scope_id="",
+                source="local",
+            )
+        )
+
     db.commit()
-    return "Admin user created."
+    return "Admin user created." if created else "Admin user updated."
 
 
 def main():
     load_dotenv()
     args = parse_args()
+    password = args.password or getpass("Admin password: ")
+    if not password:
+        raise SystemExit("Admin password cannot be empty.")
     db = SessionLocal()
     try:
         print(
@@ -80,7 +140,7 @@ def main():
                 first_name=args.first_name,
                 last_name=args.last_name,
                 username=args.username,
-                password=args.password,
+                password=password,
                 force_reset=args.force_reset,
             )
         )

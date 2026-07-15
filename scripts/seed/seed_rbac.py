@@ -3,12 +3,26 @@ import argparse
 from dotenv import load_dotenv
 
 from app.db import SessionLocal
-from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
+from app.models.rbac import (
+    Permission,
+    Role,
+    RolePermission,
+    SubscriberRole,
+    SystemUserRole,
+)
 from app.models.subscriber import Subscriber
+from app.models.system_user import SystemUser
 
 ADMIN_ONLY_PERMISSION_KEYS = {
     "*",
     "auth:manage",
+    "auth:credential:read",
+    "auth:credential:write",
+    "network:admin",
+    "reseller:impersonate",
+    "system:db_admin",
+    "system:read",
+    "system:write",
     "billing:read",
     "billing:write",
     "catalog:read",
@@ -37,6 +51,11 @@ DEFAULT_PERMISSIONS = [
     ("audit:read", "Read audit events"),
     # Auth & System
     ("auth:manage", "Manage authentication settings"),
+    ("auth:credential:read", "View authentication credential metadata"),
+    ("auth:credential:write", "Manage authentication credentials"),
+    ("system:read", "View system administration resources"),
+    ("system:write", "Manage system administration resources"),
+    ("system:db_admin", "Perform restricted database administration"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
     # Secret management (OpenBao) — admin-only; intentionally NOT granted to any
@@ -57,6 +76,8 @@ DEFAULT_PERMISSIONS = [
     ("customer:update", "Update customers and subscribers"),
     ("customer:delete", "Delete customers and subscribers"),
     ("customer:impersonate", "Impersonate customer accounts"),
+    ("customer:write", "Manage customers through compatibility endpoints"),
+    ("reseller:impersonate", "Impersonate reseller portal principals"),
     # Billing - Invoices
     ("billing:invoice:read", "View invoices"),
     ("billing:invoice:create", "Create invoices"),
@@ -113,6 +134,7 @@ DEFAULT_PERMISSIONS = [
     ("subscription:cancel", "Cancel subscriptions"),
     # Network - Devices
     ("network:hub:read", "View the network operations hub"),
+    ("network:admin", "Perform restricted network administration"),
     ("network:map:read", "View the comprehensive network map"),
     ("network:device:read", "View network devices"),
     ("network:device:write", "Manage network devices"),
@@ -159,6 +181,8 @@ DEFAULT_PERMISSIONS = [
     ("network:radius:write", "Manage RADIUS configuration"),
     ("monitoring:read", "View monitoring dashboards and alerts"),
     ("monitoring:write", "Manage monitoring rules and alert states"),
+    ("usage:read", "View subscriber usage and metering records"),
+    ("usage:write", "Manage usage and metering records"),
     # Operations - Work Orders
     ("operations:work_order:read", "View work orders"),
     ("operations:work_order:create", "Create work orders"),
@@ -175,6 +199,11 @@ DEFAULT_PERMISSIONS = [
     # Operations - Field Expense Requests
     ("operations:expense_request:read", "View field expense requests"),
     ("operations:expense_request:write", "Approve or reject field expense requests"),
+    ("operations:asset_custody:read", "View asset custody records"),
+    ("operations:asset_custody:write", "Manage asset custody records"),
+    ("operations:dispatch", "Dispatch operational work"),
+    ("operations:material_request:read", "View material requests"),
+    ("operations:material_request:write", "Manage material requests"),
     # Support - Tickets
     ("support:ticket:read", "View tickets"),
     ("support:ticket:create", "Create tickets"),
@@ -214,6 +243,8 @@ DEFAULT_PERMISSIONS = [
     # Inventory
     ("inventory:read", "View inventory"),
     ("inventory:write", "Manage inventory"),
+    ("finance:ap:read", "View accounts-payable resources"),
+    ("finance:ap:write", "Manage accounts-payable resources"),
     # GIS / Mapping
     ("gis:map:view", "View maps and layers"),
     ("gis:map:edit", "Edit map features (markers, polygons)"),
@@ -408,9 +439,13 @@ ROLE_PERMISSIONS = {
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Seed RBAC roles and permissions.")
-    parser.add_argument("--admin-email", help="Email to map to admin role.")
-    parser.add_argument(
-        "--admin-subscriber-id", help="Subscriber ID to map to admin role."
+    admin_target = parser.add_mutually_exclusive_group()
+    admin_target.add_argument(
+        "--admin-email", help="System user email to map to the admin role."
+    )
+    admin_target.add_argument(
+        "--admin-subscriber-id",
+        help="Legacy subscriber principal ID to map to the admin role.",
     )
     return parser.parse_args()
 
@@ -474,6 +509,29 @@ def _ensure_subscriber_role(db, subscriber_id, role_id):
     return link
 
 
+def _ensure_system_user_role(db, system_user_id, role_id):
+    link = (
+        db.query(SystemUserRole)
+        .filter(
+            SystemUserRole.system_user_id == system_user_id,
+            SystemUserRole.role_id == role_id,
+            SystemUserRole.scope_type == "",
+            SystemUserRole.scope_id == "",
+        )
+        .first()
+    )
+    if not link:
+        link = SystemUserRole(
+            system_user_id=system_user_id,
+            role_id=role_id,
+            scope_type="",
+            scope_id="",
+            source="local",
+        )
+        db.add(link)
+    return link
+
+
 def main():
     load_dotenv()
     args = parse_args()
@@ -513,18 +571,20 @@ def main():
 
         admin_role = roles.get("admin")
         if admin_role and (args.admin_email or args.admin_subscriber_id):
-            subscriber = None
-            if args.admin_subscriber_id:
-                subscriber = db.get(Subscriber, args.admin_subscriber_id)
-            if not subscriber and args.admin_email:
-                subscriber = (
-                    db.query(Subscriber)
-                    .filter(Subscriber.email == args.admin_email)
+            if args.admin_email:
+                system_user = (
+                    db.query(SystemUser)
+                    .filter(SystemUser.email == args.admin_email)
                     .first()
                 )
-            if not subscriber:
-                raise SystemExit("Admin subscriber not found.")
-            _ensure_subscriber_role(db, subscriber.id, admin_role.id)
+                if not system_user:
+                    raise SystemExit("Admin system user not found.")
+                _ensure_system_user_role(db, system_user.id, admin_role.id)
+            else:
+                subscriber = db.get(Subscriber, args.admin_subscriber_id)
+                if not subscriber:
+                    raise SystemExit("Admin subscriber not found.")
+                _ensure_subscriber_role(db, subscriber.id, admin_role.id)
             db.commit()
             print("Admin role assigned.")
         print("RBAC seed complete.")

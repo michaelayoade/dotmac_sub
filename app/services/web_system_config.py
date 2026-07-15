@@ -228,7 +228,6 @@ BILLING_KEYS = [
 ]
 
 DIRECT_BANK_TRANSFER_KEYS = [
-    "direct_bank_transfer_enabled",
     "direct_bank_transfer_bank_name",
     "direct_bank_transfer_account_name",
     "direct_bank_transfer_account_number",
@@ -413,8 +412,6 @@ def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
 
 def get_direct_bank_transfer_context(db: Session) -> dict:
     settings = _read_settings(db, SettingDomain.billing, DIRECT_BANK_TRANSFER_KEYS)
-    if not settings.get("direct_bank_transfer_enabled"):
-        settings["direct_bank_transfer_enabled"] = "false"
     return {
         "direct_bank_transfer": settings,
         "direct_bank_transfer_accounts": _parse_direct_transfer_accounts(settings),
@@ -425,9 +422,6 @@ def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> No
     accounts = _direct_transfer_accounts_from_form(data)
     primary = accounts[0] if accounts else {}
     payload = {
-        "direct_bank_transfer_enabled": data.get(
-            "direct_bank_transfer_enabled", "false"
-        ),
         "direct_bank_transfer_instructions": data.get(
             "direct_bank_transfer_instructions", ""
         ),

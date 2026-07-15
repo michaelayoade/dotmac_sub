@@ -143,6 +143,7 @@ class RouterConfigTemplateCreate(BaseModel):
     template_body: str = Field(min_length=1)
     category: str = "custom"
     variables: dict = Field(default_factory=dict)
+    is_active: bool = True
 
 
 class RouterConfigTemplateUpdate(BaseModel):

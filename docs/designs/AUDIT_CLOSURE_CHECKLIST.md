@@ -66,16 +66,45 @@ instead of leaving it unchecked forever. Source of detail: each domain's
   dunning/arrangement tz+currency, and the reseller UTC-label-only branch
 - [x] CROSS-CUTTING: "no dead controls" lint — settings-key half done via
   `tests/architecture/test_no_orphan_settings.py`: every registered
-  `SETTINGS_SPECS` key must have a reader or the build fails. Surfaced **35
-  pre-existing dead keys** (burn-down `_KNOWN_ORPHAN_SETTINGS`) — see Tier 4.
-  The "every form field maps to a consumer" half is deliberately deferred (too
-  noisy for CI without a large allowlist).
-- [ ] TIER-4 follow-up: burn down the 35 orphan settings the lint captured
-  (wire a consumer or drop from SETTINGS_SPECS). Clusters: collections
-  `prepaid_deactivation_*` / `prepaid_warning_*` / `prepaid_skip_*` (dead
-  prepaid-dunning settings page), `meta_*` comms, `hotspot_*`, subscriber
-  `account_number_*`, several network/monitoring poll intervals, vendor
-  quote/bid thresholds, `vendor_*session*` auth.
+  `SETTINGS_SPECS` key must have a reader or the build fails. The historical
+  allowlist is gone: all 26 remaining inert setting registrations and four
+  inert module switches were removed in the control-plane cleanup. Nineteen
+  additional granular module feature switches with no behavior consumer were
+  removed when the module manager moved to the canonical feature registry.
+- [x] CROSS-CUTTING: form-field consumer coverage without an allowlist — every
+  statically named field must exist in Python's request/schema vocabulary or
+  declare a real client-side consumer. Statically resolvable parent actions,
+  simple inline-Jinja branches, and submit-button `formaction` destinations must
+  exist in the application and consume fields at their route/service/schema
+  boundary. Runtime `action_url` and `form_action` values are traced from the
+  template-rendering module through their producer/caller modules and checked
+  against the same route and field boundary. Typeahead display fields are
+  separately forbidden from submitting shadow values; only their canonical
+  hidden IDs are named. The first route-scoped pass removed dead alarm and
+  profile-password controls and repaired NAS, integration-job, and vendor-logout
+  actions. The quote-aware/runtime-provenance pass wired router-template forms
+  to their canonical service, corrected the NAS online filter, enforced payment
+  arrangement terms, and removed ignored invoice-batch and speed-profile
+  controls.
+- [x] CROSS-CUTTING: canonical feature-control writer UX — registered controls
+  expose Inherit/On/Off, effective and stored state, source, precedence, scope,
+  last canonical change, relationship validation, and audit records.
+- [x] CROSS-CUTTING DECISION: Michael approved immediate legacy-alias cutoff on
+  2026-07-15 once the canonical implementation and release checks pass. There is
+  no 30-day observation window; database values are materialized by migration
+  284 and environment-only decisions are a mandatory production pre-deploy
+  capture. See `docs/runbooks/legacy-feature-alias-retirement.md`.
+- [x] CROSS-CUTTING: bidirectional SOT liveness — declared owners require real
+  callers, new persistence-writing services require declared owners, and the
+  303-module legacy ownership-debt baseline can only shrink. Confirmed audit,
+  settings-bootstrap, secret-settings migration, communication, support-ticket,
+  and RADIUS-projection owners are registered.
+- [x] TIER-4 follow-up: burn down the orphan settings captured by the lint.
+  Live prepaid controls were wired to enforcement; the remaining no-consumer
+  keys were removed from specs, seeds, tests, and stored rows.
+- [x] RBAC catalogue parity: every literal `require_permission`,
+  `require_scoped_permission`, and `require_any_permission` key under `app/`
+  is seeded and therefore grantable; architecture coverage prevents drift.
 
 ## Tier 3 — product decisions needed (blocked on a human call)
 

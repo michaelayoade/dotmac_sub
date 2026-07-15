@@ -930,10 +930,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "observability.recording",
                 ),
             ),
+            SOTService(
+                name="secrets.settings_migration",
+                module="app.services.settings_secret_cleanup",
+                owns=(
+                    "noncanonical secret-setting discovery",
+                    "OpenBao secret-setting migration",
+                    "secret-setting reference replacement",
+                ),
+                depends_on=(
+                    "secrets.reference_store",
+                    "secrets.settings_policy",
+                    "secrets.credential_crypto",
+                ),
+            ),
         ),
         entrypoints=(
             "app.tasks.security",
             "app.web.admin.system",
+            "scripts.one_off.migrate_secret_settings_to_openbao",
             "app.services.*",
         ),
         rule=(
@@ -964,6 +979,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "balance notification suppression",
                 ),
                 depends_on=("communications.channel_policy",),
+            ),
+            SOTService(
+                name="communications.eligibility",
+                module="app.services.communication_eligibility",
+                owns=(
+                    "recipient suppression ledger",
+                    "transactional versus marketing send eligibility",
+                ),
+            ),
+            SOTService(
+                name="communications.intents",
+                module="app.services.communication_intents",
+                owns=(
+                    "communication intent lifecycle",
+                    "recipient and channel delivery expansion",
+                    "intent delivery outcome projection",
+                ),
+                depends_on=(
+                    "communications.channel_policy",
+                    "communications.customer_policy",
+                    "communications.eligibility",
+                    "communications.notification_service",
+                ),
             ),
             SOTService(
                 name="communications.notification_service",
@@ -1118,6 +1156,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
     DomainSOT(
         domain="observability",
         services=(
+            SOTService(
+                name="observability.audit_log",
+                module="app.services.audit",
+                owns=(
+                    "audit event persistence and queries",
+                    "request audit payload redaction",
+                    "staged and deferred audit recording",
+                ),
+            ),
             SOTService(
                 name="observability.recording",
                 module="app.services.observability",
@@ -1330,6 +1377,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.settings_spec",
                 owns=("setting schema", "setting value coercion", "env fallback rules"),
                 depends_on=("control.domain_settings",),
+            ),
+            SOTService(
+                name="control.settings_bootstrap",
+                module="app.services.settings_seed",
+                owns=(
+                    "startup default-setting materialization",
+                    "environment-to-setting bootstrap",
+                    "default notification-template seeding",
+                ),
+                depends_on=("control.domain_settings", "control.settings_spec"),
             ),
             SOTService(
                 name="control.relationships",

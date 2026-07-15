@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 from starlette.requests import Request
 
-from app.schemas.router_management import RouterCreate, RouterUpdate
+from app.schemas.router_management import (
+    RouterConfigTemplateCreate,
+    RouterConfigTemplateUpdate,
+    RouterCreate,
+    RouterUpdate,
+)
 from app.services.credential_crypto import decrypt_credential
 from app.services.router_management.config import (
     RouterConfigService,
@@ -106,9 +111,16 @@ def template_list_context(
     return context
 
 
-def template_form_context(request: Request, db: Session) -> dict[str, object]:
+def template_form_context(
+    request: Request,
+    db: Session,
+    *,
+    template_id: uuid.UUID | None = None,
+) -> dict[str, object]:
     context = _base_context(request, db)
-    context["template"] = None
+    context["template"] = (
+        RouterTemplateService.get(db, template_id) if template_id else None
+    )
     return context
 
 
@@ -230,6 +242,28 @@ def _form_payload(form: FormData) -> dict[str, Any]:
             "yes",
         }
     return data
+
+
+def _template_form_payload(form: FormData) -> dict[str, Any]:
+    data = _form_strings(form)
+    raw_active = form.get("is_active")
+    data["is_active"] = isinstance(raw_active, str) and raw_active.strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
+    return data
+
+
+def create_template(db: Session, form: FormData):
+    payload = RouterConfigTemplateCreate(**_template_form_payload(form))
+    return RouterTemplateService.create(db, payload)
+
+
+def update_template(db: Session, template_id: uuid.UUID, form: FormData) -> None:
+    payload = RouterConfigTemplateUpdate(**_template_form_payload(form))
+    RouterTemplateService.update(db, template_id, payload)
 
 
 def create_router(db: Session, form: FormData):

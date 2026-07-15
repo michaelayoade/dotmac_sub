@@ -215,8 +215,8 @@ def _guard_submonthly_period(db: Session, consumption_period: str) -> None:
 
     Sub-monthly usage is samples/VM-derived (not billing-grade) and durable
     period buckets aren't in place yet, so a daily/weekly rule must not silently
-    go live in prod. Off by default; ops flips ``fup_submonthly_rules_enabled``
-    (usage domain) after validating the metrics source.
+    go live in prod. Off by default; ops enables the canonical
+    ``usage.fup_submonthly_rules`` feature after validating the metrics source.
     """
     if consumption_period not in _SUBMONTHLY_PERIODS:
         return
@@ -226,8 +226,8 @@ def _guard_submonthly_period(db: Session, consumption_period: str) -> None:
             detail=(
                 "Daily/weekly FUP rules are gated. Sub-monthly usage is "
                 "samples-derived (not billing-grade); enable the "
-                "'fup_submonthly_rules_enabled' usage setting after validating "
-                "the metrics source."
+                "'usage.fup_submonthly_rules' feature in System → Modules "
+                "after validating the metrics source."
             ),
         )
 

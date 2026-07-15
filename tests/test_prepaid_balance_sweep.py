@@ -39,9 +39,12 @@ def _enable_control(
     activation_at: datetime | None = _SATURDAY_NOON - timedelta(days=10),
 ) -> None:
     settings = [
+        # Canonical feature control (effective-state SOT): modules-domain row keyed
+        # by the control's dotted key with dots→underscores. The legacy
+        # collections/prepaid_balance_enforcement_enabled setting is ignored.
         DomainSetting(
-            domain=SettingDomain.collections,
-            key="prepaid_balance_enforcement_enabled",
+            domain=SettingDomain.modules,
+            key="collections_prepaid_balance_enforcement",
             value_type=SettingValueType.boolean,
             value_text="true" if enabled else "false",
             value_json=enabled,

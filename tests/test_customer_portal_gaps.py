@@ -1337,7 +1337,7 @@ class TestPaymentArrangementRouteErrors:
                 side_effect=HTTPException(
                     status_code=400, detail="Invalid arrangement"
                 ),
-            ),
+            ) as submit,
             patch(
                 "app.web.customer.routes.customer_portal.get_arrangement_error_context",
                 return_value={"invoices": [], "outstanding_balance": 0},
@@ -1355,6 +1355,7 @@ class TestPaymentArrangementRouteErrors:
                 start_date="2025-01-31",
                 invoice_id=None,
                 notes=None,
+                terms="on",
                 db=MagicMock(),
             )
 
@@ -1363,6 +1364,7 @@ class TestPaymentArrangementRouteErrors:
         assert render.call_args.kwargs["status_code"] == 400
         context = render.call_args.args[1]
         assert context["error"] == "Invalid arrangement"
+        assert submit.call_args.kwargs["terms_accepted"] is True
 
 
 class TestCustomerTopupRoutes:
