@@ -101,7 +101,6 @@ class _SectionTiles extends StatelessWidget {
       'Service requests',
       '/reseller/service-requests'
     ),
-    (Icons.bolt_outlined, 'Airtime & bills', '/reseller/vas'),
     (Icons.map_outlined, 'Coverage map', '/reseller/fiber-map'),
     (Icons.manage_accounts_outlined, 'Profile & security', '/reseller/profile'),
   ];

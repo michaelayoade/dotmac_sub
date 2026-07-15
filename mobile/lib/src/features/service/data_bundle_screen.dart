@@ -9,7 +9,7 @@ import '../../providers/data_providers.dart';
 
 /// Buy a data top-up for a service. Data top-ups are add-ons that grant GB to
 /// the current quota bucket (GET/POST /me/subscriptions/{id}/add-ons); the
-/// charge comes from the wallet balance.
+/// charge is confirmed from a server-owned prepaid-funding preview.
 class DataBundleScreen extends ConsumerStatefulWidget {
   const DataBundleScreen({super.key, required this.service});
   final Subscription service;
@@ -48,32 +48,54 @@ class _DataBundleScreenState extends ConsumerState<DataBundleScreen> {
   }
 
   Future<void> _buy(AddonOption option) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text('Buy ${option.grantGb} GB?'),
-        content: Text(
-          '${Fmt.money(option.amount, option.currency)} will be charged from '
-          'your wallet and added to this cycle.',
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Buy')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
+      final quote = await ref
+          .read(catalogRepositoryProvider)
+          .addonQuote(_subId, option.addOnId, 1);
+      if (!mounted) return;
+      if (!quote.allowed) {
+        final message = quote.rejectionReason == 'subscription_not_active'
+            ? 'Your service is not active — purchases resume once it is restored'
+            : 'Top up ${Fmt.money(quote.shortfall, quote.currency)} to buy this bundle';
+        messenger.showSnackBar(SnackBar(content: Text(message)));
+        return;
+      }
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: Text('Buy ${option.grantGb} GB?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Charge: ${Fmt.money(quote.charge, quote.currency)}'),
+              Text(
+                  'Prepaid funding: ${Fmt.money(quote.prepaidFundingBefore, quote.currency)}'),
+              Text(
+                  'Funding after: ${Fmt.money(quote.prepaidFundingAfter, quote.currency)}'),
+              Text(
+                  'Postpaid receivables: ${Fmt.money(quote.postpaidReceivables, quote.currency)}'),
+              const SizedBox(height: 8),
+              const Text(
+                  'This purchase does not directly change service access.'),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Confirm')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
       final result = await ref
           .read(catalogRepositoryProvider)
-          .purchaseAddon(_subId, option.addOnId, 1);
+          .purchaseAddon(_subId, option.addOnId, 1, quote.previewFingerprint);
       if (result.success) {
         ref.invalidate(balanceProvider);
         ref.invalidate(ledgerProvider);
@@ -85,7 +107,7 @@ class _DataBundleScreenState extends ConsumerState<DataBundleScreen> {
       } else if (result.insufficient) {
         messenger.showSnackBar(SnackBar(
           content: Text(
-              'Insufficient balance — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
+              'Insufficient prepaid funding — top up ${Fmt.money(result.shortfall ?? 0, result.currency)}'),
         ));
       } else if (result.serviceNotActive) {
         messenger.showSnackBar(const SnackBar(
@@ -136,18 +158,6 @@ class _DataBundleScreenState extends ConsumerState<DataBundleScreen> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        if (data.walletBalance != null)
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.account_balance_wallet_outlined),
-              title: const Text('Wallet balance'),
-              trailing: Text(
-                Fmt.money(data.walletBalance!, data.currency),
-                style: theme.textTheme.titleMedium,
-              ),
-            ),
-          ),
-        const SizedBox(height: 8),
         if (bundles.isEmpty)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 40),

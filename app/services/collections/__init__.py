@@ -15,13 +15,19 @@ from app.services.collections._core import (
     # Classes
     DunningCases,
     DunningWorkflow,
+    FinancialAccessConsequencePreview,
+    FinancialAccessConsequenceResult,
     billing_enforcement_reconciler,
+    confirm_financial_access_consequence,
+    confirm_financial_access_restoration,
     dunning_action_logs,
     # Service instances
     dunning_cases,
     dunning_workflow,
     get_available_balance,
     has_overdue_balance,
+    preview_financial_access_consequence,
+    preview_financial_access_restoration,
     # Public functions
     restore_account_services,
 )
@@ -32,6 +38,8 @@ __all__ = [
     "DunningActionLogs",
     "BillingEnforcementReconciler",
     "DunningWorkflow",
+    "FinancialAccessConsequencePreview",
+    "FinancialAccessConsequenceResult",
     # Service instances
     "dunning_cases",
     "dunning_action_logs",
@@ -40,5 +48,9 @@ __all__ = [
     # Public functions
     "get_available_balance",
     "has_overdue_balance",
+    "preview_financial_access_consequence",
+    "confirm_financial_access_consequence",
+    "preview_financial_access_restoration",
+    "confirm_financial_access_restoration",
     "restore_account_services",
 ]

@@ -389,13 +389,9 @@ class TestSeedBillingNotificationSettings:
                 DomainSetting.domain == SettingDomain.billing,
                 DomainSetting.key.in_(
                     [
-                        "suspension_grace_hours",
                         "expiry_reminder_days",
                         "invoice_reminder_days",
-                        "dunning_escalation_days",
                         "autopay_max_consecutive_failures",
-                        "blocking_period_days",
-                        "deactivation_period_days",
                         "minimum_balance",
                         "arrangement_min_installments",
                         "arrangement_max_installments",
@@ -415,13 +411,9 @@ class TestSeedBillingNotificationSettings:
             .all()
         }
 
-        assert settings["suspension_grace_hours"] == "48"
         assert settings["expiry_reminder_days"] == "7"
         assert settings["invoice_reminder_days"] == "7,1"
-        assert settings["dunning_escalation_days"] == "3,7,14,30"
         assert settings["autopay_max_consecutive_failures"] == "3"
-        assert settings["blocking_period_days"] == "0"
-        assert settings["deactivation_period_days"] == "0"
         assert settings["minimum_balance"] == "0"
         assert settings["arrangement_min_installments"] == "2"
         assert settings["arrangement_max_installments"] == "24"
@@ -631,22 +623,23 @@ class TestSeedBillingSettings:
         assert setting is not None
         assert setting.value_text == "INVOICE-"
 
-    def test_seeds_auto_suspend_on_overdue(self, db_session, monkeypatch):
-        """Test overdue auto-suspension setting is seeded."""
-        monkeypatch.setenv("BILLING_AUTO_SUSPEND_ON_OVERDUE", "false")
-
+    def test_does_not_seed_retired_access_controls(self, db_session):
         settings_seed.seed_billing_settings(db_session)
 
-        setting = (
-            db_session.query(DomainSetting)
-            .filter(
-                DomainSetting.domain == SettingDomain.billing,
-                DomainSetting.key == "auto_suspend_on_overdue",
-            )
-            .first()
-        )
-        assert setting is not None
-        assert setting.value_text == "false"
+        retired = {
+            "auto_suspend_on_overdue",
+            "suspension_grace_hours",
+            "dunning_escalation_days",
+            "blocking_period_days",
+            "deactivation_period_days",
+        }
+        seeded = {
+            row.key
+            for row in db_session.query(DomainSetting)
+            .filter(DomainSetting.domain == SettingDomain.billing)
+            .all()
+        }
+        assert retired.isdisjoint(seeded)
 
     def test_seeds_plan_change_runtime_settings(self, db_session, monkeypatch):
         """Test runtime plan-change settings are seeded in billing domain."""

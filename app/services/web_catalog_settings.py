@@ -27,7 +27,6 @@ from app.models.catalog import (
     RefundPolicy,
     RegionZone,
     SlaProfile,
-    SuspensionAction,
     UsageAllowance,
 )
 from app.schemas.catalog import (
@@ -509,7 +508,6 @@ def policy_set_form_defaults() -> dict[str, object]:
         "trial_days": "",
         "trial_card_required": False,
         "grace_days": "",
-        "suspension_action": "suspend",
         "refund_policy": "none",
         "refund_window_days": "",
         "is_active": True,
@@ -521,7 +519,6 @@ def policy_set_form_options() -> dict[str, list[str]]:
     """Return enum option lists for policy-set forms."""
     return {
         "proration_policies": [item.value for item in ProrationPolicy],
-        "suspension_actions": [item.value for item in SuspensionAction],
         "refund_policies": [item.value for item in RefundPolicy],
         "dunning_actions": [item.value for item in DunningAction],
     }
@@ -564,10 +561,7 @@ def policy_set_form_context(
             else "next_cycle",
             "trial_days": obj.trial_days or "",
             "trial_card_required": obj.trial_card_required,
-            "grace_days": obj.grace_days or "",
-            "suspension_action": obj.suspension_action.value
-            if obj.suspension_action
-            else "suspend",
+            "grace_days": obj.grace_days if obj.grace_days is not None else "",
             "refund_policy": obj.refund_policy.value if obj.refund_policy else "none",
             "refund_window_days": obj.refund_window_days or "",
             "is_active": obj.is_active,
@@ -634,7 +628,6 @@ def parse_policy_set_form(
         "trial_days": form_str("trial_days").strip(),
         "trial_card_required": form_str("trial_card_required") == "true",
         "grace_days": form_str("grace_days").strip(),
-        "suspension_action": form_str("suspension_action", "suspend").strip(),
         "refund_policy": form_str("refund_policy", "none").strip(),
         "refund_window_days": form_str("refund_window_days").strip(),
         "is_active": form_str("is_active") == "true",
@@ -653,7 +646,6 @@ def _policy_set_payload(values: dict[str, object]) -> dict[str, object]:
         "trial_days": _optional_int(values["trial_days"]),
         "trial_card_required": values["trial_card_required"],
         "grace_days": _optional_int(values["grace_days"]),
-        "suspension_action": SuspensionAction(str(values["suspension_action"])),
         "refund_policy": RefundPolicy(str(values["refund_policy"])),
         "refund_window_days": _optional_int(values["refund_window_days"]),
         "is_active": values["is_active"],
@@ -1078,7 +1070,7 @@ def export_policy_sets_csv(db: Session) -> str:
                 p.downgrade_policy.value if p.downgrade_policy else "",
                 p.trial_days or "",
                 "Yes" if p.trial_card_required else "No",
-                p.grace_days or "",
+                p.grace_days if p.grace_days is not None else "",
                 p.suspension_action.value if p.suspension_action else "",
                 p.refund_policy.value if p.refund_policy else "",
                 p.refund_window_days or "",

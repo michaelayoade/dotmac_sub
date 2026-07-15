@@ -397,6 +397,7 @@ def test_invoice_read_serializes_status_presentation_for_api_clients() -> None:
             StatusTone.warning,
             StatusIcon.clock,
         ),
+        (PaymentStatus.reversed, "Reversed", StatusTone.negative, StatusIcon.alert),
         (PaymentStatus.canceled, "Canceled", StatusTone.neutral, StatusIcon.x),
     ],
 )

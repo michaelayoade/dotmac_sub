@@ -9,7 +9,14 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.models.billing import Invoice, LedgerEntry, LedgerEntryType, LedgerSource
+from app.models.audit import AuditEvent
+from app.models.billing import (
+    AccountAdjustment,
+    Invoice,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
 from app.models.catalog import (
     AccessType,
     BillingCycle,
@@ -23,6 +30,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.subscription_change import SubscriptionChangeRequest
 from app.services.billing._common import get_account_credit_balance
 from app.services.customer_portal_context import get_available_portal_offers
 from app.services.customer_portal_flow_changes import apply_instant_plan_change
@@ -144,6 +152,19 @@ def _stub_plan_change_side_effects(
             )
         ),
     )
+
+
+def _confirmation_kwargs(db_session, subscription, target_offer) -> dict[str, str]:
+    from app.services.prepaid_plan_changes import resolve_prepaid_plan_change
+
+    decision = resolve_prepaid_plan_change(
+        db_session, subscription, str(target_offer.id)
+    )
+    return {
+        "preview_fingerprint": decision.fingerprint,
+        "idempotency_key": f"test-plan-{uuid4()}",
+        "confirmation_origin": "test",
+    }
 
 
 def test_get_available_portal_offers_only_returns_same_family_compatible_offers(
@@ -372,13 +393,14 @@ def test_prepaid_upgrade_returns_insufficient_balance_without_mutation(
         },
         str(subscription.id),
         str(target_offer.id),
+        **_confirmation_kwargs(db_session, subscription, target_offer),
     )
 
     db_session.refresh(subscription)
     assert result["success"] is False
-    assert result["reason"] == "insufficient_balance"
+    assert result["reason"] == "insufficient_prepaid_funding"
     assert result["required_amount"] == Decimal("50.00")
-    assert result["current_balance"] == Decimal("0.00")
+    assert result["prepaid_funding_before"] == Decimal("0.00")
     assert result["shortfall"] == Decimal("50.00")
     assert subscription.offer_id == current_offer.id
     assert db_session.query(LedgerEntry).count() == 0
@@ -420,7 +442,7 @@ def test_proration_uses_exact_cycle_seconds(db_session, subscriber, monkeypatch)
     assert proration["net_amount"] == Decimal("50.00")
 
 
-def test_prepaid_upgrade_with_exact_balance_preserves_anniversary_and_uses_wallet(
+def test_prepaid_upgrade_with_exact_funding_preserves_anniversary_and_posts_debit(
     db_session, subscriber, monkeypatch
 ):
     current_offer = _make_offer(
@@ -453,7 +475,7 @@ def test_prepaid_upgrade_with_exact_balance_preserves_anniversary_and_uses_walle
             source=LedgerSource.payment,
             amount=Decimal("50.00"),
             currency="NGN",
-            memo="Wallet top-up",
+            memo="Prepaid funding",
         )
     )
     db_session.commit()
@@ -466,6 +488,7 @@ def test_prepaid_upgrade_with_exact_balance_preserves_anniversary_and_uses_walle
         },
         str(subscription.id),
         str(target_offer.id),
+        **_confirmation_kwargs(db_session, subscription, target_offer),
     )
 
     db_session.refresh(subscription)
@@ -481,8 +504,224 @@ def test_prepaid_upgrade_with_exact_balance_preserves_anniversary_and_uses_walle
     assert subscription.next_billing_at.replace(tzinfo=UTC) == next_billing_at
     assert len(debits) == 1
     assert debits[0].amount == Decimal("50.00")
+    adjustment = db_session.query(AccountAdjustment).one()
+    assert adjustment.origin == "prepaid_plan_change"
+    assert adjustment.origin_ref == f"{subscription.id}:{target_offer.id}"
+    assert adjustment.ledger_entry_id == debits[0].id
+    change_request = db_session.get(
+        SubscriptionChangeRequest, result["change_request_id"]
+    )
+    assert change_request is not None
+    assert change_request.confirmation_preview_fingerprint
+    assert change_request.confirmation_idempotency_key
+    assert change_request.confirmation_snapshot["prepaid_funding_before"] == "50.00"
+    assert change_request.confirmation_snapshot["postpaid_receivables"] == "0.00"
+    assert change_request.confirmation_snapshot["ledger_entry_type"] == "debit"
+    assert change_request.confirmation_snapshot["ledger_source"] == "adjustment"
+    assert change_request.account_adjustment_id == adjustment.id
+    assert change_request.ledger_entry_id == debits[0].id
+    assert change_request.credit_note_id is None
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "confirm_immediate_plan_change")
+        .filter(AuditEvent.entity_id == str(change_request.id))
+        .one()
+    )
+    assert audit.metadata_["preview_fingerprint"] == (
+        change_request.confirmation_preview_fingerprint
+    )
+    assert audit.metadata_["account_adjustment_id"] == str(adjustment.id)
+    assert audit.metadata_["ledger_entry_id"] == str(debits[0].id)
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal("0.00")
     assert db_session.query(Invoice).count() == 0
+
+
+def test_plan_change_confirmation_rejects_stale_financial_position(
+    db_session, subscriber, monkeypatch
+):
+    _stub_plan_change_side_effects(monkeypatch)
+    current_offer = _make_offer(
+        db_session,
+        name="Stale Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Stale Plus",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, tzinfo=UTC))
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("50.00"),
+            currency="NGN",
+            memo="Previewed funding",
+        )
+    )
+    db_session.commit()
+    confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("1.00"),
+            currency="NGN",
+            memo="Financial position changed after preview",
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        apply_instant_plan_change(
+            db_session,
+            {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+            str(subscription.id),
+            str(target_offer.id),
+            **confirmation,
+        )
+
+    assert exc.value.status_code == 409
+    db_session.refresh(subscription)
+    assert subscription.offer_id == current_offer.id
+    assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(SubscriptionChangeRequest).count() == 0
+
+
+def test_prepaid_downgrade_links_credit_note_and_exact_ledger_evidence(
+    db_session, subscriber, monkeypatch
+):
+    from app.models.billing import CreditNote
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    _stub_plan_change_side_effects(monkeypatch)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="refund_policy",
+            value_type=SettingValueType.string,
+            value_text="prorated",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    current_offer = _make_offer(
+        db_session,
+        name="Credit Plus",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Credit Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, tzinfo=UTC))
+
+    result = apply_instant_plan_change(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        str(target_offer.id),
+        **_confirmation_kwargs(db_session, subscription, target_offer),
+    )
+
+    change_request = db_session.query(SubscriptionChangeRequest).one()
+    credit_note = db_session.query(CreditNote).one()
+    assert result["credit_note_id"] == str(credit_note.id)
+    assert change_request.credit_note_id == credit_note.id
+    assert change_request.account_adjustment_id is None
+    assert change_request.ledger_entry_id == credit_note.funding_ledger_entry_id
+    assert change_request.confirmation_snapshot["ledger_entry_type"] == "credit"
+    assert change_request.confirmation_snapshot["ledger_source"] == "credit_note"
+    assert change_request.confirmation_snapshot["ledger_amount"] == "50.00"
+
+
+def test_plan_change_confirmation_idempotently_replays_exact_evidence(
+    db_session, subscriber, monkeypatch
+):
+    _stub_plan_change_side_effects(monkeypatch)
+    current_offer = _make_offer(
+        db_session,
+        name="Replay Basic",
+        amount=Decimal("100.00"),
+        plan_family="unlimited",
+    )
+    target_offer = _make_offer(
+        db_session,
+        name="Replay Plus",
+        amount=Decimal("200.00"),
+        plan_family="unlimited",
+    )
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        current_offer,
+        next_billing_at=datetime(2026, 6, 1, tzinfo=UTC),
+        start_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, tzinfo=UTC))
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("50.00"),
+            currency="NGN",
+            memo="Replay funding",
+        )
+    )
+    db_session.commit()
+    confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
+
+    first = apply_instant_plan_change(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        str(target_offer.id),
+        **confirmation,
+    )
+    second = apply_instant_plan_change(
+        db_session,
+        {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
+        str(subscription.id),
+        str(target_offer.id),
+        **confirmation,
+    )
+
+    assert second["replayed"] is True
+    assert second["change_request_id"] == first["change_request_id"]
+    assert second["account_adjustment_id"] == first["account_adjustment_id"]
+    assert second["ledger_entry_id"] == first["ledger_entry_id"]
+    assert db_session.query(SubscriptionChangeRequest).count() == 1
+    assert db_session.query(AccountAdjustment).count() == 1
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .count()
+        == 1
+    )
 
 
 def test_apply_instant_plan_change_emits_single_upgrade_event(
@@ -520,7 +759,7 @@ def test_apply_instant_plan_change_emits_single_upgrade_event(
             source=LedgerSource.payment,
             amount=Decimal("50.00"),
             currency="NGN",
-            memo="Wallet top-up",
+            memo="Prepaid funding",
         )
     )
     db_session.commit()
@@ -533,6 +772,7 @@ def test_apply_instant_plan_change_emits_single_upgrade_event(
         },
         str(subscription.id),
         str(target_offer.id),
+        **_confirmation_kwargs(db_session, subscription, target_offer),
     )
 
     assert emitted.count(EventType.subscription_upgraded) == 1
@@ -575,6 +815,7 @@ def test_no_provisioning_before_payment_coverage(db_session, subscriber, monkeyp
         },
         str(subscription.id),
         str(target_offer.id),
+        **_confirmation_kwargs(db_session, subscription, target_offer),
     )
 
     assert result["success"] is False
@@ -655,6 +896,10 @@ def test_get_plan_change_quote_returns_single_quote(
 
     assert quote is not None and quote != {}
     assert "required_amount" in quote
+    assert len(str(quote["preview_fingerprint"])) == 64
+    assert quote["ledger_entry_type"] == "debit"
+    assert quote["ledger_source"] == "adjustment"
+    assert quote["access_consequence"] == "none_plan_change_only"
 
 
 def test_get_plan_change_quote_enforces_ownership(db_session, subscriber):
@@ -1097,6 +1342,9 @@ def test_apply_instant_plan_change_rejects_archived_offer(
             {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
             str(subscription.id),
             str(archived.id),
+            preview_fingerprint="x" * 64,
+            idempotency_key=f"test-plan-{uuid4()}",
+            confirmation_origin="test",
         )
 
     db_session.refresh(subscription)
@@ -1201,13 +1449,16 @@ def test_admin_prepaid_upgrade_rejects_insufficient_balance(
             db_session,
             str(subscription.id),
             SubscriptionUpdate(offer_id=target_offer.id),
+            plan_change_preview_fingerprint=_confirmation_kwargs(
+                db_session, subscription, target_offer
+            )["preview_fingerprint"],
         )
 
     db_session.refresh(subscription)
     assert exc.value.status_code == 400
-    assert exc.value.detail["code"] == "insufficient_prepaid_balance"
+    assert exc.value.detail["code"] == "insufficient_prepaid_funding"
     assert exc.value.detail["required_amount"] == "50.00"
-    assert exc.value.detail["current_balance"] == "0.00"
+    assert exc.value.detail["prepaid_funding_before"] == "0.00"
     assert subscription.offer_id == current_offer.id
     assert (
         db_session.query(LedgerEntry)
@@ -1253,7 +1504,7 @@ def test_immediate_prepaid_change_rejects_cross_currency_catalog(
             source=LedgerSource.payment,
             amount=Decimal("500.00"),
             currency="NGN",
-            memo="Wallet top-up",
+            memo="Prepaid funding",
         )
     )
     db_session.commit()
@@ -1263,12 +1514,15 @@ def test_immediate_prepaid_change_rejects_cross_currency_catalog(
             db_session,
             str(subscription.id),
             SubscriptionUpdate(offer_id=target_offer.id),
+            plan_change_preview_fingerprint=_confirmation_kwargs(
+                db_session, subscription, target_offer
+            )["preview_fingerprint"],
         )
 
     assert exc.value.detail["code"] == "catalog_currency_mismatch"
 
 
-def test_admin_prepaid_upgrade_with_balance_writes_wallet_debit(
+def test_admin_prepaid_upgrade_with_funding_writes_evidenced_debit(
     db_session, subscriber, monkeypatch
 ):
     from app.schemas.catalog import SubscriptionUpdate
@@ -1302,7 +1556,7 @@ def test_admin_prepaid_upgrade_with_balance_writes_wallet_debit(
             source=LedgerSource.payment,
             amount=Decimal("50.00"),
             currency="NGN",
-            memo="Wallet top-up",
+            memo="Prepaid funding",
         )
     )
     db_session.commit()
@@ -1311,6 +1565,9 @@ def test_admin_prepaid_upgrade_with_balance_writes_wallet_debit(
         db_session,
         str(subscription.id),
         SubscriptionUpdate(offer_id=target_offer.id),
+        plan_change_preview_fingerprint=_confirmation_kwargs(
+            db_session, subscription, target_offer
+        )["preview_fingerprint"],
     )
 
     db_session.refresh(subscription)
@@ -1323,6 +1580,10 @@ def test_admin_prepaid_upgrade_with_balance_writes_wallet_debit(
     assert subscription.offer_id == target_offer.id
     assert len(debits) == 1
     assert debits[0].amount == Decimal("50.00")
+    adjustment = db_session.query(AccountAdjustment).one()
+    assert adjustment.ledger_entry_id == debits[0].id
+    assert adjustment.prepaid_funding_before == Decimal("50.00")
+    assert adjustment.prepaid_funding_after == Decimal("0.00")
 
 
 def test_prepaid_plan_change_adjustment_is_idempotent_within_transaction(
@@ -1359,10 +1620,14 @@ def test_prepaid_plan_change_adjustment_is_idempotent_within_transaction(
             source=LedgerSource.payment,
             amount=Decimal("50.00"),
             currency="NGN",
-            memo="Wallet top-up",
+            memo="Prepaid funding",
         )
     )
     db_session.commit()
+
+    preview_fingerprint = _confirmation_kwargs(db_session, subscription, target_offer)[
+        "preview_fingerprint"
+    ]
 
     first = prepare_immediate_prepaid_plan_change(
         db_session,
@@ -1370,6 +1635,7 @@ def test_prepaid_plan_change_adjustment_is_idempotent_within_transaction(
         target_offer,
         old_offer_name=current_offer.name,
         operation_key="same-request",
+        expected_preview_fingerprint=preview_fingerprint,
     )
     second = prepare_immediate_prepaid_plan_change(
         db_session,
@@ -1377,11 +1643,13 @@ def test_prepaid_plan_change_adjustment_is_idempotent_within_transaction(
         target_offer,
         old_offer_name=current_offer.name,
         operation_key="same-request",
+        expected_preview_fingerprint=preview_fingerprint,
     )
 
     assert first.ledger_entry is not None
     assert second.replayed is True
     assert second.ledger_entry.id == first.ledger_entry.id
+    assert db_session.query(AccountAdjustment).count() == 1
     assert (
         db_session.query(LedgerEntry)
         .filter(LedgerEntry.account_id == subscriber.id)
@@ -1408,7 +1676,7 @@ def _add_overdue_invoice(db_session, subscriber, amount: Decimal) -> None:
     db_session.commit()
 
 
-def test_admin_prepaid_change_rejects_overdue_debt_even_with_wallet(
+def test_admin_prepaid_change_rejects_overdue_debt_even_with_funding(
     db_session, subscriber, monkeypatch
 ):
     from app.schemas.catalog import SubscriptionUpdate
@@ -1441,7 +1709,7 @@ def test_admin_prepaid_change_rejects_overdue_debt_even_with_wallet(
             source=LedgerSource.payment,
             amount=Decimal("500.00"),
             currency="NGN",
-            memo="Wallet top-up",
+            memo="Prepaid funding",
         )
     )
     db_session.commit()
@@ -1452,6 +1720,9 @@ def test_admin_prepaid_change_rejects_overdue_debt_even_with_wallet(
             db_session,
             str(subscription.id),
             SubscriptionUpdate(offer_id=target_offer.id),
+            plan_change_preview_fingerprint=_confirmation_kwargs(
+                db_session, subscription, target_offer
+            )["preview_fingerprint"],
         )
 
     db_session.refresh(subscription)
@@ -1471,7 +1742,7 @@ def test_plan_change_blocked_when_account_in_arrears(
 ):
     """An account with an overdue balance cannot self-service change plans
     (policy: block-until-settled). Covers POSTPAID too — the old gate only
-    looked at prepaid wallet credit and never considered debt (account
+    looked at prepaid funding and never considered debt (account
     100000016 could upgrade while owing)."""
     _stub_plan_change_side_effects(monkeypatch)
     current_offer = _make_offer(
@@ -1503,6 +1774,9 @@ def test_plan_change_blocked_when_account_in_arrears(
             {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
             str(subscription.id),
             str(target_offer.id),
+            preview_fingerprint="x" * 64,
+            idempotency_key=f"test-plan-{uuid4()}",
+            confirmation_origin="test",
         )
 
     db_session.refresh(subscription)
@@ -1541,10 +1815,18 @@ def test_postpaid_plan_change_applies_when_no_arrears(
         {"account_id": str(subscriber.id), "subscriber_id": str(subscriber.id)},
         str(subscription.id),
         str(target_offer.id),
+        **_confirmation_kwargs(db_session, subscription, target_offer),
     )
     db_session.refresh(subscription)
     assert result["success"] is True
     assert subscription.offer_id == target_offer.id
+    change_request = db_session.query(SubscriptionChangeRequest).one()
+    assert change_request.confirmation_preview_fingerprint
+    assert change_request.confirmation_snapshot["billing_mode"] == "postpaid"
+    assert change_request.confirmation_snapshot["ledger_entry_type"] is None
+    assert change_request.account_adjustment_id is None
+    assert change_request.credit_note_id is None
+    assert change_request.ledger_entry_id is None
 
 
 def test_change_plan_page_flags_arrears(db_session, subscriber):
@@ -1608,6 +1890,10 @@ def test_admin_change_plan_quote_response(db_session, subscriber):
     assert quote["charge_amount"] > 0
     # Upgrading mid-cycle must cost something net.
     assert quote["net_amount"] > 0
+    assert len(quote["preview_fingerprint"]) == 64
+    assert quote["ledger_entry_type"] == "debit"
+    assert quote["ledger_source"] == "adjustment"
+    assert quote["ledger_amount"] == quote["net_amount"]
 
 
 def test_admin_change_plan_quote_unknown_offer_404(db_session, subscriber):

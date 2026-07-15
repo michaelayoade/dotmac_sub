@@ -430,7 +430,7 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
                 db,
                 str(subscriber.id),
                 title="You earned a referral reward!",
-                body=f"{credited} has been added to your wallet.",
+                body=f"{credited} has been added to your account credit.",
                 data={"type": "referral_reward", "referral_id": crm_referral_id},
             )
         except Exception as exc:  # noqa: BLE001 - notification is advisory

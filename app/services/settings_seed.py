@@ -28,7 +28,6 @@ from app.services.domain_settings import (
     subscriber_settings,
     tr069_settings,
     usage_settings,
-    vas_settings,
 )
 from app.services.secrets import is_openbao_ref
 from app.timezone import APP_TIMEZONE_NAME
@@ -904,6 +903,17 @@ def _seed_missing_notification_templates(db: Session) -> int:
             ),
         },
         {
+            "code": "payment_reversed",
+            "name": "Payment Reversed",
+            "channel": NotificationChannel.email,
+            "subject": "Payment reversed",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "A settled payment of {amount} was reversed on your account. "
+                "Please contact billing if you need more information."
+            ),
+        },
+        {
             "code": "usage_warning",
             "name": "Usage Warning",
             "channel": NotificationChannel.email,
@@ -1158,18 +1168,6 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
-        key="prepaid_grace_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_GRACE_DAYS", "0"),
-    )
-    collections_settings.ensure_by_key(
-        db,
-        key="prepaid_deactivation_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("PREPAID_DEACTIVATION_DAYS", "3"),
-    )
-    collections_settings.ensure_by_key(
-        db,
         key="prepaid_enforcement_activation_at",
         value_type=SettingValueType.string,
         value_text=os.getenv("PREPAID_ENFORCEMENT_ACTIVATION_AT", ""),
@@ -1291,95 +1289,6 @@ def seed_geocoding_settings(db: Session) -> None:
         key="batch_geocode_log_rows",
         value_type=SettingValueType.json,
         value_json=[],
-    )
-
-
-def seed_vas_settings(db: Session) -> None:
-    vas_settings.ensure_by_key(
-        db,
-        key="enabled",
-        value_type=SettingValueType.boolean,
-        value_text=os.getenv("VAS_ENABLED", "false"),
-        value_json=os.getenv("VAS_ENABLED", "false").strip().lower()
-        in {"1", "true", "yes", "on"},
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="topup_min",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_TOPUP_MIN", "100"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="topup_max_per_txn",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_TOPUP_MAX_PER_TXN", "50000"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="topup_daily_limit",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_TOPUP_DAILY_LIMIT", "100000"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="purchase_txn_limit",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_PURCHASE_TXN_LIMIT", "50000"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="auth_threshold",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_AUTH_THRESHOLD", "5000"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="purchase_dedupe_window_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_PURCHASE_DEDUPE_WINDOW_SECONDS", "300"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="pay_bill_dedupe_window_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_PAY_BILL_DEDUPE_WINDOW_SECONDS", "60"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="requery_max_attempts",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VAS_REQUERY_MAX_ATTEMPTS", "10"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="slow_settlement_categories",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("VAS_SLOW_SETTLEMENT_CATEGORIES", "electricity-bill"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="vtpass_get_timeout_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VTPASS_GET_TIMEOUT_SECONDS", "20"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="vtpass_post_timeout_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VTPASS_POST_TIMEOUT_SECONDS", "45"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="vtpass_verify_timeout_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VTPASS_VERIFY_TIMEOUT_SECONDS", "20"),
-    )
-    vas_settings.ensure_by_key(
-        db,
-        key="vtpass_requery_timeout_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("VTPASS_REQUERY_TIMEOUT_SECONDS", "20"),
     )
 
 
@@ -1682,14 +1591,6 @@ def seed_billing_settings(db: Session) -> None:
             os.getenv("BILLING_INVOICE_DUE_DAYS", "14"),
         ),
     )
-    auto_suspend_raw = os.getenv("BILLING_AUTO_SUSPEND_ON_OVERDUE", "true")
-    billing_settings.ensure_by_key(
-        db,
-        key="auto_suspend_on_overdue",
-        value_type=SettingValueType.boolean,
-        value_text=auto_suspend_raw,
-        value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
-    )
     billing_settings.ensure_by_key(
         db,
         key="autopay_max_consecutive_failures",
@@ -1719,12 +1620,6 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
-        key="suspension_grace_hours",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_SUSPENSION_GRACE_HOURS", "48"),
-    )
-    billing_settings.ensure_by_key(
-        db,
         key="expiry_reminder_days",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_EXPIRY_REMINDER_DAYS", "7"),
@@ -1734,24 +1629,6 @@ def seed_billing_settings(db: Session) -> None:
         key="invoice_reminder_days",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_INVOICE_REMINDER_DAYS", "7,1"),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="dunning_escalation_days",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_DUNNING_ESCALATION_DAYS", "3,7,14,30"),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="blocking_period_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_BLOCKING_PERIOD_DAYS", "0"),
-    )
-    billing_settings.ensure_by_key(
-        db,
-        key="deactivation_period_days",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_DEACTIVATION_PERIOD_DAYS", "0"),
     )
     billing_settings.ensure_by_key(
         db,

@@ -25,7 +25,7 @@
     {% endif %}
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <form method="post" action="{{ action_url }}" class="space-y-6 p-6" onsubmit="if (!confirm('Issue this credit to the selected billing account?')) return false; this.querySelector('button[type=submit]').disabled = true;">
+        <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
             {% include "components/forms/csrf_input.html" %}
             {% include "admin/billing/_customer_account_fields.html" with context %}
             <div class="grid gap-4 sm:grid-cols-2">
@@ -52,7 +52,7 @@
                 </a>
                 <button type="submit"
                         class="inline-flex items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                    {{ submit_label }}
+                    Review Credit
                 </button>
             </div>
         </form>

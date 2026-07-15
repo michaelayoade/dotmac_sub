@@ -46,7 +46,11 @@ from app.models.catalog import (
     SubscriptionAddOn,
     SubscriptionStatus,
 )
-from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.enforcement_lock import (
+    AccessRestrictionMode,
+    EnforcementLock,
+    EnforcementReason,
+)
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.events import emit_event as _emit_event
 from app.services.events.types import EventType
@@ -243,6 +247,7 @@ def suspend_subscription(
     reason: EnforcementReason,
     source: str,
     *,
+    access_mode: AccessRestrictionMode = AccessRestrictionMode.hard_reject,
     notes: str | None = None,
     emit: bool = True,
 ) -> EnforcementLock:
@@ -293,6 +298,12 @@ def suspend_subscription(
         )
     ).first()
     if existing:
+        if (
+            access_mode == AccessRestrictionMode.hard_reject
+            and existing.access_mode != AccessRestrictionMode.hard_reject
+        ):
+            existing.access_mode = AccessRestrictionMode.hard_reject
+            db.flush()
         logger.info(
             "Duplicate lock skipped: subscription=%s reason=%s source=%s existing=%s",
             subscription_id,
@@ -307,6 +318,7 @@ def suspend_subscription(
         subscription_id=subscription.id,
         subscriber_id=subscription.subscriber_id,
         reason=reason,
+        access_mode=access_mode,
         source=source,
         is_active=True,
         notes=notes,
@@ -329,6 +341,7 @@ def suspend_subscription(
                 {
                     "subscription_id": str(subscription.id),
                     "reason": reason.value,
+                    "access_mode": access_mode.value,
                     "source": source,
                     "from_status": prev_status.value if prev_status else None,
                     "to_status": SubscriptionStatus.suspended.value,
@@ -347,6 +360,7 @@ def suspend_subscription(
                 "lock_id": str(lock.id),
                 "subscription_id": str(subscription.id),
                 "reason": reason.value,
+                "access_mode": access_mode.value,
                 "source": source,
             },
             subscription_id=subscription.id,

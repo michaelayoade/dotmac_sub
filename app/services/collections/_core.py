@@ -1,4 +1,7 @@
+import hashlib
+import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
@@ -6,7 +9,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import (
@@ -18,10 +21,24 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
-from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.enforcement_lock import EnforcementLock, EnforcementReason
-from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
+from app.models.collections import (
+    DunningActionLog,
+    DunningCase,
+    DunningCaseStatus,
+    FinancialAccessAction,
+    FinancialAccessConsequence,
+    FinancialAccessConsequenceEvidence,
+    FinancialAccessEvidenceOperation,
+    FinancialAccessOrigin,
+)
+from app.models.domain_settings import SettingDomain
+from app.models.enforcement_lock import (
+    AccessRestrictionMode,
+    EnforcementLock,
+    EnforcementReason,
+)
+from app.models.subscriber import Subscriber, SubscriberStatus
+from app.schemas.audit import AuditEventCreate
 from app.schemas.collections import (
     BillingEnforcementRunRequest,
     BillingEnforcementRunResponse,
@@ -38,24 +55,130 @@ from app.services.access_resolution import (
     resolve_prepaid_available_balance,
     resolve_prepaid_funding,
 )
+from app.services.audit import AuditEvents
+from app.services.billing._common import resolve_invoice_settlement_amounts
 from app.services.billing.invoice_classification import collectible_ar_invoice_filter
+from app.services.billing.invoices import Invoices
 from app.services.billing_prepaid_overlap_repair import (
     apply_prepaid_overlap_hold,
     invoice_paid_prepaid_overlap,
 )
 from app.services.billing_profile import resolve_billing_profile
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+from app.services.collections.grace_policy import (
+    resolve_grace_decision,
+    resolve_policy_set_for_account,
+)
 from app.services.common import (
     apply_ordering,
     apply_pagination,
     coerce_uuid,
+    round_money,
+    to_decimal,
     validate_enum,
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.payment_arrangements import (
+    active_arrangement_shield_reason,
+    bulk_active_arrangement_shield_reasons,
+)
 from app.services.response import ListResponseMixin
+from app.services.walled_garden_policy import resolve_walled_garden_decision
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FinancialAccessCredentialChange:
+    credential_id: UUID
+    profile_before_id: UUID | None
+    profile_after_id: UUID | None
+
+
+@dataclass(frozen=True)
+class FinancialAccessConsequencePreview:
+    account_id: UUID
+    action: FinancialAccessAction
+    requested_reason: EnforcementReason | None
+    origin: FinancialAccessOrigin
+    dunning_case_id: UUID | None
+    eligible: bool
+    outcome: str
+    target_subscription_ids: tuple[UUID, ...]
+    target_lock_ids: tuple[UUID, ...]
+    target_case_ids: tuple[UUID, ...]
+    credential_changes: tuple[FinancialAccessCredentialChange, ...]
+    decision_inputs: dict
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class FinancialAccessConsequenceResult:
+    consequence: FinancialAccessConsequence
+    preview: FinancialAccessConsequencePreview
+    subscriptions_changed: int
+    idempotent_replay: bool = False
+
+
+def _financial_access_fingerprint(payload: dict) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _overdue_receivable_snapshot(db: Session, account_id: UUID) -> list[dict]:
+    """Exact collectible overdue receivables used by access policy.
+
+    The stored ``balance_due`` remains a materialized query accelerator, but
+    the decision evidence records the receivable recomputed from the invoice
+    total and canonical payment/credit application facts.
+    """
+    now = datetime.now(UTC)
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.account_id == account_id)
+        .filter(Invoice.is_active.is_(True))
+        .filter(collectible_ar_invoice_filter())
+        .filter(
+            or_(
+                Invoice.status == InvoiceStatus.overdue,
+                and_(
+                    Invoice.status.in_(
+                        [InvoiceStatus.issued, InvoiceStatus.partially_paid]
+                    ),
+                    Invoice.due_at.is_not(None),
+                    Invoice.due_at <= now,
+                ),
+            )
+        )
+        .order_by(Invoice.due_at.asc(), Invoice.id.asc())
+        .all()
+    )
+    result: list[dict] = []
+    for invoice in invoices:
+        if (invoice.metadata_ or {}).get("reconciliation_hold"):
+            continue
+        settlement = resolve_invoice_settlement_amounts(db, invoice.id)
+        receivable = max(
+            Decimal("0.00"),
+            round_money(
+                to_decimal(invoice.total)
+                - settlement.payments_applied
+                - settlement.credits_applied
+            ),
+        )
+        if receivable <= 0:
+            continue
+        result.append(
+            {
+                "invoice_id": str(invoice.id),
+                "currency": invoice.currency,
+                "receivable": f"{receivable:.2f}",
+                "payments_applied": f"{settlement.payments_applied:.2f}",
+                "credits_applied": f"{settlement.credits_applied:.2f}",
+            }
+        )
+    return result
 
 
 def _resolve_positive_int_setting(
@@ -103,45 +226,8 @@ def get_available_balance(db: Session, account_id: str) -> Decimal:
 
 
 def has_overdue_balance(db: Session, account_id: str) -> bool:
-    """Return True if the account still owes money on a past-due invoice.
-
-    An invoice counts as overdue debt when it is active, retains a
-    ``balance_due > 0``, and is either already marked ``overdue`` or is an
-    ``issued``/``partially_paid`` invoice whose ``due_at`` has elapsed (the
-    hourly overdue sweep may not have flipped its status yet).
-
-    Used as the restore guard for overdue suspensions: a partial payment
-    must not lift the suspension while overdue debt remains.
-    """
-    now = datetime.now(UTC)
-    invoices = (
-        db.query(Invoice.id)
-        .filter(Invoice.account_id == coerce_uuid(account_id))
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.balance_due > 0)
-        .filter(collectible_ar_invoice_filter())
-        .filter(
-            or_(
-                Invoice.status == InvoiceStatus.overdue,
-                and_(
-                    Invoice.status.in_(
-                        [InvoiceStatus.issued, InvoiceStatus.partially_paid]
-                    ),
-                    Invoice.due_at.is_not(None),
-                    Invoice.due_at <= now,
-                ),
-            )
-        )
-        .all()
-    )
-    for (invoice_id,) in invoices:
-        invoice = db.get(Invoice, invoice_id)
-        if invoice is None:
-            continue
-        if (invoice.metadata_ or {}).get("reconciliation_hold"):
-            continue
-        return True
-    return False
+    """Return whether canonical settlement facts leave overdue receivable."""
+    return bool(_overdue_receivable_snapshot(db, coerce_uuid(account_id)))
 
 
 def _effective_billing_mode_for_account(
@@ -170,36 +256,6 @@ def _effective_billing_mode_for_account(
     return profile.effective_mode
 
 
-def _general_default_policy_set_id(db: Session, account: Subscriber):
-    """The general (fallback) dunning policy for an account's billing mode.
-
-    Configured via the collections settings ``default_prepaid_policy_set_id`` /
-    ``default_postpaid_policy_set_id`` (seeded to the immediate-suspend prepaid
-    policy and the 30-day postpaid policy respectively).
-    """
-    billing_mode = _effective_billing_mode_for_account(db, account)
-    key = (
-        "default_prepaid_policy_set_id"
-        if billing_mode == BillingMode.prepaid
-        else "default_postpaid_policy_set_id"
-    )
-    # Read the setting row directly: these are seeded data settings, not declared
-    # in SETTINGS_SPECS, so settings_spec.resolve_value() would ignore them.
-    raw = (
-        db.query(DomainSetting.value_text)
-        .filter(DomainSetting.domain == SettingDomain.collections)
-        .filter(DomainSetting.key == key)
-        .filter(DomainSetting.is_active.is_(True))
-        .scalar()
-    )
-    if not raw:
-        return None
-    try:
-        return coerce_uuid(str(raw))
-    except (ValueError, TypeError):
-        return None
-
-
 def _resolve_policy_set_for_account(db: Session, account_id: str):
     """Resolve the dunning policy for an account, most specific override first:
 
@@ -211,44 +267,7 @@ def _resolve_policy_set_for_account(db: Session, account_id: str):
     account = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(account_id)))
     if account is None:
         return None
-    # 1. account-level override
-    if account.policy_set_id:
-        return account.policy_set_id
-    # 2. reseller-level override
-    if account.reseller_id:
-        reseller = db.get(Reseller, account.reseller_id)
-        if reseller and reseller.policy_set_id:
-            return reseller.policy_set_id
-    # 3. offer / offer_version assignment
-    subscriptions = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == account_id)
-        .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
-        .options(
-            selectinload(Subscription.offer_version),
-            selectinload(Subscription.offer),
-        )
-        .all()
-    )
-    priority = {
-        SubscriptionStatus.active: 0,
-        SubscriptionStatus.suspended: 1,
-        SubscriptionStatus.pending: 2,
-        SubscriptionStatus.blocked: 3,
-    }
-    subscriptions.sort(
-        key=lambda sub: (
-            priority.get(sub.status, 99),
-            -(sub.created_at.timestamp() if sub.created_at else 0),
-        )
-    )
-    for subscription in subscriptions:
-        if subscription.offer_version and subscription.offer_version.policy_set_id:
-            return subscription.offer_version.policy_set_id
-        if subscription.offer and subscription.offer.policy_set_id:
-            return subscription.offer.policy_set_id
-    # 4. general default by billing mode
-    return _general_default_policy_set_id(db, account)
+    return resolve_policy_set_for_account(db, account)
 
 
 def _resolve_dunning_steps(db: Session, policy_set_id: str):
@@ -265,6 +284,7 @@ def _resolve_overdue_days(
     run_at: datetime,
     account: Subscriber | None = None,
     db: Session | None = None,
+    policy_set_id: UUID | None = None,
 ) -> int:
     """Calculate days overdue, accounting for account grace period.
 
@@ -278,29 +298,15 @@ def _resolve_overdue_days(
     """
     if not invoice.due_at:
         return 0
-    delta = run_at.date() - invoice.due_at.date()
-    raw_days = max(delta.days, 0)
-
-    # Subtract the account grace period. If a migrated account has no explicit
-    # value, fall back to the billing-mode default so dunning can be governed
-    # centrally instead of cutting immediately on null account data.
-    grace_period = 0
-    if account and account.grace_period_days is not None:
-        grace_period = int(account.grace_period_days)
-    elif account and db is not None:
-        billing_mode = _effective_billing_mode_for_account(db, account)
-        setting_key = (
-            "prepaid_default_grace_period_days"
-            if billing_mode == BillingMode.prepaid
-            else "postpaid_default_grace_period_days"
-        )
-        value = settings_spec.resolve_value(db, SettingDomain.billing, setting_key)
-        try:
-            grace_period = int(str(value or 0))
-        except (TypeError, ValueError):
-            grace_period = 0
-
-    return max(raw_days - grace_period, 0)
+    if account is None or db is None:
+        return max((run_at.date() - invoice.due_at.date()).days, 0)
+    return resolve_grace_decision(
+        db,
+        account,
+        starts_at=invoice.due_at,
+        as_of=run_at,
+        policy_set_id=policy_set_id,
+    ).elapsed_days_after_grace
 
 
 def _create_action_log(
@@ -311,6 +317,7 @@ def _create_action_log(
     invoice_id: str | None,
     outcome: str | None = None,
     notes: str | None = None,
+    access_consequence: FinancialAccessConsequence | None = None,
 ):
     log = DunningActionLog(
         case_id=case.id,
@@ -319,6 +326,9 @@ def _create_action_log(
         action=action,
         outcome=outcome,
         notes=notes,
+        access_consequence_id=(
+            access_consequence.id if access_consequence is not None else None
+        ),
     )
     db.add(log)
     return log
@@ -359,252 +369,1026 @@ def _account_has_dedicated_bundle(db: Session, account_id) -> bool:
     )
 
 
-def _suspend_account(
+def preview_financial_access_consequence(
     db: Session,
     account_id: str,
-    reason: EnforcementReason = EnforcementReason.overdue,
-    source: str = "dunning",
-) -> bool:
-    """Suspend account via enforcement locks on its active subscriptions.
+    *,
+    action: FinancialAccessAction,
+    reason: EnforcementReason,
+    origin: FinancialAccessOrigin,
+    dunning_case_id: UUID | None = None,
+    overdue_days: int | None = None,
+) -> FinancialAccessConsequencePreview:
+    """Resolve a financial access consequence without mutating service state."""
+    account_uuid = coerce_uuid(account_id)
+    account = db.get(Subscriber, account_uuid)
+    target_subscriptions: tuple[UUID, ...] = ()
+    credential_changes: tuple[FinancialAccessCredentialChange, ...] = ()
+    eligible = True
+    outcome = f"{action.value}_ready"
+    receivables: list[dict] = []
+    prepaid_funding: dict | None = None
+    grace_decision: dict | None = None
+    access_decision: dict | None = None
+    shield_reason: str | None = None
+    health_reasons: list[str] = []
+    profile_payload: dict = {"valid": False, "automation_safe": False}
+    dedicated_bundle = False
+    inside_window = enforcement_window.within_enforcement_window(db)
 
-    Delegates to ``account_lifecycle.suspend_subscription`` per subscription
-    and lets ``compute_account_status`` derive the subscriber status.
-
-    Unified dunning suspends the whole account on collectible arrears after the
-    live balance/shield gates pass.
-
-    Returns True if any subscription was suspended, False otherwise.
-    """
-    from app.services.account_lifecycle import suspend_subscription
-
-    # Every automatic financial suspend converges here.  Lock the account so a
-    # concurrent payment restore and this check-and-suspend sequence serialize
-    # on the same row.
-    account = db.execute(
-        select(Subscriber)
-        .where(Subscriber.id == coerce_uuid(account_id))
-        .with_for_update()
-    ).scalar_one_or_none()
-    if not account:
-        logger.warning("Cannot suspend account %s: account not found", account_id)
-        return False
-
-    if account.status == SubscriberStatus.canceled:
-        logger.info("Account %s is canceled, skipping suspension", account_id)
-        return False
-
-    if _account_has_dedicated_bundle(db, account.id):
-        logger.info(
-            "dedicated_bundle_skip: account %s has a dedicated-internet bundle; "
-            "hands-off for auto-enforcement",
-            account_id,
-        )
-        return False
-
-    if reason in {EnforcementReason.overdue, EnforcementReason.prepaid}:
+    if account is None:
+        eligible = False
+        outcome = "account_not_found"
+    elif account.status == SubscriberStatus.canceled:
+        eligible = False
+        outcome = "account_canceled"
+    else:
+        dedicated_bundle = _account_has_dedicated_bundle(db, account.id)
         profile = resolve_billing_profile(db, account)
-        if not profile.automation_safe:
-            logger.warning(
-                "Financial suspension blocked for account %s by billing profile: "
-                "reason=%s source=%s invalid_reason=%s account=%s "
-                "subscription_modes=%s",
-                account_id,
-                reason.value,
-                profile.source,
-                profile.invalid_reason,
-                profile.account_mode.value if profile.account_mode else None,
-                sorted(mode.value for mode in profile.subscription_modes),
+        profile_payload = {
+            "valid": profile.is_valid,
+            "automation_safe": profile.automation_safe,
+            "effective_mode": (
+                profile.effective_mode.value if profile.effective_mode else None
+            ),
+            "source": profile.source,
+            "invalid_reason": profile.invalid_reason,
+        }
+        if dedicated_bundle:
+            eligible = False
+            outcome = "dedicated_bundle"
+        elif not profile.automation_safe:
+            eligible = False
+            outcome = "billing_profile_invalid"
+        elif reason == EnforcementReason.overdue:
+            receivables = _overdue_receivable_snapshot(db, account.id)
+            due_at = (
+                db.query(func.min(Invoice.due_at))
+                .filter(
+                    Invoice.id.in_(
+                        [coerce_uuid(item["invoice_id"]) for item in receivables]
+                    )
+                )
+                .scalar()
+                if receivables
+                else None
             )
-            return False
-
-        if reason == EnforcementReason.overdue and not has_overdue_balance(
-            db, account_id
-        ):
-            logger.info(
-                "Overdue suspension skipped for account %s: balance cleared",
-                account_id,
-            )
-            return False
-
-        if reason == EnforcementReason.prepaid:
+            case = db.get(DunningCase, dunning_case_id) if dunning_case_id else None
+            grace_decision = resolve_grace_decision(
+                db,
+                account,
+                starts_at=due_at,
+                policy_set_id=case.policy_set_id if case else None,
+            ).as_dict()
+            grace_decision.pop("as_of", None)
+            if profile.effective_mode != BillingMode.postpaid:
+                eligible = False
+                outcome = "billing_profile_invalid"
+            elif not receivables:
+                eligible = False
+                outcome = "balance_cleared"
+        elif reason == EnforcementReason.prepaid:
             if profile.effective_mode != BillingMode.prepaid:
-                logger.warning(
-                    "Prepaid suspension blocked for non-prepaid account %s",
-                    account_id,
-                )
-                return False
-            funding = resolve_prepaid_funding(db, account)
-            if funding.funded:
-                logger.info(
-                    "Prepaid suspension skipped for account %s: available "
-                    "balance %s >= required balance %s",
-                    account_id,
-                    funding.available_balance,
-                    funding.required_balance,
-                )
-                return False
+                eligible = False
+                outcome = "billing_profile_invalid"
+            else:
+                funding = resolve_prepaid_funding(db, account)
+                prepaid_funding = {
+                    "available_balance": f"{funding.available_balance:.2f}",
+                    "required_balance": f"{funding.required_balance:.2f}",
+                    "funded": funding.funded,
+                }
+                grace_decision = resolve_grace_decision(
+                    db,
+                    account,
+                    starts_at=account.prepaid_low_balance_at,
+                ).as_dict()
+                grace_decision.pop("as_of", None)
+                if funding.funded:
+                    eligible = False
+                    outcome = "prepaid_balance_available"
 
-        shield = _dunning_shield_reason(db, account.id)
-        if shield:
-            logger.info(
-                "%s suspension skipped for account %s: %s",
-                reason.value,
-                account_id,
-                shield,
+        if eligible:
+            shield_reason = _dunning_shield_reason(db, account.id)
+            if shield_reason:
+                eligible = False
+                outcome = "shielded"
+        if eligible and overdue_days is not None:
+            minimum_age_skip = _minimum_enforcement_age_skip_reason(
+                db, account, overdue_days
             )
-            return False
+            if minimum_age_skip:
+                eligible = False
+                outcome = minimum_age_skip
+        if eligible:
+            from app.services.billing_enforcement_guards import (
+                billing_enforcement_health,
+            )
 
-        from app.services.billing_enforcement_guards import (
-            billing_enforcement_health,
+            health = billing_enforcement_health(db)
+            health_reasons = list(health.reasons)
+            if not health.ok:
+                eligible = False
+                outcome = "enforcement_health_blocked"
+
+        if eligible and action == FinancialAccessAction.throttle:
+            throttle_profile_id = settings_spec.resolve_value(
+                db, SettingDomain.collections, "throttle_radius_profile_id"
+            )
+            throttle_profile = (
+                db.get(RadiusProfile, coerce_uuid(throttle_profile_id))
+                if throttle_profile_id
+                else None
+            )
+            if throttle_profile is None or not throttle_profile.is_active:
+                eligible = False
+                outcome = "throttle_failed"
+            else:
+                credentials = (
+                    db.query(AccessCredential)
+                    .filter(AccessCredential.subscriber_id == account.id)
+                    .filter(AccessCredential.is_active.is_(True))
+                    .order_by(AccessCredential.id.asc())
+                    .all()
+                )
+                credential_changes = tuple(
+                    FinancialAccessCredentialChange(
+                        credential_id=credential.id,
+                        profile_before_id=credential.radius_profile_id,
+                        profile_after_id=throttle_profile.id,
+                    )
+                    for credential in credentials
+                    if credential.radius_profile_id != throttle_profile.id
+                )
+                if not credential_changes:
+                    eligible = False
+                    outcome = (
+                        "already_throttled"
+                        if credentials
+                        else "no_credentials_to_throttle"
+                    )
+        elif eligible:
+            subscriptions = (
+                db.query(Subscription)
+                .filter(Subscription.subscriber_id == account.id)
+                .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+                .order_by(Subscription.id.asc())
+                .all()
+            )
+            active_reason_locks = {
+                row[0]
+                for row in (
+                    db.query(EnforcementLock.subscription_id)
+                    .filter(EnforcementLock.subscriber_id == account.id)
+                    .filter(EnforcementLock.reason == reason)
+                    .filter(EnforcementLock.is_active.is_(True))
+                    .all()
+                )
+            }
+            target_subscriptions = tuple(
+                subscription.id
+                for subscription in subscriptions
+                if subscription.id not in active_reason_locks
+            )
+            if not target_subscriptions:
+                eligible = False
+                outcome = (
+                    "already_rejected"
+                    if action == FinancialAccessAction.reject and active_reason_locks
+                    else (
+                        "already_suspended"
+                        if active_reason_locks
+                        else "no_eligible_subscriptions"
+                    )
+                )
+
+        if action in {
+            FinancialAccessAction.suspend,
+            FinancialAccessAction.reject,
+        }:
+            requested_mode = (
+                AccessRestrictionMode.captive
+                if action == FinancialAccessAction.suspend
+                else AccessRestrictionMode.hard_reject
+            )
+            access_decision = resolve_walled_garden_decision(
+                db,
+                account,
+                requested_mode=requested_mode,
+            ).as_dict()
+
+    inputs = {
+        "account_status": (
+            account.status.value if account is not None and account.status else None
+        ),
+        "profile": profile_payload,
+        "overdue_receivables": receivables,
+        "prepaid_funding": prepaid_funding,
+        "grace_decision": grace_decision,
+        "access_decision": access_decision,
+        "shield_reason": shield_reason,
+        "billing_health_reasons": health_reasons,
+        "dedicated_bundle": dedicated_bundle,
+        "inside_enforcement_window": inside_window,
+        "overdue_days": overdue_days,
+        "target_subscription_ids": [str(value) for value in target_subscriptions],
+        "credential_changes": [
+            {
+                "credential_id": str(change.credential_id),
+                "profile_before_id": (
+                    str(change.profile_before_id) if change.profile_before_id else None
+                ),
+                "profile_after_id": (
+                    str(change.profile_after_id) if change.profile_after_id else None
+                ),
+            }
+            for change in credential_changes
+        ],
+    }
+    fingerprint_payload = {
+        "account_id": str(account_uuid),
+        "action": action.value,
+        "requested_reason": reason.value,
+        "origin": origin.value,
+        "dunning_case_id": str(dunning_case_id) if dunning_case_id else None,
+        "eligible": eligible,
+        "outcome": outcome,
+        "inputs": inputs,
+    }
+    return FinancialAccessConsequencePreview(
+        account_id=account_uuid,
+        action=action,
+        requested_reason=reason,
+        origin=origin,
+        dunning_case_id=dunning_case_id,
+        eligible=eligible,
+        outcome=outcome,
+        target_subscription_ids=target_subscriptions,
+        target_lock_ids=(),
+        target_case_ids=(),
+        credential_changes=credential_changes,
+        decision_inputs=inputs,
+        fingerprint=_financial_access_fingerprint(fingerprint_payload),
+    )
+
+
+def _financial_access_replay(
+    db: Session,
+    *,
+    idempotency_key: str,
+    account_id: UUID,
+    action: FinancialAccessAction,
+    requested_reason: EnforcementReason | None,
+    preview_fingerprint: str,
+) -> FinancialAccessConsequenceResult | None:
+    consequence = db.scalar(
+        select(FinancialAccessConsequence).where(
+            FinancialAccessConsequence.idempotency_key == idempotency_key
+        )
+    )
+    if consequence is None:
+        return None
+    if (
+        consequence.account_id != account_id
+        or consequence.action != action
+        or consequence.requested_reason != requested_reason
+        or consequence.preview_fingerprint != preview_fingerprint
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency key was used for a different access consequence",
+        )
+    return FinancialAccessConsequenceResult(
+        consequence=consequence,
+        preview=FinancialAccessConsequencePreview(
+            account_id=consequence.account_id,
+            action=consequence.action,
+            requested_reason=consequence.requested_reason,
+            origin=consequence.origin,
+            dunning_case_id=consequence.dunning_case_id,
+            eligible=consequence.eligible,
+            outcome=consequence.outcome,
+            target_subscription_ids=tuple(
+                coerce_uuid(value)
+                for value in consequence.decision_inputs.get(
+                    "target_subscription_ids", []
+                )
+            ),
+            target_lock_ids=(),
+            target_case_ids=(),
+            credential_changes=(),
+            decision_inputs=consequence.decision_inputs,
+            fingerprint=consequence.preview_fingerprint,
+        ),
+        subscriptions_changed=int(consequence.result.get("subscriptions_changed", 0)),
+        idempotent_replay=True,
+    )
+
+
+def confirm_financial_access_consequence(
+    db: Session,
+    account_id: str,
+    *,
+    action: FinancialAccessAction,
+    reason: EnforcementReason,
+    origin: FinancialAccessOrigin,
+    preview_fingerprint: str,
+    idempotency_key: str,
+    source: str,
+    dunning_case_id: UUID | None = None,
+    overdue_days: int | None = None,
+    commit: bool = False,
+) -> FinancialAccessConsequenceResult:
+    """Lock, recompute, confirm, and evidence one financial access action."""
+    key = idempotency_key.strip()
+    if not key or len(key) > 120:
+        raise HTTPException(status_code=400, detail="Invalid idempotency key")
+    account_uuid = coerce_uuid(account_id)
+    replay = _financial_access_replay(
+        db,
+        idempotency_key=key,
+        account_id=account_uuid,
+        action=action,
+        requested_reason=reason,
+        preview_fingerprint=preview_fingerprint,
+    )
+    if replay:
+        return replay
+    account = db.execute(
+        select(Subscriber).where(Subscriber.id == account_uuid).with_for_update()
+    ).scalar_one_or_none()
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    preview = preview_financial_access_consequence(
+        db,
+        account_id,
+        action=action,
+        reason=reason,
+        origin=origin,
+        dunning_case_id=dunning_case_id,
+        overdue_days=overdue_days,
+    )
+    if preview.fingerprint != preview_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail="Financial access state changed after preview; preview again",
         )
 
-        health = billing_enforcement_health(db)
-        if not health.ok:
-            logger.warning(
-                "%s suspension blocked for account %s by billing enforcement "
-                "health gate: reasons=%s details=%s",
-                reason.value,
-                account_id,
-                ",".join(health.reasons),
-                health.details,
-            )
-            return False
+    lock_results: list[EnforcementLock] = []
+    credential_results: list[FinancialAccessCredentialChange] = []
+    subscriptions_changed = 0
+    if preview.eligible and action in {
+        FinancialAccessAction.suspend,
+        FinancialAccessAction.reject,
+    }:
+        from app.services.account_lifecycle import suspend_subscription
 
-    query = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == account.id)
-        .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
-    )
-    subscriptions = query.all()
-    suspended_count = 0
-    for sub in subscriptions:
-        try:
-            suspend_subscription(
+        access_mode = AccessRestrictionMode(
+            preview.decision_inputs["access_decision"]["effective_mode"]
+        )
+
+        for subscription_id in preview.target_subscription_ids:
+            subscription = db.get(Subscription, subscription_id)
+            before = subscription.status if subscription is not None else None
+            lock = suspend_subscription(
                 db,
-                str(sub.id),
+                str(subscription_id),
                 reason=reason,
                 source=source,
+                access_mode=access_mode,
             )
-            suspended_count += 1
-        except ValueError as e:
-            if "Cannot suspend" in str(e):
-                logger.info("Skipped suspending subscription %s: %s", sub.id, e)
-            else:
-                logger.error("Failed to suspend subscription %s: %s", sub.id, e)
-                raise
+            lock_results.append(lock)
+            if before not in {
+                SubscriptionStatus.suspended,
+                SubscriptionStatus.blocked,
+                SubscriptionStatus.stopped,
+            }:
+                subscriptions_changed += 1
+    elif preview.eligible and action == FinancialAccessAction.throttle:
+        credential_ids = [change.credential_id for change in preview.credential_changes]
+        credentials = {
+            credential.id: credential
+            for credential in (
+                db.query(AccessCredential)
+                .filter(AccessCredential.id.in_(credential_ids))
+                .with_for_update()
+                .all()
+            )
+        }
+        for change in preview.credential_changes:
+            credential = credentials.get(change.credential_id)
+            if credential is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Access credential changed after preview; preview again",
+                )
+            if (
+                credential.radius_profile_id != change.profile_before_id
+                or change.profile_after_id is None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Access credential profile changed after preview",
+                )
+            if credential.radius_profile_id is not None:
+                credential.pre_throttle_radius_profile_id = credential.radius_profile_id
+            credential.radius_profile_id = change.profile_after_id
+            credential_results.append(change)
+        db.flush()
+        emit_event(
+            db,
+            EventType.subscriber_throttled,
+            {
+                "account_id": str(account.id),
+                "credentials_throttled": len(credential_results),
+                "throttle_profile_id": (
+                    str(credential_results[0].profile_after_id)
+                    if credential_results
+                    else None
+                ),
+            },
+            account_id=account.id,
+        )
 
-    if suspended_count:
+    outcome = preview.outcome
+    if preview.eligible:
+        if action == FinancialAccessAction.suspend:
+            outcome = "suspended"
+        elif action == FinancialAccessAction.reject:
+            outcome = "rejected"
+        elif action == FinancialAccessAction.throttle:
+            outcome = "throttled"
+
+    consequence = FinancialAccessConsequence(
+        account_id=account.id,
+        dunning_case_id=dunning_case_id,
+        action=action,
+        requested_reason=reason,
+        access_mode=(
+            AccessRestrictionMode(
+                preview.decision_inputs["access_decision"]["effective_mode"]
+            )
+            if preview.decision_inputs.get("access_decision")
+            else None
+        ),
+        origin=origin,
+        eligible=preview.eligible,
+        outcome=outcome,
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=key,
+        decision_inputs=preview.decision_inputs,
+        result={
+            "subscriptions_changed": subscriptions_changed,
+            "enforcement_lock_ids": [str(lock.id) for lock in lock_results],
+            "access_mode": (
+                preview.decision_inputs["access_decision"]["effective_mode"]
+                if preview.decision_inputs.get("access_decision")
+                else None
+            ),
+            "access_credential_ids": [
+                str(change.credential_id) for change in credential_results
+            ],
+        },
+    )
+    db.add(consequence)
+    db.flush()
+    evidence: list[FinancialAccessConsequenceEvidence] = [
+        FinancialAccessConsequenceEvidence(
+            consequence_id=consequence.id,
+            enforcement_lock_id=lock.id,
+            operation=FinancialAccessEvidenceOperation.lock_created,
+        )
+        for lock in lock_results
+    ]
+    evidence.extend(
+        FinancialAccessConsequenceEvidence(
+            consequence_id=consequence.id,
+            access_credential_id=change.credential_id,
+            operation=FinancialAccessEvidenceOperation.credential_throttled,
+            profile_before_id=change.profile_before_id,
+            profile_after_id=change.profile_after_id,
+        )
+        for change in credential_results
+    )
+    db.add_all(evidence)
+    db.flush()
+    consequence.evidence = evidence
+    AuditEvents.stage(
+        db,
+        AuditEventCreate(
+            action="confirm_financial_access_consequence",
+            entity_type="subscriber",
+            entity_id=str(account.id),
+            metadata_={
+                "consequence_id": str(consequence.id),
+                "action": action.value,
+                "requested_reason": reason.value,
+                "origin": origin.value,
+                "outcome": outcome,
+                "preview_fingerprint": preview.fingerprint,
+                "enforcement_lock_ids": [str(lock.id) for lock in lock_results],
+                "access_credential_ids": [
+                    str(change.credential_id) for change in credential_results
+                ],
+            },
+        ),
+    )
+    if subscriptions_changed:
         emit_event(
             db,
             EventType.subscriber_suspended,
             {
                 "account_id": str(account.id),
                 "subscriber_id": str(account.id),
-                "suspended_subscriptions": suspended_count,
+                "suspended_subscriptions": subscriptions_changed,
+                "access_consequence_id": str(consequence.id),
             },
             account_id=account.id,
             subscriber_id=account.id,
         )
-
-    logger.info(
-        "Suspended account %s with %d subscriptions", account_id, suspended_count
+    if commit:
+        db.commit()
+        db.refresh(consequence)
+    return FinancialAccessConsequenceResult(
+        consequence=consequence,
+        preview=preview,
+        subscriptions_changed=subscriptions_changed,
     )
-    return suspended_count > 0
 
 
-def _restore_account(
+def _suspend_account(
     db: Session,
     account_id: str,
-    trigger: str = "payment",
+    reason: EnforcementReason = EnforcementReason.overdue,
+    source: str = "dunning",
+) -> bool:
+    """Compatibility adapter through the canonical consequence owner."""
+    origin = (
+        FinancialAccessOrigin.prepaid_enforcement
+        if reason == EnforcementReason.prepaid
+        else FinancialAccessOrigin.dunning
+    )
+    preview = preview_financial_access_consequence(
+        db,
+        account_id,
+        action=FinancialAccessAction.suspend,
+        reason=reason,
+        origin=origin,
+    )
+    result = confirm_financial_access_consequence(
+        db,
+        account_id,
+        action=FinancialAccessAction.suspend,
+        reason=reason,
+        origin=origin,
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=(
+            f"financial-suspend:{account_id}:{reason.value}:{preview.fingerprint[:24]}"
+        ),
+        source=source,
+    )
+    return bool(result.consequence.result.get("enforcement_lock_ids"))
+
+
+def preview_financial_access_restoration(
+    db: Session,
+    account_id: str,
+    *,
+    origin: FinancialAccessOrigin = FinancialAccessOrigin.financial_reconciliation,
+) -> FinancialAccessConsequencePreview:
+    """Preview exact financial locks/cases/throttles eligible for release."""
+    account_uuid = coerce_uuid(account_id)
+    account = db.get(Subscriber, account_uuid)
+    target_locks: list[EnforcementLock] = []
+    target_cases: list[DunningCase] = []
+    credential_changes: list[FinancialAccessCredentialChange] = []
+    receivables: list[dict] = []
+    prepaid_funding: dict | None = None
+    legacy_throttle_ids: list[str] = []
+    clear_prepaid_timers = False
+    eligible = True
+    outcome = "restore_ready"
+    profile_payload: dict = {"valid": False, "automation_safe": False}
+
+    if account is None:
+        eligible = False
+        outcome = "account_not_found"
+    elif account.status == SubscriberStatus.canceled:
+        eligible = False
+        outcome = "account_canceled"
+    else:
+        receivables = _overdue_receivable_snapshot(db, account.id)
+        profile = resolve_billing_profile(db, account)
+        profile_payload = {
+            "valid": profile.is_valid,
+            "automation_safe": profile.automation_safe,
+            "effective_mode": (
+                profile.effective_mode.value if profile.effective_mode else None
+            ),
+            "source": profile.source,
+            "invalid_reason": profile.invalid_reason,
+        }
+        active_locks = (
+            db.query(EnforcementLock)
+            .filter(EnforcementLock.subscriber_id == account.id)
+            .filter(EnforcementLock.is_active.is_(True))
+            .filter(
+                EnforcementLock.reason.in_(
+                    [EnforcementReason.overdue, EnforcementReason.prepaid]
+                )
+            )
+            .order_by(EnforcementLock.created_at.asc(), EnforcementLock.id.asc())
+            .all()
+        )
+        if not receivables:
+            target_locks.extend(
+                lock
+                for lock in active_locks
+                if lock.reason == EnforcementReason.overdue
+            )
+            target_cases = (
+                db.query(DunningCase)
+                .filter(DunningCase.account_id == account.id)
+                .filter(DunningCase.status == DunningCaseStatus.open)
+                .order_by(DunningCase.started_at.asc(), DunningCase.id.asc())
+                .all()
+            )
+
+            throttle_profile_id = settings_spec.resolve_value(
+                db, SettingDomain.collections, "throttle_radius_profile_id"
+            )
+            if throttle_profile_id:
+                credentials = (
+                    db.query(AccessCredential)
+                    .filter(AccessCredential.subscriber_id == account.id)
+                    .filter(
+                        AccessCredential.radius_profile_id
+                        == coerce_uuid(throttle_profile_id)
+                    )
+                    .filter(AccessCredential.is_active.is_(True))
+                    .order_by(AccessCredential.id.asc())
+                    .all()
+                )
+                for credential in credentials:
+                    if credential.pre_throttle_radius_profile_id is None:
+                        legacy_throttle_ids.append(str(credential.id))
+                        continue
+                    credential_changes.append(
+                        FinancialAccessCredentialChange(
+                            credential_id=credential.id,
+                            profile_before_id=credential.radius_profile_id,
+                            profile_after_id=(
+                                credential.pre_throttle_radius_profile_id
+                            ),
+                        )
+                    )
+
+        if profile.automation_safe and profile.effective_mode == BillingMode.prepaid:
+            funding = resolve_prepaid_funding(db, account)
+            prepaid_funding = {
+                "available_balance": f"{funding.available_balance:.2f}",
+                "required_balance": f"{funding.required_balance:.2f}",
+                "funded": funding.funded,
+            }
+            if funding.funded:
+                target_locks.extend(
+                    lock
+                    for lock in active_locks
+                    if lock.reason == EnforcementReason.prepaid
+                )
+                clear_prepaid_timers = True
+        elif profile.is_valid and profile.effective_mode != BillingMode.prepaid:
+            clear_prepaid_timers = True
+
+        if not (
+            target_locks
+            or target_cases
+            or credential_changes
+            or (
+                clear_prepaid_timers
+                and (
+                    account.prepaid_low_balance_at is not None
+                    or account.prepaid_deactivation_at is not None
+                )
+            )
+        ):
+            outcome = "no_change"
+
+    target_subscription_ids = tuple(
+        sorted({lock.subscription_id for lock in target_locks}, key=str)
+    )
+    inputs = {
+        "account_status": (
+            account.status.value if account is not None and account.status else None
+        ),
+        "profile": profile_payload,
+        "overdue_receivables": receivables,
+        "prepaid_funding": prepaid_funding,
+        "target_subscription_ids": [str(value) for value in target_subscription_ids],
+        "target_lock_ids": [str(lock.id) for lock in target_locks],
+        "target_case_ids": [str(case.id) for case in target_cases],
+        "credential_changes": [
+            {
+                "credential_id": str(change.credential_id),
+                "profile_before_id": (
+                    str(change.profile_before_id) if change.profile_before_id else None
+                ),
+                "profile_after_id": (
+                    str(change.profile_after_id) if change.profile_after_id else None
+                ),
+            }
+            for change in credential_changes
+        ],
+        "legacy_throttle_credential_ids": legacy_throttle_ids,
+        "clear_prepaid_timers": clear_prepaid_timers,
+        "prepaid_low_balance_at": (
+            account.prepaid_low_balance_at.isoformat()
+            if account is not None and account.prepaid_low_balance_at
+            else None
+        ),
+        "prepaid_deactivation_at": (
+            account.prepaid_deactivation_at.isoformat()
+            if account is not None and account.prepaid_deactivation_at
+            else None
+        ),
+    }
+    fingerprint_payload = {
+        "account_id": str(account_uuid),
+        "action": FinancialAccessAction.restore.value,
+        "origin": origin.value,
+        "eligible": eligible,
+        "outcome": outcome,
+        "inputs": inputs,
+    }
+    return FinancialAccessConsequencePreview(
+        account_id=account_uuid,
+        action=FinancialAccessAction.restore,
+        requested_reason=None,
+        origin=origin,
+        dunning_case_id=None,
+        eligible=eligible,
+        outcome=outcome,
+        target_subscription_ids=target_subscription_ids,
+        target_lock_ids=tuple(lock.id for lock in target_locks),
+        target_case_ids=tuple(case.id for case in target_cases),
+        credential_changes=tuple(credential_changes),
+        decision_inputs=inputs,
+        fingerprint=_financial_access_fingerprint(fingerprint_payload),
+    )
+
+
+def confirm_financial_access_restoration(
+    db: Session,
+    account_id: str,
+    *,
+    preview_fingerprint: str,
+    idempotency_key: str,
+    origin: FinancialAccessOrigin = FinancialAccessOrigin.financial_reconciliation,
+    invoice_id: str | None = None,
     resolved_by: str | None = None,
-    reason: EnforcementReason | None = None,
-) -> int:
-    """Restore account subscriptions via enforcement lock resolution.
+    overdue_trigger: str = "payment",
+    commit: bool = False,
+) -> FinancialAccessConsequenceResult:
+    """Confirm exact eligible financial lock, throttle, and case releases."""
+    key = idempotency_key.strip()
+    if not key or len(key) > 120:
+        raise HTTPException(status_code=400, detail="Invalid idempotency key")
+    account_uuid = coerce_uuid(account_id)
+    replay = _financial_access_replay(
+        db,
+        idempotency_key=key,
+        account_id=account_uuid,
+        action=FinancialAccessAction.restore,
+        requested_reason=None,
+        preview_fingerprint=preview_fingerprint,
+    )
+    if replay:
+        return replay
+    account = db.execute(
+        select(Subscriber).where(Subscriber.id == account_uuid).with_for_update()
+    ).scalar_one_or_none()
+    if account is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    preview = preview_financial_access_restoration(db, account_id, origin=origin)
+    if preview.fingerprint != preview_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail="Financial access state changed after preview; preview again",
+        )
 
-    Delegates to ``account_lifecycle.restore_subscription`` per subscription.
-    Only locks whose reason allows the given trigger will be resolved.
-    Subscriptions with remaining locks from other reasons stay suspended.
-
-    Returns count of subscriptions actually restored to active.
-    """
     from app.services.account_lifecycle import restore_subscription
 
-    account = db.get(Subscriber, coerce_uuid(account_id))
-    if not account:
-        logger.warning("Cannot restore account %s: account not found", account_id)
-        return 0
-    if account.status == SubscriberStatus.canceled:
-        logger.info("Account %s is canceled, skipping restore", account_id)
-        return 0
+    resolved_lock_ids: list[UUID] = []
+    restored_subscriptions = 0
+    for lock_id in preview.target_lock_ids:
+        lock = db.get(EnforcementLock, lock_id)
+        if lock is None or not lock.is_active:
+            raise HTTPException(
+                status_code=409,
+                detail="Financial enforcement lock changed after preview",
+            )
+        trigger = (
+            "top_up" if lock.reason == EnforcementReason.prepaid else overdue_trigger
+        )
+        restored = restore_subscription(
+            db,
+            str(lock.subscription_id),
+            trigger=trigger,
+            resolved_by=resolved_by or f"financial_access:{account.id}",
+            reason=lock.reason,
+        )
+        db.flush()
+        if lock.is_active:
+            raise HTTPException(
+                status_code=409,
+                detail="Financial enforcement lock was not resolved by its owner",
+            )
+        resolved_lock_ids.append(lock.id)
+        if restored:
+            restored_subscriptions += 1
 
-    resolved_by_str = resolved_by or f"{trigger}:{account_id}"
+    resolved_case_ids: list[UUID] = []
     now = datetime.now(UTC)
-
-    subscriptions_query = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == account.id)
-        .filter(
-            Subscription.status.in_(
-                (SubscriptionStatus.suspended, SubscriptionStatus.blocked)
+    for case_id in preview.target_case_ids:
+        case = db.get(DunningCase, case_id)
+        if case is None or case.status != DunningCaseStatus.open:
+            raise HTTPException(
+                status_code=409, detail="Dunning case changed after preview"
             )
+        case.status = DunningCaseStatus.resolved
+        case.resolved_at = now
+        _create_action_log(
+            db,
+            case,
+            DunningAction.notify,
+            case.current_step,
+            invoice_id,
+            outcome="resolved",
+            notes=(
+                "Resolved after financial access reconciliation"
+                if overdue_trigger == "payment"
+                else "Resolved with no overdue receivable"
+            ),
         )
+        emit_event(
+            db,
+            EventType.dunning_resolved,
+            {
+                "case_id": str(case.id),
+                "account_id": str(case.account_id),
+                "reason": (
+                    "financial_reconciliation"
+                    if overdue_trigger == "payment"
+                    else "no_overdue_invoices"
+                ),
+            },
+            account_id=case.account_id,
+        )
+        resolved_case_ids.append(case.id)
+
+    restored_credentials: list[FinancialAccessCredentialChange] = []
+    credential_ids = [change.credential_id for change in preview.credential_changes]
+    credentials = {
+        credential.id: credential
+        for credential in (
+            db.query(AccessCredential)
+            .filter(AccessCredential.id.in_(credential_ids))
+            .with_for_update()
+            .all()
+            if credential_ids
+            else []
+        )
+    }
+    for change in preview.credential_changes:
+        credential = credentials.get(change.credential_id)
+        if (
+            credential is None
+            or credential.radius_profile_id != change.profile_before_id
+            or credential.pre_throttle_radius_profile_id != change.profile_after_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Throttled credential changed after preview",
+            )
+        credential.radius_profile_id = change.profile_after_id
+        credential.pre_throttle_radius_profile_id = None
+        restored_credentials.append(change)
+
+    if preview.decision_inputs.get("clear_prepaid_timers"):
+        _clear_prepaid_dunning_flags(db, account_id)
+    db.flush()
+    if resolved_case_ids:
+        _refresh_account_status(db, account.id)
+    if restored_credentials:
+        emit_event(
+            db,
+            EventType.subscriber_unthrottled,
+            {
+                "account_id": str(account.id),
+                "credentials_restored": len(restored_credentials),
+            },
+            account_id=account.id,
+        )
+
+    has_effect = bool(resolved_lock_ids or resolved_case_ids or restored_credentials)
+    outcome = (
+        "restored"
+        if restored_subscriptions
+        else ("reconciled" if has_effect else preview.outcome)
     )
-    if reason is not None:
-        subscriptions_query = (
-            subscriptions_query.join(
-                EnforcementLock,
-                EnforcementLock.subscription_id == Subscription.id,
-            )
-            .filter(EnforcementLock.reason == reason)
-            .filter(EnforcementLock.is_active.is_(True))
-            .distinct()
+    consequence = FinancialAccessConsequence(
+        account_id=account.id,
+        action=FinancialAccessAction.restore,
+        requested_reason=None,
+        origin=origin,
+        eligible=preview.eligible,
+        outcome=outcome,
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=key,
+        decision_inputs=preview.decision_inputs,
+        result={
+            "subscriptions_changed": restored_subscriptions,
+            "enforcement_lock_ids": [str(value) for value in resolved_lock_ids],
+            "dunning_case_ids": [str(value) for value in resolved_case_ids],
+            "access_credential_ids": [
+                str(change.credential_id) for change in restored_credentials
+            ],
+        },
+    )
+    db.add(consequence)
+    db.flush()
+    evidence = [
+        FinancialAccessConsequenceEvidence(
+            consequence_id=consequence.id,
+            enforcement_lock_id=lock_id,
+            operation=FinancialAccessEvidenceOperation.lock_resolved,
         )
-    subscriptions = subscriptions_query.all()
-    restored_count = 0
-    for sub in subscriptions:
-        if sub.end_at and sub.end_at <= now:
-            continue
-        try:
-            restored = restore_subscription(
-                db,
-                str(sub.id),
-                trigger=trigger,
-                resolved_by=resolved_by_str,
-                reason=reason,
-            )
-            if restored:
-                restored_count += 1
-        except ValueError as e:
-            logger.error(
-                "Failed to restore subscription %s for account %s: %s",
-                sub.id,
-                account_id,
-                e,
-            )
-        except Exception as e:
-            logger.error(
-                "Unexpected error restoring subscription %s for account %s: %s",
-                sub.id,
-                account_id,
-                e,
-            )
-
-    if restored_count:
+        for lock_id in resolved_lock_ids
+    ]
+    evidence.extend(
+        FinancialAccessConsequenceEvidence(
+            consequence_id=consequence.id,
+            dunning_case_id=case_id,
+            operation=FinancialAccessEvidenceOperation.dunning_case_resolved,
+        )
+        for case_id in resolved_case_ids
+    )
+    evidence.extend(
+        FinancialAccessConsequenceEvidence(
+            consequence_id=consequence.id,
+            access_credential_id=change.credential_id,
+            operation=FinancialAccessEvidenceOperation.credential_restored,
+            profile_before_id=change.profile_before_id,
+            profile_after_id=change.profile_after_id,
+        )
+        for change in restored_credentials
+    )
+    db.add_all(evidence)
+    db.flush()
+    consequence.evidence = evidence
+    AuditEvents.stage(
+        db,
+        AuditEventCreate(
+            action="confirm_financial_access_restoration",
+            entity_type="subscriber",
+            entity_id=str(account.id),
+            metadata_={
+                "consequence_id": str(consequence.id),
+                "origin": origin.value,
+                "outcome": outcome,
+                "preview_fingerprint": preview.fingerprint,
+                "resolved_lock_ids": [str(value) for value in resolved_lock_ids],
+                "resolved_case_ids": [str(value) for value in resolved_case_ids],
+                "restored_credential_ids": [
+                    str(change.credential_id) for change in restored_credentials
+                ],
+                "legacy_throttle_credential_ids": preview.decision_inputs.get(
+                    "legacy_throttle_credential_ids", []
+                ),
+            },
+        ),
+    )
+    if restored_subscriptions:
         emit_event(
             db,
             EventType.subscriber_reactivated,
             {
                 "account_id": str(account.id),
                 "subscriber_id": str(account.id),
-                "restored_subscriptions": restored_count,
+                "restored_subscriptions": restored_subscriptions,
+                "access_consequence_id": str(consequence.id),
             },
             account_id=account.id,
             subscriber_id=account.id,
         )
-        logger.info(
-            "Restored %d subscriptions for account %s", restored_count, account_id
-        )
-    return restored_count
+    if commit:
+        db.commit()
+        db.refresh(consequence)
+    return FinancialAccessConsequenceResult(
+        consequence=consequence,
+        preview=preview,
+        subscriptions_changed=restored_subscriptions,
+    )
 
 
 def _get_account_email(db: Session, account_id: str) -> str | None:
@@ -724,39 +1508,18 @@ def _restore_throttle(db: Session, account_id: str) -> int:
     restored_count = 0
     for cred in credentials:
         if cred.pre_throttle_radius_profile_id is not None:
-            # Give back exactly what we took. This is the only path that can
-            # honour an admin credential-level override, which the offer-profile
-            # guess below silently discards.
+            # Give back exactly what we took. This preserves credential-level
+            # overrides and provides exact restoration evidence.
             cred.radius_profile_id = cred.pre_throttle_radius_profile_id
             cred.pre_throttle_radius_profile_id = None
             restored_count += 1
             continue
 
-        # LEGACY cohort only: credentials throttled before the pre-throttle
-        # profile was persisted have nothing to give back, so fall back to the
-        # offer's profile. This is a guess, and it is why the column exists.
-        subscription = (
-            db.query(Subscription)
-            .filter(Subscription.subscriber_id == coerce_uuid(account_id))
-            .filter(
-                Subscription.status.in_(
-                    [SubscriptionStatus.active, SubscriptionStatus.suspended]
-                )
-            )
-            .first()
+        logger.warning(
+            "Legacy throttled credential %s has no exact pre-throttle profile; "
+            "leaving it unchanged for reviewed reconciliation",
+            cred.id,
         )
-        if subscription and subscription.offer:
-            from app.models.catalog import OfferRadiusProfile
-
-            offer_profile = (
-                db.query(OfferRadiusProfile)
-                .filter(OfferRadiusProfile.offer_id == subscription.offer_id)
-                .first()
-            )
-            cred.radius_profile_id = offer_profile.profile_id if offer_profile else None
-        else:
-            cred.radius_profile_id = None
-        restored_count += 1
 
     if restored_count:
         logger.info(
@@ -894,22 +1657,11 @@ def _dunning_shield_reason(db: Session, account_id) -> str | None:
     proof under review must NOT be dunned/suspended. The scheduled dunning
     runner previously ignored this shield entirely.
     """
-    from app.models.payment_arrangement import (
-        ArrangementStatus,
-        PaymentArrangement,
-    )
     from app.models.payment_proof import PaymentProof, PaymentProofStatus
 
-    arrangement_id = (
-        db.query(PaymentArrangement.id)
-        .filter(PaymentArrangement.subscriber_id == account_id)
-        .filter(PaymentArrangement.status == ArrangementStatus.active)
-        .filter(PaymentArrangement.is_active.is_(True))
-        .limit(1)
-        .scalar()
-    )
-    if arrangement_id:
-        return f"active payment arrangement {arrangement_id}"
+    arrangement_reason = active_arrangement_shield_reason(db, account_id)
+    if arrangement_reason:
+        return arrangement_reason
     proof_id = (
         db.query(PaymentProof.id)
         .filter(PaymentProof.account_id == account_id)
@@ -931,22 +1683,9 @@ def _bulk_dunning_shield_reasons(
     if not account_ids:
         return {}
     ids = {coerce_uuid(str(account_id)) for account_id in account_ids}
-    from app.models.payment_arrangement import (
-        ArrangementStatus,
-        PaymentArrangement,
-    )
     from app.models.payment_proof import PaymentProof, PaymentProofStatus
 
-    reasons: dict[UUID, str] = {}
-    arrangement_rows = (
-        db.query(PaymentArrangement.subscriber_id, PaymentArrangement.id)
-        .filter(PaymentArrangement.subscriber_id.in_(ids))
-        .filter(PaymentArrangement.status == ArrangementStatus.active)
-        .filter(PaymentArrangement.is_active.is_(True))
-        .all()
-    )
-    for account_id, arrangement_id in arrangement_rows:
-        reasons.setdefault(account_id, f"active payment arrangement {arrangement_id}")
+    reasons = bulk_active_arrangement_shield_reasons(db, ids)
 
     proof_rows = (
         db.query(PaymentProof.account_id, PaymentProof.id)
@@ -1038,6 +1777,77 @@ def _minimum_enforcement_age_skip_reason(
     return None
 
 
+def _execute_dunning_action_with_evidence(
+    db: Session,
+    case: DunningCase,
+    action: DunningAction,
+    day_offset: int,
+    note: str | None,
+    overdue_days: int | None = None,
+    invoice_id: str | None = None,
+) -> tuple[str, FinancialAccessConsequence | None]:
+    """Execute one dunning action through its consequence owner."""
+    account_id = str(case.account_id)
+
+    if action == DunningAction.notify:
+        if _dunning_shield_reason(db, case.account_id):
+            return "shielded", None
+        _create_suspension_warning_notification(
+            db, account_id, day_offset, note, invoice_id=invoice_id
+        )
+        return "notification_sent", None
+
+    if action not in _ENFORCING_ACTIONS:
+        return "unknown_action", None
+    financial_action = {
+        DunningAction.suspend: FinancialAccessAction.suspend,
+        DunningAction.reject: FinancialAccessAction.reject,
+        DunningAction.throttle: FinancialAccessAction.throttle,
+    }[action]
+    effective_overdue_days = day_offset if overdue_days is None else overdue_days
+    preview = preview_financial_access_consequence(
+        db,
+        account_id,
+        action=financial_action,
+        reason=EnforcementReason.overdue,
+        origin=FinancialAccessOrigin.dunning,
+        dunning_case_id=case.id,
+        overdue_days=effective_overdue_days,
+    )
+    if not preview.decision_inputs.get("inside_enforcement_window", True):
+        logger.info(
+            "enforcement_window_audit",
+            extra={
+                "event": "enforcement_window_audit",
+                "path": "dunning",
+                "action": action.value,
+                "account_id": account_id,
+                "would_gate": True,
+                "timezone": enforcement_window.resolve_timezone_name(db),
+            },
+        )
+    result = confirm_financial_access_consequence(
+        db,
+        account_id,
+        action=financial_action,
+        reason=EnforcementReason.overdue,
+        origin=FinancialAccessOrigin.dunning,
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=(
+            f"dunning:{case.id}:{action.value}:{day_offset}:{preview.fingerprint[:20]}"
+        ),
+        source=f"dunning_case:{case.id}",
+        dunning_case_id=case.id,
+        overdue_days=effective_overdue_days,
+    )
+    outcome = result.consequence.outcome
+    if outcome in {"suspended", "rejected"}:
+        _create_suspension_notification(db, account_id)
+    elif outcome == "throttled":
+        _create_throttle_notification(db, account_id, day_offset)
+    return outcome, result.consequence
+
+
 def _execute_dunning_action(
     db: Session,
     case: DunningCase,
@@ -1047,142 +1857,17 @@ def _execute_dunning_action(
     overdue_days: int | None = None,
     invoice_id: str | None = None,
 ) -> str:
-    """Execute a dunning action and return the outcome.
-
-    Args:
-        db: Database session
-        case: The dunning case
-        action: The action to execute (notify, throttle, suspend, reject)
-        day_offset: Policy step day
-        note: Optional note for the action
-        overdue_days: Actual account overdue age after grace, when known
-
-    Returns:
-        Outcome string describing what was done
-    """
-    account_id = str(case.account_id)
-
-    if action == DunningAction.notify and _dunning_shield_reason(db, case.account_id):
-        return "shielded"
-
-    # Race + shield guard for enforcing actions. The run reads every account's
-    # balance once at the top and only gets here much later, so the decision is
-    # stale: a payment may have landed, or an arrangement been granted, in the
-    # meantime. Lock the subscriber row, then RE-READ the live balance and the
-    # arrangement/proof shield before acting — so we never suspend a customer
-    # who just paid or who has an approved payment plan.
-    if action in _ENFORCING_ACTIONS:
-        subscriber = db.execute(
-            select(Subscriber).where(Subscriber.id == case.account_id).with_for_update()
-        ).scalar_one_or_none()
-        if subscriber is None:
-            return "account_not_found"
-        profile = resolve_billing_profile(db, subscriber)
-        if not profile.automation_safe:
-            logger.warning(
-                "Dunning %s blocked for account %s by billing profile: "
-                "source=%s invalid_reason=%s account=%s subscription_modes=%s",
-                action.value,
-                account_id,
-                profile.source,
-                profile.invalid_reason,
-                profile.account_mode.value if profile.account_mode else None,
-                sorted(mode.value for mode in profile.subscription_modes),
-            )
-            return "billing_profile_invalid"
-        if not has_overdue_balance(db, account_id):
-            return "balance_cleared"
-        prepaid_skip = _prepaid_balance_gate_skip_reason(db, subscriber)
-        if prepaid_skip:
-            return prepaid_skip
-        shield = _dunning_shield_reason(db, case.account_id)
-        if shield:
-            logger.info(
-                "Dunning %s skipped for account %s: %s",
-                action.value,
-                account_id,
-                shield,
-            )
-            return "shielded"
-        minimum_age_skip = _minimum_enforcement_age_skip_reason(
-            db, subscriber, day_offset if overdue_days is None else overdue_days
-        )
-        if minimum_age_skip:
-            return minimum_age_skip
-        from app.services.billing_enforcement_guards import (
-            billing_enforcement_health,
-        )
-
-        health = billing_enforcement_health(db)
-        if not health.ok:
-            logger.warning(
-                "Dunning %s blocked for account %s by billing enforcement "
-                "health gate: reasons=%s details=%s",
-                action.value,
-                account_id,
-                ",".join(health.reasons),
-                health.details,
-            )
-            return "enforcement_health_blocked"
-
-        # Phase 6 (audit-first): record whether this enforcing dunning action
-        # would be deferred by the enforcement time-of-day window — WITHOUT
-        # skipping yet. Flip to actually gating once the would_gate logs confirm
-        # the window config. See docs/designs/BILLING_ENFORCEMENT_WINDOW.md.
-        if not enforcement_window.within_enforcement_window(db):
-            logger.info(
-                "enforcement_window_audit",
-                extra={
-                    "event": "enforcement_window_audit",
-                    "path": "dunning",
-                    "action": action.value,
-                    "account_id": account_id,
-                    "would_gate": True,
-                    "timezone": enforcement_window.resolve_timezone_name(db),
-                },
-            )
-
-    if action == DunningAction.notify:
-        _create_suspension_warning_notification(
-            db, account_id, day_offset, note, invoice_id=invoice_id
-        )
-        return "notification_sent"
-
-    elif action == DunningAction.suspend:
-        suspended = _suspend_account(
-            db,
-            account_id,
-            reason=EnforcementReason.overdue,
-            source=f"dunning_case:{case.id}",
-        )
-        if suspended:
-            _create_suspension_notification(db, account_id)
-            return "suspended"
-        return "already_suspended"
-
-    elif action == DunningAction.throttle:
-        # Apply throttle RADIUS profile to reduce bandwidth
-        success, count = _throttle_account(db, account_id)
-        if success and count > 0:
-            _create_throttle_notification(db, account_id, day_offset)
-            return "throttled"
-        elif success:
-            return "no_credentials_to_throttle"
-        return "throttle_failed"
-
-    elif action == DunningAction.reject:
-        suspended = _suspend_account(
-            db,
-            account_id,
-            reason=EnforcementReason.overdue,
-            source=f"dunning_case:{case.id}",
-        )
-        if suspended:
-            _create_suspension_notification(db, account_id)
-            return "rejected"
-        return "already_rejected"
-
-    return "unknown_action"
+    """Compatibility adapter returning only the owner-confirmed outcome."""
+    outcome, _ = _execute_dunning_action_with_evidence(
+        db,
+        case,
+        action,
+        day_offset,
+        note,
+        overdue_days=overdue_days,
+        invoice_id=invoice_id,
+    )
+    return outcome
 
 
 class DunningCases(ListResponseMixin):
@@ -1399,8 +2084,9 @@ class DunningCases(ListResponseMixin):
             notes=notes or "Case closed manually",
         )
 
-        # Restore any throttled credentials
-        _restore_throttle(db, str(case.account_id))
+        # Closing a collections case is not permission to restore access.
+        # Payment/billing reconciliation will separately ask the consequence
+        # owner to release only the exact financial holds whose gates pass.
         db.flush()
         _refresh_account_status(db, case.account_id)
 
@@ -1559,11 +2245,13 @@ class DunningWorkflow(ListResponseMixin):
                 continue
             account_id = coerce_uuid(str(invoice.account_id))
             overdue_accounts.setdefault(account_id, []).append(invoice)
-            if not payload.dry_run and invoice.status in {
-                InvoiceStatus.issued,
-                InvoiceStatus.partially_paid,
-            }:
-                invoice.status = InvoiceStatus.overdue
+            if not payload.dry_run:
+                Invoices.mark_overdue_system(
+                    db,
+                    str(invoice.id),
+                    as_of=run_at,
+                    reason="dunning_candidate_resolution",
+                )
         # Dunning is a postpaid collections workflow. Prepaid service cuts are
         # owned by prepaid_balance_sweep using account available balance; legacy
         # prepaid AR rows should be cleaned/reclassified, not dunned.
@@ -1651,7 +2339,13 @@ class DunningWorkflow(ListResponseMixin):
 
             # Calculate max overdue days accounting for grace period
             max_days = max(
-                _resolve_overdue_days(inv, run_at, account, db)
+                _resolve_overdue_days(
+                    inv,
+                    run_at,
+                    account,
+                    db,
+                    policy_set_id=policy_set_id,
+                )
                 for inv in account_invoices
             )
 
@@ -1709,9 +2403,23 @@ class DunningWorkflow(ListResponseMixin):
             if not step:
                 continue
             if case.current_step is None or step.day_offset > case.current_step:
+                if payload.dry_run and step.action in _ENFORCING_ACTIONS:
+                    preview_financial_access_consequence(
+                        db,
+                        str(account_id),
+                        action={
+                            DunningAction.suspend: FinancialAccessAction.suspend,
+                            DunningAction.reject: FinancialAccessAction.reject,
+                            DunningAction.throttle: FinancialAccessAction.throttle,
+                        }[step.action],
+                        reason=EnforcementReason.overdue,
+                        origin=FinancialAccessOrigin.dunning,
+                        dunning_case_id=case.id,
+                        overdue_days=max_days,
+                    )
                 if not payload.dry_run:
                     # Execute the dunning action (notify, suspend, throttle, reject)
-                    outcome = _execute_dunning_action(
+                    outcome, access_consequence = _execute_dunning_action_with_evidence(
                         db,
                         case,
                         step.action,
@@ -1728,6 +2436,7 @@ class DunningWorkflow(ListResponseMixin):
                         str(oldest_invoice.id),
                         outcome=outcome,
                         notes=step.note,
+                        access_consequence=access_consequence,
                     )
                     if outcome not in _NON_ADVANCING_DUNNING_OUTCOMES:
                         case.current_step = step.day_offset
@@ -1768,34 +2477,26 @@ class DunningWorkflow(ListResponseMixin):
                     .all()
                 )
             if open_cases:
-                now = datetime.now(UTC)
-                for case in open_cases:
-                    case.status = DunningCaseStatus.resolved
-                    case.resolved_at = now
-                    _create_action_log(
-                        db,
-                        case,
-                        DunningAction.notify,
-                        case.current_step,
-                        None,
-                        outcome="resolved",
-                        notes="Resolved with no overdue invoices",
-                    )
-                    # Emit dunning.resolved event
-                    emit_event(
-                        db,
-                        EventType.dunning_resolved,
-                        {
-                            "case_id": str(case.id),
-                            "account_id": str(case.account_id),
-                            "reason": "no_overdue_invoices",
-                        },
-                        account_id=case.account_id,
-                    )
-                    # Restore throttled credentials if any
-                    _restore_throttle(db, str(case.account_id))
-                    db.flush()
-                    _refresh_account_status(db, case.account_id)
+                for account_id in sorted(
+                    {case.account_id for case in open_cases}, key=str
+                ):
+                    try:
+                        with db.begin_nested():
+                            restore_account_services(
+                                db,
+                                str(account_id),
+                                origin=(FinancialAccessOrigin.financial_reconciliation),
+                                resolved_by=f"dunning_reconcile:{account_id}",
+                                overdue_trigger="collections_resolution",
+                            )
+                    except Exception:
+                        logger.exception(
+                            "billing_enforcement_access_restore_failed",
+                            extra={
+                                "event": "billing_enforcement_access_restore_failed",
+                                "account_id": str(account_id),
+                            },
+                        )
         if not payload.dry_run:
             db.commit()
         return DunningRunResponse(
@@ -2051,12 +2752,11 @@ def _restore_prepaid_if_funded(
             funding.required_balance,
         )
         return 0
-    return _restore_account(
+    return restore_account_services(
         db,
         str(account.id),
-        trigger="top_up",
+        origin=FinancialAccessOrigin.prepaid_enforcement,
         resolved_by=resolved_by,
-        reason=EnforcementReason.prepaid,
     )
 
 
@@ -2064,6 +2764,11 @@ def restore_account_services(
     db: Session,
     account_id: str,
     invoice_id: str | None = None,
+    *,
+    origin: FinancialAccessOrigin = FinancialAccessOrigin.financial_reconciliation,
+    idempotency_key: str | None = None,
+    resolved_by: str | None = None,
+    overdue_trigger: str = "payment",
 ) -> int:
     """Reconcile financial locks after a payment or balance change.
 
@@ -2073,71 +2778,25 @@ def restore_account_services(
     threshold used by the suspension sweep before a prepaid lock or timer is
     cleared.  No caller can turn the mere existence of a payment into access.
     """
-    account = db.execute(
-        select(Subscriber)
-        .where(Subscriber.id == coerce_uuid(account_id))
-        .with_for_update()
-    ).scalar_one_or_none()
-    if account is None:
+    preview = preview_financial_access_restoration(db, account_id, origin=origin)
+    if preview.outcome == "account_not_found":
         logger.warning("Cannot restore account %s: account not found", account_id)
         return 0
-    if account.status == SubscriberStatus.canceled:
-        logger.info("Account %s is canceled, skipping restore", account_id)
-        return 0
-
-    restored = 0
-    if not has_overdue_balance(db, account_id):
-        restored += _restore_account(
-            db,
-            account_id,
-            trigger="payment",
-            resolved_by=f"payment:{account_id}",
-            reason=EnforcementReason.overdue,
-        )
-        DunningWorkflow.resolve_cases_for_account(
-            db,
-            account_id,
-            invoice_id=invoice_id,
-            commit=False,
-        )
-        # Lift the collections throttle. resolve_cases_for_account marks the case
-        # resolved but never un-throttled, and DunningWorkflow.run only revisits
-        # OPEN cases — so a customer who paid in full was left rate-limited
-        # forever, with radius_population re-applying the throttle on every sweep.
-        # The debt is gone, so the bandwidth penalty for it must be gone too.
-        _restore_throttle(db, account_id)
-    else:
-        logger.info(
-            "Overdue restore skipped for account %s: overdue balance remains",
-            account_id,
-        )
-
-    profile = resolve_billing_profile(db, account)
-    if profile.automation_safe and profile.effective_mode == BillingMode.prepaid:
-        funding = resolve_prepaid_funding(db, account)
-        restored += _restore_prepaid_if_funded(
-            db,
-            account,
-            funding,
-            resolved_by=f"prepaid_funding:{account_id}",
-        )
-        if funding.funded:
-            _clear_prepaid_dunning_flags(db, account_id)
-    elif profile.is_valid and profile.effective_mode != BillingMode.prepaid:
-        # Billing-mode migrations may leave stale prepaid timer projections.
-        # They are not meaningful once the canonical profile is non-prepaid.
-        _clear_prepaid_dunning_flags(db, account_id)
-    elif profile.effective_mode == BillingMode.prepaid:
-        logger.warning(
-            "Prepaid restore blocked for account %s by billing profile: "
-            "source=%s invalid_reason=%s account=%s subscription_modes=%s",
-            account_id,
-            profile.source,
-            profile.invalid_reason,
-            profile.account_mode.value if profile.account_mode else None,
-            sorted(mode.value for mode in profile.subscription_modes),
-        )
-    return restored
+    result = confirm_financial_access_restoration(
+        db,
+        account_id,
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=(
+            idempotency_key
+            or f"financial-restore:{account_id}:{origin.value}:"
+            f"{preview.fingerprint[:24]}"
+        ),
+        origin=origin,
+        invoice_id=invoice_id,
+        resolved_by=resolved_by or f"financial_access:{account_id}",
+        overdue_trigger=overdue_trigger,
+    )
+    return result.subscriptions_changed
 
 
 dunning_cases = DunningCases()

@@ -89,7 +89,14 @@ def test_generic_edit_form_does_not_offer_parallel_lifecycle_mutations() -> None
         PROJECT_ROOT / "templates/admin/catalog/subscription_form.html"
     ).read_text(encoding="utf-8")
 
-    assert 'id="offer_id" required {% if subscription.id %}disabled' in template
+    assert (
+        '{% if is_new %}\n                        <select name="offer_id"' in template
+    )
+    assert (
+        '<input type="hidden" name="offer_id" id="offer_id" '
+        'value="{{ subscription.offer_id }}">' in template
+    )
+    assert "Use <strong>Change Plan</strong>" in template
     assert '<select name="status"' not in template
     assert (
         'name="status" value="{{ subscription.status if subscription.id '

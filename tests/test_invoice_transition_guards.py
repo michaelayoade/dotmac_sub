@@ -42,13 +42,15 @@ def test_transition_table_blocks_resurrection():
         with pytest.raises(HTTPException) as e:
             assert_legal_invoice_transition(InvoiceStatus.void, to)
         assert e.value.status_code == 409
-    # paid may only go to void
+    # paid and terminal financial transitions belong to named owners
     with pytest.raises(HTTPException):
         assert_legal_invoice_transition(InvoiceStatus.paid, InvoiceStatus.issued)
     # legal edges pass
     assert_legal_invoice_transition(InvoiceStatus.draft, InvoiceStatus.issued)
-    assert_legal_invoice_transition(InvoiceStatus.issued, InvoiceStatus.paid)
-    assert_legal_invoice_transition(InvoiceStatus.paid, InvoiceStatus.void)
+    with pytest.raises(HTTPException):
+        assert_legal_invoice_transition(InvoiceStatus.issued, InvoiceStatus.paid)
+    with pytest.raises(HTTPException):
+        assert_legal_invoice_transition(InvoiceStatus.paid, InvoiceStatus.void)
     assert_legal_invoice_transition(InvoiceStatus.paid, InvoiceStatus.paid)  # no-op
 
 

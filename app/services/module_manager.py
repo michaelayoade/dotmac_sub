@@ -234,8 +234,8 @@ def update_provider_flags(db: Session, *, payload: dict[str, bool]) -> None:
     """Set ``is_active`` per payment-provider id.
 
     Defensive: unknown or malformed ids are skipped; only commits if a row
-    actually changed. Flipping a provider off here removes it from billing and
-    VAS checkout (both honour ``PaymentProvider.is_active``).
+    actually changed. Flipping a provider off here removes it from billing
+    checkout.
     """
     if not payload:
         return

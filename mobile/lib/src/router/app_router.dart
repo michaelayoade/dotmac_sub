@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../core/observability.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/billing/topup_screen.dart';
-import '../features/billing/wallet_screen.dart';
 import '../features/auth/lock_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/mfa_screen.dart';
@@ -32,7 +31,6 @@ import '../features/reseller/reseller_accounts_screen.dart';
 import '../features/reseller/reseller_billing_screen.dart';
 import '../features/reseller/reseller_crm_screen.dart';
 import '../features/reseller/reseller_fiber_map_screen.dart';
-import '../features/reseller/reseller_vas_screen.dart';
 import '../features/reseller/reseller_home_screen.dart';
 import '../features/reseller/reseller_payment_methods_screen.dart';
 import '../features/reseller/reseller_profile_screen.dart';
@@ -154,7 +152,6 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) =>
             TopUpScreen(saveCardInitial: state.extra == true),
       ),
-      GoRoute(path: '/wallet', builder: (_, __) => const WalletScreen()),
       // Connection troubleshooter (outage classifier P4) — reached from the
       // slim Home banner and the Service tab; a drill-in that keeps the shell.
       GoRoute(
@@ -248,7 +245,6 @@ final routerProvider = Provider<GoRouter>((ref) {
               fallbackRoute: '/reseller',
             ),
           ),
-          GoRoute(path: 'vas', builder: (_, __) => const ResellerVasScreen()),
           GoRoute(
             path: 'fiber-map',
             builder: (_, __) => const ResellerFiberMapScreen(),

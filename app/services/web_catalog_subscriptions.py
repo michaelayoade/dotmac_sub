@@ -3986,6 +3986,8 @@ def bulk_change_plan(
     actor_id: str | None,
     effective_timing: str = "instant",
     include_suspended: bool = False,
+    preview_fingerprint: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Compatibility adapter for canonical plan-change command execution.
 
@@ -3995,13 +3997,15 @@ def bulk_change_plan(
 
     ``effective_timing`` selects when the change lands:
 
-    - ``instant`` (default): swap the offer now and generate proration —
-      unchanged legacy behavior.
+    - ``instant`` (default): accept one owner-previewed change and execute it
+      through the subscription lifecycle command owner.
     - ``next_cycle``: record an approved scheduled change effective at each
       subscription's next billing date; the applier task swaps the offer at the
-      boundary with no proration. The offer is NOT swapped now.
+      boundary with no immediate financial transaction. This is the only bulk
+      mode until a batch owner can preview each subscription separately.
     """
     from app.models.catalog import CatalogOffer
+    from app.services.prepaid_plan_changes import resolve_prepaid_plan_change
     from app.services.subscription_lifecycle import (
         SubscriptionCommandKind,
         SubscriptionEffectiveTiming,
@@ -4016,6 +4020,23 @@ def bulk_change_plan(
 
     if effective_timing not in ("instant", "next_cycle"):
         raise ValueError("Invalid effective_timing")
+    subscription_ids = [
+        value.strip() for value in subscription_ids_csv.split(",") if value.strip()
+    ]
+    if effective_timing == "instant":
+        if len(subscription_ids) != 1:
+            raise ValueError(
+                "Immediate plan changes require one preview per subscription"
+            )
+        if not (preview_fingerprint or "").strip():
+            raise ValueError("Preview the immediate plan change before confirming it")
+        if not (idempotency_key or "").strip():
+            raise ValueError("Plan-change idempotency key is required")
+
+        subscription = catalog_service.subscriptions.get(db, subscription_ids[0])
+        decision = resolve_prepaid_plan_change(db, subscription, target_offer_id)
+        if decision.fingerprint != preview_fingerprint:
+            raise ValueError("Financial state changed after preview; preview again")
     allowed_from = {SubscriptionStatus.active}
     if include_suspended:
         allowed_from.add(SubscriptionStatus.suspended)
@@ -4026,12 +4047,16 @@ def bulk_change_plan(
     )
     result = execute_subscription_command_batch(
         db,
-        subscription_ids_csv.split(","),
+        subscription_ids,
         command_kind_by_status=dict.fromkeys(
             allowed_from, SubscriptionCommandKind.change_plan
         ),
         source=f"admin:catalog_bulk:change_plan:{actor_id or 'system'}",
-        idempotency_key=_bulk_lifecycle_operation_key(request, action="change_plan"),
+        idempotency_key=(
+            str(idempotency_key)
+            if effective_timing == "instant"
+            else _bulk_lifecycle_operation_key(request, action="change_plan")
+        ),
         actor_id=actor_id,
         actor_type=AuditActorType.user if actor_id else AuditActorType.system,
         reason="Bulk plan change requested from the admin catalog",

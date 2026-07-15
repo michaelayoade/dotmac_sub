@@ -501,9 +501,6 @@ Format: `[POLISH|CONTROL] (severity) file:line — problem → recommendation [r
 - [CONTROL] (Med) `credit_form.html:39`, `collection_accounts.html:55`, `billing_consolidated.py:90`, `billing_adapter` — currency hardcoded NGN despite `default_currency` setting → seed from setting [resolved in draft]
 - [CONTROL] (Med) `app/services/web_billing_invoice_batch.py:410` / `invoice_batch.html:199` — run_day default 1, cap 1-28 hardcoded → consider end-of-month anchor option [defer]
 - [CONTROL] (Low) `app/services/reseller_portal_billing.py:38` — `_INTENT_TTL=30min` hardcoded → setting (default 30m) [defer]
-- [CONTROL] (Low) `app/services/vas_wallet.py:461` — dup-submit guard 60s hardcoded → setting if false positives [defer]
-- Verified: VAS top-up min/max/daily limits + billing-run schedule already settings/flag-driven.
-
 ### Customer pay portal (web + mobile)
 - [POLISH] (High) `app/web/customer/routes.py:1701-1708` — payment-return verify failure renders bare `errors/400.html` + raw exception even though card may be charged → dedicated "confirming your payment" state; reserve hard-error for genuine declines [resolved in draft]
 - [POLISH] (Med) `app/web/customer/routes.py:1638-1639` + `app/api/billing.py:1174` — pay routes only `except ValueError`; `charge_authorization` raises HTTPError on decline/5xx → 500 + generic JS → catch gateway errors, friendly decline copy [resolved in draft]

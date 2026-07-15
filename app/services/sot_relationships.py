@@ -53,7 +53,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="customer.financial_position",
                 module="app.services.customer_financial_position",
                 owns=(
-                    "customer balance summaries",
+                    "distinct invoice-receivable and prepaid-funding summaries",
                     "customer-visible financial position",
                     "bounded cohort financial projections",
                 ),
@@ -70,6 +70,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "financial.access_resolution",
                     "customer.financial_position",
+                    "financial.grace_policy",
                 ),
             ),
             SOTService(
@@ -129,23 +130,104 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.account_adjustments",
+                module="app.services.billing.adjustments",
+                owns=(
+                    "prepaid account-debit eligibility and preview",
+                    "locked account-debit confirmation",
+                    "account-adjustment idempotency and audit evidence",
+                    "exact account-adjustment ledger links",
+                    "previewed account-adjustment reversal evidence",
+                ),
+                depends_on=("financial.ledger", "customer.financial_position"),
+                notes=(
+                    "This owner accepts debits only. Customer credits remain "
+                    "owned by financial.credit_notes, and account adjustments "
+                    "do not decide service-access state."
+                ),
+            ),
+            SOTService(
                 name="financial.billing_accounts",
                 module="app.services.billing.billing_accounts",
                 owns=(
-                    "billing account read/write operations",
-                    "account-level balance materialization",
+                    "billing account identity and configuration",
+                    "consolidated billing account statement projection",
                 ),
                 depends_on=("financial.ledger",),
+            ),
+            SOTService(
+                name="financial.consolidated_payments",
+                module="app.services.billing.consolidated_payments",
+                owns=(
+                    "consolidated payment settlement preview and confirmation",
+                    "consolidated payment idempotency and actor audit evidence",
+                    "exact member-invoice allocation ledger links",
+                    "exact consolidated-credit ledger links",
+                    "consolidated payment access-reconciliation handoff",
+                ),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.billing_accounts",
+                    "financial.payments",
+                ),
+                notes=(
+                    "Subscriber invoice receivable credits remain subscriber "
+                    "ledger rows; reseller-held surplus is recorded in the "
+                    "billing-account ledger and never assigned to a fake "
+                    "subscriber. Payment state and access state remain separate."
+                ),
             ),
             SOTService(
                 name="financial.payments",
                 module="app.services.billing.payments",
                 owns=(
                     "payment document lifecycle",
-                    "payment allocation and account credit",
+                    "payment intent and observation lifecycle",
+                    "confirmed payment settlement preview and evidence",
+                    "payment creation and settlement idempotency and audit",
+                    "exact settlement allocation and unallocated-credit links",
+                    "previewed prepaid renewal consequence and exact debit link",
+                    "settled account-credit allocation preview and confirmation",
+                    "exact invoice-credit and account-credit-consumption links",
+                    "historical payment settlement evidence reconciliation",
+                    "payment settlement access-reconciliation handoff",
                     "payment-originated ledger postings",
+                    "payment refund eligibility and preview",
+                    "payment refund confirmation and exact ledger evidence",
+                    "payment refund idempotency and audit evidence",
+                    "historical payment refund evidence reconciliation",
+                    "payment refund access-reconciliation handoff",
+                    "payment reversal eligibility and preview",
+                    "payment reversal confirmation and exact ledger evidence",
+                    "payment reversal idempotency and audit evidence",
+                    "normalized provider reversal evidence",
+                    "historical payment reversal evidence reconciliation",
+                    "payment reversal access-reconciliation handoff",
                 ),
                 depends_on=("financial.ledger", "financial.billing_accounts"),
+            ),
+            SOTService(
+                name="financial.import_payment_batch_reversals",
+                module="app.services.financial_import_batch_reversals",
+                owns=(
+                    "payment import creation provenance",
+                    "imported-payment batch reversal eligibility and preview",
+                    "locked imported-payment batch reversal confirmation",
+                    "batch reversal idempotency and actor audit evidence",
+                    "exact import-row-to-settlement-to-reversal ledger links",
+                    "imported-payment reversal access-reconciliation handoff",
+                ),
+                depends_on=(
+                    "financial.payments",
+                    "customer.financial_position",
+                ),
+                notes=(
+                    "Only payments structurally proven to have been created by "
+                    "one durable apply run can be reversed. Reused or historical "
+                    "rows without provenance are never inferred from JSON, "
+                    "external IDs, amounts, or memos. Confirmation composes the "
+                    "payment reversal owner and keeps every source and result row."
+                ),
             ),
             SOTService(
                 name="financial.invoices",
@@ -154,22 +236,41 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "invoice document lifecycle",
                     "invoice status transitions",
                     "invoice adjustment and reversal postings",
+                    "automation invoice creation and draft issuance",
+                    "overdue invoice state and observation event",
+                    "unfunded prepaid invoice return-to-draft eligibility",
+                    "invoice-originated ledger postings",
+                    "invoice receivable settlement summary",
+                    "invoice void eligibility preview and confirmation",
+                    "invoice write-off eligibility preview and confirmation",
+                    "exact invoice closure ledger evidence",
+                    "invoice closure idempotency and audit evidence",
+                    "historical invoice closure evidence reconciliation",
+                    "invoice settlement access-reconciliation handoff",
                 ),
                 depends_on=("financial.ledger", "financial.billing_accounts"),
             ),
             SOTService(
                 name="financial.credit_notes",
                 module="app.services.billing.credit_notes",
-                owns=("credit-note lifecycle", "credit-note ledger postings"),
+                owns=(
+                    "credit-note lifecycle",
+                    "credit-note issuance and void preview/confirmation",
+                    "credit-note funding and void ledger evidence",
+                    "historical credit-note funding reconciliation",
+                    "credit-note application eligibility and preview",
+                    "credit-note application idempotency",
+                    "credit-note application-to-ledger evidence",
+                    "funded credit-note application consumption evidence",
+                    "credit-note ledger-posting requests",
+                    "referral reward account credits",
+                ),
                 depends_on=("financial.ledger", "financial.invoices"),
             ),
             SOTService(
                 name="financial.tax_configuration",
                 module="app.services.billing.tax",
-                owns=(
-                    "configurable tax-rate records",
-                    "tax-rate activation lifecycle",
-                ),
+                owns=("configurable tax-rate records", "tax-rate activation lifecycle"),
             ),
             SOTService(
                 name="financial.payment_proofs",
@@ -211,16 +312,6 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="financial.vas_wallet",
-                module="app.services.vas_wallet",
-                owns=(
-                    "VAS wallet entry lifecycle",
-                    "VAS spendable balance",
-                    "atomic wallet-to-billing payment bridge",
-                ),
-                depends_on=("financial.payments",),
-            ),
-            SOTService(
                 name="financial.billing_profile",
                 module="app.services.billing_profile",
                 owns=(
@@ -238,6 +329,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("financial.billing_profile",),
             ),
             SOTService(
+                name="financial.grace_policy",
+                module="app.services.collections.grace_policy",
+                owns=(
+                    "account/policy/billing-default grace precedence",
+                    "grace provenance and deadline",
+                    "post-grace elapsed-day decision",
+                ),
+                depends_on=("financial.billing_profile",),
+            ),
+            SOTService(
                 name="financial.prepaid_enforcement",
                 module="app.services.prepaid_enforcement_planner",
                 owns=(
@@ -249,6 +350,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.ledger",
                     "financial.billing_profile",
                     "financial.prepaid_threshold",
+                    "financial.grace_policy",
                 ),
             ),
             SOTService(
@@ -256,16 +358,55 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.prepaid_plan_changes",
                 owns=(
                     "prepaid plan-change proration decision",
-                    "prepaid plan-change wallet affordability",
+                    "prepaid plan-change funding affordability",
+                    "human preview fingerprint and locked confirmation",
+                    "plan-change confirmation idempotency and actor audit",
+                    "exact change-request-to-financial-evidence links",
                     "idempotent plan-change debit and credit staging",
                 ),
                 depends_on=(
-                    "financial.ledger",
+                    "financial.account_adjustments",
+                    "financial.credit_notes",
                     "customer.financial_position",
                 ),
                 notes=(
-                    "Immediate changes lock the account, recompute at write time, "
-                    "and commit the financial adjustment with the subscription."
+                    "Immediate changes bind the displayed owner preview to a "
+                    "durable change request, lock and recompute at write time, "
+                    "then commit the request, exact financial evidence, and "
+                    "subscription together. Bulk changes remain next-cycle only "
+                    "until they have per-subscription previews."
+                ),
+            ),
+            SOTService(
+                name="financial.addon_purchases",
+                module="app.services.customer_portal_flow_addons",
+                owns=(
+                    "customer add-on purchase eligibility and preview",
+                    "add-on price and subscription-state confirmation",
+                    "add-on purchase idempotency and audit evidence",
+                    "exact add-on entitlement-to-adjustment link",
+                ),
+                depends_on=(
+                    "financial.account_adjustments",
+                    "customer.financial_position",
+                ),
+                notes=(
+                    "Paid purchases request one exact debit from the adjustment "
+                    "owner. Free add-ons explicitly produce no ledger transaction."
+                ),
+            ),
+            SOTService(
+                name="financial.payment_arrangements",
+                module="app.services.payment_arrangements",
+                owns=(
+                    "payment-arrangement eligibility and lifecycle",
+                    "installment schedule and payment application",
+                    "active-arrangement collection shield state",
+                ),
+                depends_on=(
+                    "customer.financial_position",
+                    "financial.invoices",
+                    "financial.payments",
                 ),
             ),
             SOTService(
@@ -289,8 +430,37 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "postpaid collection lifecycle",
                     "dunning action execution",
+                    "financial access consequence preview and confirmation",
+                    "financial suspension and restoration idempotency and audit",
+                    "exact enforcement-lock, throttle, and case evidence",
+                    "financial access restoration reconciliation",
                 ),
-                depends_on=("financial.access_resolution", "financial.ledger"),
+                depends_on=(
+                    "financial.access_resolution",
+                    "financial.ledger",
+                    "financial.payment_arrangements",
+                    "financial.billing_health",
+                    "access.subscription_lifecycle",
+                    "access.walled_garden_policy",
+                ),
+            ),
+            SOTService(
+                name="financial.billing_health",
+                module="app.services.billing_health",
+                owns=(
+                    "billing health snapshot",
+                    "billing anomaly classification",
+                    "bounded billing health observations",
+                ),
+                depends_on=(
+                    "customer.financial_position",
+                    "financial.access_resolution",
+                    "financial.billing_profile",
+                ),
+                notes=(
+                    "Billing health is monitoring evidence, never a financial "
+                    "balance owner or direct suspension/restoration decision."
+                ),
             ),
             SOTService(
                 name="financial.billing_scheduled",
@@ -303,6 +473,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "financial.ledger",
                     "financial.access_resolution",
+                    "financial.billing_health",
                 ),
             ),
             SOTService(
@@ -324,6 +495,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.billing.providers",
                 owns=(
                     "payment-provider event ingestion",
+                    "normalized provider monetary observations",
                     "provider-event idempotency",
                     "incomplete provider settlement resumption",
                 ),
@@ -348,47 +520,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=("financial.ledger", "financial.payment_provider_events"),
             ),
-            SOTService(
-                name="financial.vas_operations",
-                module="app.services.vas_admin_commands",
-                owns=(
-                    "admin VAS mutation transactions",
-                    "VAS manual transaction resolution",
-                ),
-                depends_on=("control.domain_settings", "financial.vas_refunds"),
-            ),
-            SOTService(
-                name="financial.vas_refunds",
-                module="app.services.vas_refunds",
-                owns=(
-                    "VAS refund-to-source eligibility",
-                    "VAS refund request lifecycle",
-                    "VAS refund wallet reservation and reversal projection",
-                    "VAS refund provider reconciliation",
-                ),
-                depends_on=("control.domain_settings",),
-                notes=(
-                    "The VAS wallet is a separate customer-liability ledger; "
-                    "a refund request and wallet reservation commit before the "
-                    "gateway call. Gateway adapters provide observations but do "
-                    "not decide eligibility or lifecycle state."
-                ),
-            ),
         ),
         entrypoints=(
             "app.services.billing_automation",
             "app.services.collections.*",
             "app.web.admin.billing_*",
             "app.web.admin.reports",
-            "app.web.admin.vas",
             "app.api.billing",
             "app.services.payment_proofs",
             "app.services.web_reports_extended",
+            "app.api.me",
+            "mobile",
             "app.tasks.billing",
             "app.tasks.collections",
             "app.tasks.enforcement",
             "app.tasks.payment_reconciliation",
-            "app.tasks.vas",
         ),
         rule=(
             "No caller infers access or balances from draft invoices, imported "
@@ -1275,6 +1421,17 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="network_access_control_plane",
         services=(
             SOTService(
+                name="access.subscription_lifecycle",
+                module="app.services.account_lifecycle",
+                owns=(
+                    "enforcement lock lifecycle",
+                    "persisted access restriction intent",
+                    "subscription access-status transitions",
+                    "subscriber access-status projection",
+                ),
+                depends_on=("events.dispatcher",),
+            ),
+            SOTService(
                 name="access.control_resolution",
                 module="app.services.access_resolution",
                 owns=(
@@ -1294,10 +1451,27 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("control.settings_spec",),
             ),
             SOTService(
+                name="access.walled_garden_policy",
+                module="app.services.walled_garden_policy",
+                owns=(
+                    "captive account eligibility",
+                    "captive network readiness",
+                    "effective hard-reject/captive restriction",
+                    "most-restrictive-active-lock resolution",
+                ),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "control.settings_spec",
+                ),
+            ),
+            SOTService(
                 name="access.radius_state",
                 module="app.services.radius_access_state",
                 owns=("desired RADIUS state mapping", "RADIUS group/profile actions"),
-                depends_on=("access.control_resolution", "access.event_policy"),
+                depends_on=(
+                    "access.control_resolution",
+                    "access.walled_garden_policy",
+                ),
             ),
             SOTService(
                 name="access.radius_reject",

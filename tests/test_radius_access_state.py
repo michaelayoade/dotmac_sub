@@ -1,31 +1,23 @@
-"""Tests for derive_access_state — pure function mapping
-SubscriptionStatus + captive flag → AccessState. Phase 2.
-"""
+"""Pure mapping from status + owner-resolved restriction to AccessState."""
 
 from __future__ import annotations
 
 import pytest
 
 from app.models.catalog import AccessState, SubscriptionStatus
+from app.models.enforcement_lock import AccessRestrictionMode
 from app.services.radius_access_state import derive_access_state
 
 
 class TestDeriveAccessStateActive:
     def test_active_maps_to_active(self):
-        assert (
-            derive_access_state(
-                SubscriptionStatus.active, captive_redirect_enabled=False
-            )
-            == AccessState.active
-        )
+        assert derive_access_state(SubscriptionStatus.active) == AccessState.active
 
-    def test_active_ignores_captive_flag(self):
-        """Active subscribers don't get routed to captive even if their
-        captive_redirect_enabled flag is set — captive is for blocked
-        subscribers only."""
+    def test_active_ignores_captive_restriction(self):
         assert (
             derive_access_state(
-                SubscriptionStatus.active, captive_redirect_enabled=True
+                SubscriptionStatus.active,
+                restriction_mode=AccessRestrictionMode.captive,
             )
             == AccessState.active
         )
@@ -40,11 +32,12 @@ class TestDeriveAccessStateBlocked:
             SubscriptionStatus.stopped,
         ],
     )
-    def test_blocked_opt_in_maps_to_captive(self, status):
-        """Captive redirect is per-customer opt-in: only an opted-in blocked
-        subscriber gets the soft walled-garden."""
+    def test_owner_resolved_captive_maps_to_captive(self, status):
         assert (
-            derive_access_state(status, captive_redirect_enabled=True)
+            derive_access_state(
+                status,
+                restriction_mode=AccessRestrictionMode.captive,
+            )
             == AccessState.captive
         )
 
@@ -59,10 +52,7 @@ class TestDeriveAccessStateBlocked:
     def test_blocked_default_maps_to_suspended_hard_block(self, status):
         """Default (not opted in) → hard block (Auth-Type := Reject), NOT
         captive. The redirect is not applied to every account."""
-        assert (
-            derive_access_state(status, captive_redirect_enabled=False)
-            == AccessState.suspended
-        )
+        assert derive_access_state(status) == AccessState.suspended
 
     @pytest.mark.parametrize(
         "status",
@@ -87,17 +77,13 @@ class TestDeriveAccessStateTerminated:
         ],
     )
     def test_terminal_statuses_map_to_terminated(self, status):
-        assert (
-            derive_access_state(status, captive_redirect_enabled=False)
-            == AccessState.terminated
-        )
+        assert derive_access_state(status) == AccessState.terminated
 
-    def test_terminal_ignores_captive_flag(self):
-        """A terminated subscriber doesn't get captive routing even if
-        they're flagged for it. Terminated overrides."""
+    def test_terminal_ignores_captive_restriction(self):
         assert (
             derive_access_state(
-                SubscriptionStatus.canceled, captive_redirect_enabled=True
+                SubscriptionStatus.canceled,
+                restriction_mode=AccessRestrictionMode.captive,
             )
             == AccessState.terminated
         )
@@ -113,14 +99,15 @@ class TestDeriveAccessStateUnprovisioned:
         ],
     )
     def test_unprovisioned_statuses_map_to_none(self, status):
-        assert derive_access_state(status, captive_redirect_enabled=False) is None
+        assert derive_access_state(status) is None
 
-    def test_unprovisioned_with_captive_flag_still_none(self):
-        """Captive flag doesn't promote an unprovisioned sub to captive —
+    def test_unprovisioned_with_captive_restriction_still_none(self):
+        """Captive restriction doesn't promote an unprovisioned sub —
         unprovisioned means literally not in RADIUS yet."""
         assert (
             derive_access_state(
-                SubscriptionStatus.pending, captive_redirect_enabled=True
+                SubscriptionStatus.pending,
+                restriction_mode=AccessRestrictionMode.captive,
             )
             is None
         )

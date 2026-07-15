@@ -114,6 +114,7 @@ def test_build_payments_list_data_filters_by_status_and_method(db_session, subsc
         {"value": "failed", "label": "Failed"},
         {"value": "refunded", "label": "Refunded"},
         {"value": "partially_refunded", "label": "Partially refunded"},
+        {"value": "reversed", "label": "Reversed"},
         {"value": "canceled", "label": "Canceled"},
     ]
 

@@ -67,9 +67,9 @@
                         {% endif %}
                         {{ status_presentation_badge(customer_status_presentation, pulse=(customer_status_presentation.value == 'active'), size="sm") }}
                         {% if customer.captive_redirect_enabled %}
-                        <span class="inline-flex items-center gap-1 rounded-lg bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300" title="Captive portal redirect enabled">
+                        <span class="inline-flex items-center gap-1 rounded-lg bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300" title="Residential captive-access opt-in requested; eligibility and network readiness still apply">
                             <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
-                            Captive Portal
+                            Captive Opt-in
                         </span>
                         {% endif %}
                     </div>

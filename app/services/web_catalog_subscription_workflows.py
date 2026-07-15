@@ -109,6 +109,7 @@ def execute_lifecycle_command_response(
     kind: SubscriptionCommandKind,
     actor_id: str | None,
     expected_head: str | None = None,
+    preview_fingerprint: str | None = None,
     idempotency_key: str | None = None,
     reason: str | None = None,
     target_offer_id: str | None = None,
@@ -128,8 +129,27 @@ def execute_lifecycle_command_response(
             target_offer_id=target_offer_id,
             reason=reason,
             expected_head=expected_head,
+            expected_financial_fingerprint=preview_fingerprint,
             idempotency_key=idempotency_key,
         )
+        if (
+            command.kind == SubscriptionCommandKind.change_plan
+            and command.effective_timing == SubscriptionEffectiveTiming.immediate
+            and not command.expected_financial_fingerprint
+        ):
+            return (
+                {
+                    "status": "rejected",
+                    "message": (
+                        "Preview the financial plan change before confirming it"
+                    ),
+                    "previous_head": expected_head,
+                    "current_head": expected_head,
+                    "artifact_ids": [],
+                    "error_code": "plan_change_preview_required",
+                },
+                422,
+            )
         outcome = execute_subscription_command(
             db,
             command,
@@ -512,7 +532,15 @@ def handle_subscription_update_form(
 ) -> dict[str, object]:
     """Validate and update a subscription from the admin form."""
     subscription = core.parse_subscription_form(form, subscription_id=subscription_id)
-    error = core.resolve_account_id(db, subscription)
+    current = catalog_service.subscriptions.get(db, subscription_id)
+    error = None
+    if str(subscription.get("offer_id") or "") != str(current.offer_id):
+        error = (
+            "Use Change Plan from the subscription detail page so the owner "
+            "preview, confirmation, audit, and exact result are preserved."
+        )
+    if not error:
+        error = core.resolve_account_id(db, subscription)
     if not error:
         error = core.validate_subscription_form(subscription, for_create=False)
     if not error:

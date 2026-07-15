@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
 import pytest
@@ -12,10 +13,11 @@ from app.models.billing import (
     InvoiceStatus,
     LedgerEntry,
     PaymentAllocation,
+    PaymentSettlementOrigin,
     PaymentStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
-from app.schemas.billing import PaymentCreate
+from app.schemas.billing import BillingAccountPaymentPreviewRequest, PaymentCreate
 from app.services import billing as billing_service
 
 
@@ -54,6 +56,21 @@ def _make_invoice(db_session, *, account_id, balance: Decimal):
     return inv
 
 
+def _settle(db_session, payload: PaymentCreate, *, auto_allocate: bool = True):
+    assert payload.billing_account_id is not None
+    request = BillingAccountPaymentPreviewRequest(
+        **payload.model_dump(exclude={"account_id", "billing_account_id", "status"}),
+        auto_allocate=auto_allocate,
+    )
+    return billing_service.consolidated_payment_settlements.settle_verified(
+        db_session,
+        str(payload.billing_account_id),
+        request,
+        idempotency_key=f"test-consolidated-{uuid.uuid4()}",
+        origin=PaymentSettlementOrigin.system,
+    ).payment
+
+
 def test_paymentcreate_requires_exactly_one_account_scope():
     with pytest.raises(ValueError):
         PaymentCreate(amount=Decimal("10.00"))
@@ -70,12 +87,13 @@ def test_consolidated_payment_auto_allocates_across_subscribers(db_session):
     inv_a = _make_invoice(db_session, account_id=sub_a.id, balance=Decimal("300.00"))
     inv_b = _make_invoice(db_session, account_id=sub_b.id, balance=Decimal("200.00"))
 
-    payment = billing_service.payments.create(
+    payment = _settle(
         db_session,
         PaymentCreate(
             billing_account_id=ba.id,
             amount=Decimal("450.00"),
             currency="NGN",
+            status=PaymentStatus.succeeded,
         ),
     )
     assert payment.billing_account_id == ba.id
@@ -108,12 +126,13 @@ def test_consolidated_payment_remainder_credits_billing_account_balance(db_sessi
     sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="C")
     _make_invoice(db_session, account_id=sub.id, balance=Decimal("100.00"))
 
-    billing_service.payments.create(
+    _settle(
         db_session,
         PaymentCreate(
             billing_account_id=ba.id,
             amount=Decimal("250.00"),
             currency="NGN",
+            status=PaymentStatus.succeeded,
         ),
     )
     db_session.refresh(ba)
@@ -129,7 +148,7 @@ def test_consolidated_payment_can_remain_unallocated(db_session):
     sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="MANUAL")
     inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("100.00"))
 
-    payment = billing_service.payments.create(
+    payment = _settle(
         db_session,
         PaymentCreate(
             billing_account_id=ba.id,
@@ -162,7 +181,7 @@ def test_allocate_consolidated_balance_to_selected_subscriber(db_session):
     inv_a = _make_invoice(db_session, account_id=sub_a.id, balance=Decimal("80.00"))
     inv_b = _make_invoice(db_session, account_id=sub_b.id, balance=Decimal("80.00"))
 
-    payment = billing_service.payments.create(
+    payment = _settle(
         db_session,
         PaymentCreate(
             billing_account_id=ba.id,
@@ -202,7 +221,7 @@ def test_allocate_consolidated_balance_never_exceeds_unallocated_credit(db_sessi
     sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="CAP")
     inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("250.00"))
 
-    payment = billing_service.payments.create(
+    payment = _settle(
         db_session,
         PaymentCreate(
             billing_account_id=ba.id,
@@ -238,7 +257,7 @@ def test_allocate_consolidated_balance_honors_requested_amount(db_session):
     sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="PART")
     inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("250.00"))
 
-    payment = billing_service.payments.create(
+    payment = _settle(
         db_session,
         PaymentCreate(
             billing_account_id=ba.id,
@@ -301,7 +320,7 @@ def test_reseller_account_activity_includes_subscriber_allocations(db_session):
     sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="ACT")
     inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("100.00"))
 
-    billing_service.payments.create(
+    _settle(
         db_session,
         PaymentCreate(
             billing_account_id=ba.id,
@@ -355,12 +374,13 @@ def test_consolidated_payment_ledger_entries_are_per_subscriber(db_session):
     _make_invoice(db_session, account_id=sub_a.id, balance=Decimal("100.00"))
     _make_invoice(db_session, account_id=sub_b.id, balance=Decimal("100.00"))
 
-    payment = billing_service.payments.create(
+    payment = _settle(
         db_session,
         PaymentCreate(
             billing_account_id=ba.id,
             amount=Decimal("200.00"),
             currency="NGN",
+            status=PaymentStatus.succeeded,
         ),
     )
     entries = (
@@ -387,12 +407,13 @@ def test_consolidated_explicit_allocation_rejects_cross_reseller_invoice(db_sess
     from app.schemas.billing import PaymentAllocationApply
 
     with pytest.raises(HTTPException) as exc:
-        billing_service.payments.create(
+        _settle(
             db_session,
             PaymentCreate(
                 billing_account_id=ba1.id,
                 amount=Decimal("100.00"),
                 currency="NGN",
+                status=PaymentStatus.succeeded,
                 allocations=[
                     PaymentAllocationApply(
                         invoice_id=inv_other.id, amount=Decimal("100.00")
@@ -419,6 +440,7 @@ def test_account_scoped_payment_still_rejects_cross_account_invoice(
                 account_id=subscriber.id,
                 amount=Decimal("50.00"),
                 currency="NGN",
+                status=PaymentStatus.succeeded,
                 allocations=[
                     PaymentAllocationApply(
                         invoice_id=inv_other.id, amount=Decimal("50.00")

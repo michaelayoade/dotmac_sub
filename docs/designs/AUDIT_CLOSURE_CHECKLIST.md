@@ -62,9 +62,8 @@ instead of leaving it unchecked forever. Source of detail: each domain's
 - [ ] RESELLER C-2: per-reseller "restrict catalog to assigned offers" flag +
   global default (catalog is default-open today)
 - [ ] CROSS-CUTTING: shared currency + timezone display helpers, then sweep the
-  known hardcodes: catalog customer-detail `₦` + calculator totals, reseller
-  VAS `min_topup=100`/`₦`/`NGN`, dunning/arrangement tz+currency, reseller
-  UTC-label-only branch
+  known hardcodes: catalog customer-detail `₦` + calculator totals,
+  dunning/arrangement tz+currency, and the reseller UTC-label-only branch
 - [x] CROSS-CUTTING: "no dead controls" lint — settings-key half done via
   `tests/architecture/test_no_orphan_settings.py`: every registered
   `SETTINGS_SPECS` key must have a reader or the build fails. Surfaced **35
@@ -84,8 +83,6 @@ instead of leaving it unchecked forever. Source of detail: each domain's
   alongside instant-with-proration? (currently hardcoded instant)
 - [ ] RESELLER C-1: partner economics — commission rate/markup, credit limit,
   payout terms fields + defaults (data-model decision)
-- [ ] RESELLER: dual-provider VAS float top-up (Flutterwave path exists,
-  unused) — enable or drop?
 - [ ] CUSTOMER-PORTAL: direct appointment reschedule/cancel workflow (replaces
   prefilled-ticket flow) — accept customer-side scheduling changes?
 - [ ] CATALOG: bulk ops include suspended subscriptions via a configurable
@@ -146,8 +143,6 @@ instead of leaving it unchecked forever. Source of detail: each domain's
   batch-size + reclaim-category controls
 - [ ] SUPPORT (4): searchable ticket picker for link/merge; scheduled
   SLA-breach materialization; richer team-management views; broader tz sweep
-- [ ] VAS/WALLET (4): the four unchecked "Recommended" items in its doc
-
 ---
 
 ## Suggested closure order

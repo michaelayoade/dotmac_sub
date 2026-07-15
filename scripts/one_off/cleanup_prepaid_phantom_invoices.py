@@ -9,8 +9,8 @@ prepaid invoicing cutover. The generation bug is fixed, but the bad invoice rows
 still exist and inflate ledger balances / AR. This one-off voids them.
 
 It targets ONLY runner-generated prepaid phantoms — and reuses the canonical
-``Invoices.void`` so each void also posts compensating credit ledger entries
-(restoring the account balance). Historical prepaid debit ledger entries
+``Invoices.void`` so each void posts structurally linked, append-only reversing
+credit entries while the original debits remain active. Historical prepaid debit ledger entries
 (``invoice_id IS NULL``, memo "Prepaid charge ...") are NOT touched by void.
 
 Targeting (a candidate must match ALL):

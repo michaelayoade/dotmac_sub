@@ -209,10 +209,6 @@ def test_new_control_aliases_keep_expected_defaults_and_legacy_rows(db_session):
     _set_legacy(db_session, SettingDomain.radius, "coa_enabled", False)
     assert control_registry.is_enabled(db_session, "access.radius_coa") is False
 
-    assert control_registry.is_enabled(db_session, "vas.wallet") is False
-    _set_legacy(db_session, SettingDomain.vas, "enabled", True)
-    assert control_registry.is_enabled(db_session, "vas.wallet") is True
-
 
 def test_scheduler_routes_new_registered_usage_keys_through_resolver(db_session):
     from app.models.domain_settings import SettingDomain

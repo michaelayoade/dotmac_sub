@@ -213,10 +213,11 @@ class TestAuditSuspensionEnforcement:
     def test_walled_garden_marker_is_by_design(
         self, db_session, tmp_path, catalog_offer
     ):
-        """Captive-by-default: a blocked subscriber with the walled-garden
-        address-list radreply (or captive group) keeps a usable password ON
-        PURPOSE — they can reach the pay page. Their open session is equally
-        by design."""
+        """An explicitly projected captive user keeps portal-only access.
+
+        Eligibility is decided before this projection audit; here the address
+        list or dotmac-captive group is sufficient proof of intended treatment.
+        """
         now = datetime.now(UTC)
         db_path = tmp_path / "radius.db"
         _seed_radius_sqlite(

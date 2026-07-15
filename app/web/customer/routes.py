@@ -2594,6 +2594,8 @@ def customer_submit_change_plan(
     subscription_id: UUID,
     offer_id: str = Form(...),
     notes: str = Form(None),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Response:
     """Instantly apply a plan change."""
@@ -2609,15 +2611,18 @@ def customer_submit_change_plan(
             subscription_id=str(subscription_id),
             offer_id=offer_id,
             notes=notes,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            confirmation_origin="customer_web",
         )
         if not result.get("success", False):
             error_ctx = customer_portal.get_change_plan_error_context(
                 db,
                 str(subscription_id),
                 selected_offer_id=str(result.get("selected_offer_id") or offer_id),
-                insufficient_balance={
+                insufficient_funding={
                     "required_amount": result.get("required_amount"),
-                    "current_balance": result.get("current_balance"),
+                    "prepaid_funding_before": result.get("prepaid_funding_before"),
                     "shortfall": result.get("shortfall"),
                     "quote": result.get("plan_change_quote"),
                 },
@@ -2629,7 +2634,7 @@ def customer_submit_change_plan(
                     "customer": customer,
                     **error_ctx,
                     "error": (
-                        "You need additional wallet balance before this upgrade can be applied."
+                        "You need additional prepaid funding before this upgrade can be applied."
                     ),
                     "active_page": "services",
                 },
@@ -2638,6 +2643,30 @@ def customer_submit_change_plan(
         return RedirectResponse(
             url=f"/portal/services/{subscription_id}?plan_changed=true",
             status_code=303,
+        )
+    except HTTPException as exc:
+        db.rollback()
+        detail = exc.detail
+        message = (
+            str(detail.get("message") or detail.get("detail") or detail)
+            if isinstance(detail, dict)
+            else str(detail)
+        )
+        error_ctx = customer_portal.get_change_plan_error_context(
+            db,
+            str(subscription_id),
+            selected_offer_id=offer_id,
+        )
+        return templates.TemplateResponse(
+            "customer/services/change_plan.html",
+            {
+                "request": request,
+                "customer": customer,
+                **error_ctx,
+                "error": message,
+                "active_page": "services",
+            },
+            status_code=exc.status_code,
         )
     except ValueError as exc:
         message = str(exc)

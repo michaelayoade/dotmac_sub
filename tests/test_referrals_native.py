@@ -12,12 +12,12 @@ from decimal import Decimal
 import pytest
 from fastapi import HTTPException
 
+from app.models.billing import CreditNote
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.referral_native import Referral, ReferralCode
 from app.models.sales import Lead
 from app.models.subscriber import PartyStatus, Subscriber, SubscriberStatus
-from app.models.vas import VasWalletEntry
-from app.services import crm_api, vas_wallet
+from app.services import crm_api
 from app.services.referrals import _CODE_ALPHABET, referrals
 
 
@@ -314,18 +314,11 @@ def test_issue_reward_credits_wallet_with_referral_external_ref(db_session):
     assert result.reward_status == "issued"
     assert result.reward_issued_at is not None
 
-    # The wallet entry carries the exact CRM-era idempotency key.
-    entry = (
-        db_session.query(VasWalletEntry)
-        .filter(VasWalletEntry.reference == f"referral:{referral.id}")
-        .one()
-    )
-    assert entry.amount == Decimal("2500")
-    assert result.metadata_["reward_credit_id"] == str(entry.id)
+    credit = db_session.get(CreditNote, result.metadata_["reward_credit_id"])
+    assert credit is not None
+    assert credit.total == Decimal("2500")
+    assert f"[ref:referral:{referral.id}]" in str(credit.memo)
     assert result.metadata_["reward_subscriber_id"] == str(referrer.id)
-
-    wallet = vas_wallet.get_or_create_wallet(db_session, str(referrer.id))
-    assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("2500")
 
 
 def test_issue_reward_is_idempotent(db_session):
@@ -334,14 +327,13 @@ def test_issue_reward_is_idempotent(db_session):
     again = referrals.issue_reward(db_session, str(referral.id))  # retry
     assert again.status == "rewarded"
 
-    entries = (
-        db_session.query(VasWalletEntry)
-        .filter(VasWalletEntry.reference == f"referral:{referral.id}")
+    credits = (
+        db_session.query(CreditNote)
+        .filter(CreditNote.account_id == referrer.id)
+        .filter(CreditNote.memo.ilike(f"%[ref:referral:{referral.id}]%"))
         .all()
     )
-    assert len(entries) == 1  # never double-credited
-    wallet = vas_wallet.get_or_create_wallet(db_session, str(referrer.id))
-    assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("2500")
+    assert len(credits) == 1  # never double-credited
 
 
 def test_issue_reward_external_ref_continuity_with_crm_payout(db_session):
@@ -352,7 +344,7 @@ def test_issue_reward_external_ref_continuity_with_crm_payout(db_session):
     external_ref = f"referral:{referral.id}"
 
     # Simulate the CRM's historical payout through the /crm/credits service.
-    crm_entry = crm_api.credit_referral_reward_to_wallet(
+    crm_entry = crm_api.create_account_credit(
         db_session,
         subscriber_id=str(referrer.id),
         amount=Decimal("2500"),
@@ -365,11 +357,10 @@ def test_issue_reward_external_ref_continuity_with_crm_payout(db_session):
     assert result.reward_status == "issued"
     assert result.metadata_["reward_credit_id"] == str(crm_entry.id)
 
-    wallet = vas_wallet.get_or_create_wallet(db_session, str(referrer.id))
-    assert vas_wallet.wallet_balance(db_session, wallet.id) == Decimal("2500")
     assert (
-        db_session.query(VasWalletEntry)
-        .filter(VasWalletEntry.reference == external_ref)
+        db_session.query(CreditNote)
+        .filter(CreditNote.account_id == referrer.id)
+        .filter(CreditNote.memo.ilike(f"%[ref:{external_ref}]%"))
         .count()
         == 1
     )

@@ -447,7 +447,7 @@ class TestPlanChangeUiHelpers:
             SimpleNamespace(billing_mode=SimpleNamespace(value="prepaid"))
         )
 
-        assert "wallet" in copy["billing_message"]
+        assert "prepaid funding" in copy["billing_message"]
         assert "prorated difference" in copy["billing_message"]
 
     def test_get_fup_status_uses_nearest_rule_threshold_and_quota_bucket(

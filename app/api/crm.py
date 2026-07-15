@@ -759,8 +759,7 @@ def create_crm_credit(
     payload: dict[str, Any] = Body(default_factory=dict),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Pay a referral reward into a subscriber's VAS wallet (a spendable
-    balance) — used by the CRM to pay out referral rewards. Body:
+    """Issue a referral reward as account credit. Body:
     ``{subscriber_id, amount, external_ref, reason?, currency?}``. ``external_ref``
     is REQUIRED and is the idempotency key (a repeat call returns the existing
     entry). Individual subscribers only (reseller float wallets are never
@@ -778,9 +777,8 @@ def create_crm_credit(
     else:
         if amount <= 0:
             errors.setdefault("amount", []).append("Must be greater than 0.")
-    # external_ref is the idempotency key. Required: without it the wallet
-    # entry's unique `reference` is NULL (unconstrained), so a retry/redelivery
-    # would credit real spendable money twice.
+    # external_ref is the idempotency key. It is required so a retry/redelivery
+    # cannot issue the same account credit twice.
     external_ref = payload.get("external_ref")
     external_ref = str(external_ref).strip() if external_ref not in (None, "") else None
     if not external_ref:
@@ -793,7 +791,7 @@ def create_crm_credit(
     reason = str(reason).strip() if reason not in (None, "") else None
 
     try:
-        entry = crm_api.credit_referral_reward_to_wallet(
+        credit_note = crm_api.create_account_credit(
             db,
             subscriber_id=subscriber_id,
             amount=amount,
@@ -806,12 +804,12 @@ def create_crm_credit(
 
     return _envelope(
         {
-            "id": str(entry.id),
-            "wallet_id": str(entry.wallet_id),
-            "amount": str(entry.amount),
-            "currency": entry.currency,
-            "reference": entry.reference,
-            "type": "wallet_credit",
+            "id": str(credit_note.id),
+            "account_id": str(credit_note.account_id),
+            "amount": str(credit_note.total),
+            "currency": credit_note.currency,
+            "credit_number": credit_note.credit_number,
+            "type": "account_credit",
         }
     )
 

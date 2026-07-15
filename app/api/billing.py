@@ -1,18 +1,28 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.db import finish_read_response, get_db
+from app.models.audit import AuditActorType
+from app.models.billing import PaymentSettlementOrigin, PaymentStatus
 from app.schemas.billing import (
+    AccountAdjustmentConfirm,
+    AccountAdjustmentPreviewRead,
+    AccountAdjustmentPreviewRequest,
+    AccountAdjustmentRead,
+    AccountAdjustmentReversalConfirm,
+    AccountAdjustmentReversalPreviewRead,
+    AccountAdjustmentReversalPreviewRequest,
     BankAccountCreate,
     BankAccountRead,
     BankAccountUpdate,
-    BillingAccountConsolidatedPaymentCreate,
     BillingAccountCreate,
+    BillingAccountPaymentConfirm,
+    BillingAccountPaymentPreviewRead,
+    BillingAccountPaymentPreviewRequest,
     BillingAccountRead,
     BillingAccountStatement,
     BillingAccountUpdate,
@@ -20,18 +30,31 @@ from app.schemas.billing import (
     CollectionAccountCreate,
     CollectionAccountRead,
     CollectionAccountUpdate,
+    CreditNoteApplicationPreviewRead,
+    CreditNoteApplicationPreviewRequest,
     CreditNoteApplicationRead,
     CreditNoteApplyRequest,
     CreditNoteCreate,
+    CreditNoteIssueConfirmation,
+    CreditNoteIssuePreviewRead,
+    CreditNoteIssuePreviewRequest,
+    CreditNoteIssueRequest,
     CreditNoteLineCreate,
     CreditNoteLineRead,
     CreditNoteLineUpdate,
     CreditNoteRead,
     CreditNoteSyncRead,
     CreditNoteUpdate,
+    CreditNoteVoidPreviewRead,
+    CreditNoteVoidRequest,
     InvoiceBulkActionResponse,
     InvoiceBulkVoidRequest,
     InvoiceBulkWriteOffRequest,
+    InvoiceClosureConfirm,
+    InvoiceClosureConfirmationRead,
+    InvoiceClosureEvidenceInspectionRead,
+    InvoiceClosurePreviewRead,
+    InvoiceClosureReconciliationRequest,
     InvoiceCreate,
     InvoiceLineCreate,
     InvoiceLineRead,
@@ -44,7 +67,10 @@ from app.schemas.billing import (
     InvoiceWriteOffRequest,
     LedgerEntryCreate,
     LedgerEntryRead,
+    PaymentAllocationConfirm,
     PaymentAllocationCreate,
+    PaymentAllocationPreviewRead,
+    PaymentAllocationPreviewRequest,
     PaymentAllocationRead,
     PaymentChannelAccountCreate,
     PaymentChannelAccountRead,
@@ -53,6 +79,9 @@ from app.schemas.billing import (
     PaymentChannelRead,
     PaymentChannelUpdate,
     PaymentCreate,
+    PaymentCreationConfirm,
+    PaymentCreationPreviewRead,
+    PaymentCreationPreviewRequest,
     PaymentInitiateRequest,
     PaymentInitiateResponse,
     PaymentMethodCreate,
@@ -64,6 +93,18 @@ from app.schemas.billing import (
     PaymentProviderRead,
     PaymentProviderUpdate,
     PaymentRead,
+    PaymentRefundPreviewRead,
+    PaymentRefundPreviewRequest,
+    PaymentRefundRead,
+    PaymentRefundRequest,
+    PaymentReversalPreviewRead,
+    PaymentReversalPreviewRequest,
+    PaymentReversalRead,
+    PaymentReversalRequest,
+    PaymentSettlementConfirm,
+    PaymentSettlementEvidenceInspectionRead,
+    PaymentSettlementRead,
+    PaymentSettlementReconciliationRequest,
     PaymentSyncRead,
     PaymentUpdate,
     PaymentVerifyRequest,
@@ -234,7 +275,81 @@ def update_invoice(
 def write_off_invoice(
     invoice_id: str, payload: InvoiceWriteOffRequest, db: Session = Depends(get_db)
 ):
-    return billing_service.invoices.write_off(db, invoice_id, payload.memo)
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Invoice write-off requires POST /invoices/{invoice_id}/write-off/preview "
+            "followed by /write-off/confirm"
+        ),
+    )
+
+
+@router.post(
+    "/invoices/{invoice_id}/write-off/preview",
+    response_model=InvoiceClosurePreviewRead,
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def preview_write_off_invoice(invoice_id: str, db: Session = Depends(get_db)):
+    return billing_service.invoices.preview_write_off(db, invoice_id)
+
+
+@router.post(
+    "/invoices/{invoice_id}/write-off/confirm",
+    response_model=InvoiceClosureConfirmationRead,
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def confirm_write_off_invoice(
+    invoice_id: str, payload: InvoiceClosureConfirm, db: Session = Depends(get_db)
+):
+    return billing_service.invoices.confirm_write_off(db, invoice_id, payload)
+
+
+@router.post(
+    "/invoices/{invoice_id}/void/preview",
+    response_model=InvoiceClosurePreviewRead,
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def preview_void_invoice(invoice_id: str, db: Session = Depends(get_db)):
+    return billing_service.invoices.preview_void(db, invoice_id)
+
+
+@router.post(
+    "/invoices/{invoice_id}/void/confirm",
+    response_model=InvoiceClosureConfirmationRead,
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def confirm_void_invoice(
+    invoice_id: str, payload: InvoiceClosureConfirm, db: Session = Depends(get_db)
+):
+    return billing_service.invoices.confirm_void(db, invoice_id, payload)
+
+
+@router.get(
+    "/invoices/{invoice_id}/closure-evidence/inspect",
+    response_model=InvoiceClosureEvidenceInspectionRead,
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def inspect_invoice_closure_evidence(invoice_id: str, db: Session = Depends(get_db)):
+    return billing_service.invoices.inspect_closure_evidence(db, invoice_id)
+
+
+@router.post(
+    "/invoices/{invoice_id}/closure-evidence/reconcile",
+    response_model=InvoiceClosureConfirmationRead,
+    tags=["invoices"],
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def reconcile_invoice_closure_evidence(
+    invoice_id: str,
+    payload: InvoiceClosureReconciliationRequest,
+    db: Session = Depends(get_db),
+):
+    return billing_service.invoices.reconcile_closure_evidence(db, invoice_id, payload)
 
 
 @router.post(
@@ -330,6 +445,31 @@ def delete_invoice(invoice_id: str, db: Session = Depends(get_db)):
 )
 def create_credit_note(payload: CreditNoteCreate, db: Session = Depends(get_db)):
     return billing_service.credit_notes.create(db, payload)
+
+
+@router.post(
+    "/credit-notes/issue/preview",
+    response_model=CreditNoteIssuePreviewRead,
+    tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:credit_note:create"))],
+)
+def preview_credit_note_issue(
+    payload: CreditNoteIssuePreviewRequest, db: Session = Depends(get_db)
+):
+    return finish_read_response(
+        db, billing_service.credit_notes.preview_issue(db, payload)
+    )
+
+
+@router.post(
+    "/credit-notes/issue",
+    response_model=CreditNoteRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:credit_note:create"))],
+)
+def issue_credit_note(payload: CreditNoteIssueRequest, db: Session = Depends(get_db)):
+    return billing_service.credit_notes.issue_with_evidence(db, payload).credit_note
 
 
 @router.get(
@@ -442,13 +582,76 @@ def delete_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
 
 
 @router.post(
+    "/credit-notes/{credit_note_id}/issue/preview",
+    response_model=CreditNoteIssuePreviewRead,
+    tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:credit_note:update"))],
+)
+def preview_draft_credit_note_issue(credit_note_id: str, db: Session = Depends(get_db)):
+    return finish_read_response(
+        db, billing_service.credit_notes.preview_draft_issue(db, credit_note_id)
+    )
+
+
+@router.post(
+    "/credit-notes/{credit_note_id}/issue",
+    response_model=CreditNoteRead,
+    tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:credit_note:update"))],
+)
+def issue_draft_credit_note(
+    credit_note_id: str,
+    payload: CreditNoteIssueConfirmation,
+    db: Session = Depends(get_db),
+):
+    return billing_service.credit_notes.issue_draft_with_evidence(
+        db, credit_note_id, payload
+    ).credit_note
+
+
+@router.post(
+    "/credit-notes/{credit_note_id}/void/preview",
+    response_model=CreditNoteVoidPreviewRead,
+    tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:credit_note:update"))],
+)
+def preview_credit_note_void(credit_note_id: str, db: Session = Depends(get_db)):
+    return finish_read_response(
+        db, billing_service.credit_notes.preview_void(db, credit_note_id)
+    )
+
+
+@router.post(
     "/credit-notes/{credit_note_id}/void",
     response_model=CreditNoteRead,
     tags=["credit-notes"],
     dependencies=[Depends(require_permission("billing:credit_note:update"))],
 )
-def void_credit_note(credit_note_id: str, db: Session = Depends(get_db)):
-    return billing_service.credit_notes.void(db, credit_note_id)
+def void_credit_note(
+    credit_note_id: str,
+    payload: CreditNoteVoidRequest,
+    db: Session = Depends(get_db),
+):
+    return billing_service.credit_notes.void_with_evidence(
+        db, credit_note_id, payload
+    ).credit_note
+
+
+@router.post(
+    "/credit-notes/{credit_note_id}/apply/preview",
+    response_model=CreditNoteApplicationPreviewRead,
+    tags=["credit-notes"],
+    dependencies=[Depends(require_permission("billing:credit_note:update"))],
+)
+def preview_credit_note_application(
+    credit_note_id: str,
+    payload: CreditNoteApplicationPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.credit_notes.preview_application(db, credit_note_id, payload),
+    )
 
 
 @router.post(
@@ -714,6 +917,35 @@ def create_payment_allocation(
     payload: PaymentAllocationCreate, db: Session = Depends(get_db)
 ):
     return billing_service.payment_allocations.create(db, payload)
+
+
+@router.post(
+    "/payment-allocations/preview",
+    response_model=PaymentAllocationPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:create"))],
+)
+def preview_payment_allocation(
+    payload: PaymentAllocationPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db, billing_service.payment_allocations.preview(db, payload)
+    )
+
+
+@router.post(
+    "/payment-allocations/confirm",
+    response_model=PaymentAllocationRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:create"))],
+)
+def confirm_payment_allocation(
+    payload: PaymentAllocationConfirm,
+    db: Session = Depends(get_db),
+):
+    return billing_service.payment_allocations.confirm(db, payload).allocation
 
 
 @router.get(
@@ -1262,7 +1494,44 @@ def delete_bank_account(bank_account_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("billing:payment:create"))],
 )
 def create_payment(payload: PaymentCreate, db: Session = Depends(get_db)):
+    if payload.status == PaymentStatus.succeeded:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Confirmed payment creation requires /payments/creation/preview "
+                "and /payments/creation/confirm"
+            ),
+        )
     return billing_service.payments.create(db, payload)
+
+
+@router.post(
+    "/payments/creation/preview",
+    response_model=PaymentCreationPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:create"))],
+)
+def preview_payment_creation(
+    payload: PaymentCreationPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db, billing_service.payments.preview_creation(db, payload)
+    )
+
+
+@router.post(
+    "/payments/creation/confirm",
+    response_model=PaymentRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:create"))],
+)
+def confirm_payment_creation(
+    payload: PaymentCreationConfirm,
+    db: Session = Depends(get_db),
+):
+    return billing_service.payments.confirm_creation(db, payload).payment
 
 
 @router.get(
@@ -1296,6 +1565,129 @@ def sync_payments(
             limit=limit,
             offset=offset,
         ),
+    )
+
+
+@router.post(
+    "/payments/{payment_id}/refund/preview",
+    response_model=PaymentRefundPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def preview_payment_refund(
+    payment_id: str,
+    payload: PaymentRefundPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    return billing_service.refunds.preview(db, payment_id, payload)
+
+
+@router.post(
+    "/payments/{payment_id}/refund",
+    response_model=PaymentRefundRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def confirm_payment_refund(
+    payment_id: str,
+    payload: PaymentRefundRequest,
+    db: Session = Depends(get_db),
+):
+    return billing_service.refunds.process_with_evidence(db, payment_id, payload).refund
+
+
+@router.post(
+    "/payments/{payment_id}/reversal/preview",
+    response_model=PaymentReversalPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def preview_payment_reversal(
+    payment_id: str,
+    payload: PaymentReversalPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    return billing_service.reversals.preview(db, payment_id, payload)
+
+
+@router.post(
+    "/payments/{payment_id}/reversal",
+    response_model=PaymentReversalRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def confirm_payment_reversal(
+    payment_id: str,
+    payload: PaymentReversalRequest,
+    db: Session = Depends(get_db),
+):
+    return billing_service.reversals.process_with_evidence(
+        db, payment_id, payload
+    ).reversal
+
+
+@router.post(
+    "/payments/{payment_id}/settlement/preview",
+    response_model=PaymentCreationPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def preview_payment_settlement(payment_id: str, db: Session = Depends(get_db)):
+    return finish_read_response(
+        db, billing_service.payments.preview_settlement(db, payment_id)
+    )
+
+
+@router.post(
+    "/payments/{payment_id}/settlement",
+    response_model=PaymentRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def confirm_payment_settlement(
+    payment_id: str,
+    payload: PaymentSettlementConfirm,
+    db: Session = Depends(get_db),
+):
+    return billing_service.payments.settle(
+        db,
+        payment_id,
+        preview_fingerprint=payload.preview_fingerprint,
+        idempotency_key=payload.idempotency_key,
+        origin=PaymentSettlementOrigin.manual,
+    ).payment
+
+
+@router.get(
+    "/payments/{payment_id}/settlement/evidence",
+    response_model=PaymentSettlementEvidenceInspectionRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:read"))],
+)
+def inspect_payment_settlement_evidence(
+    payment_id: str,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db, billing_service.payments.inspect_settlement_evidence(db, payment_id)
+    )
+
+
+@router.post(
+    "/payments/{payment_id}/settlement/evidence/reconcile",
+    response_model=PaymentSettlementRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:write"))],
+)
+def reconcile_payment_settlement_evidence(
+    payment_id: str,
+    payload: PaymentSettlementReconciliationRequest,
+    db: Session = Depends(get_db),
+):
+    return billing_service.payments.reconcile_settlement_evidence(
+        db, payment_id, payload
     )
 
 
@@ -1500,7 +1892,13 @@ def update_payment(
     dependencies=[Depends(require_permission("billing:payment:update"))],
 )
 def mark_payment_succeeded(payment_id: str, db: Session = Depends(get_db)):
-    return billing_service.payments.mark_status(db, payment_id, status="succeeded")
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Payment settlement requires /payments/{payment_id}/settlement/preview "
+            "and /payments/{payment_id}/settlement"
+        ),
+    )
 
 
 @router.post(
@@ -1526,6 +1924,87 @@ def delete_payment(payment_id: str, db: Session = Depends(get_db)):
 # --- Ledger Entries ---
 
 
+def _financial_actor(principal: dict) -> tuple[AuditActorType, str | None]:
+    actor_type = (
+        AuditActorType.api_key
+        if principal.get("principal_type") == "api_key"
+        else AuditActorType.user
+    )
+    return actor_type, str(principal.get("principal_id") or "") or None
+
+
+@router.post(
+    "/account-adjustments/preview",
+    response_model=AccountAdjustmentPreviewRead,
+    tags=["ledger-entries"],
+)
+def preview_account_adjustment(
+    payload: AccountAdjustmentPreviewRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    del principal
+    return billing_service.account_adjustments.preview(db, payload).as_dict()
+
+
+@router.post(
+    "/account-adjustments",
+    response_model=AccountAdjustmentRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["ledger-entries"],
+)
+def confirm_account_adjustment(
+    payload: AccountAdjustmentConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    actor_type, actor_id = _financial_actor(principal)
+    return billing_service.account_adjustments.confirm(
+        db,
+        payload,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    ).adjustment
+
+
+@router.post(
+    "/account-adjustments/{adjustment_id}/reversal/preview",
+    response_model=AccountAdjustmentReversalPreviewRead,
+    tags=["ledger-entries"],
+)
+def preview_account_adjustment_reversal(
+    adjustment_id: str,
+    payload: AccountAdjustmentReversalPreviewRequest,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    del principal
+    return billing_service.account_adjustments.preview_reversal(
+        db, adjustment_id, payload
+    ).as_dict()
+
+
+@router.post(
+    "/account-adjustments/{adjustment_id}/reversal",
+    response_model=AccountAdjustmentRead,
+    tags=["ledger-entries"],
+)
+def confirm_account_adjustment_reversal(
+    adjustment_id: str,
+    payload: AccountAdjustmentReversalConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    actor_type, actor_id = _financial_actor(principal)
+    return billing_service.account_adjustments.confirm_reversal(
+        db,
+        adjustment_id,
+        payload,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    ).adjustment
+
+
 @router.post(
     "/ledger-entries",
     response_model=LedgerEntryRead,
@@ -1534,7 +2013,15 @@ def delete_payment(payment_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("billing:ledger:write"))],
 )
 def create_ledger_entry(payload: LedgerEntryCreate, db: Session = Depends(get_db)):
-    return billing_service.ledger_entries.create(db, payload)
+    del payload, db
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Direct ledger posting is disabled. Debit adjustments require "
+            "/account-adjustments/preview then /account-adjustments; customer "
+            "credits require the credit-note owner."
+        ),
+    )
 
 
 @router.get(
@@ -1589,13 +2076,20 @@ def list_ledger_entries(
 def reverse_ledger_entry(
     entry_id: str, memo: str | None = None, db: Session = Depends(get_db)
 ):
-    return billing_service.ledger_entries.reverse(db, entry_id, memo)
+    del entry_id, memo, db
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Direct ledger reversal is disabled. Reverse the owning financial "
+            "document or use the account-adjustment reversal preview/confirmation."
+        ),
+    )
 
 
 # DELETE /ledger-entries/{entry_id} is deliberately absent. The ledger is
 # append-only: deleting an entry silently moved the account balance with no
-# record of why. Undo a posted entry by reversing it —
-# POST /ledger-entries/{entry_id}/reverse.
+# record of why. Undo a posted entry through its owning financial document or
+# the previewed account-adjustment reversal contract.
 
 
 # --- Tax Rates ---
@@ -1824,6 +2318,25 @@ def get_billing_account_statement(
 
 
 @router.post(
+    "/billing-accounts/{billing_account_id}/payments/preview",
+    response_model=BillingAccountPaymentPreviewRead,
+    tags=["billing-accounts"],
+    dependencies=[Depends(require_permission("billing_account:distribute"))],
+)
+def preview_billing_account_payment(
+    billing_account_id: str,
+    payload: BillingAccountPaymentPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_settlements.preview(
+            db, billing_account_id, payload
+        ),
+    )
+
+
+@router.post(
     "/billing-accounts/{billing_account_id}/payments",
     response_model=PaymentRead,
     status_code=status.HTTP_201_CREATED,
@@ -1832,27 +2345,13 @@ def get_billing_account_statement(
 )
 def create_billing_account_payment(
     billing_account_id: str,
-    payload: BillingAccountConsolidatedPaymentCreate,
+    payload: BillingAccountPaymentConfirm,
     db: Session = Depends(get_db),
 ):
-    """Record a verified bulk payment against a billing account.
-
-    If ``allocations`` is empty, the payment is auto-allocated FIFO across the
-    billing account's subscribers' open invoices. Any remainder lands on
-    ``BillingAccount.balance``.
-    """
-    billing_service.billing_accounts.get(db, billing_account_id)
-    payment_create = PaymentCreate(
-        billing_account_id=UUID(billing_account_id),
-        amount=payload.amount,
-        currency=payload.currency,
-        paid_at=payload.paid_at,
-        memo=payload.memo,
-        payment_method_id=payload.payment_method_id,
-        payment_channel_id=payload.payment_channel_id,
-        collection_account_id=payload.collection_account_id,
-        provider_id=payload.provider_id,
-        external_id=payload.external_id,
-        allocations=payload.allocations,
-    )
-    return billing_service.payments.create(db, payment_create)
+    """Confirm a previewed consolidated payment settlement."""
+    return billing_service.consolidated_payment_settlements.confirm(
+        db,
+        billing_account_id,
+        payload,
+        origin=PaymentSettlementOrigin.manual,
+    ).payment

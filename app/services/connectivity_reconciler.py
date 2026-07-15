@@ -46,6 +46,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.enforcement_lock import AccessRestrictionMode
 from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.services.common import coerce_uuid
 from app.services.ip_consistency_audit import _external_ip_state, _norm
@@ -89,21 +90,28 @@ class DesiredConnectivity:
 
 
 def derive_desired_connectivity(
-    status: SubscriptionStatus, *, hard_reject: bool = False
+    status: SubscriptionStatus,
+    *,
+    restriction_mode: AccessRestrictionMode | None = None,
+    hard_reject: bool = False,
 ) -> DesiredConnectivity:
-    """Pure: ``SubscriptionStatus`` (+ fraud ``hard_reject``) → desired
+    """Pure: status + an owner-resolved restriction → desired
     connectivity. No I/O. Encodes the design-doc invariants:
 
     - pending/hidden/archived → not provisioned (no RADIUS row, no IP).
     - active → full access, IP active AND retained, don't kick.
-    - blocked family (suspended/blocked/stopped) → ``captive`` by default,
-      ``suspended`` under ``hard_reject``; credentials stay active and the IP is
-      RETAINED (INV-1 paid→offline / INV-3 reversible), kick the live session
-      once (INV-5).
+    - blocked family (suspended/blocked/stopped) → ``suspended`` by default;
+      ``captive`` only for the explicit effective captive tier. Credentials stay
+      active and the IP is RETAINED (INV-1 paid→offline / INV-3 reversible),
+      and the live session is kicked once (INV-5).
     - terminal (canceled/expired/disabled) → ``terminated``; credentials
       inactive, IP released and cache cleared (INV-3/INV-4), kick once.
     """
-    access = derive_access_state(status, hard_reject=hard_reject)
+    access = derive_access_state(
+        status,
+        restriction_mode=restriction_mode,
+        hard_reject=hard_reject,
+    )
     if access is None:
         return DesiredConnectivity(None, False, False, False, False)
     if access is AccessState.active:
@@ -114,6 +122,20 @@ def derive_desired_connectivity(
         return DesiredConnectivity(access, True, True, True, True)
     # AccessState.terminated
     return DesiredConnectivity(AccessState.terminated, False, False, False, True)
+
+
+def resolve_desired_connectivity(
+    db: Session, subscription: Subscription
+) -> DesiredConnectivity:
+    """Resolve persisted restriction evidence before deriving connectivity."""
+
+    from app.services.walled_garden_policy import resolve_subscription_restriction
+
+    restriction = resolve_subscription_restriction(db, subscription)
+    return derive_desired_connectivity(
+        subscription.status,
+        restriction_mode=(restriction.effective_mode if restriction else None),
+    )
 
 
 # Write-source marker. The reconciler is the legitimate single writer of
@@ -190,7 +212,7 @@ def connectivity_shadow_diff(
     access_mismatch = False
     ipv4_cache_mismatch = False
     for sub in subs:
-        desired = derive_desired_connectivity(sub.status)
+        desired = resolve_desired_connectivity(db, sub)
         any_creds_desired = any_creds_desired or desired.credentials_active
         any_ip_desired = any_ip_desired or desired.ip_active
         desired_access = (
@@ -404,7 +426,7 @@ def desired_connectivity_signature(db: Session, subscriber_id: Any) -> str:
     )
     payload = []
     for sub in subs:
-        d = derive_desired_connectivity(sub.status)
+        d = resolve_desired_connectivity(db, sub)
         payload.append(
             {
                 "sub": str(sub.id),
@@ -457,7 +479,7 @@ def plan_subscription_suspend(
     Reports the actions that would converge the suspend dimensions to the design
     invariants (INV-1 IP retained, INV-3 credential survives, INV-5 CoA-once);
     writes nothing. The ``apply=True`` cutover is deferred (design §2d)."""
-    desired = derive_desired_connectivity(subscription.status)
+    desired = resolve_desired_connectivity(db, subscription)
     desired_access = (
         desired.access_state.value if desired.access_state is not None else None
     )

@@ -54,10 +54,10 @@ recomputes the derived subscriber status). States:
 pending ──activate──▶ active ⇄ suspended / blocked / stopped ──▶ canceled / expired / disabled
 ```
 
-`derive_access_state` (`radius_access_state.py:83`) maps status → RADIUS group:
-active → `dotmac-active`; blocked-family → `dotmac-captive` (default, walled-garden) or
-`dotmac-suspended` (hard `Auth-Type := Reject`, reserved for fraud via `hard_reject=True`);
-terminated → no row.
+`derive_access_state` (`radius_access_state.py`) maps status plus the effective
+persisted restriction → RADIUS group: active → `dotmac-active`; blocked-family
+→ `dotmac-suspended` (hard reject by default) or `dotmac-captive` only after the
+residential opt-in/readiness policy validates a captive lock; terminated → no row.
 
 ### Block / suspend
 `suspend_subscription` (`account_lifecycle.py:102`) only transitions status + creates the lock.

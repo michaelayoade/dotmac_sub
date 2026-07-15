@@ -57,11 +57,11 @@ that obscure business behavior.
 
 1. `financial.ledger` owns the append-only record lifecycle and reversal
    invariant. Domain owners decide why money moves.
-2. `financial.payments`, `financial.invoices`, and `financial.credit_notes` own
-   their document lifecycles and the ledger postings currently implemented for
-   those transitions. Native invoice issuance is an authoritative billing fact
-   but does not yet write a customer `ledger_entries` debit; invoice write-off,
-   void, and credit-note paths own their adjustment/reversal postings.
+2. `financial.payments`, `financial.consolidated_payments`,
+   `financial.invoices`, and `financial.credit_notes` own their scoped document
+   lifecycles, owner-produced previews, and the ledger postings those
+   transitions require. Invoice read models expose payment, credit-note, and
+   remaining-receivable amounts as distinct fields.
 3. `financial.tax_configuration` owns configurable tax-rate records and their
    active lifecycle. Inclusive, exclusive, or exempt treatment belongs to the
    invoice/credit-note line, not to a second tax-rate vocabulary.
@@ -78,11 +78,17 @@ that obscure business behavior.
    exclusively owns TaxCode account mappings, balanced journals, tax
    transactions, and financial statements. Sub has no tax posting or account-
    mapping table.
-6. `financial.vas_wallet` owns its separate append-only wallet, spendable
-   balance, and atomic bridge into `financial.payments` for bill settlement.
+6. The VAS product is retired. Its database tables are immutable financial
+   archives, not live balances or action owners. Revision
+   `300_retire_vas_runtime` blocks cutover until wallet liabilities are zero and
+   provider workflows are terminal; no route, task, setting, or service may
+   resume writes to those tables. The cutover and fallback contract is
+   `docs/designs/VAS_RETIREMENT.md`.
 7. Customer financial position owns read-side financial summaries, including
-   the bounded bulk projection used by cohort monitoring. Bulk callers do not
-   loop the single-customer ledger reader.
+   the bounded bulk projection used by cohort monitoring. It exposes invoice
+   receivables and prepaid service funding as separate values; it does not net
+   them into a generic balance or absorb payment lifecycle or service-access
+   state. Bulk callers do not loop the single-customer ledger reader.
 8. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold`; the
@@ -98,36 +104,491 @@ that obscure business behavior.
    complete-or-error for that cohort and never fall back to a different local
    balance for missing accounts.
 10. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
-   affordability decision, and idempotent financial adjustment. It locks the
-   account and recomputes at write time; portal, admin, API, and change-request
-   application paths do not post their own plan-change debit.
-11. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
-   Both converge on the account lifecycle writer, which re-checks billing
-   profile validity, payment-arrangement/proof/extension shields, and billing
-   enforcement health immediately before a financial suspension.
-12. Scheduled billing, collections, and payment-reconciliation services own DB
+   affordability decision, confirmation fingerprint, and idempotent financial
+   adjustment. It binds the human preview to a durable change request, locks the
+   account and recomputes at write time, then records the exact adjustment or
+   credit-note and ledger transaction on that request. Portal, admin, API, and
+   change-request application paths do not post their own plan-change debit.
+   Debits delegate to `financial.account_adjustments`; credits delegate to
+   `financial.credit_notes`. Immediate admin bulk changes are gated until a
+   batch contract can preview and confirm every subscription separately;
+   next-cycle bulk scheduling produces no immediate financial transaction.
+11. `financial.account_adjustments` owns debit eligibility, preview, locked
+   confirmation, idempotency, actor audit, exact ledger evidence, and previewed
+   append-only reversal. It never issues customer credits and never decides
+   service-access state.
+12. `financial.addon_purchases` owns customer add-on price, subscription-state,
+   and entitlement confirmation. A paid add-on delegates one exact debit to
+   `financial.account_adjustments` and stores the structural entitlement-to-
+   adjustment link; a free add-on explicitly produces no ledger transaction.
+13. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+   Both submit owner-produced previews to `financial.dunning`'s shared
+   financial-access consequence confirmation. It locks and rechecks billing
+   profile validity, payment-arrangement/proof/extension shields, canonical
+   receivables or prepaid funding, and billing enforcement health immediately
+   before acting. `access.subscription_lifecycle` is the sole writer of
+   enforcement locks and subscription/account access status.
+14. `financial.payment_arrangements` owns arrangement eligibility, lifecycle,
+   installment schedule, payment application, and active-arrangement shield
+   state. Dunning consumes the shield; it does not reimplement arrangement
+   eligibility, and an arrangement does not rewrite receivables or access.
+15. `financial.billing_health` owns monitoring snapshots and anomaly
+    classification. Health signals are observations, not balances or direct
+    suspension/restoration permission.
+16. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-13. `financial.payment_webhooks` owns signature-verified provider-payload
+17. `financial.payment_webhooks` owns signature-verified provider-payload
    projection and inbound dead-letter lifecycle. Replay rebuilds the same
    settlement command as live delivery; `financial.payment_provider_events`
    owns idempotent event processing, delegates the monetary write to the
    payment owner, and must resume an incomplete event rather than treating
    receipt identity as proof that money was posted.
-14. `financial.vas_operations` owns admin VAS mutation transactions and manual
-   purchase resolution. `financial.vas_refunds` exclusively owns
-   refund-to-source eligibility, the durable request lifecycle, and wallet
-   reservation/reversal projection. It commits the request and wallet debit
-   before contacting the gateway; provider responses are observations that an
-   idempotent reconciler can replay. Gateway adapters only submit or observe a
-   refund against the original funding transaction and never decide eligibility
-   or lifecycle state.
+18. Referral rewards are account credits owned by `financial.credit_notes`;
+   neither CRM nor referral services post a parallel wallet balance. Automated
+   referral issuance uses the same owner-generated preview, locked confirmation,
+   idempotency, audit, and exact funding-ledger evidence as other credit issuance.
+19. Every money-moving financial command is previewed by the same owner that executes it.
+   Execution locks and recomputes the preview, rejects stale confirmation,
+   records idempotency and actor audit evidence, and structurally links the
+   command result to its exact ledger transaction(s). Financial settlement may
+   request access reconciliation, but it never promises restoration itself.
+
+Account adjustments and add-on purchase debits use one evidenced contract:
+
+- Old paths: the generic ledger API could post or reverse arbitrary account
+  entries, plan changes posted their own ledger debit, and customer add-on
+  purchases derived a wallet balance before constructing a bare adjustment row.
+  None recorded a durable decision-to-transaction link.
+- New debit owner: `financial.account_adjustments` exposes prepaid funding,
+  postpaid receivables, collection-blocking balance, and service-access
+  consequence as distinct preview fields. Confirmation locks the account,
+  recomputes the preview, rejects stale or unfunded requests, records
+  idempotency and actor audit evidence, and links one decision to one exact debit.
+- Credit boundary: the adjustment contract is debit-only. Customer credits,
+  including the credit side of a prepaid plan change, remain documents owned by
+  `financial.credit_notes`; callers cannot use a generic adjustment as a second
+  credit authority.
+- Add-on boundary: `financial.addon_purchases` combines the current catalog
+  price and subscription state with the adjustment owner's funding preview.
+  Mobile/API confirmation sends the fingerprint and an idempotency key, then the
+  entitlement and exact adjustment link commit atomically. Clients do not
+  derive affordability from a displayed balance.
+- Reversal boundary: generic ledger reversal is gated. An adjustment reversal
+  is separately previewed and confirmed, preserves the original category,
+  records audit/idempotency evidence, and structurally points its exact credit to
+  the debit it reverses. It does not promise restoration or mutate access state.
+- Cutover gate: generic ledger writes/reversals remain disabled; plan-change and
+  add-on paths contain no direct debit writer; stale preview, insufficient
+  funding, idempotent replay, exact debit/reversal links, audit, architecture,
+  API, and mobile contract tests must remain green.
+
+Immediate plan changes use the same evidenced wrapper contract:
+
+- Old wrapper: customer web/mobile/API and admin could show a proration quote,
+  then submit only the target offer. The nested debit owner recomputed safely,
+  but nothing proved which wrapper quote the person confirmed, and the change
+  request did not name the resulting adjustment, credit note, or ledger row.
+- New owner contract: the quote exposes one fingerprint plus distinct prepaid
+  funding, postpaid receivables, collection-blocking balance, exact ledger type,
+  source and amount, and the explicitly non-restorative access consequence.
+  Confirmation supplies that fingerprint and an idempotency key. The owner
+  locks and recomputes before changing money.
+- Exact evidence: revision `302_plan_change_confirmation_evidence` links the
+  applied request to at most one account adjustment or credit note and directly
+  to its exact ledger entry. Zero-money immediate changes record the confirmed
+  snapshot and no ledger link. Actor audit, request state, subscription state,
+  and nested financial evidence commit together.
+- Historical boundary: pre-cutover and scheduled next-cycle requests retain
+  NULL confirmation/evidence fields; no amount, memo, or timestamp matching is
+  used to invent financial provenance.
+- Batch boundary: bulk admin changes schedule at each service's next cycle.
+  Immediate batch execution is rejected until it can carry per-subscription
+  owner previews, fingerprints, idempotency, and results.
+
+Credit-note application is the first migrated financial-action contract:
+
+- Old path: the invoice template derived credit availability and settlement
+  totals, then posted directly to an unpreviewed application command.
+- New owner: `financial.credit_notes` resolves choices, preview, eligibility,
+  locked execution, idempotency, and application-to-ledger evidence;
+  `financial.invoices` owns the receivable summary and settlement handoff.
+- Cutover gate: preview fingerprint, exact ledger link, audit metadata,
+  idempotent replay, invoice-summary, access-reconciliation, and template
+  boundary tests must remain green.
+- Historical application rows are not heuristically linked to ledger entries;
+  reconciliation must use reviewed evidence rather than amount/memo guesses.
+
+Credit-note issuance and voiding are the next migrated financial-action contract:
+
+- Old owners: admin, refund, cancellation-proration, prepaid plan-change, CRM,
+  and remediation paths could construct issued documents directly; some posted
+  a separate credit ledger row and some posted no ledger evidence at all.
+- New owner: `financial.credit_notes` produces the issue/void preview, locks and
+  rechecks confirmation, creates the document and descriptive line, requests
+  the exact append-only funding or reversal transaction, records idempotency and
+  audit evidence, and structurally links every result.
+- Projection boundary: the issued credit-note document owns the customer
+  financial-position effect. Credit-note funding, application-transfer, and
+  void-reversal ledger rows are operational evidence and are excluded from that
+  projection so the same credit is not counted twice.
+- Application boundary: applying a structurally funded note also links the exact
+  unallocated debit that consumes the operational credit pool. Historical notes
+  without reviewed funding evidence retain their legacy application behavior.
+- Verification phase: direct writers have migrated to the owner and architecture
+  tests reject new document, line, or status writers outside the owner package.
+- Cutover gate: issue/void preview fingerprints, idempotent replay, actor audit,
+  exact funding/application/reversal links, customer-position non-duplication,
+  access separation, and adapter-boundary tests must remain green.
+- Historical reconciliation is explicit and dry-run-first. It never guesses a
+  ledger link from amount or memo; an operator must select the exact entry or
+  explicitly approve creation of missing funding for the remaining amount.
+
+Payment refunds are the next migrated financial-action contract:
+
+- Old paths: the admin button and provider-event adapter could flip payment
+  status without a confirmed amount, preview, idempotency key, or structural
+  link to the refund transaction. The compatibility command could also grant a
+  cash refund and credit note for the same amount.
+- New owner: `financial.payments` exclusively resolves refund capability,
+  previews customer funding, unallocated account credit, invoice receivables,
+  exact ledger results, and the access-reconciliation handoff; then locks and
+  recomputes those facts before confirmation.
+- Provider boundary: manual recording is limited to non-provider payments.
+  Provider-backed refunds require a signature-verified, provider-matched event
+  carrying a normalized amount and currency; the provider-event adapter submits
+  that observation and never sets refund status itself.
+- Projection boundary: the payment document owns the refund's customer-position
+  effect. Its payment-linked refund ledger row is exact accounting evidence and
+  is not debited again from unallocated account credit. A separate structurally
+  linked internal debit consumes only the refund portion attributable to
+  spendable account credit and is excluded from the customer ledger projection.
+- Access boundary: refund confirmation requests the canonical account-status
+  recheck. Neither the preview nor the UI promises suspension, restoration, or
+  any other service-access outcome.
+- Cutover gate: stale-preview rejection, idempotent replay, audit evidence,
+  exact total and account-credit ledger links, proportional invoice effects,
+  normalized provider-event evidence, UI boundary, and owner-writer tests must
+  remain green. Refund-plus-credit-note double benefit remains rejected.
+- Historical reconciliation is dry-run-first and identifies every unlinked
+  refund ledger row. Execution requires an operator-selected exact row and an
+  explicitly reviewed account-credit consumption amount; it does not infer
+  either from UI balances, memo text, or today's eligibility.
+
+Payment reversals and chargebacks are a separate migrated financial-action
+contract; they are not failed captures or customer refunds:
+
+- Old owner/path: the compatibility command combined status mutation and a
+  refund-shaped ledger row. It had no preview, confirmation fingerprint,
+  idempotency reservation, audit record, or structural reversal evidence; a
+  partially refunded payment could be marked failed without reversing its
+  remaining settled value, and unallocated credit could remain spendable.
+- New owner: `financial.payments` exclusively resolves reversal capability,
+  previews the remaining settled value after completed refunds, separates
+  customer funding, unallocated account credit, and invoice receivables, then
+  locks and recomputes those facts before writing one `PaymentReversal` and its
+  exact ledger links. The terminal payment state is `reversed`, distinct from a
+  failed capture and from `refunded`/`partially_refunded`.
+- Provider boundary: manual recording is limited to non-provider payments and
+  represents a chargeback or bank reversal already confirmed outside Sub.
+  Provider-backed reversal requires a verified, provider-matched event with the
+  explicit normalized `reversal_confirmed` financial effect, exact remaining
+  amount, and matching currency. Raw event names or UI-selected statuses are not
+  financial evidence.
+- Projection boundary: the reversed payment document removes its remaining
+  settled value once from customer financial position. Its payment-linked total
+  reversal debit is exact accounting evidence and is excluded from both the
+  customer-position projection and the unallocated-credit pool. A second,
+  structurally linked internal debit consumes only reversal value that was still
+  spendable as account credit.
+- Access boundary: confirmation requests the canonical account-status recheck;
+  payment reversal does not decide, promise, or render a suspension or
+  restoration amount.
+- Verification/cutover gate: distinct status presentation, stale-preview
+  rejection, idempotent replay, actor audit, exact total and account-credit
+  links, proportional receivable reopening, normalized provider evidence,
+  adapter boundaries, and sole-writer tests must remain green. Generic status
+  edits and provider adapters cannot write `reversed` directly.
+- Historical reconciliation is explicit and repairable. Inspection reports
+  unlinked candidate debits, while execution requires the exact selected row and
+  a reviewed account-credit consumption amount. It does not guess from an old
+  failed status, a memo, or a current UI balance.
+
+Payment creation, settlement, and allocation are one coherent owner contract:
+
+- Old path: constructing a payment immediately posted allocations, unallocated
+  credit, events, and access consequences even when the document said
+  `pending`, `failed`, or `canceled`. Generic status edits later treated
+  `succeeded` as a field value, provider adapters constructed allocations, and
+  the admin form used a browser confirmation instead of an owner preview.
+- New owner: `financial.payments` separates payment intent/observation from
+  confirmed settlement. Pending, failed, and canceled documents post no money,
+  change no receivable, emit no payment-received event, and request no access
+  consequence. Only settlement writes `PaymentSettlement`, allocation ledger
+  links, an unallocated-credit link, optional prepaid-renewal debit evidence,
+  actor audit, and the access-reconciliation handoff.
+- Position boundary: the preview keeps confirmed funding, unallocated account
+  credit, postpaid invoice receivables, prepaid service renewal, payment state,
+  and service-access consequence visibly distinct. A prepaid renewal is an
+  explicit previewed debit and billing-period consequence, never a UI-derived
+  balance or billing date.
+- Allocation boundary: applying already-settled unallocated credit to an
+  invoice is a transfer, not new funding. Confirmation writes and structurally
+  links the exact invoice credit and a separate internal account-credit debit;
+  customer financial position excludes that internal debit so the transfer
+  does not double-change total funding. Provider adapters and APIs call the
+  same owner.
+- Immutability boundary: evidence-backed payment amounts, currencies,
+  settlements, and allocations are not edited, deleted, or re-pointed in
+  place. Pending allocation intent has no money evidence and may be withdrawn.
+  Generic import rollback cannot delete financial rows; imported-payment
+  reversal uses the separate batch owner below.
+- Provider boundary: verified provider success is a settlement origin, while a
+  non-success webhook remains an observation. A verified invoice hint becomes
+  pending intent before settlement or uses the confirmed allocation-transfer
+  owner after settlement; the provider adapter never constructs financial rows.
+- Historical boundary: old succeeded payments are not automatically trusted or
+  linked by amount/memo similarity. Inspection lists candidates; reconciliation
+  requires an operator-selected exact ledger row for every active allocation,
+  remainder, and prepaid debit, verifies the complete payment partition, links
+  evidence, records audit, and posts no new money.
+- Cutover gate: pending/no-money tests, stale-preview rejection, idempotent
+  creation/settlement/allocation replay, exact settlement/allocation/prepaid
+  links, provider replay, explicit historical reconciliation, owner-writer
+  architecture tests, and admin/API preview-confirm boundaries must remain
+  green. Generic succeeded status edits and direct settled-allocation commands
+  remain gated.
+
+Consolidated payment settlement has a separate scoped owner contract:
+
+- Old path: a billing-account payment entered the generic payment creator as
+  already succeeded. That path allocated member invoices immediately, mutated
+  `BillingAccount.balance` for any surplus without a ledger row, and accepted a
+  browser confirmation instead of an owner preview. Provider verification,
+  proof approval, reconciliation, reseller checkout, admin, and API callers
+  could each enter that parallel path.
+- Owner: `financial.consolidated_payments` exclusively owns the exact FIFO or
+  explicit member-invoice allocation preview, locked fingerprint confirmation,
+  idempotency, actor audit, and settlement evidence. Verified provider facts
+  and approved proofs use the same preview-bound owner; generic
+  `financial.payments` may record a pending consolidated observation but gates
+  a succeeded consolidated write.
+- Position boundary: the preview and confirmation keep payment state, each
+  subscriber invoice receivable, reseller-held consolidated credit, prepaid
+  funding, and service-access consequence distinct. Paying a reseller account
+  does not itself decide subscriber access; paid member invoices request the
+  existing access-reconciliation owner.
+- Ledger boundary: each member-invoice allocation links its exact subscriber
+  `LedgerEntry`. Any surplus links one exact
+  `BillingAccountLedgerEntry`; `BillingAccount.balance` is only the current
+  projection of those consolidated-account transactions and never substitutes
+  for ledger evidence or a fake subscriber account.
+- Adapter boundary: admin uses a server-rendered preview and a second
+  fingerprint-bound confirmation. The API exposes matching preview and confirm
+  commands. Provider webhooks, top-up reconciliation, reseller checkout, and
+  proof approval treat their verified fact or human approval as confirmation
+  but still bind it to the owner-produced fingerprint and stable idempotency
+  key.
+- Cutover gate: read-only preview, exact dual-ledger evidence, stale-preview
+  rejection, idempotent replay, pending/no-money behavior, generic-writer gate,
+  provider replay, admin/API boundary, and owner-registry tests remain green.
+  Historical succeeded consolidated payments are not guessed into evidence;
+  they require a later explicit reconciliation slice.
+
+Imported-payment batch reversal is a separate migrated wrapper owner:
+
+- Owner: `financial.import_payment_batch_reversals` owns durable creation
+  provenance, batch eligibility, the human preview fingerprint, locked
+  confirmation, batch idempotency, actor audit, and exact links from import row
+  to source settlement to resulting `PaymentReversal` and ledger transactions.
+  `financial.payments` remains the sole writer of every nested payment reversal.
+- Provenance boundary: a new applied payment row records both its exact
+  `payment_id` and whether that run created or merely reused the payment. The
+  created Payment also links back to that run. A later idempotent import cannot
+  claim or reverse a payment created by an earlier run.
+- Historical boundary: nullable provenance is deliberate. Existing import rows
+  without both structural links fail closed and are not backfilled from row
+  JSON, external ID, amount, memo, file name, or current UI state.
+- Preview boundary: the batch owner resolves every exact source settlement,
+  allocation ledger link, unallocated-credit link, prepaid-funding link,
+  remaining reversible amount, receivable reopening, and resulting reversal
+  ledger debit. Prepaid funding, unallocated account credit, postpaid
+  receivables, collection-blocking balance, payment state, and service-access
+  consequence remain visibly distinct.
+- Confirmation boundary: the owner locks the import run and every affected
+  account, rebuilds the whole batch preview, rejects drift before posting, then
+  composes idempotent per-payment reversal commands in one transaction. A
+  changed payment, refund, allocation, funding position, receivable, or source
+  evidence aborts the entire batch. No imported row is deleted or deactivated.
+- Reused-row boundary: rows that structurally say `record_created = false` are
+  shown as skipped and remain unchanged. A batch with no newly created payments
+  is ineligible rather than reversing somebody else's payment.
+- Result/access boundary: `PaymentImportBatchReversalItem` links each import row,
+  source settlement, payment reversal, exact result ledger debit, and optional
+  account-credit-consumption debit. Nested payment reversal reopens receivables
+  and requests canonical account/access reconciliation; the batch UI never
+  promises restoration, suspension, or an eligibility amount.
+- Cutover gate: revision `303_payment_import_batch_reversal.py`, stale-preview,
+  replay, atomic multi-payment, mixed created/reused, invoice reopening,
+  historical fail-closed, exact-evidence, adapter, and sole-writer tests must
+  remain green. Legacy settings-history rollback stays nonfinancial only.
+
+Nonterminal invoice lifecycle transitions are owned alongside terminal closure:
+
+- Old paths: scheduled billing constructed draft/issued invoices directly and
+  temporarily flipped prepaid drafts to issued; prepaid credit reconciliation
+  and cleanup moved invoices back to draft; overdue automation, dunning, and
+  admin bulk issue assigned status and timestamps themselves. The architecture
+  allowlist normalized these parallel writers instead of enforcing one owner.
+- Owner: `financial.invoices` now stages automation-created invoice documents,
+  owns draft issuance, rechecks whether an untouched prepaid receivable may
+  return to draft, and owns overdue eligibility, transition, one-time
+  observation event, and audit. Automation, reconciliation, cleanup, dunning,
+  and UI services select candidates and call the owner.
+- Derived-state boundary: payment and credit settlement still derive
+  `paid`/`partially_paid`/reopened status inside the invoice owner package from
+  canonical settlement facts. No adapter may assign those states. Draft,
+  issued, and overdue transitions record that no ledger transaction resulted;
+  terminal monetary closure continues to require exact evidence below.
+- Access boundary: `invoice.overdue` is an observation. It does not create a
+  dunning consequence or decide service access. Returning an unfunded prepaid
+  invoice to draft likewise changes no funding and grants no access.
+- Verification boundary: the invoice lifecycle writer allowlist contains only
+  `app.services.billing.invoices` and its derived-total helper. Direct status
+  assignments in automation, reconciliation, cleanup, collections, and web
+  adapters are rejected by architecture tests.
+
+Invoice void and write-off are distinct terminal owner contracts:
+
+- Old path: generic invoice status edits, single/bulk routes, and prepaid
+  remediation jobs could set `void` or `written_off` directly. Void constructed
+  ad hoc credits and deactivated original debits, violating append-only ledger
+  semantics; partially settled invoices could retain stranded payment or credit
+  allocations. Write-off trusted the stored balance and had no structural link
+  from the terminal decision to its adjustment entry.
+- New owner: `financial.invoices` exclusively resolves void/write-off
+  eligibility, derives the receivable from invoice total plus canonical payment
+  and credit-note settlement facts, previews exact consequences, locks and
+  rechecks confirmation, records idempotency/audit evidence, writes one terminal
+  `InvoiceClosure`, and links every exact ledger result through
+  `InvoiceClosureLedgerEvidence`.
+- Meaning boundary: void means the invoice should never have existed and is
+  permitted only after effective payment/credit value is removed through its
+  own owner. It reverses each original invoice debit append-only and leaves the
+  original active. Current `invoice`-source debits and historical
+  `adjustment`-source debits qualify only when the ledger row carries the exact
+  `invoice_id`; unlinked account adjustments remain outside this owner.
+  Write-off means collectible postpaid debt will not be
+  collected; it writes one exact adjustment credit for the remaining
+  receivable. It is not payment, prepaid funding, customer credit, or invoice
+  void.
+- Position boundary: a native written-off invoice remains the original customer
+  debit and its `InvoiceClosure` contributes only the confirmed remaining-debt
+  credit, preserving any already-applied payment/credit value. The linked
+  operational ledger entry is evidence and is not counted a second time. Void
+  removes the invoice document from customer position; its reversal rows are
+  likewise evidence-only. Historical evidence reconciliation changes neither
+  projection.
+- State boundary: generic create/update/delete paths cannot manufacture paid,
+  partially-paid, void, or written-off state, edit `balance_due`, or delete an
+  issued receivable. Admin and API adapters use owner preview/confirmation;
+  bulk void displays and confirms each per-invoice owner preview. Prepaid repair
+  and cleanup workflows call deterministic system confirmation rather than
+  mutating terminal state.
+- Access boundary: the preview names only an access-reconciliation handoff.
+  Confirmation clears the receivable and asks the access/collections owners to
+  re-evaluate eligibility; neither void nor write-off promises restoration.
+- Historical boundary: legacy terminal invoices remain immutable. Inspection
+  lists exact invoice-linked ledger candidates; reconciliation requires explicit
+  operator-selected evidence (one exact write-off credit or one exact reversal
+  for every original invoice debit), records links/audit, and posts no money.
+- Cutover gate: append-only reversal, exact write-off link, no-settlement void,
+  stale-preview rejection, idempotent replay, draft/no-money closure, explicit
+  historical reconciliation, remediation-adapter, admin/API confirmation, and
+  owner-writer architecture tests must remain green.
+
+Dunning decisions and their service-access consequences are now a distinct,
+evidenced owner contract:
+
+- Old paths: scheduled dunning selected policy steps, `_execute_dunning_action`
+  independently rechecked some gates, `_suspend_account` rechecked a different
+  set, payment events decided whether restoration was allowed from invoice
+  snapshots, invoice-overdue events maintained a second warning/shield path,
+  and case resolution restored throttle state without evidence linking the
+  decision to what changed.
+- Decision owner: `financial.dunning` owns postpaid policy selection and the
+  shared financial access consequence preview/confirmation used by dunning,
+  prepaid enforcement, payment settlement, and billing reconciliation.
+  `financial.access_resolution`, payment arrangements/proofs/extensions, and
+  billing health supply independent decision inputs; none writes access state.
+- Grace owner: `app.services.collections.grace_policy` resolves the effective
+  duration and provenance once: explicit account override, then active policy
+  set, then billing-mode default. Postpaid dunning steps count from the end of
+  that grace decision; prepaid planning, enforcement, and customer status use
+  the same low-balance deadline. The former collections settings
+  `prepaid_grace_days` and `prepaid_deactivation_days` are retired.
+- Consequence writer: `access.subscription_lifecycle` exclusively creates or
+  resolves `EnforcementLock` rows, persists their `access_mode`, and derives
+  subscription/account status.
+  RADIUS and session-enforcement services project that lifecycle result; they
+  do not decide whether debt, funding, a shield, or a case permits access.
+- Evidence boundary: every confirmed financial suspend, reject, throttle, or
+  restore writes one `FinancialAccessConsequence` containing the exact locked
+  preview fingerprint, idempotency key, separated receivable/prepaid/profile/
+  shield/health inputs, outcome, and system audit. Structural evidence links
+  the decision to every exact enforcement lock, access credential, and dunning
+  case it created, resolved, throttled, or restored. A `DunningActionLog` links
+  to the consequence that implemented its access action.
+- Access-tier boundary: hard reject is the default. Captive is a requested
+  exception only for an explicitly opted-in, direct-house account with an
+  explicit residential classification and a valid enabled portal network
+  contract. Business, government, NGO, reseller-owned, reseller-principal,
+  system, disabled, canceled, and uncategorized accounts fail closed even when
+  a stale opt-in flag exists. `app.services.walled_garden_policy` revalidates
+  persisted captive intent and applies most-restrictive-active-lock-wins before
+  RADIUS, connectivity, and UI read projections consume it.
+- Captive cutover gate: the global captive setting remains disabled until
+  staging proves RADIUS projection readback, portal reachability from the
+  restricted tier, a real test payment, and canonical post-payment access
+  restoration. Any failed or stale readiness input downgrades the effective
+  tier to hard reject.
+- Restoration boundary: payment and invoice settlement submit observations;
+  they never promise restoration. Confirmation resolves overdue locks/cases/
+  throttle only after canonical overdue receivables are empty, and resolves
+  prepaid locks/timers only after the canonical funding threshold is met.
+  Other active lock reasons remain untouched.
+- Transport boundary: `invoice.overdue` is observation only. Notifications,
+  throttle, suspension, and rejection come from the configured dunning step.
+  `payment.received` always asks the owner to reconcile and contains no local
+  invoice-balance eligibility branch.
+- Retired controls: billing automation no longer reads or seeds
+  `auto_suspend_on_overdue`, `suspension_grace_hours`,
+  `dunning_escalation_days`, `blocking_period_days`, or
+  `deactivation_period_days`. Existing database rows are inert legacy data.
+  The hourly billing-notification job sends pre-due invoice reminders only;
+  it does not re-emit overdue events or maintain invoice metadata as access
+  evidence. Policy dunning steps are the only overdue timing/action controls.
+  `PolicySet.suspension_action` is retained as compatibility data but is not an
+  execution input and is no longer exposed by the admin policy form.
+- UI boundary: subscriber pages do not derive a "next block" date or access
+  eligibility from balance, grace, or legacy metadata. They render only
+  owner-produced financial/access projections and confirmed consequences.
+- Historical boundary: a throttled credential without a structurally captured
+  `pre_throttle_radius_profile_id` is reported in preview/audit and is not
+  restored by guessing from an offer, UI state, or current profile. It requires
+  explicit reviewed historical reconciliation.
+- Cutover gate: stale-preview rejection, idempotent replay, exact consequence
+  links, canonical receivable evidence, shield/health enforcement, reason-
+  scoped restoration, event-adapter thinness, and owner-writer architecture
+  tests must remain green.
 
 Rule: no module should infer access from draft invoices, ad hoc balances, or
 legacy import fields when a billing/access resolver exists. Celery tasks only
 apply scheduling, routing, idempotency, and feature-gate concerns before calling
-the owning financial service. Admin VAS routes do not mutate catalog or
-transaction rows, control wallet transactions, or decide whether funds may
-leave through a gateway.
+the owning financial service. Retired VAS archive tables have no application
+writer and are excluded from schema autogeneration so history cannot be dropped
+accidentally. Templates and mobile clients do not calculate invoice
+receivables, credit availability, restoration amounts, billing dates, or
+financial-action eligibility.
 
 Tax-accounting migration record:
 
@@ -798,7 +1259,7 @@ Feature controls:
 Rule: task and feature gates should call the feature registry. Callers should
 not separately read env vars, domain settings, module state, and legacy flags.
 Registered capability gates include billing capture/collections/payment
-options, prepaid monthly invoicing, RADIUS/session enforcement, VAS wallet,
+options, prepaid monthly invoicing, RADIUS/session enforcement,
 usage/FUP emission gates, CRM/native transition flags, and GIS/network worker
 toggles. Numeric intervals, thresholds, profile IDs, account lists, and other
 tuning values remain in `settings_spec`.
@@ -827,9 +1288,12 @@ Network access:
 1. `access.control_resolution`: owns desired service access outcomes.
 2. `access.event_policy`: owns event-driven enforcement settings, FUP action
    policy, and overdue suspension policy reads.
-3. `access.radius_state`: maps desired access to RADIUS groups/profiles.
-4. `access.radius_reject`: owns reject IP lifecycle.
-5. `access.session_enforcement`: applies CoA/disconnect outcomes.
+3. `access.walled_garden_policy`: resolves persisted restriction intent to the
+   effective hard-reject/captive tier. Hard reject is default; captive requires
+   explicit eligible residential opt-in and network readiness.
+4. `access.radius_state`: maps the effective tier to RADIUS groups/profiles.
+5. `access.radius_reject`: owns reject IP lifecycle.
+6. `access.session_enforcement`: applies CoA/disconnect outcomes.
 
 Rule: billing, FUP, and admin actions resolve the desired access outcome once,
 map it to RADIUS state once, and let enforcement apply the network-side change.

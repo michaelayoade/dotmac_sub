@@ -270,6 +270,11 @@ _PAYMENT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
         StatusTone.warning,
         StatusIcon.clock,
     ),
+    PaymentStatus.reversed.value: (
+        "Reversed",
+        StatusTone.negative,
+        StatusIcon.alert,
+    ),
     PaymentStatus.canceled.value: (
         "Canceled",
         StatusTone.neutral,

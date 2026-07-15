@@ -17,10 +17,15 @@ invisible to it, the recent-payment-volume floor trips, and the health gate bloc
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import uuid4
+
+import pytest
+from fastapi import HTTPException
 
 from app.models.billing import Invoice, InvoiceStatus, PaymentStatus
 from app.schemas.billing import PaymentCreate, PaymentUpdate
 from app.services import billing as billing_service
+from app.services.billing.payments import Refunds
 
 
 def _invoice(db_session, account_id, total: str, number: str) -> Invoice:
@@ -51,15 +56,29 @@ def _pending_payment(db_session, account_id, invoice: Invoice, amount: str):
     )
 
 
-def test_updating_status_to_succeeded_stamps_paid_at(db_session, subscriber):
+def _settle(db_session, payment):
+    preview = billing_service.payments.preview_settlement(db_session, str(payment.id))
+    return billing_service.payments.settle(
+        db_session,
+        str(payment.id),
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=f"settlement-test-{uuid4().hex}",
+    )
+
+
+def test_generic_update_cannot_replace_confirmed_settlement(db_session, subscriber):
     """The health gate counts settlements by paid_at. It must never be NULL."""
     inv = _invoice(db_session, subscriber.id, "5000.00", "INV-1")
     payment = _pending_payment(db_session, subscriber.id, inv, "5000.00")
     assert payment.paid_at is None
 
-    billing_service.payments.update(
-        db_session, str(payment.id), PaymentUpdate(status=PaymentStatus.succeeded)
-    )
+    with pytest.raises(HTTPException) as blocked:
+        billing_service.payments.update(
+            db_session, str(payment.id), PaymentUpdate(status=PaymentStatus.succeeded)
+        )
+    assert blocked.value.status_code == 409
+
+    _settle(db_session, payment)
 
     db_session.refresh(payment)
     assert payment.status == PaymentStatus.succeeded
@@ -69,13 +88,11 @@ def test_updating_status_to_succeeded_stamps_paid_at(db_session, subscriber):
     )
 
 
-def test_updating_status_to_succeeded_settles_the_invoice(db_session, subscriber):
+def test_confirmed_settlement_settles_the_invoice(db_session, subscriber):
     inv = _invoice(db_session, subscriber.id, "5000.00", "INV-2")
     payment = _pending_payment(db_session, subscriber.id, inv, "5000.00")
 
-    billing_service.payments.update(
-        db_session, str(payment.id), PaymentUpdate(status=PaymentStatus.succeeded)
-    )
+    _settle(db_session, payment)
 
     db_session.refresh(inv)
     assert inv.status == InvoiceStatus.paid
@@ -93,15 +110,19 @@ def test_update_cannot_resurrect_a_refunded_payment(db_session, subscriber):
     billing_service.payments.mark_status(
         db_session, str(payment.id), PaymentStatus.succeeded
     )
-    billing_service.payments.mark_status(
-        db_session, str(payment.id), PaymentStatus.refunded
+    Refunds.process_refund(
+        db_session,
+        str(payment.id),
+        idempotency_key=f"refund-test-{uuid4().hex}",
     )
     db_session.refresh(payment)
     assert payment.status == PaymentStatus.refunded
 
-    billing_service.payments.update(
-        db_session, str(payment.id), PaymentUpdate(status=PaymentStatus.succeeded)
-    )
+    with pytest.raises(HTTPException) as blocked:
+        billing_service.payments.update(
+            db_session, str(payment.id), PaymentUpdate(status=PaymentStatus.succeeded)
+        )
+    assert blocked.value.status_code == 409
 
     db_session.refresh(payment)
     assert payment.status == PaymentStatus.refunded, (

@@ -124,6 +124,7 @@ def test_repeated_payment_source_is_idempotent_across_runs(db_session, subscribe
         f"{subscriber.id},25,succeeded,bank-import-001\n"
     )
 
+    applied_runs = []
     for _ in range(2):
         dry = import_runs.create_import_run(
             db_session,
@@ -135,6 +136,7 @@ def test_repeated_payment_source_is_idempotent_across_runs(db_session, subscribe
         import_runs.process_import_run(db_session, dry.id)
         applied = import_runs.apply_from_dry_run(db_session, dry.id)
         assert applied.failed_rows == 0
+        applied_runs.append(applied)
 
     payment = (
         db_session.query(Payment).filter(Payment.external_id == "bank-import-001").one()
@@ -145,6 +147,13 @@ def test_repeated_payment_source_is_idempotent_across_runs(db_session, subscribe
         .count()
         == 1
     )
+    first_row = applied_runs[0].rows[0]
+    second_row = applied_runs[1].rows[0]
+    assert first_row.record_created is True
+    assert first_row.payment_id == payment.id
+    assert second_row.record_created is False
+    assert second_row.payment_id == payment.id
+    assert payment.import_run_id == applied_runs[0].id
 
 
 def test_ipv4_assignments_import_dry_run_then_apply(db_session):

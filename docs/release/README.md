@@ -13,7 +13,6 @@ submission content lives in the linked docs.
 - [x] Unified payment selector (Paystack / Flutterwave / bank transfer + saved cards)
 - [x] Reseller bulk pay + withholding tax + receipt + allocation
 - [x] Address geocode-on-save + pin auto-approval (shadow on prod)
-- [x] Bill-pay (VAS) entry deferred until VTPass go-live
 - [x] Ticket attachment opening
 - [x] Backend deployed to prod
 
@@ -42,4 +41,3 @@ submission content lives in the linked docs.
 
 ### Post-launch
 - [ ] Watch pin auto-approval shadow decisions in admin → flip `gis.location_auto_approve_shadow=false` when trusted
-- [ ] VTPass go-live → re-enable the bill-pay (VAS) entry

@@ -21,6 +21,7 @@ from app.models.billing import (
     Invoice,
     InvoiceStatus,
     LedgerEntry,
+    LedgerEntryType,
     LedgerSource,
     Payment,
     PaymentAllocation,
@@ -30,6 +31,7 @@ from app.models.subscriber import Subscriber
 from app.schemas.billing import PaymentCreate
 from app.services import billing as billing_service
 from app.services.billing._common import get_account_credit_balance
+from app.services.billing.payments import _finalize_invoice_payment_effects
 
 
 def _invoice(db_session, account_id, total: str, number: str) -> Invoice:
@@ -48,16 +50,36 @@ def _invoice(db_session, account_id, total: str, number: str) -> Invoice:
 
 
 def _pay(db_session, account_id, invoice: Invoice, amount: str):
-    return billing_service.payments.create(
-        db_session,
-        PaymentCreate(
-            account_id=account_id,
-            invoice_id=invoice.id,
-            amount=Decimal(amount),
-            currency="NGN",
-            status="succeeded",
-        ),
+    """Build a historical pre-settlement-evidence row for legacy-path tests."""
+    payment = Payment(
+        account_id=account_id,
+        amount=Decimal(amount),
+        currency="NGN",
+        status=PaymentStatus.succeeded,
     )
+    db_session.add(payment)
+    db_session.flush()
+    allocation = PaymentAllocation(
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        amount=Decimal(amount),
+    )
+    entry = LedgerEntry(
+        account_id=account_id,
+        invoice_id=invoice.id,
+        payment_id=payment.id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.payment,
+        amount=Decimal(amount),
+        currency="NGN",
+    )
+    db_session.add_all([allocation, entry])
+    db_session.flush()
+    allocation.ledger_entry_id = entry.id
+    _finalize_invoice_payment_effects(db_session, invoice)
+    db_session.commit()
+    db_session.refresh(payment)
+    return payment
 
 
 def _active_allocs(db_session, payment_id) -> list[PaymentAllocation]:
@@ -99,6 +121,27 @@ def test_reallocation_releases_the_old_invoice(db_session, subscriber):
     assert old.balance_due == Decimal("10000.00")
     assert new.status == InvoiceStatus.paid
     assert new.balance_due == Decimal("0.00")
+
+
+def test_evidence_backed_payment_reallocation_fails_closed(db_session, subscriber):
+    old = _invoice(db_session, subscriber.id, "5000.00", "INV-EVIDENCE-OLD")
+    new = _invoice(db_session, subscriber.id, "5000.00", "INV-EVIDENCE-NEW")
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            account_id=subscriber.id,
+            amount=Decimal("5000.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        billing_service.payments.reallocate(db_session, str(payment.id), str(new.id))
+    assert blocked.value.status_code == 409
+    assert "reviewed reversal workflow" in blocked.value.detail
+    db_session.refresh(old)
+    assert old.status == InvoiceStatus.paid
 
 
 def test_reallocation_moves_the_ledger_credit_with_the_allocation(

@@ -368,9 +368,8 @@ def run_billing_notifications() -> dict[str, int | bool]:
     try:
         result = billing_automation_service.run_billing_notifications(session)
         logger.info(
-            "Billing notifications run completed: %s reminders, %s escalations%s",
+            "Billing notifications run completed: %s reminders%s",
             result.get("invoice_reminders_sent", 0),
-            result.get("dunning_escalations_sent", 0),
             " (outside send window)" if result.get("skipped_outside_window") else "",
         )
         session.commit()

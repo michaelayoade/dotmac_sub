@@ -15,9 +15,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
+from app.models.billing import CreditNote
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.models.vas import VasWalletEntry
 from app.services import web_referrals
 from app.services.referrals import referrals
 from app.web.admin import crm_referrals as admin_referrals_web
@@ -244,7 +244,7 @@ def test_qualify_override_guards(db_session):
 
 def test_admin_flow_qualify_override_then_issue_reward(db_session):
     """The §2.6 happy path end-to-end: capture → qualify override → issue
-    reward lands exactly one wallet credit with the CRM-era idempotency key,
+    reward lands exactly one account credit with the CRM-era idempotency key,
     and the detail context flips its action gates at each step."""
     _program(db_session, amount="2500")
     referral, referrer = _captured_referral(db_session)
@@ -258,12 +258,10 @@ def test_admin_flow_qualify_override_then_issue_reward(db_session):
     assert result.status == "rewarded"
     assert result.reward_status == "issued"
 
-    entry = (
-        db_session.query(VasWalletEntry)
-        .filter(VasWalletEntry.reference == f"referral:{referral.id}")
-        .one()
-    )
-    assert entry.amount == Decimal("2500")
+    entry = db_session.get(CreditNote, result.metadata_["reward_credit_id"])
+    assert entry is not None
+    assert entry.total == Decimal("2500")
+    assert f"[ref:referral:{referral.id}]" in str(entry.memo)
 
     detail = web_referrals.detail_data(db_session, referral_id=str(referral.id))
     assert detail["reward_credit_id"] == str(entry.id)

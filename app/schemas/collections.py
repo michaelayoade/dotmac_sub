@@ -71,6 +71,7 @@ class DunningActionLogRead(DunningActionLogBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    access_consequence_id: UUID | None = None
 
 
 class DunningRunRequest(BaseModel):

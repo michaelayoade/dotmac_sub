@@ -105,14 +105,10 @@ class AddonsAvailable {
   AddonsAvailable({
     this.available = const [],
     this.active = const [],
-    this.walletBalance,
-    this.currency = 'NGN',
   });
 
   final List<AddonOption> available;
   final List<ActiveAddon> active;
-  final double? walletBalance;
-  final String currency;
 
   factory AddonsAvailable.fromJson(Map<String, dynamic> json) =>
       AddonsAvailable(
@@ -124,10 +120,6 @@ class AddonsAvailable {
             .cast<Map<String, dynamic>>()
             .map(ActiveAddon.fromJson)
             .toList(),
-        walletBalance: json['wallet_balance'] == null
-            ? null
-            : asDouble(json['wallet_balance']),
-        currency: json['currency'] as String? ?? 'NGN',
       );
 }
 
@@ -135,23 +127,38 @@ class AddonQuote {
   AddonQuote({
     required this.charge,
     required this.currency,
-    required this.currentBalance,
+    required this.prepaidFundingBefore,
+    required this.prepaidFundingAfter,
+    required this.postpaidReceivables,
     required this.shortfall,
     required this.canAfford,
+    required this.allowed,
+    required this.previewFingerprint,
+    this.rejectionReason,
   });
 
   final double charge;
   final String currency;
-  final double currentBalance;
+  final double prepaidFundingBefore;
+  final double prepaidFundingAfter;
+  final double postpaidReceivables;
   final double shortfall;
   final bool canAfford;
+  final bool allowed;
+  final String previewFingerprint;
+  final String? rejectionReason;
 
   factory AddonQuote.fromJson(Map<String, dynamic> json) => AddonQuote(
         charge: asDouble(json['charge']),
         currency: json['currency'] as String? ?? 'NGN',
-        currentBalance: asDouble(json['current_balance']),
+        prepaidFundingBefore: asDouble(json['prepaid_funding_before']),
+        prepaidFundingAfter: asDouble(json['prepaid_funding_after']),
+        postpaidReceivables: asDouble(json['postpaid_receivables']),
         shortfall: asDouble(json['shortfall']),
         canAfford: json['can_afford'] as bool? ?? false,
+        allowed: json['allowed'] as bool? ?? false,
+        previewFingerprint: json['preview_fingerprint'] as String? ?? '',
+        rejectionReason: json['rejection_reason'] as String?,
       );
 }
 
@@ -161,7 +168,7 @@ class AddonPurchaseResult {
     this.reason,
     this.charge,
     this.currency = 'NGN',
-    this.newBalance,
+    this.prepaidFundingAfter,
     this.shortfall,
   });
 
@@ -169,10 +176,10 @@ class AddonPurchaseResult {
   final String? reason;
   final double? charge;
   final String currency;
-  final double? newBalance;
+  final double? prepaidFundingAfter;
   final double? shortfall;
 
-  bool get insufficient => reason == 'insufficient_balance';
+  bool get insufficient => reason == 'insufficient_prepaid_funding';
   bool get serviceNotActive => reason == 'subscription_not_active';
 
   factory AddonPurchaseResult.fromJson(Map<String, dynamic> json) =>
@@ -181,8 +188,9 @@ class AddonPurchaseResult {
         reason: json['reason'] as String?,
         charge: json['charge'] == null ? null : asDouble(json['charge']),
         currency: json['currency'] as String? ?? 'NGN',
-        newBalance:
-            json['new_balance'] == null ? null : asDouble(json['new_balance']),
+        prepaidFundingAfter: json['prepaid_funding_after'] == null
+            ? null
+            : asDouble(json['prepaid_funding_after']),
         shortfall:
             json['shortfall'] == null ? null : asDouble(json['shortfall']),
       );

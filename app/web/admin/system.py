@@ -104,6 +104,9 @@ from app.services.brand_theme import (
     is_accessible_semantic_color,
 )
 from app.services.common import coerce_uuid
+from app.services.financial_import_batch_reversals import (
+    PaymentImportBatchReversals,
+)
 from app.tasks.exports import run_export_job
 from app.tasks.gis import run_batch_geocode_job
 from app.tasks.imports import (
@@ -719,6 +722,7 @@ def system_import_run_detail(
     run = import_runs_service.get_import_run(db, run_id)
     if run is None:
         return RedirectResponse("/admin/system/import-runs", status_code=303)
+    batch_reversal_capability = PaymentImportBatchReversals.capability(db, run.id)
     return templates.TemplateResponse(
         "admin/system/import_run_detail.html",
         {
@@ -729,6 +733,10 @@ def system_import_run_detail(
             "sidebar_stats": get_sidebar_stats(db),
             "run": run,
             "rows": run.rows,
+            "batch_reversal": run.payment_batch_reversal,
+            "batch_reversal_capability": batch_reversal_capability,
+            "reversal_error": request.query_params.get("reversal_error"),
+            "reversal_notice": request.query_params.get("reversal_notice"),
         },
     )
 
@@ -750,6 +758,80 @@ def system_import_run_apply(
     except ValueError:
         return RedirectResponse(f"/admin/system/import-runs/{run_id}", status_code=303)
     return RedirectResponse(f"/admin/system/import-runs/{applied.id}", status_code=303)
+
+
+@router.post(
+    "/import-runs/{run_id}/payment-reversal-preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_import_payment_reversal_preview(
+    request: Request, run_id: str, db: Session = Depends(get_db)
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    form = parse_form_data_sync(request)
+    reason = str(form.get("reason") or "").strip()
+    try:
+        preview = PaymentImportBatchReversals.preview(db, run_id, reason=reason)
+    except (HTTPException, ValueError) as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return RedirectResponse(
+            f"/admin/system/import-runs/{run_id}?reversal_error={quote_plus(str(detail))}",
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        "admin/system/import_payment_batch_reversal_confirm.html",
+        {
+            "request": request,
+            "active_page": "system-import",
+            "active_menu": "system",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "preview": preview,
+            "preview_snapshot": preview.as_snapshot(),
+            "preview_fingerprint": preview.fingerprint,
+            "idempotency_key": f"payment-import-batch-reversal:{preview.import_run_id}",
+        },
+    )
+
+
+@router.post(
+    "/import-runs/{run_id}/payment-reversal-confirm",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def system_import_payment_reversal_confirm(
+    request: Request, run_id: str, db: Session = Depends(get_db)
+):
+    from app.web.admin import get_current_user
+
+    form = parse_form_data_sync(request)
+    user = get_current_user(request)
+    try:
+        result = PaymentImportBatchReversals.confirm(
+            db,
+            run_id,
+            reason=str(form.get("reason") or ""),
+            preview_fingerprint=str(form.get("preview_fingerprint") or ""),
+            idempotency_key=str(form.get("idempotency_key") or ""),
+            actor_id=(user.get("email") or "").strip() or None,
+        )
+    except (HTTPException, ValueError) as exc:
+        db.rollback()
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return RedirectResponse(
+            f"/admin/system/import-runs/{run_id}?reversal_error={quote_plus(str(detail))}",
+            status_code=303,
+        )
+    replay = " Existing evidence was returned." if result.idempotent_replay else ""
+    notice = quote_plus(
+        f"Reversed {result.batch_reversal.reversed_payment_count} imported payments "
+        f"through exact append-only evidence.{replay}"
+    )
+    return RedirectResponse(
+        f"/admin/system/import-runs/{run_id}?reversal_notice={notice}",
+        status_code=303,
+    )
 
 
 @router.get(

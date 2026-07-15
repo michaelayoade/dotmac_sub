@@ -360,7 +360,13 @@ def _dispatch_command(
     actor_type: AuditActorType,
 ) -> tuple[SubscriptionCommandOutcomeStatus, tuple[str, ...], str]:
     if command.kind == SubscriptionCommandKind.change_plan:
-        return _dispatch_plan_change(db, subscription, command, preview)
+        return _dispatch_plan_change(
+            db,
+            subscription,
+            command,
+            preview,
+            actor_id=actor_id,
+        )
     if command.effective_timing != SubscriptionEffectiveTiming.immediate:
         from app.services.subscription_lifecycle_schedules import (
             schedule_subscription_status_command,
@@ -435,23 +441,50 @@ def _dispatch_plan_change(
     subscription: Subscription,
     command: SubscriptionLifecycleCommand,
     preview: SubscriptionLifecyclePreview,
+    *,
+    actor_id: str | None,
 ) -> tuple[SubscriptionCommandOutcomeStatus, tuple[str, ...], str]:
     target_offer_id = str(command.target_offer_id)
     if command.effective_timing == SubscriptionEffectiveTiming.immediate:
-        from app.schemas.catalog import SubscriptionUpdate
-        from app.services import catalog as catalog_service
+        from app.services.subscription_changes import subscription_change_requests
 
-        catalog_service.subscriptions.update(
+        billing_impact = preview.billing_impact
+        details = billing_impact.details if billing_impact is not None else None
+        quote = details.get("quote") if isinstance(details, dict) else None
+        fingerprint = (
+            str(quote.get("preview_fingerprint") or "").strip()
+            if isinstance(quote, dict)
+            else ""
+        )
+        if not fingerprint:
+            raise SubscriptionCommandExecutionRejected(
+                "plan_change_preview_missing",
+                "The financial plan-change preview is missing its fingerprint",
+            )
+        if (
+            command.expected_financial_fingerprint is not None
+            and command.expected_financial_fingerprint != fingerprint
+        ):
+            raise SubscriptionCommandExecutionRejected(
+                "plan_change_financial_preview_stale",
+                "Financial state changed after preview; preview again",
+            )
+        request = subscription_change_requests.confirm_immediate(
             db,
-            str(subscription.id),
-            SubscriptionUpdate(offer_id=coerce_uuid(target_offer_id)),
-            plan_change_operation_key=(
+            subscription_id=str(subscription.id),
+            new_offer_id=target_offer_id,
+            preview_fingerprint=fingerprint,
+            idempotency_key=(
                 command.idempotency_key or subscription_command_fingerprint(command)
             ),
+            confirmation_origin=command.source,
+            confirmation_snapshot=json.loads(json.dumps(quote, default=str)),
+            actor_id=actor_id,
+            notes=command.reason or "Confirmed by subscription lifecycle command",
         )
         return (
             SubscriptionCommandOutcomeStatus.applied,
-            (),
+            (str(request.id),),
             "Subscription plan changed",
         )
 
@@ -579,6 +612,7 @@ def subscription_command_fingerprint(command: SubscriptionLifecycleCommand) -> s
         "target_offer_id": command.target_offer_id,
         "reason": command.reason,
         "expected_head": command.expected_head,
+        "expected_financial_fingerprint": command.expected_financial_fingerprint,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

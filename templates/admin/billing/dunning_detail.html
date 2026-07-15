@@ -103,6 +103,7 @@
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Action</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Step</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Outcome</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Access Evidence</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
@@ -112,10 +113,28 @@
                         <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ action.action.value|replace('_', ' ')|title if action.action else '-' }}</td>
                         <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ action.step_day if action.step_day is not none else '-' }}</td>
                         <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ action.outcome or action.notes or '-' }}</td>
+                        <td class="px-6 py-4 text-xs text-slate-600 dark:text-slate-300">
+                            {% if action.access_consequence %}
+                            <div class="space-y-1">
+                                <div class="font-medium text-slate-900 dark:text-white">{{ action.access_consequence.action.value|replace('_', ' ')|title }} · {{ action.access_consequence.outcome|replace('_', ' ')|title }}</div>
+                                {% if action.access_consequence.access_mode %}
+                                <div>Network tier: {{ action.access_consequence.access_mode.value|replace('_', ' ')|title }}</div>
+                                {% endif %}
+                                {% set grace = action.access_consequence.decision_inputs.get('grace_decision') %}
+                                {% if grace %}
+                                <div>Grace: {{ grace.policy.days }} day(s) from {{ grace.policy.source|replace('_', ' ') }}{% if grace.ends_at %} · ends {{ grace.ends_at }}{% endif %}</div>
+                                {% endif %}
+                                <div>{{ action.access_consequence.evidence|length }} exact consequence record(s)</div>
+                                <div class="font-mono text-[11px]">{{ action.access_consequence.id }}</div>
+                            </div>
+                            {% else %}
+                            No service-access consequence
+                            {% endif %}
+                        </td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="4" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No action history recorded.</td>
+                        <td colspan="5" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No action history recorded.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
