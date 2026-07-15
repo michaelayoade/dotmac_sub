@@ -90,8 +90,8 @@ def test_invoice_cycle_prepaid_skipped_excludes_enabled_monthly_prepaid(
     _add_recurring_price(db_session, subscription.offer_id)
     db_session.add(
         DomainSetting(
-            domain=SettingDomain.billing,
-            key="prepaid_monthly_invoicing_enabled",
+            domain=SettingDomain.modules,
+            key="billing_prepaid_monthly_invoicing",
             value_text="true",
             value_json=True,
             is_active=True,
@@ -127,8 +127,8 @@ def test_invoice_cycle_keeps_prepaid_and_postpaid_invoices_separate(
         [
             postpaid_subscription,
             DomainSetting(
-                domain=SettingDomain.billing,
-                key="prepaid_monthly_invoicing_enabled",
+                domain=SettingDomain.modules,
+                key="billing_prepaid_monthly_invoicing",
                 value_text="true",
                 value_json=True,
                 is_active=True,

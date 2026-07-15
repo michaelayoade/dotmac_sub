@@ -3068,6 +3068,7 @@ def customer_submit_payment_arrangement(
     start_date: str = Form(...),
     invoice_id: str = Form(None),
     notes: str = Form(None),
+    terms: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> Response:
     """Submit a payment arrangement request."""
@@ -3087,6 +3088,8 @@ def customer_submit_payment_arrangement(
             start_date=start_date,
             invoice_id=invoice_id,
             notes=notes,
+            terms_accepted=isinstance(terms, str)
+            and terms.strip().lower() in {"1", "true", "on", "yes"},
         )
         return RedirectResponse(
             url="/portal/billing/arrangements?submitted=true",

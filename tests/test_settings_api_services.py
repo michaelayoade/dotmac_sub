@@ -186,13 +186,20 @@ def test_upsert_gis_setting_variants(db_session):
     assert interval.value_type.value == "integer"
     assert interval.value_text == "5"
 
-    enabled = settings_api.upsert_gis_setting(
+    addresses = settings_api.upsert_gis_setting(
         db_session,
-        "sync_enabled",
+        "sync_addresses",
         DomainSettingUpdate(value_text="false"),
     )
-    assert enabled.value_type.value == "boolean"
-    assert enabled.value_json is False
+    assert addresses.value_type.value == "boolean"
+    assert addresses.value_json is False
+
+    with pytest.raises(HTTPException):
+        settings_api.upsert_gis_setting(
+            db_session,
+            "sync_enabled",
+            DomainSettingUpdate(value_text="false"),
+        )
 
 
 def test_list_settings_response(db_session):

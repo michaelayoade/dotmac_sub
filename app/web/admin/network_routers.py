@@ -100,7 +100,11 @@ def template_list(
     )
 
 
-@router.get("/templates/new", response_class=HTMLResponse)
+@router.get(
+    "/templates/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:write"))],
+)
 def template_create_form(
     request: Request,
     db: Session = Depends(get_db),
@@ -109,6 +113,51 @@ def template_create_form(
     return templates.TemplateResponse(
         "admin/network/routers/templates/form.html", context
     )
+
+
+@router.post(
+    "/templates/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:write"))],
+)
+def template_create(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    web_routers_service.create_template(db, parse_form_data_sync(request))
+    return RedirectResponse(url="/admin/network/routers/templates", status_code=303)
+
+
+@router.get(
+    "/templates/{template_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:write"))],
+)
+def template_edit_form(
+    request: Request,
+    template_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    context = web_routers_service.template_form_context(
+        request, db, template_id=template_id
+    )
+    return templates.TemplateResponse(
+        "admin/network/routers/templates/form.html", context
+    )
+
+
+@router.post(
+    "/templates/{template_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("router:write"))],
+)
+def template_update(
+    request: Request,
+    template_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    web_routers_service.update_template(db, template_id, parse_form_data_sync(request))
+    return RedirectResponse(url="/admin/network/routers/templates", status_code=303)
 
 
 @router.get("/push", response_class=HTMLResponse)

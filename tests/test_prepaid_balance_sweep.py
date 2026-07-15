@@ -32,34 +32,12 @@ _MONDAY_NOON = datetime(2026, 7, 6, 12, 0, tzinfo=UTC)
 _SATURDAY_NOON = datetime(2026, 7, 4, 12, 0, tzinfo=UTC)
 
 
-def _enable_control(
-    db,
-    *,
-    enabled: bool = True,
-    activation_at: datetime | None = _SATURDAY_NOON - timedelta(days=10),
-) -> None:
-    settings = [
-        DomainSetting(
-            domain=SettingDomain.collections,
-            key="prepaid_balance_enforcement_enabled",
-            value_type=SettingValueType.boolean,
-            value_text="true" if enabled else "false",
-            value_json=enabled,
-            is_active=True,
-        )
-    ]
-    if activation_at is not None:
-        settings.append(
-            DomainSetting(
-                domain=SettingDomain.collections,
-                key="prepaid_enforcement_activation_at",
-                value_type=SettingValueType.string,
-                value_text=activation_at.isoformat(),
-                is_active=True,
-            )
-        )
-    db.add_all(settings)
-    db.commit()
+def _enable_control(db, *, enabled: bool = True) -> None:
+    from app.services import control_registry
+
+    control_registry.update_canonical_feature_controls(
+        db, payload={"collections.prepaid_balance_enforcement": enabled}
+    )
 
 
 def _set_collections_setting(

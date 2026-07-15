@@ -925,8 +925,8 @@ def test_prepaid_invoice_rows_do_not_create_dunning_case(
 
     db_session.add(
         DomainSetting(
-            domain=SettingDomain.billing,
-            key="prepaid_monthly_invoicing_enabled",
+            domain=SettingDomain.modules,
+            key="billing_prepaid_monthly_invoicing",
             value_text="true",
             value_json=True,
             is_active=True,
@@ -1042,8 +1042,8 @@ def test_prepaid_monthly_dunning_does_not_suspend_service(
     db_session.add_all(
         [
             DomainSetting(
-                domain=SettingDomain.billing,
-                key="prepaid_monthly_invoicing_enabled",
+                domain=SettingDomain.modules,
+                key="billing_prepaid_monthly_invoicing",
                 value_text="true",
                 value_json=True,
                 is_active=True,

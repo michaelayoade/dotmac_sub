@@ -76,11 +76,9 @@ def _effective_bool(
     db, domain: SettingDomain, key: str, env_key: str, default: bool
 ) -> bool:
     # Single control plane: if this (domain, key) is a registered control, the
-    # ONE resolver decides — composing env override, the canonical row a
-    # registry-driven admin page writes, the legacy alias, and the owning
-    # module. Behavior-neutral for registered keys until a module is disabled or
-    # a canonical row is set, because each control's on_missing == the legacy
-    # default here (asserted by the parity test).
+    # ONE resolver decides from the canonical row/default and owning module.
+    # ``domain``/``key`` are caller-routing metadata only; ``env_key`` and the
+    # retired domain-setting row are never consulted for registered controls.
     from app.services import control_registry
 
     canonical = control_registry.control_for_legacy(domain, key)

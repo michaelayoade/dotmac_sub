@@ -27,7 +27,6 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import billing_health
 from app.services.billing_health import BillingHealthSnapshot
@@ -253,17 +252,11 @@ def test_anomalies_flag_each_signal():
 
 
 def _enable_prepaid_balance_sweep(db, enabled: bool) -> None:
-    db.add(
-        DomainSetting(
-            domain=SettingDomain.collections,
-            key="prepaid_balance_enforcement_enabled",
-            value_type=SettingValueType.boolean,
-            value_text="true" if enabled else "false",
-            value_json=enabled,
-            is_active=True,
-        )
+    from app.services import control_registry
+
+    control_registry.update_canonical_feature_controls(
+        db, payload={"collections.prepaid_balance_enforcement": enabled}
     )
-    db.commit()
 
 
 def test_negative_prepaid_balance_exposure_flags_disabled_sweep(db_session):

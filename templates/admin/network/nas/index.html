@@ -43,7 +43,7 @@
                         <p class="text-xs text-blue-600 dark:text-blue-400">Sync all NAS devices to the monitoring system for health checks and alerts.</p>
                     </div>
                 </div>
-                <form method="POST" action="/admin/nas/sync-all-monitoring" class="flex-shrink-0">
+                <form method="POST" action="/admin/network/nas/sync-all-monitoring" class="flex-shrink-0">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit" hx-confirm="Sync all active NAS devices to the monitoring system? This will create monitoring entries for devices that don't have one." class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
@@ -129,10 +129,10 @@
                 </div>
                 <div class="w-40">
                     <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Online Status</label>
-                    <select name="online_status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <select name="olt_status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">All</option>
-                        <option value="online" {% if filters.online_status == 'online' %}selected{% endif %}>Online</option>
-                        <option value="offline" {% if filters.online_status == 'offline' %}selected{% endif %}>Offline</option>
+                        <option value="online" {% if filters.olt_status == 'online' %}selected{% endif %}>Online</option>
+                        <option value="offline" {% if filters.olt_status == 'offline' %}selected{% endif %}>Offline</option>
                     </select>
                 </div>
                 <div class="w-40">
@@ -146,7 +146,7 @@
                 </div>
                 <div class="flex gap-2">
                     <button type="submit" class="inline-flex h-[38px] items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700">Filter</button>
-                    {% if filters.search or filters.nas_type or filters.status or filters.pop_site_id or filters.partner_org_id or filters.online_status %}
+                    {% if filters.search or filters.nas_type or filters.status or filters.pop_site_id or filters.partner_org_id or filters.olt_status %}
                     <a href="/admin/network/nas" class="inline-flex h-[38px] items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-700">Clear</a>
                     {% endif %}
                 </div>
@@ -242,12 +242,12 @@
             </p>
             <div class="flex items-center gap-2">
                 {% if pagination.has_prev %}
-                <a href="?page={{ pagination.page - 1 }}{% if filters.nas_type %}&nas_type={{ filters.nas_type }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.pop_site_id %}&pop_site_id={{ filters.pop_site_id }}{% endif %}{% if filters.partner_org_id %}&partner_org_id={{ filters.partner_org_id }}{% endif %}{% if filters.online_status %}&online_status={{ filters.online_status }}{% endif %}"
+                <a href="?page={{ pagination.page - 1 }}{% if filters.nas_type %}&nas_type={{ filters.nas_type }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.pop_site_id %}&pop_site_id={{ filters.pop_site_id }}{% endif %}{% if filters.partner_org_id %}&partner_org_id={{ filters.partner_org_id }}{% endif %}{% if filters.olt_status %}&olt_status={{ filters.olt_status }}{% endif %}"
                    class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
                 {% endif %}
                 <span class="text-sm text-slate-600 dark:text-slate-400">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
                 {% if pagination.has_next %}
-                <a href="?page={{ pagination.page + 1 }}{% if filters.nas_type %}&nas_type={{ filters.nas_type }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.pop_site_id %}&pop_site_id={{ filters.pop_site_id }}{% endif %}{% if filters.partner_org_id %}&partner_org_id={{ filters.partner_org_id }}{% endif %}{% if filters.online_status %}&online_status={{ filters.online_status }}{% endif %}"
+                <a href="?page={{ pagination.page + 1 }}{% if filters.nas_type %}&nas_type={{ filters.nas_type }}{% endif %}{% if filters.status %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}{% if filters.pop_site_id %}&pop_site_id={{ filters.pop_site_id }}{% endif %}{% if filters.partner_org_id %}&partner_org_id={{ filters.partner_org_id }}{% endif %}{% if filters.olt_status %}&olt_status={{ filters.olt_status }}{% endif %}"
                    class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
                 {% endif %}
             </div>

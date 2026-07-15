@@ -16,10 +16,8 @@ sufficient — a literal in a hand-written settings page still counts — but it
 reliably catches the fully-dead keys with zero plumbing and near-zero false
 positives).
 
-``_KNOWN_ORPHAN_SETTINGS`` is a burn-down backlog of pre-existing dead keys,
-captured 2026-07-03. Each should eventually be either wired to a consumer or
-removed from ``SETTINGS_SPECS``. Do NOT add to it: a newly-registered key with
-no reader fails immediately, which is the whole point.
+The historical orphan backlog was removed in July 2026. A registered key with
+no reader now fails immediately; there is deliberately no allowlist.
 """
 
 from __future__ import annotations
@@ -32,39 +30,6 @@ from app.services.settings_spec import SETTINGS_SPECS
 _EXCLUDED_FILES = {
     "app/services/settings_spec.py",
     "app/services/settings_seed.py",
-}
-
-# Pre-existing registered-but-unread keys (2026-07-03). Burn-down only — wire or
-# remove each, never extend. A new orphan must fail the build instead.
-_KNOWN_ORPHAN_SETTINGS: set[str] = {
-    "account_number_enabled",
-    "account_number_padding",
-    "account_number_start",
-    "core_device_ping_interval_seconds",
-    "core_device_snmp_walk_interval_seconds",
-    "default_account_status",
-    "default_contact_role",
-    "default_material_status",
-    "default_olt_port_type",
-    "default_reservation_status",
-    "default_splitter_input_ports",
-    "default_splitter_output_ports",
-    "hotspot_redirect_url",
-    "hotspot_walled_garden",
-    "meta_access_token_override",
-    "meta_api_timeout_seconds",
-    "meta_oauth_redirect_uri",
-    "notification_category_preferences_enabled",
-    "olt_polling_interval_minutes",
-    "ont_offline_poll_threshold",
-    "pon_outage_min_offline_onus",
-    # prepaid_* enforcement settings wired 2026-07-04 by the prepaid balance
-    # sweep (app/services/collections/prepaid_balance_sweep.py).
-    "vendor_bid_minimum_days",
-    "vendor_quote_approval_threshold",
-    "vendor_quote_validity_days",
-    "vendor_remember_ttl_seconds",
-    "vendor_session_ttl_seconds",
 }
 
 
@@ -92,23 +57,10 @@ def _find_orphans() -> set[str]:
     return {k for k in keys if f'"{k}"' not in corpus and f"'{k}'" not in corpus}
 
 
-def test_no_new_orphan_settings() -> None:
+def test_no_orphan_settings() -> None:
     orphans = _find_orphans()
-    new_orphans = orphans - _KNOWN_ORPHAN_SETTINGS
-    assert not new_orphans, (
+    assert not orphans, (
         "Registered setting(s) with no reader (dead control): "
-        f"{sorted(new_orphans)}. Either read the value somewhere it changes "
-        "behavior, or drop it from SETTINGS_SPECS. Do not add to "
-        "_KNOWN_ORPHAN_SETTINGS."
-    )
-
-
-def test_known_orphan_list_is_accurate() -> None:
-    # Keeps the burn-down honest: once a known orphan is wired or removed, it
-    # must be deleted from the allowlist so the list shrinks toward empty.
-    orphans = _find_orphans()
-    stale = _KNOWN_ORPHAN_SETTINGS - orphans
-    assert not stale, (
-        "These keys are no longer orphaned (wired or removed) — delete them "
-        f"from _KNOWN_ORPHAN_SETTINGS: {sorted(stale)}"
+        f"{sorted(orphans)}. Either read the value somewhere it changes "
+        "behavior, or drop it from SETTINGS_SPECS."
     )

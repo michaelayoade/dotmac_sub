@@ -117,13 +117,13 @@
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Sets buttons, links and accents across all portals.</p>
                 <div class="mt-4 flex items-center gap-3">
                     <input type="color" name="brand_primary_color"
-                           value="{{ current_brand_primary_color }}"
-                           oninput="this.form.brand_primary_color_hex.value = this.value"
+                           value="{{ current_brand_primary_color or '#206a07' }}"
+                           oninput="document.getElementById('brand_primary_color_hex').value = this.value"
                            class="h-10 w-14 cursor-pointer rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-600 dark:bg-slate-700">
-                    <input type="text" name="brand_primary_color_hex"
-                           value="{{ current_brand_primary_color }}"
-                           oninput="this.form.brand_primary_color.value = this.value"
-                           placeholder="{{ current_brand_primary_color }}"
+                    <input type="text" id="brand_primary_color_hex"
+                           value="{{ current_brand_primary_color or '#206a07' }}"
+                           oninput="this.form.elements.namedItem('brand_primary_color').value = this.value"
+                           placeholder="#206a07"
                            class="block w-40 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </section>
@@ -133,13 +133,13 @@
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for links, highlights and secondary chart series.</p>
                 <div class="mt-4 flex items-center gap-3">
                     <input type="color" name="brand_secondary_color"
-                           value="{{ current_brand_secondary_color }}"
-                           oninput="this.form.brand_secondary_color_hex.value = this.value"
+                           value="{{ current_brand_secondary_color or '#06b6d4' }}"
+                           oninput="document.getElementById('brand_secondary_color_hex').value = this.value"
                            class="h-10 w-14 cursor-pointer rounded-lg border border-slate-300 bg-white p-1 dark:border-slate-600 dark:bg-slate-700">
-                    <input type="text" name="brand_secondary_color_hex"
-                           value="{{ current_brand_secondary_color }}"
-                           oninput="this.form.brand_secondary_color.value = this.value"
-                           placeholder="{{ current_brand_secondary_color }}"
+                    <input type="text" id="brand_secondary_color_hex"
+                           value="{{ current_brand_secondary_color or '#06b6d4' }}"
+                           oninput="this.form.elements.namedItem('brand_secondary_color').value = this.value"
+                           placeholder="#06b6d4"
                            class="block w-40 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </section>

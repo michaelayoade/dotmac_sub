@@ -42,6 +42,7 @@ from app.services import (
     billing as billing_service,
 )
 from app.services import branding_storage as branding_storage_service
+from app.services import control_registry as control_registry_service
 from app.services import email as email_service
 from app.services import file_upload as file_upload_service
 from app.services import import_runs as import_runs_service
@@ -57,6 +58,7 @@ from app.services import session_manager as session_manager_service
 from app.services import settings_spec
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services import web_control_plane as web_control_plane_service
 from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
 from app.services import (
@@ -354,31 +356,69 @@ def modules_manager_page(request: Request, db: Session = Depends(get_db)):
 )
 def modules_manager_save(request: Request, db: Session = Depends(get_db)):
     """Persist module manager toggles."""
+    from app.services.control_registry import Layer
+
     form = parse_form_data_sync(request)
     module_payload: dict[str, bool] = {}
-    feature_payload: dict[str, bool] = {}
+    feature_payload: dict[str, bool | None] = {}
 
     for module_name in module_manager_service.MODULE_KEY_MAP:
-        module_payload[module_name] = (
-            str(form.get(f"module__{module_name}") or "").lower() == "true"
-        )
-
-    for feature_map in module_manager_service.MODULE_FEATURE_MAP.values():
-        for feature_name in feature_map:
-            feature_payload[feature_name] = (
-                str(form.get(f"feature__{feature_name}") or "").lower() == "true"
+        field_name = f"module__{module_name}"
+        if field_name in form:
+            module_payload[module_name] = (
+                str(form.get(field_name) or "").lower() == "true"
             )
+
+    stored_values: dict[str, bool | None] = {
+        "inherit": None,
+        "on": True,
+        "off": False,
+    }
+    for control in control_registry_service.all_controls():
+        if control.layer is not Layer.feature:
+            continue
+        field_name = f"control__{control.key}"
+        if field_name not in form:
+            continue
+        raw_value = str(form.get(field_name) or "").lower()
+        if raw_value not in stored_values:
+            raise HTTPException(status_code=400, detail="Invalid feature control value")
+        feature_payload[control.key] = stored_values[raw_value]
 
     provider_payload: dict[str, bool] = {}
     for provider in module_manager_service.list_payment_providers(db):
         provider_id = provider["id"]
-        provider_payload[provider_id] = (
-            str(form.get(f"provider__{provider_id}") or "").lower() == "true"
-        )
+        field_name = f"provider__{provider_id}"
+        if field_name in form:
+            provider_payload[provider_id] = (
+                str(form.get(field_name) or "").lower() == "true"
+            )
+
+    from app.services.control_relationships import (
+        ControlRelationshipError,
+        validate_feature_control_changes,
+    )
+
+    try:
+        validate_feature_control_changes(db, feature_payload)
+    except ControlRelationshipError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     module_manager_service.update_module_flags(db, payload=module_payload)
-    module_manager_service.update_feature_flags(db, payload=feature_payload)
+    feature_changes = control_registry_service.update_canonical_feature_controls(
+        db, payload=feature_payload
+    )
     module_manager_service.update_provider_flags(db, payload=provider_payload)
+    if feature_changes:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="feature_controls.update",
+            entity_type="feature_control",
+            entity_id="canonical-features",
+            actor_id=_system_actor_id(request),
+            metadata={"changes": feature_changes},
+        )
     return RedirectResponse("/admin/system/modules?saved=1", status_code=303)
 
 
@@ -4443,6 +4483,25 @@ def settings_hub(request: Request, db: Session = Depends(get_db)):
                 else "settings-hub",
                 "selected_category": selected_category,
                 **data,
+            },
+        ),
+    )
+
+
+@router.get(
+    "/control-plane",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def control_plane(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/system/control_plane.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "control-plane",
+                **web_control_plane_service.build_control_plane_context(db),
             },
         ),
     )

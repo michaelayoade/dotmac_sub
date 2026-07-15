@@ -15,10 +15,10 @@ This module is the single source of truth and the single read path:
 
 ``is_enabled(db, "billing.autopay")`` is the one call sites should use. A
 feature is enabled only if BOTH its module and its own flag are on. Resolution
-order per control: explicit env override → explicit DB row (canonical, then any
-legacy alias) → registry default, with a per-control fail direction
-(``on_missing``). Legacy-alias reads are logged so a later stale-key report can
-prove which old keys are still live before they're deleted.
+order per control: explicit canonical DB row → registry default, with a
+per-control fail direction (``on_missing``). Historical environment and
+database aliases are retained below only as caller-routing metadata for legacy
+scheduler call sites; they never supply an effective value.
 
 The module/feature substrate is :mod:`app.services.module_manager` (already
 fail-open + cached); this layer adds the capability features that have parallel
@@ -29,14 +29,17 @@ one composed resolver.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
+from app.schemas.settings import DomainSettingUpdate
+from app.services import domain_settings as domain_settings_service
 from app.services import module_manager
 
 logger = logging.getLogger(__name__)
@@ -50,6 +53,12 @@ class Layer(str, Enum):
 
 @dataclass(frozen=True)
 class LegacyAlias:
+    """Retired setting identity used only to route callers to a control.
+
+    ``env`` is retained as cutover inventory. Runtime resolution must never read
+    it or the legacy domain-setting row.
+    """
+
     domain: SettingDomain
     key: str
     env: str | None = None
@@ -71,6 +80,22 @@ class Control:
     description: str = ""
 
 
+@dataclass(frozen=True)
+class ControlResolution:
+    """Effective control state plus the provenance used to reach it."""
+
+    key: str
+    enabled: bool
+    own_enabled: bool
+    source: str
+    precedence: str
+    affected_scope: str
+    updated_at: datetime | None = None
+    module_enabled: bool | None = None
+    canonical_value: bool | None = None
+    canonical_updated_at: datetime | None = None
+
+
 def _truthy(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -79,8 +104,9 @@ def _truthy(value: object) -> bool:
 
 # ---------------------------------------------------------------------------
 # Registry. Modules come from module_manager.MODULE_KEY_MAP (Layer 1). Here we
-# add the capability features that own scheduler/task behavior, each aliased to
-# the legacy key(s) it currently reads so this is behavior-neutral on rollout.
+# add the capability features that own scheduler/task behavior. ``legacy``
+# entries are retired caller bindings only: they route existing scheduler call
+# sites to the canonical control and are never value sources.
 # ---------------------------------------------------------------------------
 
 _B = SettingDomain.billing
@@ -256,6 +282,17 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
             ),
         ),
         description="Auto-resume expired vacation holds.",
+    ),
+    Control(
+        key="customer.services_view",
+        layer=Layer.feature,
+        owner_module="customer",
+        default=True,
+        on_missing=True,
+        legacy=(
+            LegacyAlias(SettingDomain.modules, "module_customer_services_enabled"),
+        ),
+        description="Show the services view in the customer portal.",
     ),
     # NOTE: nas_backup_retention intentionally NOT registered — it is network
     # infrastructure housekeeping, not a catalog (product) capability. Leaving it
@@ -643,9 +680,9 @@ for _m in module_manager.MODULE_KEY_MAP:
 for _c in _FEATURE_CONTROLS:
     _CONTROLS[_c.key] = _c
 
-# Reverse index: legacy (domain, key) -> canonical control key. Lets the
-# scheduler chokepoint (_effective_bool) and task bodies delegate by their
-# existing keys without touching every call site.
+# Reverse index: retired caller (domain, key) -> canonical control key. Lets the
+# scheduler chokepoint and task bodies delegate to the canonical resolver while
+# their call-site migration remains mechanical; no legacy value is read.
 _LEGACY_INDEX: dict[tuple[SettingDomain, str], str] = {}
 for _c in _FEATURE_CONTROLS:
     for _a in _c.legacy:
@@ -653,7 +690,7 @@ for _c in _FEATURE_CONTROLS:
 
 
 def control_for_legacy(domain: SettingDomain, key: str) -> str | None:
-    """Canonical control key for a legacy (domain, key), or None if unmapped."""
+    """Canonical control for a retired caller identity, or None if unmapped."""
     return _LEGACY_INDEX.get((domain, key))
 
 
@@ -667,51 +704,190 @@ def all_controls() -> Iterable[Control]:
     return _CONTROLS.values()
 
 
-def _db_value(db: Session, domain: SettingDomain, key: str) -> object | None:
+def canonical_setting_key(control: Control) -> str:
+    """Return the modules-domain key owned by the canonical feature writer."""
+    return control.key.replace(".", "_")
+
+
+def _db_setting(db: Session, domain: SettingDomain, key: str) -> DomainSetting | None:
     # query(...).filter(...).filter(...).filter(...).first() — the shape the
     # scheduler tests mock; returns None for "no row".
-    setting = (
+    return (
         db.query(DomainSetting)
         .filter(DomainSetting.domain == domain)
         .filter(DomainSetting.key == key)
         .filter(DomainSetting.is_active.is_(True))
         .first()
     )
+
+
+def _db_value(db: Session, domain: SettingDomain, key: str) -> object | None:
+    setting = _db_setting(db, domain, key)
     if setting is None:
         return None
     return setting.value_json if setting.value_json is not None else setting.value_text
 
 
+def _resolve_own_flag_with_source(
+    db: Session, control: Control
+) -> tuple[bool, str, datetime | None]:
+    canonical_key = canonical_setting_key(control)
+    setting = _db_setting(db, SettingDomain.modules, canonical_key)
+    if setting is not None:
+        value = (
+            setting.value_json if setting.value_json is not None else setting.value_text
+        )
+        return _truthy(value), f"database (modules.{canonical_key})", setting.updated_at
+
+    return control.on_missing, "registry default", None
+
+
 def _resolve_own_flag(db: Session, control: Control) -> bool:
     """Resolve a control's OWN value (ignoring module composition).
 
-    Precedence (highest first): env override → canonical DB row
-    (``modules.<feature>``) → legacy alias DB row → ``on_missing`` default. Env
-    is the emergency override, so it wins over any stored row. Logs which legacy
-    alias supplied the value.
+    Precedence: canonical DB row (``modules.<feature>``) → ``on_missing``
+    default. Retired environment and database aliases are deliberately ignored.
     """
-    # 1) Env override (any alias env) — emergency lever, beats stored rows.
-    for alias in control.legacy:
-        if alias.env:
-            env_val = os.getenv(alias.env)
-            if env_val is not None:
-                return _truthy(env_val)
-    # 2) Canonical row (modules.<feature>) — what the admin page will write.
-    value = _db_value(db, SettingDomain.modules, control.key.replace(".", "_"))
-    if value is not None:
-        return _truthy(value)
-    # 3) Legacy alias rows — back-compat with pre-registry keys.
-    for alias in control.legacy:
-        row = _db_value(db, alias.domain, alias.key)
-        if row is not None:
-            logger.debug(
-                "control_registry: %s resolved from legacy alias %s.%s",
-                control.key,
-                alias.domain.value,
-                alias.key,
+    return _resolve_own_flag_with_source(db, control)[0]
+
+
+def resolve_control(db: Session, key: str) -> ControlResolution:
+    """Resolve a registered control and explain its effective state.
+
+    This is the read-only inspection counterpart to :func:`is_enabled`; both
+    use the same precedence and module composition rules.
+    """
+    control = _CONTROLS.get(key)
+    if control is None:
+        enabled = is_enabled(db, key)
+        return ControlResolution(
+            key=key,
+            enabled=enabled,
+            own_enabled=enabled,
+            source="implicit compatibility default",
+            precedence="registered controls only",
+            affected_scope=key,
+        )
+
+    precedence = "modules database row → registry default"
+    if control.layer is Layer.module:
+        setting_key = module_manager.MODULE_KEY_MAP[control.key]
+        setting = _db_setting(db, SettingDomain.modules, setting_key)
+        enabled = module_manager.is_module_enabled(db, control.key)
+        return ControlResolution(
+            key=key,
+            enabled=enabled,
+            own_enabled=enabled,
+            source=(
+                f"database (modules.{setting_key})"
+                if setting is not None
+                else "registry default"
+            ),
+            precedence="modules database row → registry default",
+            affected_scope=f"{control.key} module and owned capabilities",
+            updated_at=setting.updated_at if setting is not None else None,
+        )
+
+    canonical_setting = _db_setting(
+        db, SettingDomain.modules, canonical_setting_key(control)
+    )
+    canonical_value = None
+    if canonical_setting is not None:
+        value = (
+            canonical_setting.value_json
+            if canonical_setting.value_json is not None
+            else canonical_setting.value_text
+        )
+        canonical_value = _truthy(value)
+
+    own_enabled, source, updated_at = _resolve_own_flag_with_source(db, control)
+    module_enabled = (
+        module_manager.is_module_enabled(db, control.owner_module)
+        if control.owner_module
+        else None
+    )
+    enabled = own_enabled and module_enabled is not False
+    if module_enabled is False:
+        source = f"owner module {control.owner_module} disabled; own source: {source}"
+    return ControlResolution(
+        key=key,
+        enabled=enabled,
+        own_enabled=own_enabled,
+        source=source,
+        precedence=precedence,
+        affected_scope=(
+            f"{control.owner_module} module / {control.key} capability"
+            if control.owner_module
+            else f"{control.key} capability"
+        ),
+        updated_at=updated_at,
+        module_enabled=module_enabled,
+        canonical_value=canonical_value,
+        canonical_updated_at=(
+            canonical_setting.updated_at if canonical_setting is not None else None
+        ),
+    )
+
+
+def update_canonical_feature_controls(
+    db: Session, *, payload: dict[str, bool | None]
+) -> list[dict[str, object]]:
+    """Persist explicit feature overrides through the canonical settings owner.
+
+    ``None`` means inherit and deactivates the canonical row. Boolean values pin
+    the canonical row on or off. The returned change record reports stored and
+    effective state separately because the owner module can still mask a feature.
+    """
+    invalid = sorted(
+        key
+        for key in payload
+        if key not in _CONTROLS or _CONTROLS[key].layer is not Layer.feature
+    )
+    if invalid:
+        raise ValueError(f"Unknown feature controls: {', '.join(invalid)}")
+
+    from app.services.control_relationships import validate_feature_control_changes
+
+    validate_feature_control_changes(db, payload)
+
+    changes: list[dict[str, object]] = []
+    for key, requested_value in payload.items():
+        control = _CONTROLS[key]
+        before = resolve_control(db, key)
+        if before.canonical_value is requested_value:
+            continue
+
+        setting_key = canonical_setting_key(control)
+        setting = _db_setting(db, SettingDomain.modules, setting_key)
+        if requested_value is None:
+            if setting is not None:
+                domain_settings_service.modules_settings.delete(db, str(setting.id))
+        else:
+            domain_settings_service.modules_settings.upsert_by_key(
+                db,
+                setting_key,
+                DomainSettingUpdate(
+                    domain=SettingDomain.modules,
+                    value_type=SettingValueType.boolean,
+                    value_text="true" if requested_value else "false",
+                    value_json=None,
+                    is_active=True,
+                ),
             )
-            return _truthy(row)
-    return control.on_missing
+
+        after = resolve_control(db, key)
+        changes.append(
+            {
+                "key": key,
+                "stored": {
+                    "from": before.canonical_value,
+                    "to": after.canonical_value,
+                },
+                "effective": {"from": before.enabled, "to": after.enabled},
+                "source": {"from": before.source, "to": after.source},
+            }
+        )
+    return changes
 
 
 def is_enabled(db: Session, key: str) -> bool:

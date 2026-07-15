@@ -15,9 +15,9 @@ def test_domain_setting_domain_mismatch(db_session):
         db_session,
         DomainSettingCreate(
             domain=SettingDomain.gis,
-            key="sync_enabled",
-            value_type=SettingValueType.boolean,
-            value_text="true",
+            key="sync_interval_minutes",
+            value_type=SettingValueType.integer,
+            value_text="60",
         ),
     )
     with pytest.raises(HTTPException) as exc:
@@ -32,13 +32,20 @@ def test_domain_setting_domain_mismatch(db_session):
 def test_settings_api_gis_upsert_and_validation(db_session):
     updated = settings_api_service.upsert_gis_setting(
         db_session,
-        "sync_enabled",
+        "sync_addresses",
         DomainSettingUpdate(value_text="false"),
     )
     assert updated.value_type == SettingValueType.boolean
     assert updated.value_json is False
-    fetched = settings_api_service.get_gis_setting(db_session, "sync_enabled")
+    fetched = settings_api_service.get_gis_setting(db_session, "sync_addresses")
     assert fetched.id == updated.id
+
+    with pytest.raises(HTTPException):
+        settings_api_service.upsert_gis_setting(
+            db_session,
+            "sync_enabled",
+            DomainSettingUpdate(value_text="false"),
+        )
 
 
 def test_settings_api_invalid_key(db_session):

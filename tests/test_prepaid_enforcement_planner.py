@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.catalog import BillingMode, SubscriptionStatus
-from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.notification import Notification
 from app.models.subscriber import SubscriberStatus
 from app.services.access_resolution import PrepaidFundingDecision
@@ -34,26 +33,11 @@ def _prepare(db, account, subscription) -> None:
 
 
 def _enable(db) -> None:
-    db.add_all(
-        [
-            DomainSetting(
-                domain=SettingDomain.collections,
-                key="prepaid_balance_enforcement_enabled",
-                value_type=SettingValueType.boolean,
-                value_text="true",
-                value_json=True,
-                is_active=True,
-            ),
-            DomainSetting(
-                domain=SettingDomain.collections,
-                key="prepaid_enforcement_activation_at",
-                value_type=SettingValueType.string,
-                value_text=(_MONDAY_NOON - timedelta(days=10)).isoformat(),
-                is_active=True,
-            ),
-        ]
+    from app.services import control_registry
+
+    control_registry.update_canonical_feature_controls(
+        db, payload={"collections.prepaid_balance_enforcement": True}
     )
-    db.commit()
 
 
 def test_disabled_control_still_reports_warn_without_writes(

@@ -111,7 +111,12 @@ def test_valid_event_reaches_service(db_session):
 
 def test_event_noop_when_pull_disabled(monkeypatch, db_session):
     """Flip kill switch: crm.work_order_pull off -> 200 ack, mirror untouched."""
-    monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "false")
+    from app.services import control_registry
+
+    monkeypatch.setenv("CRM_WORK_ORDER_PULL_ENABLED", "true")
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.work_order_pull": False}
+    )
     sub = _subscriber(db_session)
     body = {
         "subscriber_id": str(sub.id),
@@ -153,19 +158,13 @@ def test_event_processes_when_setting_missing(monkeypatch, db_session):
     assert resp["status"] == "ok"
 
 
-def test_branch_gated_by_scheduler_db_row(monkeypatch, db_session):
-    """The exact flip lever: the legacy scheduler.crm_work_order_pull_enabled
-    DB row turns the branch on and off (no env, no deploy)."""
-    from app.models.domain_settings import DomainSetting, SettingDomain
+def test_branch_gated_by_canonical_control(monkeypatch, db_session):
+    from app.services import control_registry
 
     monkeypatch.delenv("CRM_WORK_ORDER_PULL_ENABLED", raising=False)
-    row = DomainSetting(
-        domain=SettingDomain.scheduler,
-        key="crm_work_order_pull_enabled",
-        value_text="false",
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.work_order_pull": False}
     )
-    db_session.add(row)
-    db_session.commit()
 
     sub = _subscriber(db_session)
     body = {
@@ -179,8 +178,9 @@ def test_branch_gated_by_scheduler_db_row(monkeypatch, db_session):
     assert code == 200
     assert resp["reason"] == "work_order_pull_disabled"
 
-    row.value_text = "true"
-    db_session.commit()
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.work_order_pull": True}
+    )
     with _with_secret(SECRET), patch("app.services.push.send_push"):
         code, resp = _post(db_session, body)
     assert code == 200

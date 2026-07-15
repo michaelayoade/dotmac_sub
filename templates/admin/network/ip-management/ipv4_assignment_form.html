@@ -52,7 +52,7 @@
         <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber <span class="text-red-500">*</span></label>
             <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscribers" data-typeahead-min="2" data-typeahead-limit="8">
-                <input type="text" name="subscriber_search" data-typeahead-input
+                <input type="text" data-typeahead-input
                        value="{{ current_subscriber_label if assignment else '' }}"
                        placeholder="Search subscriber..."
                        class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -64,7 +64,7 @@
         <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscription</label>
             <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscriptions" data-typeahead-min="2" data-typeahead-limit="8">
-                <input type="text" name="subscription_search" data-typeahead-input
+                <input type="text" data-typeahead-input
                        value="{{ current_subscription_label if assignment else '' }}"
                        placeholder="Search subscription (optional)..."
                        class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">

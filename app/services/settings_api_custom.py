@@ -25,7 +25,6 @@ def _coerce_int(value: object) -> int:
 
 
 _GIS_SETTING_KEYS = {
-    "sync_enabled",
     "sync_interval_minutes",
     "sync_pop_sites",
     "sync_addresses",

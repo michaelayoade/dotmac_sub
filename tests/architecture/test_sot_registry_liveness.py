@@ -16,6 +16,29 @@ from app.services import sot_relationships
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = PROJECT_ROOT / "app"
 SCRIPT_DIR = PROJECT_ROOT / "scripts"
+SERVICE_DIR = APP_DIR / "services"
+UNDECLARED_WRITER_BASELINE = Path(__file__).with_name("sot_writer_baseline.txt")
+
+_PERSISTENCE_MUTATORS = {
+    "add",
+    "add_all",
+    "bulk_insert_mappings",
+    "bulk_save_objects",
+    "bulk_update_mappings",
+    "commit",
+    "delete",
+    "flush",
+}
+_PERSISTENCE_RECEIVER_TOKENS = {
+    "cache",
+    "conn",
+    "connection",
+    "db",
+    "query",
+    "redis",
+    "session",
+    "uow",
+}
 
 # Temporary debt only. Entries may be removed when an owner is wired or struck
 # from the registry; adding an entry requires an explicit ownership decision.
@@ -36,6 +59,65 @@ def _imported_modules(path: Path) -> set[str]:
             found.add(node.module)
             found.update(f"{node.module}.{alias.name}" for alias in node.names)
     return found
+
+
+def _module_name(path: Path) -> str:
+    rel = path.relative_to(PROJECT_ROOT).with_suffix("")
+    parts = rel.parts[:-1] if rel.name == "__init__" else rel.parts
+    return ".".join(parts)
+
+
+def _receiver_tokens(node: ast.AST) -> set[str]:
+    if isinstance(node, ast.Name):
+        return set(node.id.lower().split("_"))
+    if isinstance(node, ast.Attribute):
+        return _receiver_tokens(node.value) | set(node.attr.lower().split("_"))
+    if isinstance(node, ast.Call):
+        return _receiver_tokens(node.func)
+    if isinstance(node, ast.Subscript):
+        return _receiver_tokens(node.value)
+    return set()
+
+
+def _has_persistence_mutation(path: Path) -> bool:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:  # pragma: no cover - syntax checks fail elsewhere
+        return False
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _PERSISTENCE_MUTATORS
+        and bool(_receiver_tokens(node.func.value) & _PERSISTENCE_RECEIVER_TOKENS)
+        for node in ast.walk(tree)
+    )
+
+
+def _writer_modules() -> set[str]:
+    return {
+        _module_name(path)
+        for path in SERVICE_DIR.rglob("*.py")
+        if path.is_file()
+        and path.name != "sot_relationships.py"
+        and "__pycache__" not in path.parts
+        and _has_persistence_mutation(path)
+    }
+
+
+def _declared_owner_modules() -> set[str]:
+    return {
+        service.module
+        for domain in sot_relationships.DOMAIN_SOT_RELATIONSHIPS
+        for service in domain.services
+    }
+
+
+def _undeclared_writer_baseline() -> set[str]:
+    return {
+        line.strip()
+        for line in UNDECLARED_WRITER_BASELINE.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
 
 
 def _import_graph() -> dict[str, set[str]]:
@@ -86,6 +168,25 @@ def test_the_dead_owner_list_only_shrinks() -> None:
     assert not resurrected, (
         "owners now have callers; remove their liveness exemptions:\n  "
         + "\n  ".join(sorted(resurrected))
+    )
+
+
+def test_no_new_undeclared_persistence_writers() -> None:
+    undeclared = _writer_modules() - _declared_owner_modules()
+    new_writers = sorted(undeclared - _undeclared_writer_baseline())
+    assert not new_writers, (
+        "new persistence-writing service modules have no declared SOT owner. "
+        "Register the canonical owner; update the debt baseline only after an "
+        "explicit ownership review:\n  " + "\n  ".join(new_writers)
+    )
+
+
+def test_undeclared_writer_baseline_only_shrinks() -> None:
+    undeclared = _writer_modules() - _declared_owner_modules()
+    stale = sorted(_undeclared_writer_baseline() - undeclared)
+    assert not stale, (
+        "undeclared-writer debt was resolved or stopped writing; remove these "
+        "entries from the shrink-only baseline:\n  " + "\n  ".join(stale)
     )
 
 
