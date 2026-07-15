@@ -55,7 +55,6 @@ from app.services.billing._common import (
     lock_account,
     resolve_invoice_settlement_amounts,
 )
-from app.services.billing.invoice_classification import collectible_ar_invoice_filter
 from app.services.billing.ledger import LedgerEntries
 from app.services.common import (
     apply_ordering,
@@ -68,6 +67,7 @@ from app.services.common import (
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.locking import lock_for_update
 from app.services.response import ListResponseMixin
 from app.services.sync_feeds import apply_sync_page, sync_page_response

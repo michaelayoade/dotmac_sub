@@ -213,7 +213,7 @@ def collection_blocking_balance(db: Session, account_id) -> Decimal:
     already marked ``overdue`` and still classified as collectible AR block the
     action. Broader past-due debt remains available via ``overdue_debt_balance``.
     """
-    from app.services.billing.invoice_classification import (
+    from app.services.invoice_classification import (
         collectible_ar_invoice_filter,
     )
 
