@@ -90,12 +90,20 @@ def test_generic_edit_form_does_not_offer_parallel_lifecycle_mutations() -> None
     ).read_text(encoding="utf-8")
 
     assert 'id="offer_id" required {% if subscription.id %}disabled' in template
-    assert 'id="status" {% if subscription.id %}disabled' in template
+    assert '<select name="status"' not in template
+    assert (
+        'name="status" value="{{ subscription.status if subscription.id '
+        "else 'pending' }}\""
+    ) in template
     assert (
         'id="billing_mode" x-model="billingMode" '
         "{% if subscription.id %}disabled" in template
     )
     for field in ("start_at", "next_billing_at", "end_at"):
-        assert f'id="{field}" {{% if subscription.id %}}readonly' in template
+        assert f'id="{field}" readonly aria-readonly="true"' in template
     assert 'id="canceled_at" readonly' in template
     assert 'id="cancel_reason" readonly' in template
+    assert "{% if subscription.id %}\n        {# Lifecycle facts" in template
+    assert "Activate after creation" in template
+    assert "Set status to Active instead of Pending" not in template
+    assert "bg-violet-600" not in template
