@@ -104,7 +104,8 @@ def test_customer_bulk_message_requires_in_modal_preview_before_queueing():
     assert "messagePreviewLoading: false" in template
     assert "messagePreviewReady: false" in template
     assert "Delivery Preview" in template
-    assert "No individual rows are selected" in template
+    assert "All filtered customers selected" in template
+    assert "x-show=\"selectionMode === 'filtered'\"" in template
     assert "preview_only: true" in template
     assert "confirmed: true" in template
     assert "confirm(previewMessage)" not in template
@@ -113,6 +114,31 @@ def test_customer_bulk_message_requires_in_modal_preview_before_queueing():
     assert '@change="invalidateMessagePreview()"' in template
     assert '@input="invalidateMessagePreview()"' in template
     assert "previewRequestId !== this.messagePreviewRequestId" in template
+
+
+def test_customer_bulk_actions_use_server_contract_and_explicit_selection_scope():
+    route = (PROJECT_ROOT / "app/web/admin/customers.py").read_text(encoding="utf-8")
+    page = (PROJECT_ROOT / "templates/admin/customers/index.html").read_text(
+        encoding="utf-8"
+    )
+    table = (PROJECT_ROOT / "templates/admin/customers/_table.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "build_customer_bulk_action_contract" in route
+    assert "customer_bulk_action_contract.actions" in page
+    assert 'x-show="hasSelection()"' in page
+    assert "Select all ${filteredTotal} customers matching these filters" in page
+    assert "mode: 'filtered', filters: this.currentFilters()" in page
+    assert "mode: 'selected', ids: this.selectedIds.map" in page
+    assert "expected_count: preview.matched_count" in page
+    assert "expected_scope_token: preview.scope_token" in page
+    assert "data-customer-bulk-action" in page
+    assert "[data-select-all]')?.focus()" in page
+    assert "customer_ids: this.selectedIds" not in page
+    assert "customers in the current filtered result" not in page
+    assert "customer_bulk_action_contract.selection_enabled" in table
+    assert ":disabled=\"selectionMode === 'filtered'\"" in table
 
 
 def test_legacy_customer_data_api_delegates_to_customer_list_owner():

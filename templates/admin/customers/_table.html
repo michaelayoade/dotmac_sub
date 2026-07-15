@@ -1,4 +1,5 @@
 {% from "components/ui/macros.html" import status_presentation_badge %}
+{% set bulk_selection_enabled = customer_bulk_action_contract.selection_enabled if customer_bulk_action_contract is defined else false %}
 <div
     x-data="customersTable()"
     data-filtered-total="{{ page_meta.total_items }}"
@@ -19,14 +20,17 @@
             <caption class="sr-only">Customers matching the current search and filters</caption>
             <thead class="bg-slate-50/80 dark:bg-slate-800/80">
                 <tr>
-                    <!-- Select All Checkbox -->
+                    {% if bulk_selection_enabled %}
+                    <!-- Select the current page only; filtered selection is a separate action. -->
                     <th scope="col" class="w-12 px-4 py-3.5">
                         <input type="checkbox"
                                data-select-all
                                @change="toggleSelectAll($event)"
+                               :disabled="selectionMode === 'filtered'"
                                aria-label="Select all customers on this page"
                                class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:ring-offset-slate-800" />
                     </th>
+                    {% endif %}
                     {% set name_sort_dir = 'desc' if list_query.sort_by == 'name' and list_query.sort_dir == 'asc' else 'asc' %}
                     {% set name_sort_url = list_query.url('/admin/customers', page=1, sort_by='name', sort_dir=name_sort_dir) %}
                     <th scope="col"
@@ -87,6 +91,7 @@
                 <tr class="group transition-colors hover:bg-slate-50/60 dark:hover:bg-slate-700/30"
                     data-customer-id="{{ customer.id }}"
                     data-customer-type="{{ customer.type }}">
+                    {% if bulk_selection_enabled %}
                     <!-- Row Checkbox -->
                     <td class="whitespace-nowrap px-4 py-4">
                         <input type="checkbox"
@@ -94,9 +99,11 @@
                                data-id="{{ customer.id }}"
                                data-type="{{ customer.type }}"
                                @change="toggleCustomer($event)"
+                               :disabled="selectionMode === 'filtered'"
                                aria-label="Select {{ customer.name }}"
                                class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:ring-offset-slate-800" />
                     </td>
+                    {% endif %}
                     <td class="whitespace-nowrap px-4 py-4">
                         <a href="{{ customer_path }}" class="flex items-center gap-3 group/link">
                             <div class="relative flex-shrink-0">
@@ -267,7 +274,7 @@
                 {% endfor %}
                 {% else %}
                 <tr>
-                    <td colspan="9" class="px-6 py-16 text-center">
+                    <td colspan="{{ 9 if bulk_selection_enabled else 8 }}" class="px-6 py-16 text-center">
                         <div class="mx-auto max-w-sm">
                             <div class="mx-auto flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-100 to-slate-50 dark:from-slate-700 dark:to-slate-800">
                                 <svg class="h-10 w-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -392,12 +399,10 @@ function customersTable() {
 
             checkboxes.forEach(cb => {
                 cb.checked = checked;
-                if (checked) {
-                    customers.push({
-                        id: cb.dataset.id,
-                        type: cb.dataset.type
-                    });
-                }
+                customers.push({
+                    id: cb.dataset.id,
+                    type: cb.dataset.type
+                });
             });
 
             document.dispatchEvent(new CustomEvent('customers-select-all', {
