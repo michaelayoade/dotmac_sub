@@ -19,7 +19,6 @@ def test_domain_sot_relationships_cover_expected_domains():
         "observability",
         "support_operations",
         "provisioning_operations",
-        "support_control_plane",
         "feature_control_plane",
         "authorization_control_plane",
         "scheduler_control_plane",
@@ -258,7 +257,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("access.radius_projection") == (
         "access.radius_state",
-        "network.identity",
+        "access.radius_reject",
     )
     assert sot_relationships.dependencies_for("communications.intents") == (
         "communications.channel_policy",

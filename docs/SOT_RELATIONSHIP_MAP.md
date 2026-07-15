@@ -38,7 +38,7 @@ but equivalent state and actions resolve through the same backend owners.
 9. `runtime_infrastructure`
 10. `observability`
 11. `provisioning_operations`
-12. `support_control_plane`
+12. `support_operations`
 13. `feature_control_plane`
 14. `authorization_control_plane`
 15. `scheduler_control_plane`
@@ -55,7 +55,7 @@ that obscure business behavior.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
-persistence-like mutation must name a declared owner. The 303 existing
+persistence-like mutation must name a declared owner. The 297 existing
 undeclared writer-like modules are an explicit shrink-only migration baseline,
 not approved parallel writers; resolving an owner or removing its write requires
 deleting the baseline entry. Adding an entry requires an explicit ownership
