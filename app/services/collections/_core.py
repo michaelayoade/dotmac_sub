@@ -57,7 +57,6 @@ from app.services.access_resolution import (
 )
 from app.services.audit import AuditEvents
 from app.services.billing._common import resolve_invoice_settlement_amounts
-from app.services.billing.invoice_classification import collectible_ar_invoice_filter
 from app.services.billing.invoices import Invoices
 from app.services.billing_prepaid_overlap_repair import (
     apply_prepaid_overlap_hold,
@@ -79,6 +78,7 @@ from app.services.common import (
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.payment_arrangements import (
     active_arrangement_shield_reason,
     bulk_active_arrangement_shield_reasons,

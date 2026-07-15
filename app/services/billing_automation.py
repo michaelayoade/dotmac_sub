@@ -40,10 +40,6 @@ from app.schemas.billing import InvoiceCreate
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing._common import _calculate_tax_amount
-from app.services.billing.invoice_classification import (
-    collectible_ar_invoice_filter,
-    prepaid_non_ar_invoice_ids,
-)
 from app.services.billing.invoices import Invoices, next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
@@ -55,6 +51,10 @@ from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.common import coerce_uuid, round_money
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.invoice_classification import (
+    collectible_ar_invoice_filter,
+    prepaid_non_ar_invoice_ids,
+)
 from app.services.service_entitlements import (
     ensure_prepaid_entitlements_for_paid_invoice,
     prepaid_entitlement_coverage_end,

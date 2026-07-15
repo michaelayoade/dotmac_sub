@@ -35,8 +35,8 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.splynx_transaction import SplynxBillingTransaction
-from app.services.billing.invoice_classification import collectible_ar_invoice_filter
 from app.services.common import coerce_uuid, round_money
+from app.services.invoice_classification import collectible_ar_invoice_filter
 
 LEGACY_LEDGER_CUTOVER = datetime(2026, 3, 15, 23, 59, 59, tzinfo=UTC)
 PAYMENT_ACTIVITY_AT = datetime(2026, 6, 16, tzinfo=UTC)

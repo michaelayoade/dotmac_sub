@@ -1575,6 +1575,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("access.radius_state",),
             ),
             SOTService(
+                name="access.radius_projection",
+                module="app.services.radius_population",
+                owns=(
+                    "radcheck/radreply projection (customer credentials)",
+                    "radcheck_admin/radreply_admin device-login projection",
+                    "idempotent advisory-locked single-writer RADIUS auth sweep",
+                    "walled-garden/reject radreply on blocked/suspended access",
+                ),
+                depends_on=("access.radius_state", "access.radius_reject"),
+                notes=(
+                    "Single writer of the FreeRADIUS auth tables on one shared "
+                    "DSN. Event-time and per-user callers request a projection "
+                    "(full sweep or scoped reconcile); they do not write radcheck/"
+                    "radreply directly. Collapsing the remaining scoped writers in "
+                    "radius.py/enforcement.py is a tracked shrink-only migration."
+                ),
+            ),
+            SOTService(
                 name="access.session_enforcement",
                 module="app.services.enforcement",
                 owns=("access-state CoA/disconnect execution",),
