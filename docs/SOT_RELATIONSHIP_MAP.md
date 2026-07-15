@@ -1293,10 +1293,21 @@ Network access:
    explicit eligible residential opt-in and network readiness.
 4. `access.radius_state`: maps the effective tier to RADIUS groups/profiles.
 5. `access.radius_reject`: owns reject IP lifecycle.
-6. `access.session_enforcement`: applies CoA/disconnect outcomes.
+6. `access.radius_projection`: is the single idempotent writer that projects
+   desired access and reject state into `radcheck`/`radreply` (and the
+   `radcheck_admin`/`radreply_admin` device-login tables), under a Postgres
+   advisory lock on one shared RADIUS DSN. Blocked/suspended users get a
+   walled-garden `radreply` rather than row deletion, so suspension takes effect
+   at the BNG without losing the captive pay-page treatment.
+7. `access.session_enforcement`: applies CoA/disconnect outcomes.
 
 Rule: billing, FUP, and admin actions resolve the desired access outcome once,
 map it to RADIUS state once, and let enforcement apply the network-side change.
+No module outside `access.radius_projection` writes `radcheck`/`radreply`;
+event-time and per-user callers request a projection (full sweep or a scoped
+reconcile) or enqueue `refresh_radius_from_subs`. The remaining scoped writers in
+`radius.py` and `enforcement.py` are a shrink-only migration to that owner,
+pinned by `tests/architecture/test_radius_projection_ownership.py`.
 
 Service intent:
 
