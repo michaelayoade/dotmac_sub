@@ -282,12 +282,9 @@ def invoices_export_csv(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    invoices = web_billing_overview_service.list_invoices_for_scope(
-        db, list_query=list_query
-    )
-    content = web_billing_overview_service.render_invoices_csv(invoices)
+    rows = web_billing_overview_service.stream_invoices_csv(db, list_query=list_query)
     return StreamingResponse(
-        iter([content]),
+        rows,
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="invoices_export.csv"'},
     )

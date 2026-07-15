@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from collections.abc import Iterator
 from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -619,50 +620,95 @@ def build_invoices_list_data(
     }
 
 
+_INVOICE_CSV_HEADER = (
+    "invoice_id",
+    "invoice_number",
+    "account_id",
+    "status",
+    "total",
+    "balance_due",
+    "payment_received",
+    "currency",
+    "issued_at",
+    "due_at",
+    "created_at",
+    "memo",
+)
+
+# Rows are streamed from a server-side cursor in batches of this size, so an
+# uncapped export stays bounded to one batch in memory rather than loading the
+# whole result set (and then the whole CSV string) at once.
+_INVOICE_CSV_YIELD_PER = 1000
+
+
+def _invoice_csv_row(invoice: Invoice) -> list[str]:
+    total = Decimal(str(getattr(invoice, "total", 0) or 0))
+    due = Decimal(str(getattr(invoice, "balance_due", 0) or 0))
+    received = total - due
+    raw_status = getattr(invoice, "status", None)
+    status_value = (
+        raw_status.value if hasattr(raw_status, "value") else str(raw_status or "")
+    )
+    return [
+        str(invoice.id),
+        invoice.invoice_number or "",
+        str(invoice.account_id) if invoice.account_id else "",
+        status_value,
+        f"{total:.2f}",
+        f"{due:.2f}",
+        f"{received:.2f}",
+        invoice.currency or "NGN",
+        invoice.issued_at.isoformat() if invoice.issued_at else "",
+        invoice.due_at.isoformat() if invoice.due_at else "",
+        invoice.created_at.isoformat() if invoice.created_at else "",
+        invoice.memo or "",
+    ]
+
+
 def render_invoices_csv(invoices: list[Invoice]) -> str:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(
-        [
-            "invoice_id",
-            "invoice_number",
-            "account_id",
-            "status",
-            "total",
-            "balance_due",
-            "payment_received",
-            "currency",
-            "issued_at",
-            "due_at",
-            "created_at",
-            "memo",
-        ]
-    )
+    writer.writerow(_INVOICE_CSV_HEADER)
     for invoice in invoices:
-        total = Decimal(str(getattr(invoice, "total", 0) or 0))
-        due = Decimal(str(getattr(invoice, "balance_due", 0) or 0))
-        received = total - due
-        raw_status = getattr(invoice, "status", None)
-        status_value = (
-            raw_status.value if hasattr(raw_status, "value") else str(raw_status or "")
-        )
-        writer.writerow(
-            [
-                str(invoice.id),
-                invoice.invoice_number or "",
-                str(invoice.account_id) if invoice.account_id else "",
-                status_value,
-                f"{total:.2f}",
-                f"{due:.2f}",
-                f"{received:.2f}",
-                invoice.currency or "NGN",
-                invoice.issued_at.isoformat() if invoice.issued_at else "",
-                invoice.due_at.isoformat() if invoice.due_at else "",
-                invoice.created_at.isoformat() if invoice.created_at else "",
-                invoice.memo or "",
-            ]
-        )
+        writer.writerow(_invoice_csv_row(invoice))
     return buffer.getvalue()
+
+
+def stream_invoices_csv(db, *, list_query: ListQuery) -> Iterator[str]:
+    """Yield the canonical invoice-scope CSV one row at a time.
+
+    Same scope and column contract as ``render_invoices_csv``, but iterated from
+    a server-side cursor so the export never materializes the full result set or
+    the full CSV body in memory. Only direct invoice columns are read, so
+    ``yield_per`` batching is safe (no per-row relationship loads).
+    """
+    if list_query.definition.key != INVOICE_LIST_DEFINITION.key:
+        raise ValueError("Invoice scope requires the billing invoice definition")
+    customer_account_ids = _invoice_customer_account_ids(
+        db, list_query.filter_value("customer_ref")
+    )
+    query = _apply_invoice_list_filters(
+        db.query(Invoice),
+        list_query=list_query,
+        customer_account_ids=customer_account_ids,
+        include_status=True,
+    )
+    query = _apply_invoice_list_sort(query, list_query).yield_per(
+        _INVOICE_CSV_YIELD_PER
+    )
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+
+    def _emit(values) -> str:
+        buffer.seek(0)
+        buffer.truncate(0)
+        writer.writerow(values)
+        return buffer.getvalue()
+
+    yield _emit(_INVOICE_CSV_HEADER)
+    for invoice in query:
+        yield _emit(_invoice_csv_row(invoice))
 
 
 def _account_label(invoice: Invoice) -> str:
