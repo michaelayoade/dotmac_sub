@@ -13,6 +13,7 @@ from app.models.uisp_control import (
     UispIntentTargetType,
     UispSnapshotSource,
 )
+from app.services.uisp import UispApiError
 from app.services.uisp_control_plane import request_apply, stage_intent
 from app.services.uisp_write_adapter import (
     UispApplyResult,
@@ -383,6 +384,60 @@ def test_reconciler_materializes_snapshot_before_verifying_pending_readback(
     assert intent.verified_revision == intent.desired_revision
     assert snapshot.revision == intent.desired_revision
     assert snapshot.config == {"wifi.ssid": "Customer"}
+
+
+def test_reconciler_quarantines_permanently_missing_uisp_device(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    intent, _operation = _records(db_session, subscriber, catalog_offer)
+    intent.status = UispIntentStatus.drifted
+    db_session.commit()
+    _use_session(monkeypatch, db_session)
+    monkeypatch.setattr("app.services.uisp.uisp_configured", lambda: True)
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.UispClient.from_env", lambda: SimpleNamespace()
+    )
+
+    def missing(_db, _intent):
+        raise UispApiError("Device not found", status_code=404)
+
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.UispConfigurationWriteAdapter",
+        lambda *args, **kwargs: SimpleNamespace(readback=missing),
+    )
+
+    stats = reconcile_uisp_config_readback(max_intents=25)
+
+    db_session.refresh(intent)
+    assert stats["missing"] == 1
+    assert stats["failed"] == 0
+    assert intent.status == UispIntentStatus.manual_required
+    assert "relink the inventory target" in intent.last_error
+
+
+def test_reconciler_does_not_automatically_retry_manual_intents(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    intent, _operation = _records(db_session, subscriber, catalog_offer)
+    intent.status = UispIntentStatus.manual_required
+    db_session.commit()
+    _use_session(monkeypatch, db_session)
+    monkeypatch.setattr("app.services.uisp.uisp_configured", lambda: True)
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.UispClient.from_env", lambda: SimpleNamespace()
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "app.tasks.uisp_control.UispConfigurationWriteAdapter",
+        lambda *args, **kwargs: SimpleNamespace(
+            readback=lambda _db, item: calls.append(item)
+        ),
+    )
+
+    stats = reconcile_uisp_config_readback(max_intents=25)
+
+    assert stats["checked"] == 0
+    assert calls == []
 
 
 def test_task_marks_model_unsupported_warning(

@@ -53,7 +53,10 @@ def dispatch_huawei_ont_status() -> dict[str, int]:
 def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
     """Persist one bulk OLT observation; transport/parser failures retry."""
     from app.models.network import OLTDevice
-    from app.services.network.ont_runtime_status import refresh_huawei_olt_status
+    from app.services.network.ont_runtime_status import (
+        record_olt_poll_failure,
+        refresh_huawei_olt_status,
+    )
 
     with postgres_session_advisory_lock(_olt_lock_key(olt_id)) as acquired:
         if not acquired:
@@ -62,7 +65,12 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
             olt = db.get(OLTDevice, olt_id)
             if olt is None or not olt.is_active:
                 return {"olt_id": olt_id, "skipped": "inactive_or_missing"}
-            stats = refresh_huawei_olt_status(db, olt)
+            try:
+                stats = refresh_huawei_olt_status(db, olt)
+            except (RuntimeError, OSError, TimeoutError) as exc:
+                record_olt_poll_failure(olt, exc)
+                db.commit()
+                raise
             db.commit()
             return {
                 "olt_id": stats.olt_id,

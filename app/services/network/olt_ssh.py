@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
+import time
 from dataclasses import asdict, replace
 from typing import Any, cast
 
@@ -313,6 +314,44 @@ def _derive_prompt_regex(output: str, fallback: str) -> str:
     return fallback
 
 
+def _send_huawei_command(
+    channel: Channel,
+    command: str,
+    *,
+    word_delay_sec: float = 0.1,
+) -> None:
+    """Send a command without overrunning Huawei's interactive line editor."""
+    parts = command.split(" ")
+    for index, part in enumerate(parts):
+        channel.send(part)
+        if index < len(parts) - 1:
+            channel.send(" ")
+            time.sleep(word_delay_sec)
+    if parts:
+        time.sleep(word_delay_sec)
+    channel.send("\n")
+
+
+def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
+    """Enter privileged mode, derive its real prompt, and disable paging."""
+    _send_huawei_command(channel, "enable", word_delay_sec=0)
+    output = _read_until_prompt(
+        channel,
+        r"(?:^|\r?\n)[^\r\n]*#\s*$",
+        timeout_sec=5,
+    )
+    fallback_prompt = prompt_regex.replace(">", "#")
+    if "#" not in fallback_prompt:
+        fallback_prompt = r"#\s*$"
+    privileged_prompt = _derive_prompt_regex(output, fallback_prompt)
+    _run_huawei_cmd(
+        channel,
+        "screen-length 0 temporary",
+        prompt=privileged_prompt,
+    )
+    return privileged_prompt
+
+
 def _replace_policy_prompt_regex(
     policy: OltSshPolicy, prompt_regex: str
 ) -> OltSshPolicy:
@@ -443,7 +482,7 @@ def _needs_huawei_command_confirm(output: str) -> bool:
 def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> str:
     """Send a command to a Huawei shell, accepting optional-argument prompts."""
     logger.debug("OLT command: %r", command)
-    channel.send(f"{command}\n")
+    _send_huawei_command(channel, command)
     out = _read_until_prompt(
         channel, rf"{prompt}|<cr>|{HUAWEI_OPTIONAL_ARG_PROMPT}", timeout_sec=12
     )
@@ -458,7 +497,7 @@ def _run_huawei_paged_cmd(
 ) -> str:
     """Send a command and handle pagination (---- More ----) prompts."""
     logger.debug("OLT paged command: %r", command)
-    channel.send(f"{command}\n")
+    _send_huawei_command(channel, command)
     output_parts: list[str] = []
     pager_pattern = r"---- More(?:\s*\([^)]*\)\s*)?----|<cr>|Press any key"
     combined_pattern = rf"{prompt}|{pager_pattern}"
@@ -510,15 +549,12 @@ def get_service_ports(
 
     try:
         with ssh_context as (channel, policy):
-            channel.send("enable\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-            channel.send("screen-length 0 temporary\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
 
             output = _run_huawei_paged_cmd(
                 channel,
                 f"display service-port port {fsp}",
-                prompt=policy.prompt_regex,
+                prompt=prompt,
             )
             entries = _parse_service_port_table(output)
             _cache_service_ports(olt, fsp, entries)
@@ -702,15 +738,12 @@ def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
         return False, f"Connection failed: {exc}", FirmwareInfo()
 
     try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
 
         output = _run_huawei_paged_cmd(
             channel,
             "display version",
-            prompt=policy.prompt_regex,
+            prompt=prompt,
             timeout_sec=30,
         )
 

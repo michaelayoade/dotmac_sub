@@ -8,7 +8,13 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OLTDevice, OntUnit, OnuOfflineReason, OnuOnlineStatus
+from app.models.network import (
+    OLTDevice,
+    OntUnit,
+    OnuOfflineReason,
+    OnuOnlineStatus,
+    PollStatus,
+)
 from app.services.network.ont_status import apply_olt_status_observation
 from app.services.network.serial_utils import canonical, parse_ont_id_on_olt
 
@@ -21,6 +27,22 @@ class OltStatusRefreshStats:
     offline: int
     unmatched: int
     invalid: int
+
+
+def record_olt_poll_failure(
+    olt: OLTDevice,
+    error: Exception,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Persist bounded OLT poll failure telemetry before a task retry."""
+    observed_at = now or datetime.now(UTC)
+    olt.last_poll_at = observed_at
+    olt.last_poll_status = (
+        PollStatus.timeout if isinstance(error, TimeoutError) else PollStatus.failed
+    )
+    olt.last_poll_error = str(error)[:500]
+    olt.consecutive_poll_failures = (olt.consecutive_poll_failures or 0) + 1
 
 
 def _binary_run_state(run_state: str | None) -> OnuOnlineStatus:
@@ -138,6 +160,11 @@ def refresh_huawei_olt_status(
         else:
             offline += 1
 
+    olt.last_poll_at = observed_at
+    olt.last_poll_status = PollStatus.success
+    olt.last_poll_error = None
+    olt.consecutive_poll_failures = 0
+    olt.last_successful_ssh_at = observed_at
     db.flush()
     return OltStatusRefreshStats(
         olt_id=str(olt.id),

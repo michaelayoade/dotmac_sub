@@ -96,7 +96,7 @@ def get_service_port_by_index(
     from app.services.network import olt_ssh as core
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (core.SSHException, OSError, ValueError) as exc:
         return False, f"Connection failed: {exc}", None
     except Exception as exc:
@@ -104,9 +104,12 @@ def get_service_port_by_index(
         return False, f"Unexpected error: {type(exc).__name__}", None
 
     try:
-        channel.send("enable\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        output = core._run_huawei_paged_cmd(channel, f"display service-port {index}")
+        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        output = core._run_huawei_paged_cmd(
+            channel,
+            f"display service-port {index}",
+            prompt=prompt,
+        )
         if core.is_error_output(output):
             return False, f"OLT rejected: {output.strip()[-150:]}", None
         entries = core._parse_service_port_table(output)

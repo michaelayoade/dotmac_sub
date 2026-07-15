@@ -23,7 +23,7 @@ from app.services.control_plane_intent import (
 )
 from app.services.db_session_adapter import db_session_adapter
 from app.services.network_operations import network_operations
-from app.services.uisp import UispClient, UispClientError
+from app.services.uisp import UispApiError, UispClient, UispClientError
 from app.services.uisp_control_plane import redact_config
 from app.services.uisp_write_adapter import (
     UispConfigurationWriteAdapter,
@@ -33,6 +33,17 @@ from app.services.uisp_write_adapter import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_missing_uisp_device(exc: Exception) -> bool:
+    return isinstance(exc, UispApiError) and exc.status_code == 404
+
+
+def _missing_uisp_device_message(exc: Exception) -> str:
+    return (
+        "UISP device no longer exists; relink the inventory target or retire "
+        f"the intent before applying again: {exc}"
+    )
 
 
 def _mark_pending_readback(
@@ -184,13 +195,27 @@ def execute_uisp_apply(
             )
             return {"success": False, **payload}
         except (UispWriteAdapterError, UispClientError) as exc:
-            message = str(exc)
-            intent.status = UispIntentStatus.failed
-            intent.last_error = message
-            payload = {"outcome": "failed", "verified": False, "message": message}
-            network_operations.mark_failed(
-                db, operation_id, message, output_payload=payload
+            missing_device = _is_missing_uisp_device(exc)
+            message = _missing_uisp_device_message(exc) if missing_device else str(exc)
+            intent.status = (
+                UispIntentStatus.manual_required
+                if missing_device
+                else UispIntentStatus.failed
             )
+            intent.last_error = message
+            payload = {
+                "outcome": "missing_device" if missing_device else "failed",
+                "verified": False,
+                "message": message,
+            }
+            if missing_device:
+                network_operations.mark_warning(
+                    db, operation_id, message, output_payload=payload
+                )
+            else:
+                network_operations.mark_failed(
+                    db, operation_id, message, output_payload=payload
+                )
             return {"success": False, **payload}
         except Exception as exc:  # noqa: BLE001 - terminal operation audit
             logger.exception(
@@ -248,7 +273,14 @@ def reconcile_uisp_config_readback(max_intents: int = 25) -> dict[str, Any]:
     if not uisp_configured():
         return {"skipped": "uisp_token_missing"}
     bounded = max(1, min(int(max_intents), 100))
-    stats = {"checked": 0, "verified": 0, "drifted": 0, "unsupported": 0, "failed": 0}
+    stats = {
+        "checked": 0,
+        "verified": 0,
+        "drifted": 0,
+        "missing": 0,
+        "unsupported": 0,
+        "failed": 0,
+    }
     with db_session_adapter.session() as db:
         stale_applying_before = datetime.now(UTC) - timedelta(minutes=5)
         intents = (
@@ -259,7 +291,6 @@ def reconcile_uisp_config_readback(max_intents: int = 25) -> dict[str, Any]:
                         {
                             UispIntentStatus.verified,
                             UispIntentStatus.drifted,
-                            UispIntentStatus.manual_required,
                             UispIntentStatus.pending_readback,
                         }
                     ),
@@ -310,7 +341,12 @@ def reconcile_uisp_config_readback(max_intents: int = 25) -> dict[str, Any]:
                 intent.last_error = str(exc)
                 stats["unsupported"] += 1
             except (UispWriteAdapterError, UispClientError) as exc:
-                intent.last_error = str(exc)
-                stats["failed"] += 1
+                if _is_missing_uisp_device(exc):
+                    intent.status = UispIntentStatus.manual_required
+                    intent.last_error = _missing_uisp_device_message(exc)
+                    stats["missing"] += 1
+                else:
+                    intent.last_error = str(exc)
+                    stats["failed"] += 1
             db.flush()
     return stats

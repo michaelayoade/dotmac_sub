@@ -34,6 +34,10 @@ def _patch_successful_shell(monkeypatch, command_output: str) -> None:
         lambda *_args, **_kwargs: "",
     )
     monkeypatch.setattr(
+        "app.services.network.olt_ssh._prepare_huawei_read_shell",
+        lambda _channel, prompt: prompt,
+    )
+    monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_cmd",
         lambda _channel, command, **_kwargs: (
             command_output if command.startswith("service-port") else ""
@@ -195,6 +199,10 @@ def test_get_service_port_by_index_parses_huawei_detail_output(monkeypatch) -> N
     monkeypatch.setattr(
         "app.services.network.olt_ssh._read_until_prompt",
         lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._prepare_huawei_read_shell",
+        lambda _channel, prompt: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_paged_cmd",

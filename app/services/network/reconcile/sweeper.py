@@ -71,6 +71,7 @@ class SweepStats:
     skipped_unreachable: int = 0
     succeeded: int = 0
     failed: int = 0
+    deferred: int = 0
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -151,6 +152,7 @@ def run_sweep_once(
     only_active: bool = True,
     alert_threshold: int | None = None,
     max_onts: int | None = None,
+    max_duration_sec: float | None = None,
 ) -> SweepStats:
     """Sweep every active ONT once and return aggregated stats.
 
@@ -159,6 +161,7 @@ def run_sweep_once(
     DB connection timeouts.
     """
     started = datetime.now(UTC)
+    started_monotonic = time.monotonic()
     stats = SweepStats(started_at=started)
     effective_threshold = (
         alert_threshold if alert_threshold is not None else default_threshold_from_env()
@@ -191,7 +194,19 @@ def run_sweep_once(
         extra={"total_onts": stats.total_onts, "started_at": started.isoformat()},
     )
 
-    for ont_id in ont_ids:
+    for index, ont_id in enumerate(ont_ids):
+        if max_duration_sec is not None and time.monotonic() - started_monotonic >= max(
+            0.0, max_duration_sec
+        ):
+            stats.deferred = len(ont_ids) - index
+            logger.warning(
+                "sweep_cycle_budget_exhausted",
+                extra={
+                    "deferred": stats.deferred,
+                    "max_duration_sec": max_duration_sec,
+                },
+            )
+            break
         try:
             with db_factory() as ont_db:
                 reachable, success = _sweep_one(
@@ -229,6 +244,7 @@ def run_sweep_once(
             "skipped_unreachable": stats.skipped_unreachable,
             "succeeded": stats.succeeded,
             "failed": stats.failed,
+            "deferred": stats.deferred,
             "errors": len(stats.errors),
             "duration_sec": stats.duration_sec,
         },
