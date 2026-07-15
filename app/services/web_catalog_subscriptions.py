@@ -92,19 +92,43 @@ POOL_IPV4_SELECTOR_PREFIX = "pool:"
 UNSPECIFIED_IPV4 = ipaddress.IPv4Address(0)
 
 
-def _format_offer_price_summary(amount: object | None) -> str:
+def _price_period_suffix(*, unit: object | None, billing_cycle: object | None) -> str:
+    value = _enum_raw_value(unit) or _enum_raw_value(billing_cycle) or "month"
+    return {
+        "day": "/day",
+        "daily": "/day",
+        "week": "/week",
+        "weekly": "/week",
+        "month": "/mo",
+        "monthly": "/mo",
+        "year": "/yr",
+        "annual": "/yr",
+    }.get(value, f"/{value}")
+
+
+def _format_offer_price_summary(
+    amount: object | None,
+    *,
+    unit: object | None = None,
+    billing_cycle: object | None = None,
+) -> str:
     value = _coerce_setting_decimal(amount)
     if value is None:
         return ""
-    return f"₦{value:,.0f}/mo"
+    suffix = _price_period_suffix(unit=unit, billing_cycle=billing_cycle)
+    return f"₦{value:,.0f}{suffix}"
 
 
 def _offer_option(offer: object) -> dict[str, str]:
     offer_id = str(getattr(offer, "id", "") or "")
     name = str(getattr(offer, "name", "") or "")
     prices = getattr(offer, "prices", None) or []
-    amount = getattr(prices[0], "amount", None) if prices else None
-    price_summary = _format_offer_price_summary(amount)
+    price = prices[0] if prices else None
+    price_summary = _format_offer_price_summary(
+        getattr(price, "amount", None) if price else None,
+        unit=getattr(price, "unit", None) if price else None,
+        billing_cycle=getattr(price, "billing_cycle", None) if price else None,
+    )
     label = name
     if price_summary:
         label = f"{name} - {price_summary}"
@@ -122,24 +146,36 @@ def _offer_options(
     offer_ids = [
         getattr(offer, "id", None) for offer in offers if getattr(offer, "id", None)
     ]
-    first_amount_by_offer_id: dict[str, object] = {}
+    first_price_by_offer_id: dict[str, tuple[object, object, object]] = {}
     if include_prices and offer_ids:
         price_rows = (
-            db.query(OfferPrice.offer_id, OfferPrice.amount)
+            db.query(
+                OfferPrice.offer_id,
+                OfferPrice.amount,
+                OfferPrice.unit,
+                OfferPrice.billing_cycle,
+            )
             .filter(OfferPrice.offer_id.in_(offer_ids))
             .filter(OfferPrice.is_active.is_(True))
             .order_by(OfferPrice.created_at.asc())
             .all()
         )
-        for offer_id, amount in price_rows:
-            first_amount_by_offer_id.setdefault(str(offer_id), amount)
+        for offer_id, amount, unit, billing_cycle in price_rows:
+            first_price_by_offer_id.setdefault(
+                str(offer_id), (amount, unit, billing_cycle)
+            )
 
     options: list[dict[str, str]] = []
     for offer in offers:
         offer_id = str(getattr(offer, "id", "") or "")
         name = str(getattr(offer, "name", "") or "")
+        amount, unit, billing_cycle = first_price_by_offer_id.get(
+            offer_id, (None, None, None)
+        )
         price_summary = _format_offer_price_summary(
-            first_amount_by_offer_id.get(offer_id)
+            amount,
+            unit=unit,
+            billing_cycle=billing_cycle,
         )
         label = f"{name} - {price_summary}" if price_summary else name
         options.append(

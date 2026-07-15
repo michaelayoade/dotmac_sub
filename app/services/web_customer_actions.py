@@ -1320,6 +1320,16 @@ def _normalize_optional(value: str | None) -> str | None:
     return stripped or None
 
 
+def _normalize_subscriber_category(value: str | None) -> SubscriberCategory | None:
+    normalized = _normalize_optional(value)
+    if normalized is None:
+        return None
+    try:
+        return SubscriberCategory(normalized.lower())
+    except ValueError as exc:
+        raise ValueError("Invalid subscriber category") from exc
+
+
 def _require_text(value: str | None, label: str, *, max_length: int) -> str:
     """Validate a required free-text field: trim, reject blank/whitespace-only,
     and enforce a max length so we surface a clean message instead of relying on
@@ -1940,6 +1950,7 @@ def update_person_customer(
     postal_code: str | None,
     country_code: str | None,
     status: str | None,
+    subscriber_category: str | None = None,
     is_active: str | None,
     marketing_opt_in: str | None,
     notes: str | None,
@@ -1987,7 +1998,8 @@ def update_person_customer(
         "status": normalized_status,
         "is_active": active,
         "marketing_opt_in": marketing_opt_in == "true",
-        "category": SubscriberCategory.residential.value,
+        "category": _normalize_subscriber_category(subscriber_category)
+        or SubscriberCategory.residential,
         "notes": _normalize_optional(notes),
         "metadata_": metadata_json,
     }
@@ -2045,6 +2057,7 @@ def update_business_customer(
     tax_id: str | None,
     domain: str | None,
     website: str | None,
+    subscriber_category: str | None = None,
     org_notes: str | None,
     org_account_start_date: str | None,
     billing_enabled_override: str | None,
@@ -2067,7 +2080,8 @@ def update_business_customer(
             "domain": _normalize_optional(domain),
             "website": _normalize_optional(website),
             "notes": _normalize_optional(org_notes),
-            "category": SubscriberCategory.business.value,
+            "category": _normalize_subscriber_category(subscriber_category)
+            or SubscriberCategory.business,
             **_billing_override_payload(
                 billing_enabled_override=billing_enabled_override,
                 billing_day=billing_day,

@@ -14,9 +14,12 @@ from app.models.catalog import (
     AddOn,
     AddOnPrice,
     AddOnType,
+    BillingCycle,
     BillingMode,
     NasDevice,
+    OfferPrice,
     PriceType,
+    PriceUnit,
     Subscription,
     SubscriptionAddOn,
     SubscriptionStatus,
@@ -486,6 +489,32 @@ def test_subscription_form_context_exposes_plain_offer_labels(
     assert option["name"] == catalog_offer.name
     assert option["label"].startswith(catalog_offer.name)
     assert isinstance(option["price_summary"], str)
+
+
+def test_active_offer_options_label_annual_offer_prices(
+    db_session,
+    catalog_offer,
+):
+    db_session.add(
+        OfferPrice(
+            offer_id=catalog_offer.id,
+            price_type=PriceType.recurring,
+            amount=Decimal("8400000.00"),
+            currency="NGN",
+            billing_cycle=BillingCycle.annual,
+            unit=PriceUnit.year,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    options = web_catalog_subscriptions_service.active_offer_options(db_session)
+
+    option = next(
+        item for item in options if item["id"] == str(catalog_offer.id)
+    )
+    assert option["price_summary"] == "₦8,400,000/yr"
+    assert option["label"].endswith("₦8,400,000/yr")
 
 
 def test_subscription_form_context_exposes_json_safe_ipv4_blocks(db_session):

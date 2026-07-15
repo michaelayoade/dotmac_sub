@@ -123,6 +123,43 @@ def test_update_business_customer_applies_billing_overrides_to_linked_subscriber
     assert refreshed.payment_method == "cash"
 
 
+def test_update_business_customer_persists_selected_subscriber_category(db_session):
+    organization = Subscriber(
+        first_name="Agency",
+        last_name="Account",
+        email="agency@example.com",
+        company_name="Government Agency",
+    )
+    organization.category = SubscriberCategory.business
+    db_session.add(organization)
+    db_session.commit()
+
+    actions.update_business_customer(
+        db=db_session,
+        customer_id=str(organization.id),
+        name="Government Agency",
+        legal_name=None,
+        tax_id=None,
+        domain=None,
+        website=None,
+        subscriber_category="government",
+        org_notes=None,
+        org_account_start_date=None,
+        billing_enabled_override=None,
+        billing_day=None,
+        payment_due_days=None,
+        grace_period_days=None,
+        min_balance=None,
+        captive_redirect_enabled=None,
+        tax_rate_id=None,
+        payment_method=None,
+    )
+
+    refreshed = db_session.get(Subscriber, organization.id)
+    assert refreshed is not None
+    assert refreshed.category == SubscriberCategory.government
+
+
 def test_repair_customer_access_state_restores_stale_active_projection(
     db_session, monkeypatch, subscriber, catalog_offer
 ):
@@ -486,6 +523,16 @@ def _update_person(db, subscriber, **overrides):
     return actions.update_person_customer(
         db=db, customer_id=str(subscriber.id), **kwargs
     )
+
+
+def test_update_person_customer_persists_selected_subscriber_category(
+    db_session, subscriber
+):
+    _update_person(db_session, subscriber, subscriber_category="business")
+
+    refreshed = db_session.get(Subscriber, subscriber.id)
+    assert refreshed is not None
+    assert refreshed.category == SubscriberCategory.business
 
 
 def test_update_person_allows_shared_email(db_session, subscriber):
