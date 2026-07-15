@@ -21,6 +21,7 @@ from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
 from app.web.admin import support_assignment_rules as admin_support_assignment_rules
 from app.web.admin import support_automation as admin_support_automation
+from app.web.admin import support_tickets as admin_support_tickets
 from app.web.admin import system as admin_system
 from app.web.admin import system_whats_new as admin_system_whats_new
 from app.web.admin import usage as admin_usage
@@ -584,6 +585,21 @@ def test_team_inbox_routes_require_support_permissions():
     assert _route_has_permission(
         admin_inbox.router,
         "/inbox/{conversation_id}/reply",
+        "POST",
+        "support:ticket:update",
+    )
+
+
+def test_support_ticket_bulk_routes_require_update_permission():
+    assert _route_has_permission(
+        admin_support_tickets.router,
+        "/support/tickets/bulk/preview",
+        "POST",
+        "support:ticket:update",
+    )
+    assert _route_has_permission(
+        admin_support_tickets.router,
+        "/support/tickets/bulk/update",
         "POST",
         "support:ticket:update",
     )

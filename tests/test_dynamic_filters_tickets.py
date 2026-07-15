@@ -347,7 +347,7 @@ def test_admin_list_context_applies_filters_and_exposes_schema(db_session):
     ids = {ticket.id for ticket in context["tickets"]}
     assert high.id in ids
     assert low.id not in ids
-    assert context["filters"] == filters
+    assert context["filters"] == '[["Ticket","priority","=","high"]]'
     schema_fields = {entry["field"] for entry in context["ticket_filter_schema"]}
     assert schema_fields == set(TICKET_FILTER_SPECS)
 
