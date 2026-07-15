@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import uuid as uuid_mod
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -39,6 +40,32 @@ _MEDIA_TYPES = {
     ".webp": "image/webp",
     ".pdf": "application/pdf",
 }
+
+
+class PaymentProofReviewError(HTTPException):
+    """Typed command rejection that web adapters can project without guessing."""
+
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        detail: str,
+        code: str,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.code = code
+        self.field = field
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentProofReviewEligibility:
+    """Read-side eligibility from the owner that executes proof review."""
+
+    verify_allowed: bool
+    verify_unavailable_reason: str | None
+    reject_allowed: bool
+    reject_unavailable_reason: str | None
 
 
 def _initialize_wht_lifecycle(
@@ -130,6 +157,46 @@ def find_duplicate_proofs(db: Session, proof: PaymentProof) -> list[PaymentProof
         .filter(PaymentProof.status != PaymentProofStatus.rejected)
         .order_by(PaymentProof.created_at.asc())
         .all()
+    )
+
+
+def review_eligibility(
+    proof: PaymentProof,
+    duplicates: list[PaymentProof] | tuple[PaymentProof, ...] = (),
+) -> PaymentProofReviewEligibility:
+    """Project the review actions that the command owner will accept.
+
+    Execution still locks and rechecks these rules.  This projection exists so
+    clients do not recreate lifecycle or duplicate-reference policy.
+    """
+
+    if proof.status != PaymentProofStatus.submitted:
+        reason = f"This proof was already {proof.status.value}."
+        return PaymentProofReviewEligibility(
+            verify_allowed=False,
+            verify_unavailable_reason=reason,
+            reject_allowed=False,
+            reject_unavailable_reason=reason,
+        )
+    verified_duplicate = next(
+        (item for item in duplicates if item.status == PaymentProofStatus.verified),
+        None,
+    )
+    if verified_duplicate is not None:
+        return PaymentProofReviewEligibility(
+            verify_allowed=False,
+            verify_unavailable_reason=(
+                "This transfer reference already backs verified proof "
+                f"{verified_duplicate.id}. Reject this submission as a duplicate."
+            ),
+            reject_allowed=True,
+            reject_unavailable_reason=None,
+        )
+    return PaymentProofReviewEligibility(
+        verify_allowed=True,
+        verify_unavailable_reason=None,
+        reject_allowed=True,
+        reject_unavailable_reason=None,
     )
 
 
@@ -327,9 +394,17 @@ def verify_proof(
     """
     proof = db.get(PaymentProof, coerce_uuid(proof_id))
     if proof is None:
-        raise HTTPException(status_code=404, detail="Payment proof not found")
+        raise PaymentProofReviewError(
+            status_code=404,
+            detail="Payment proof not found",
+            code="payment_proof_not_found",
+        )
     if proof.status != PaymentProofStatus.submitted:
-        raise HTTPException(status_code=400, detail="Proof already reviewed")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Proof already reviewed",
+            code="payment_proof_already_reviewed",
+        )
 
     # Reseller consolidated transfer (credits a billing account, may carry WHT).
     if proof.billing_account_id is not None:
@@ -352,15 +427,27 @@ def verify_proof(
     lock_account(db, str(proof.account_id))
     db.refresh(proof)
     if proof.status != PaymentProofStatus.submitted:
-        raise HTTPException(status_code=400, detail="Proof already reviewed")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Proof already reviewed",
+            code="payment_proof_already_reviewed",
+        )
 
     try:
         value = round_money(to_decimal(amount if amount is not None else proof.amount))
     except (InvalidOperation, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid verified amount") from exc
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Invalid verified amount",
+            code="invalid_verified_amount",
+            field="amount",
+        ) from exc
     if value <= Decimal("0.00"):
-        raise HTTPException(
-            status_code=400, detail="Verified amount must be greater than 0"
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Verified amount must be greater than 0",
+            code="verified_amount_non_positive",
+            field="amount",
         )
 
     duplicates = find_duplicate_proofs(db, proof)
@@ -368,13 +455,14 @@ def verify_proof(
         (d for d in duplicates if d.status == PaymentProofStatus.verified), None
     )
     if verified_dup is not None:
-        raise HTTPException(
+        raise PaymentProofReviewError(
             status_code=409,
             detail=(
                 f"Reference '{proof.reference}' was already verified on another "
                 f"proof ({verified_dup.id}) and paid. Reject this submission as "
                 "a duplicate instead."
             ),
+            code="duplicate_transfer_reference",
         )
 
     allocations = (
@@ -464,21 +552,37 @@ def _verify_consolidated_proof(
         .with_for_update()
     )
     if ba is None:
-        raise HTTPException(status_code=404, detail="Billing account not found")
+        raise PaymentProofReviewError(
+            status_code=404,
+            detail="Billing account not found",
+            code="billing_account_not_found",
+        )
 
     db.refresh(proof)
     if proof.status != PaymentProofStatus.submitted:
-        raise HTTPException(status_code=400, detail="Proof already reviewed")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Proof already reviewed",
+            code="payment_proof_already_reviewed",
+        )
 
     try:
         net_value = round_money(
             to_decimal(amount if amount is not None else proof.amount)
         )
     except (InvalidOperation, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid verified amount") from exc
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Invalid verified amount",
+            code="invalid_verified_amount",
+            field="amount",
+        ) from exc
     if net_value <= Decimal("0.00"):
-        raise HTTPException(
-            status_code=400, detail="Verified amount must be greater than 0"
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Verified amount must be greater than 0",
+            code="verified_amount_non_positive",
+            field="amount",
         )
 
     source_gross = (
@@ -488,9 +592,11 @@ def _verify_consolidated_proof(
     )
     if source_gross is not None:
         if source_gross < net_value:
-            raise HTTPException(
+            raise PaymentProofReviewError(
                 status_code=400,
                 detail="Verified net amount exceeds the submitted gross amount",
+                code="verified_net_exceeds_gross",
+                field="amount",
             )
         gross_value = source_gross
         wht_value = round_money(gross_value - net_value)
@@ -518,12 +624,13 @@ def _verify_consolidated_proof(
         None,
     )
     if verified_dup is not None:
-        raise HTTPException(
+        raise PaymentProofReviewError(
             status_code=409,
             detail=(
                 f"Reference '{proof.reference}' was already verified on another "
                 f"proof ({verified_dup.id}). Reject this submission as a duplicate."
             ),
+            code="duplicate_transfer_reference",
         )
 
     payment = billing_service.payments.create(
@@ -648,11 +755,24 @@ def reject_proof(
 ) -> dict:
     proof = db.get(PaymentProof, coerce_uuid(proof_id))
     if proof is None:
-        raise HTTPException(status_code=404, detail="Payment proof not found")
+        raise PaymentProofReviewError(
+            status_code=404,
+            detail="Payment proof not found",
+            code="payment_proof_not_found",
+        )
     if proof.status != PaymentProofStatus.submitted:
-        raise HTTPException(status_code=400, detail="Proof already reviewed")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="Proof already reviewed",
+            code="payment_proof_already_reviewed",
+        )
     if not (review_notes or "").strip():
-        raise HTTPException(status_code=400, detail="A rejection reason is required")
+        raise PaymentProofReviewError(
+            status_code=400,
+            detail="A rejection reason is required",
+            code="rejection_reason_required",
+            field="review_notes",
+        )
     proof.status = PaymentProofStatus.rejected
     proof.verified_by = str(verified_by)
     proof.review_notes = review_notes.strip()

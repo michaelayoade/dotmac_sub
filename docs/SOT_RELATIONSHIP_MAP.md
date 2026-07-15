@@ -415,6 +415,7 @@ supports it. Filtered, customer-visible, financial, destructive, or fleet-wide
 operations require explicit impact preview and confirmation. WCAG 2.2 AA labels,
 indeterminate state, selected-count announcements, and focus/keyboard behavior
 are part of the contract; hidden controls are never authorization enforcement.
+## UI Action Forms
 
 ## UI Display Formatting
 
@@ -468,6 +469,53 @@ convert currency, select business precision, or collapse unknown into zero.
 Callers must make aggregate-zero behavior explicit and keep unlike currencies
 separate.
 
+1. `ui.action_form_contracts` owns the code-native interaction projection for
+   an action: visibility, disabled reason, semantic tone, impact preview,
+   confirmation requirement, declared fields/options, submitted values, and
+   structured field/general errors.
+2. Domain command and transition services still own authorization, business
+   eligibility, validation, locking, mutation, audit, and consequences. A form
+   contract is a read projection, not an execution bypass. The command owner
+   rechecks every decision when the form is submitted.
+3. Unauthorized actions are omitted. State-ineligible actions are shown
+   disabled only when the owner-provided reason helps the operator understand
+   what must change.
+4. `ui.payment_proof_review_projection` is the first adopted resource.
+   `financial.payment_proofs` owns submitted/verified/rejected eligibility,
+   duplicate-reference policy, payment creation/allocation, WHT consequences,
+   and typed command errors. The web projection adapts those facts into the
+   shared verify/reject forms.
+5. Failed payment-proof submissions render the same detail page with declared
+   values preserved and typed field or general errors. Successful mutations
+   keep POST-Redirect-GET. Templates do not map domain error strings back to
+   fields or infer review availability from raw status.
+6. High-impact actions expose their consequence before submit and require an
+   explicit confirmation supplied by the action contract. Web rendering uses
+   branding-owned semantic roles and WCAG 2.2 AA labels, descriptions, focus,
+   invalid-state, and live-error semantics.
+
+Migration record:
+
+- Old owner: payment-proof detail Jinja selected review actions from raw status,
+  declared fields/defaults, hardcoded impact/confirmation copy, and redirected
+  failed submissions through one unstructured query-string error.
+- New owners: `app.services.payment_proofs` supplies typed eligibility and
+  command errors; `app.services.web_billing_payment_proofs` builds the resource
+  projection through `app.services.action_forms`; the shared Jinja macro only
+  renders that contract.
+- Verification phase: contract, domain eligibility, route/RBAC, submitted-value,
+  structured-error, template architecture, accessibility, payment, duplicate,
+  and WHT tests.
+- Cutover gate: the payment-proof template contains no raw verify/reject form,
+  status-based action branch, local confirmation copy, or domain-error mapping.
+- Fallback retirement: the successful redirect remains; the old failed-action
+  redirect is removed. Other forms migrate incrementally only after their
+  command owner exposes equivalent eligibility and error contracts.
+
+Rule: UI action projections explain and collect a command; they do not decide or
+execute it. Routes pass submissions to the named owner, templates render only
+declared controls, and the owner rechecks permission and eligibility under the
+same lock or transaction that protects the mutation.
 ## UI Semantic Presentation
 
 1. Account, subscription, invoice, payment, outage-incident, support-ticket, and

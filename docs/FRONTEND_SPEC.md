@@ -356,6 +356,7 @@ Import what you need:
 | `submit_button` | `label, loading_label, icon, color, size` | Form submit with loading state |
 | `danger_button` | `label, confirm_title, confirm_message, action_url, method, size, icon` | Delete with confirmation modal |
 | `warning_button` | `label, confirm_title, confirm_message, action_url, method, size, icon` | Warning action with confirmation |
+| `action_form` | `form` (`ActionForm`) | Server-owned action fields, impact, confirmation, disabled reason, submitted values, and structured errors |
 | `search_input` | `name, value, placeholder, color, hx_attrs` | Search input with icon |
 | `filter_select` | `name, options, value, label, color, attrs` | Styled select dropdown |
 | `validated_input` | `name, label, type, value, placeholder, required, validation_url, help_text, icon` | Input with real-time validation |
@@ -1691,6 +1692,29 @@ Template listens:
 ---
 
 ## Form Patterns
+
+### Server-owned action forms
+
+High-impact and lifecycle action forms use
+`app.services.action_forms.ActionForm` and the shared
+`components/forms/action_form.html` renderer. The resource projection composes
+RBAC visibility with eligibility and typed errors from the command owner. It
+declares impact, confirmation, fields/options, defaults, and submitted values;
+templates do not branch on raw state or hand-map domain failures.
+
+The first adopted resource is payment-proof review. Its contract is built by
+`app.services.web_billing_payment_proofs`, while
+`app.services.payment_proofs` remains authoritative for review eligibility,
+duplicate-reference policy, payment/WHT consequences, validation, locking, and
+execution. Unauthorized verify/reject forms are absent. An unavailable verify
+action may remain visible with the owner-provided duplicate reason when reject
+is still valid.
+
+Failed submissions re-render the detail page with the operator's declared
+values and `aria-invalid` field errors or one `role="alert"` general error.
+Successful submissions use POST-Redirect-GET. Financial, destructive, or
+customer-visible action contracts show impact and require explicit confirmation.
+Concrete action colors resolve through branding-owned semantic role tokens.
 
 ### CSRF Token (Required on every POST form)
 ```html

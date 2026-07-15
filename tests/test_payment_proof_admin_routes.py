@@ -83,13 +83,20 @@ class TestAdminWebVerifyRejectHandlers:
         )
         assert "message=" in response.headers["location"]
 
-    def test_verify_redirects_with_error_when_service_rejects(self) -> None:
+    def test_verify_rerenders_with_structured_error_when_service_rejects(self) -> None:
         from app.web.admin.billing_payment_proofs import payment_proofs_verify
 
         proof_id = uuid.uuid4()
-        with patch(
-            "app.web.admin.billing_payment_proofs.web_payment_proofs_service"
-        ) as service:
+        rendered = MagicMock(status_code=409)
+        with (
+            patch(
+                "app.web.admin.billing_payment_proofs.web_payment_proofs_service"
+            ) as service,
+            patch(
+                "app.web.admin.billing_payment_proofs._detail_response",
+                return_value=rendered,
+            ) as detail_response,
+        ):
             service.verify_proof.side_effect = HTTPException(
                 status_code=409, detail="Reference already verified"
             )
@@ -102,8 +109,10 @@ class TestAdminWebVerifyRejectHandlers:
                 db=MagicMock(),
                 auth={"principal_id": "admin-1"},
             )
-        assert response.status_code == 303
-        assert "error=" in response.headers["location"]
+        assert response.status_code == 409
+        service.review_error_submission.assert_called_once()
+        assert detail_response.call_args.kwargs["status_code"] == 409
+        assert detail_response.call_args.kwargs["submission"] is not None
 
     def test_reject_passes_reason_through(self) -> None:
         from app.web.admin.billing_payment_proofs import payment_proofs_reject
@@ -339,6 +348,7 @@ class TestAdminPagesRender:
                 ),
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 db=db_session,
+                auth={"principal_id": "admin", "roles": ["admin"]},
             )
             detail_text = self._text(detail)
             assert detail.status_code == 200
@@ -372,11 +382,46 @@ class TestAdminPagesRender:
                 proof_id=uuid.UUID(proof_env["proof"]["id"]),
                 error="Reference already verified",
                 db=db_session,
+                auth={"principal_id": "admin", "roles": ["admin"]},
             )
             detail_text = self._text(detail)
             assert detail.status_code == 200
             assert "Possible duplicate submission" in detail_text
             assert "Reference already verified" in detail_text
+
+    def test_detail_disables_verify_after_duplicate_reference_was_paid(
+        self, db_session, proof_env
+    ) -> None:
+        duplicate = svc.submit_proof(
+            db_session,
+            str(proof_env["owner"].id),
+            submitted_by=str(proof_env["owner"].id),
+            amount="5000",
+            reference="TRF-FILE",
+            file_path=str(proof_env["receipt"]),
+        )
+        svc.verify_proof(db_session, duplicate["id"], verified_by="admin")
+        from app.web.admin.billing_payment_proofs import payment_proofs_detail
+
+        with (
+            patch("app.web.admin.get_current_user", return_value={"id": "admin"}),
+            patch("app.web.admin.get_sidebar_stats", return_value={}),
+        ):
+            detail = payment_proofs_detail(
+                request=self._request(
+                    f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"
+                ),
+                proof_id=uuid.UUID(proof_env["proof"]["id"]),
+                db=db_session,
+                auth={"principal_id": "admin", "roles": ["admin"]},
+            )
+
+        text = self._text(detail)
+        assert detail.status_code == 200
+        assert 'data-action-form="payment_proof.verify"' in text
+        assert f"verified proof {duplicate['id']}" in text
+        assert 'data-action-form="payment_proof.reject"' in text
+        assert 'disabled aria-disabled="true"' in text
 
     def test_unknown_proof_renders_404_page(self, db_session, proof_env) -> None:
         from app.web.admin.billing_payment_proofs import payment_proofs_detail
@@ -390,8 +435,67 @@ class TestAdminPagesRender:
                 request=self._request(f"/admin/billing/payment-proofs/{proof_id}"),
                 proof_id=proof_id,
                 db=db_session,
+                auth={"principal_id": "admin", "roles": ["admin"]},
             )
             assert resp.status_code == 404
+
+    def test_detail_hides_review_actions_without_verify_permission(
+        self, db_session, proof_env
+    ) -> None:
+        from app.web.admin.billing_payment_proofs import payment_proofs_detail
+
+        with (
+            patch("app.web.admin.get_current_user", return_value={"id": "reader"}),
+            patch("app.web.admin.get_sidebar_stats", return_value={}),
+            patch(
+                "app.web.admin.billing_payment_proofs.has_permission",
+                return_value=False,
+            ),
+        ):
+            detail = payment_proofs_detail(
+                request=self._request(
+                    f"/admin/billing/payment-proofs/{proof_env['proof']['id']}"
+                ),
+                proof_id=uuid.UUID(proof_env["proof"]["id"]),
+                db=db_session,
+                auth={"principal_id": "reader", "roles": []},
+            )
+
+        text = self._text(detail)
+        assert detail.status_code == 200
+        assert 'data-action-form="payment_proof.verify"' not in text
+        assert 'data-action-form="payment_proof.reject"' not in text
+
+    def test_invalid_verify_rerenders_value_and_accessible_field_error(
+        self, db_session, proof_env
+    ) -> None:
+        from app.web.admin.billing_payment_proofs import payment_proofs_verify
+
+        request = self._request(
+            f"/admin/billing/payment-proofs/{proof_env['proof']['id']}/verify"
+        )
+        with (
+            patch("app.web.admin.get_current_user", return_value={"id": "admin"}),
+            patch("app.web.admin.get_sidebar_stats", return_value={}),
+        ):
+            response = payment_proofs_verify(
+                request=request,
+                proof_id=uuid.UUID(proof_env["proof"]["id"]),
+                amount="not-a-number",
+                auto_allocate="no",
+                review_notes="checked statement",
+                db=db_session,
+                auth={"principal_id": "admin", "roles": ["admin"]},
+            )
+
+        text = self._text(response)
+        assert response.status_code == 400
+        assert 'value="not-a-number"' in text
+        assert '<option value="no" selected>' in text
+        assert "checked statement" in text
+        assert "Invalid verified amount" in text
+        assert 'aria-invalid="true"' in text
+        assert 'role="alert"' in text
 
 
 class TestWebAdminFileRoute:

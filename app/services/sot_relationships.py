@@ -1718,6 +1718,49 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
     DomainSOT(
+        domain="ui_action_forms",
+        services=(
+            SOTService(
+                name="ui.action_form_contracts",
+                module="app.services.action_forms",
+                owns=(
+                    "action visibility and disabled-reason projection",
+                    "action impact and confirmation presentation",
+                    "action field and option metadata",
+                    "submitted action values and structured error binding",
+                ),
+                notes=(
+                    "Domain command services still own authorization, eligibility, "
+                    "validation, locking, execution, and audit consequences."
+                ),
+            ),
+            SOTService(
+                name="ui.payment_proof_review_projection",
+                module="app.services.web_billing_payment_proofs",
+                owns=(
+                    "payment-proof review action visibility",
+                    "payment-proof verify and reject form projection",
+                    "payment-proof failed-submission presentation",
+                ),
+                depends_on=(
+                    "ui.action_form_contracts",
+                    "financial.payment_proofs",
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.web.admin.billing_payment_proofs",
+            "templates.admin.billing.payment_proof_detail",
+            "templates.components.forms.action_form",
+        ),
+        rule=(
+            "Action forms render owner-provided eligibility, impact, confirmation, "
+            "declared fields, submitted values, and structured errors. Unauthorized "
+            "actions are omitted. Routes remain adapters, and command owners lock "
+            "and recheck permission and eligibility before mutation."
+        ),
+    ),
+    DomainSOT(
         domain="ui_semantic_presentation",
         services=(
             SOTService(

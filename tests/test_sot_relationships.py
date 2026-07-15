@@ -28,6 +28,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "ui_list_projection",
         "ui_bulk_actions",
         "ui_display_formatting",
+        "ui_action_forms",
         "ui_semantic_presentation",
     ]
 
