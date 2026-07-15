@@ -55,20 +55,14 @@ def test_billing_config_context_backfills_payment_due_days_from_legacy_key(db_se
 def test_billing_config_context_backfills_notification_defaults(db_session):
     context = get_billing_config_context(db_session)
 
-    assert context["billing"]["suspension_grace_hours"] == "48"
     assert context["billing"]["expiry_reminder_days"] == "7"
     assert context["billing"]["invoice_reminder_days"] == "7,1"
-    assert context["billing"]["dunning_escalation_days"] == "3,7,14,30"
-    assert context["billing"]["blocking_period_days"] == "0"
-    assert context["billing"]["deactivation_period_days"] == "0"
     assert context["billing"]["minimum_balance"] == "0"
 
 
 def test_billing_policy_settings_have_specs():
     expected = {
         "billing_enabled_expected": True,
-        "blocking_period_days": 0,
-        "deactivation_period_days": 0,
         "minimum_balance": "0",
     }
 
@@ -76,6 +70,17 @@ def test_billing_policy_settings_have_specs():
         spec = get_spec(SettingDomain.billing, key)
         assert spec is not None
         assert spec.default == default
+
+
+def test_retired_access_controls_have_no_billing_specs():
+    for key in (
+        "auto_suspend_on_overdue",
+        "suspension_grace_hours",
+        "dunning_escalation_days",
+        "blocking_period_days",
+        "deactivation_period_days",
+    ):
+        assert get_spec(SettingDomain.billing, key) is None
 
 
 def test_save_billing_config_normalizes_valid_policy_values(db_session):
@@ -87,13 +92,8 @@ def test_save_billing_config_normalizes_valid_policy_values(db_session):
             "billing_day": "05",
             "use_creation_date": "false",
             "payment_due_days": "14",
-            "auto_suspend_on_overdue": "true",
-            "suspension_grace_hours": "48",
             "expiry_reminder_days": "7",
             "invoice_reminder_days": "7, 1",
-            "dunning_escalation_days": "3, 7, 14, 30",
-            "blocking_period_days": "0",
-            "deactivation_period_days": "30",
             "minimum_balance": "10.50",
             "send_billing_notifications": "false",
             "proforma_enabled": "false",
@@ -108,7 +108,6 @@ def test_save_billing_config_normalizes_valid_policy_values(db_session):
     assert context["payment_period"] == "monthly"
     assert context["billing_day"] == "5"
     assert context["invoice_reminder_days"] == "7,1"
-    assert context["dunning_escalation_days"] == "3,7,14,30"
     assert context["minimum_balance"] == "10.50"
 
 
@@ -148,5 +147,11 @@ def test_billing_settings_template_confirms_and_bounds_policy_save():
     assert "{% if error %}" in template
     assert 'name="payment_due_days"' in template
     assert 'name="minimum_balance"' in template
+    assert "Dunning owns overdue actions" in template
+    assert 'name="auto_suspend_on_overdue"' not in template
+    assert 'name="suspension_grace_hours"' not in template
+    assert 'name="dunning_escalation_days"' not in template
+    assert 'name="blocking_period_days"' not in template
+    assert 'name="deactivation_period_days"' not in template
     assert 'min="0"' in template
     assert 'max="3650"' in template

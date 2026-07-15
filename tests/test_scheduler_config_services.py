@@ -651,34 +651,6 @@ class TestBuildBeatSchedule:
 
         assert "gis_sync" not in schedule
 
-    def test_vas_refund_reconcile_remains_scheduled_when_vas_is_disabled(
-        self, monkeypatch
-    ):
-        """Disabling new VAS activity cannot abandon in-flight money movement."""
-        monkeypatch.setenv("VAS_ENABLED", "false")
-        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
-        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
-        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
-
-        mock_session = MagicMock()
-        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
-        mock_session.query.return_value.filter.return_value.all.return_value = []
-        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
-
-        with patch.object(scheduler_config, "SessionLocal", return_value=mock_session):
-            with patch.object(
-                scheduler_config.integration_service,
-                "list_interval_jobs",
-                return_value=[],
-            ):
-                schedule = scheduler_config.build_beat_schedule()
-
-        assert "vas_requery" not in schedule
-        assert schedule["vas_refund_reconcile"] == {
-            "task": "app.tasks.vas.reconcile_refund_requests",
-            "schedule": timedelta(minutes=5),
-        }
-
     def test_builds_integration_job_schedules(self, monkeypatch):
         """Test builds integration job schedules."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")

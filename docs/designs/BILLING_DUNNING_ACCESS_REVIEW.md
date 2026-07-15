@@ -1,6 +1,6 @@
 # Billing, Dunning, and Access Review
 
-Date: 2026-07-13
+Date: 2026-07-15
 Scope reviewed: `origin/main` billing, collections/dunning, prepaid enforcement,
 subscription changes, schedulers, cleanup/reconciliation, notification guards,
 and catalog permissions risk.
@@ -34,7 +34,7 @@ with deterministic scripts.
 | Change | Risk area | Current assessment | Action |
 | --- | --- | --- | --- |
 | `#738` / `ed8629d6` prepaid balance sweep | Prepaid suspension/access | Sound design as a backstop, but default-off. Unsafe if other prepaid paths rely on it. | Keep, but add dry-run/reporting and make enablement an explicit launch gate. |
-| `#741` / `b98fc621` prepaid plan-change drawdown | Admin/API prepaid upgrades | Closed on this branch: all immediate paths lock, recompute, reject insufficient funds/debt, and stage an idempotent adjustment atomically. | No bypass flag. Fund the wallet, post a valid credit/discount, or schedule next-cycle. |
+| `#741` / `b98fc621` prepaid plan-change drawdown | Admin/API prepaid upgrades | Closed on this branch: every immediate human path confirms the owner fingerprint and idempotency key; locked execution recomputes, rejects stale/insufficient/debt state, and links the request to its exact adjustment or credit note and ledger row atomically. Immediate bulk is gated; next-cycle bulk has no immediate money. | No bypass flag. Refresh the preview, fund prepaid service, post a valid owner credit/discount, or schedule next-cycle. |
 | `#744` / `345263da` prepaid phantom AR cleanup | Cleanup vs enforcement | Cleanup is necessary, but dangerous if it removes evidence before balance enforcement/correction review. | Keep cleanup behind reconciliation hold/dry-run; reconcile before destructive cleanup. |
 | `#751` / `dc145eb9` prepaid draft settlement/scheduler fixes | Prepaid invoice settlement | Generally supportive: settles drafts on top-up and fixes scheduler/control drift. | Keep; verify scheduled task config in prod. |
 | `cb7c1248` prepaid/postpaid separation | Invoice/dunning separation | Correct strategic direction: prepaid should not run through postpaid AR/dunning by default. | Keep; expand tests around mixed accounts and imported invoices. |
@@ -76,8 +76,32 @@ with deterministic scripts.
   - calculates available balance from canonical customer financial events;
   - arms low-balance timers;
   - sends warning notices;
-  - suspends via prepaid enforcement locks after the deactivation window;
+  - resolves the same account → policy → billing-mode grace decision as
+    dunning and customer service status;
+  - suspends via prepaid enforcement locks after that grace deadline;
   - restores when balance recovers.
+
+### Grace and Network Access Tier
+
+- `app.services.collections.grace_policy` owns grace duration, provenance,
+  deadline, and elapsed post-grace days. Dunning steps are relative to grace
+  end; prepaid planning/enforcement/status consume the same decision.
+- `EnforcementLock.access_mode` persists whether a restriction requests hard
+  reject or captive. Financial consequence evidence stores the effective mode.
+- Hard reject is the default. Captive requires an explicit direct-house
+  residential opt-in plus an enabled, valid portal IP/CIDR and HTTPS URL.
+  Business, reseller, system, uncategorized, and otherwise ineligible accounts
+  fail closed even when a stale opt-in flag exists.
+- RADIUS population, event sync, access-state shadowing, and connectivity
+  planning re-resolve the persisted mode through
+  `app.services.walled_garden_policy`; none decides from the raw flag.
+- Keep the global captive setting disabled until staging verifies RADIUS
+  readback, portal reachability from the restricted tier, one real payment,
+  and canonical restoration after settlement. A failed readiness check always
+  resolves to hard reject.
+- `PolicySet.suspension_action` is legacy compatibility data only. Dunning
+  steps own post-grace actions, and the admin form no longer writes the legacy
+  selector.
 
 ### Admin/API Plan Changes
 

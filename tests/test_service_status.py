@@ -23,6 +23,7 @@ from app.models.subscriber import SubscriberStatus
 from app.schemas.billing import InvoiceCreate
 from app.schemas.service_status import ServiceStatusActionKind
 from app.services import billing as billing_service
+from app.services.collections.grace_policy import resolve_grace_decision
 from app.services.service_status import build_service_status
 
 
@@ -333,13 +334,19 @@ def test_prepaid_low_balance_surfaces_grace_as_expiry(
     _activate(db_session, subscription, BillingMode.prepaid)  # balance 0 < 100
 
     resp = build_service_status(db_session, str(subscriber_account.id))
+    grace = resolve_grace_decision(
+        db_session,
+        subscriber_account,
+        starts_at=low_at,
+        as_of=resp.as_of,
+    )
 
     assert resp.low_balance is True
-    assert _n(resp.grace_until) == _n(low_at + timedelta(days=3))
+    assert _n(resp.grace_until) == _n(grace.ends_at)
     svc = resp.services[0]
     assert svc.reason == "low_balance"
     # The real pending lapse is when grace ends (then suspension), not a bill date.
-    assert _n(svc.expires_at) == _n(low_at + timedelta(days=3))
+    assert _n(svc.expires_at) == _n(grace.ends_at)
 
 
 def test_contract_end_at_always_wins_as_expiry(

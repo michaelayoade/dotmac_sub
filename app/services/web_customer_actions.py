@@ -142,10 +142,26 @@ def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
             "captive_redirect_enabled": "true"
             if subscriber.captive_redirect_enabled
             else "false",
-            "billing_day": str(subscriber.billing_day or ""),
-            "payment_due_days": str(subscriber.payment_due_days or ""),
-            "grace_period_days": str(subscriber.grace_period_days or ""),
-            "min_balance": str(subscriber.min_balance or ""),
+            "billing_day": (
+                str(subscriber.billing_day)
+                if subscriber.billing_day is not None
+                else ""
+            ),
+            "payment_due_days": (
+                str(subscriber.payment_due_days)
+                if subscriber.payment_due_days is not None
+                else ""
+            ),
+            "grace_period_days": (
+                str(subscriber.grace_period_days)
+                if subscriber.grace_period_days is not None
+                else ""
+            ),
+            "min_balance": (
+                str(subscriber.min_balance)
+                if subscriber.min_balance is not None
+                else ""
+            ),
             "tax_rate_id": str(subscriber.tax_rate_id or ""),
             "payment_method": str(subscriber.payment_method or ""),
         }
@@ -257,10 +273,7 @@ def repair_customer_access_state(db: Session, customer_id: str) -> dict[str, Any
     radius_group_rows_deleted = 0
     aggregate_state: str | None = None
     for subscription in active_subscriptions:
-        state = derive_access_state(
-            subscription.status,
-            captive_redirect_enabled=bool(subscriber.captive_redirect_enabled),
-        )
+        state = derive_access_state(subscription.status)
         access_result = set_subscription_access_state(
             db,
             str(subscription.id),
@@ -1766,6 +1779,7 @@ def create_customer_from_form(
                 "status": form_data.get("status") or "active",
                 "is_active": form_data.get("is_active") == "true",
                 "marketing_opt_in": form_data.get("marketing_opt_in") == "true",
+                "category": SubscriberCategory.residential.value,
                 "captive_redirect_enabled": form_data.get("captive_redirect_enabled")
                 == "true",
                 "account_start_date": _parse_date(form_data.get("account_start_date")),
@@ -1973,6 +1987,7 @@ def update_person_customer(
         "status": normalized_status,
         "is_active": active,
         "marketing_opt_in": marketing_opt_in == "true",
+        "category": SubscriberCategory.residential.value,
         "notes": _normalize_optional(notes),
         "metadata_": metadata_json,
     }

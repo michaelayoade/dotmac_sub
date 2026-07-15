@@ -19,12 +19,22 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Payment, PaymentStatus, TopupIntent
+from app.models.billing import (
+    Payment,
+    PaymentSettlementOrigin,
+    PaymentStatus,
+    TopupIntent,
+)
 from app.models.domain_settings import SettingDomain
-from app.schemas.billing import PaymentAllocationApply, PaymentCreate
+from app.schemas.billing import (
+    BillingAccountPaymentPreviewRequest,
+    PaymentAllocationApply,
+    PaymentCreate,
+)
 from app.services import billing as billing_service
 from app.services import settings_spec
 from app.services.billing._common import lock_account
+from app.services.billing.consolidated_payments import consolidated_settlement_key
 from app.services.collections import restore_account_services
 from app.services.common import round_money, to_decimal
 from app.services.customer_portal_flow_payments import _provider_uuid
@@ -144,26 +154,67 @@ def _settle_intent(
     ).first()
     created = False
     if existing is not None:
-        payment = existing
+        if (
+            intent.billing_account_id is not None
+            and existing.billing_account_id is not None
+            and existing.status == PaymentStatus.pending
+        ):
+            payment = billing_service.consolidated_payment_settlements.settle_verified(
+                db,
+                str(intent.billing_account_id),
+                BillingAccountPaymentPreviewRequest(
+                    amount=amount,
+                    currency=currency,
+                    provider_id=_provider_uuid(db, intent.provider_type),
+                    external_id=external_id,
+                    memo=memo,
+                    auto_allocate=False,
+                ),
+                idempotency_key=consolidated_settlement_key(
+                    "topup-intent", str(intent.id)
+                ),
+                origin=PaymentSettlementOrigin.provider_event,
+                commit=False,
+                existing_payment_id=str(existing.id),
+            ).payment
+            created = True
+        else:
+            payment = existing
     else:
-        payment = billing_service.payments.create(
-            db,
-            PaymentCreate(
-                account_id=intent.account_id,
-                billing_account_id=intent.billing_account_id
-                if intent.account_id is None
-                else None,
-                amount=amount,
-                currency=currency,
-                status=PaymentStatus.succeeded,
-                provider_id=_provider_uuid(db, intent.provider_type),
-                external_id=external_id,
-                memo=memo,
-                # Honour the customer's instruction recorded on the intent; only
-                # genuine top-ups auto-allocate (invoices first, rest credit).
-                allocations=_intent_allocations(intent, amount),
-            ),
-        )
+        if intent.account_id is None and intent.billing_account_id is not None:
+            payment = billing_service.consolidated_payment_settlements.settle_verified(
+                db,
+                str(intent.billing_account_id),
+                BillingAccountPaymentPreviewRequest(
+                    amount=amount,
+                    currency=currency,
+                    provider_id=_provider_uuid(db, intent.provider_type),
+                    external_id=external_id,
+                    memo=memo,
+                    auto_allocate=False,
+                ),
+                idempotency_key=consolidated_settlement_key(
+                    "topup-intent", str(intent.id)
+                ),
+                origin=PaymentSettlementOrigin.provider_event,
+                commit=False,
+            ).payment
+        else:
+            payment = billing_service.payments.create(
+                db,
+                PaymentCreate(
+                    account_id=intent.account_id,
+                    amount=amount,
+                    currency=currency,
+                    status=PaymentStatus.succeeded,
+                    provider_id=_provider_uuid(db, intent.provider_type),
+                    external_id=external_id,
+                    memo=memo,
+                    # Honour the customer's instruction recorded on the intent;
+                    # only genuine subscriber top-ups auto-allocate.
+                    allocations=_intent_allocations(intent, amount),
+                ),
+            )
         created = True
     intent.completed_payment_id = payment.id
     set_topup_intent_status(intent, "completed", source="reconcile_settle")

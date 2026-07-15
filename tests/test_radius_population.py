@@ -180,10 +180,14 @@ class TestCaptiveRedirectEligibility:
         reseller = (
             None
             if house_reseller is None
-            else types.SimpleNamespace(is_house=house_reseller)
+            else types.SimpleNamespace(is_house=house_reseller, is_active=True)
         )
         return types.SimpleNamespace(
-            user_type=user_type, metadata_=metadata, reseller=reseller
+            user_type=user_type,
+            metadata_=metadata,
+            reseller=reseller,
+            is_active=True,
+            status=SubscriberStatus.active,
         )
 
     def test_direct_house_residential_customer_allowed(self):

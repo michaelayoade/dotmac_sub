@@ -194,9 +194,9 @@ def payment_new(
             "invoices": state["invoices"],
             "prefill": prefill,
             "invoice_label": state["invoice_label"],
-            "action_url": "/admin/billing/payments/create",
+            "action_url": "/admin/billing/payments/create/preview",
             "form_title": "Record Payment",
-            "submit_label": "Record Payment",
+            "submit_label": "Preview Payment",
             "active_page": "payments",
             "active_menu": "billing",
             "current_user": get_current_user(request),
@@ -355,6 +355,150 @@ def billing_customer_subscribers(
     )
 
 
+def _payment_create_error_response(
+    request: Request,
+    db: Session,
+    exc: Exception,
+    *,
+    account_id: str | None,
+    invoice_id: str | None,
+    payment_method_id: str | None,
+    idempotency_token: str | None,
+) -> Response:
+    from fastapi import HTTPException as _HTTPException
+    from pydantic import ValidationError as _ValidationError
+
+    resolved_invoice = None
+    balance_value = None
+    balance_display = None
+    if invoice_id:
+        try:
+            resolved_invoice = web_billing_payment_forms_service.resolve_invoice(
+                db, invoice_id
+            )
+            if resolved_invoice:
+                (
+                    balance_value,
+                    balance_display,
+                ) = web_billing_payment_forms_service.invoice_balance_info(
+                    resolved_invoice
+                )
+        except Exception:
+            resolved_invoice = None
+    if isinstance(exc, _ValidationError):
+        errs = exc.errors()
+        if errs:
+            first = errs[0]
+            field = str((first.get("loc") or ("value",))[-1]).replace("_", " ")
+            msg = first.get("msg", "is invalid")
+            error_message = f"{field[:1].upper()}{field[1:]}: {msg}"
+        else:
+            error_message = "Invalid input"
+    elif isinstance(exc, _HTTPException):
+        error_message = str(exc.detail)
+    else:
+        error_message = str(exc)
+    deps = cast(
+        dict[str, object],
+        web_billing_payment_forms_service.load_create_error_dependencies(
+            db,
+            account_id=account_id,
+            resolved_invoice=resolved_invoice,
+        ),
+    )
+    error_state = web_billing_payment_forms_service.build_create_error_context(
+        error=error_message,
+        deps=deps,
+        resolved_invoice=resolved_invoice,
+        invoice_id=invoice_id,
+        payment_method_id=payment_method_id,
+        idempotency_token=idempotency_token,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/payment_form.html",
+        {
+            "request": request,
+            **error_state,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "balance_value": balance_value,
+            "balance_display": balance_display,
+        },
+        status_code=400,
+    )
+
+
+@router.post(
+    "/payments/create/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:payment:create"))],
+)
+def payment_create_preview(
+    request: Request,
+    account_id: str | None = Form(None),
+    amount: str = Form(...),
+    currency: str = Form("NGN"),
+    status: str | None = Form(None),
+    invoice_id: str | None = Form(None),
+    collection_account_id: str | None = Form(None),
+    payment_method_id: str | None = Form(None),
+    memo: str | None = Form(None),
+    idempotency_token: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = web_billing_payments_service.preview_payment_create(
+            db,
+            account_id=account_id,
+            amount=amount,
+            currency=currency,
+            status=status,
+            invoice_id=invoice_id,
+            collection_account_id=collection_account_id,
+            payment_method_id=payment_method_id,
+            memo=memo,
+        )
+    except Exception as exc:
+        db.rollback()
+        return _payment_create_error_response(
+            request,
+            db,
+            exc,
+            account_id=account_id,
+            invoice_id=invoice_id,
+            payment_method_id=payment_method_id,
+            idempotency_token=idempotency_token,
+        )
+    idempotency_token = (
+        idempotency_token
+        or web_billing_payment_forms_service.new_manual_payment_idempotency_token()
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/payment_create_confirm.html",
+        {
+            "request": request,
+            "preview": result["preview"],
+            "account_id": account_id,
+            "amount": amount,
+            "currency": currency,
+            "status": status,
+            "invoice_id": invoice_id,
+            "collection_account_id": collection_account_id,
+            "payment_method_id": payment_method_id,
+            "memo": memo,
+            "idempotency_token": idempotency_token,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "payments",
+            "active_menu": "billing",
+        },
+    )
+
+
 @router.post(
     "/payments/create",
     response_class=HTMLResponse,
@@ -371,6 +515,7 @@ def payment_create(
     payment_method_id: str | None = Form(None),
     memo: str | None = Form(None),
     idempotency_token: str | None = Form(None),
+    preview_fingerprint: str = Form(...),
     db: Session = Depends(get_db),
 ):
     resolved_invoice = None
@@ -389,6 +534,7 @@ def payment_create(
             payment_method_id=payment_method_id,
             memo=memo,
             idempotency_token=idempotency_token,
+            preview_fingerprint=preview_fingerprint,
         )
         payment = cast(Payment, result["payment"])
         resolved_invoice = result["resolved_invoice"]
@@ -617,17 +763,232 @@ def payment_update(
 
 
 @router.post(
+    "/payments/{payment_id:uuid}/allocation/preview",
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def payment_allocation_preview(
+    request: Request,
+    payment_id: UUID,
+    invoice_id: str = Form(...),
+    amount: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    state = web_billing_payments_service.preview_payment_allocation(
+        db,
+        payment_id=str(payment_id),
+        invoice_id=invoice_id,
+        amount=amount,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/payment_allocation_confirm.html",
+        {
+            "request": request,
+            "payment_id": payment_id,
+            "invoice_id": invoice_id,
+            "amount": amount,
+            **state,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "payments",
+            "active_menu": "billing",
+        },
+    )
+
+
+@router.post(
+    "/payments/{payment_id:uuid}/allocation",
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def payment_allocation(
+    request: Request,
+    payment_id: UUID,
+    invoice_id: str = Form(...),
+    amount: str = Form(...),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    web_billing_payments_service.process_payment_allocation_with_audit(
+        db,
+        request,
+        payment_id=str(payment_id),
+        invoice_id=invoice_id,
+        amount=amount,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/payments/{payment_id}", status_code=303
+    )
+
+
+@router.post(
+    "/payments/{payment_id:uuid}/settlement/preview",
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def payment_settlement_preview(
+    request: Request,
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+):
+    state = web_billing_payments_service.preview_payment_settlement(
+        db, payment_id=str(payment_id)
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/payment_settlement_confirm.html",
+        {
+            "request": request,
+            "payment_id": payment_id,
+            **state,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "payments",
+            "active_menu": "billing",
+        },
+    )
+
+
+@router.post(
+    "/payments/{payment_id:uuid}/settlement",
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def payment_settlement(
+    request: Request,
+    payment_id: UUID,
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    web_billing_payments_service.process_payment_settlement_with_audit(
+        db,
+        request,
+        payment_id=str(payment_id),
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/payments/{payment_id}", status_code=303
+    )
+
+
+@router.post(
+    "/payments/{payment_id:uuid}/refund/preview",
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def payment_refund_preview(
+    request: Request,
+    payment_id: UUID,
+    amount: str = Form(""),
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Preview distinct refund effects before confirmation."""
+    state = web_billing_payments_service.preview_payment_refund(
+        db,
+        payment_id=str(payment_id),
+        amount=amount,
+        reason=reason,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/payment_refund_confirm.html",
+        {
+            "request": request,
+            "payment_id": payment_id,
+            **state,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "payments",
+            "active_menu": "billing",
+        },
+    )
+
+
+@router.post(
     "/payments/{payment_id:uuid}/refund",
     dependencies=[Depends(require_permission("billing:payment:update"))],
 )
 def payment_refund(
     request: Request,
     payment_id: UUID,
+    amount: str = Form(...),
+    reason: str = Form(""),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    """One-click refund: mark the payment refunded and recompute its invoice."""
+    """Record a completed refund after owner-authored confirmation."""
     web_billing_payments_service.process_payment_refund_with_audit(
-        db, request, payment_id=str(payment_id)
+        db,
+        request,
+        payment_id=str(payment_id),
+        amount=amount,
+        reason=reason,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+    )
+    return RedirectResponse(
+        url=f"/admin/billing/payments/{payment_id}", status_code=303
+    )
+
+
+@router.post(
+    "/payments/{payment_id:uuid}/reversal/preview",
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def payment_reversal_preview(
+    request: Request,
+    payment_id: UUID,
+    reason: str = Form(..., min_length=3, max_length=500),
+    db: Session = Depends(get_db),
+):
+    """Preview chargeback/bank-reversal effects before confirmation."""
+    state = web_billing_payments_service.preview_payment_reversal(
+        db,
+        payment_id=str(payment_id),
+        reason=reason,
+    )
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/billing/payment_reversal_confirm.html",
+        {
+            "request": request,
+            "payment_id": payment_id,
+            **state,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "payments",
+            "active_menu": "billing",
+        },
+    )
+
+
+@router.post(
+    "/payments/{payment_id:uuid}/reversal",
+    dependencies=[Depends(require_permission("billing:payment:update"))],
+)
+def payment_reversal(
+    request: Request,
+    payment_id: UUID,
+    reason: str = Form(..., min_length=3, max_length=500),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Record a confirmed chargeback/bank reversal through its owner."""
+    web_billing_payments_service.process_payment_reversal_with_audit(
+        db,
+        request,
+        payment_id=str(payment_id),
+        reason=reason,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
     )
     return RedirectResponse(
         url=f"/admin/billing/payments/{payment_id}", status_code=303

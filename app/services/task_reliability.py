@@ -599,19 +599,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.vacation_holds.resume_expired_holds": _c(
         "customer", SWEEP, GUARDED, HEALTH
     ),
-    "app.tasks.vas.run_vas_requery": _c("vas", STATE, GUARDED, STATUS),
-    "app.tasks.vas.run_vas_review_requery": _c("vas", STATE, GUARDED, STATUS),
-    "app.tasks.vas.reconcile_refund_requests": _c(
-        "vas",
-        STATE,
-        GUARDED,
-        STATUS,
-        "Observation-only after submit; never blindly repeats a gateway refund.",
-    ),
-    "app.tasks.vas.run_wallet_auto_deduct": _c(
-        "vas", STATE, GUARDED, STATUS, "Money-moving; provider state must gate retry."
-    ),
-    "app.tasks.vas.sync_vas_catalog": _c("vas", SWEEP, IDEMP, HEALTH),
     "app.tasks.vpn.run_vpn_control_job": _c("network", STATE, STATEFUL, STATUS),
     "app.tasks.vpn.run_vpn_health_scan": _c("network", SWEEP, IDEMP, HEALTH),
     "app.tasks.webhooks.deliver_webhook": _c("webhooks", AUTORETRY, GUARDED, STATUS),

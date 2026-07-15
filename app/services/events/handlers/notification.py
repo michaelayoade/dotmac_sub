@@ -298,6 +298,17 @@ EVENT_NOTIFICATION_SPECS: dict[EventType, EventNotificationSpec] = {
             "A refund of {amount} has been processed on your account."
         ),
     ),
+    EventType.payment_reversed: EventNotificationSpec(
+        template_code="payment_reversed",
+        category="billing",
+        channels=(NotificationChannel.email,),
+        subject="Payment reversed",
+        body=(
+            "Dear {subscriber_name},\n\n"
+            "A settled payment of {amount} was reversed on your account. "
+            "Please contact billing if you need more information."
+        ),
+    ),
     EventType.arrangement_defaulted: EventNotificationSpec(
         template_code="arrangement_defaulted",
         category="billing",

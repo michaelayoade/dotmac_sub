@@ -1386,6 +1386,9 @@ class Subscriptions(ListResponseMixin):
         *,
         skip_proration_artifacts: bool = False,
         plan_change_operation_key: str | None = None,
+        plan_change_preview_fingerprint: str | None = None,
+        plan_change_request_id: str | None = None,
+        plan_change_actor_id: str | None = None,
     ):
         subscription = db.get(Subscription, subscription_id)
         if not subscription:
@@ -1450,6 +1453,8 @@ class Subscriptions(ListResponseMixin):
             is_prepaid = subscription.billing_mode == BillingMode.prepaid
             if is_prepaid and not skip_proration_artifacts:
                 from app.services.prepaid_plan_changes import (
+                    PrepaidPlanChangePreviewRequired,
+                    PrepaidPlanChangePreviewStale,
                     PrepaidPlanChangeRejected,
                     prepare_immediate_prepaid_plan_change,
                 )
@@ -1467,7 +1472,13 @@ class Subscriptions(ListResponseMixin):
                             old_offer.name if old_offer else "Previous Plan"
                         ),
                         operation_key=plan_change_operation_key,
+                        expected_preview_fingerprint=(plan_change_preview_fingerprint),
                     )
+                except (
+                    PrepaidPlanChangePreviewRequired,
+                    PrepaidPlanChangePreviewStale,
+                ) as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
                 except PrepaidPlanChangeRejected as exc:
                     raise HTTPException(
                         status_code=400,
@@ -1480,6 +1491,79 @@ class Subscriptions(ListResponseMixin):
                     prepared.credit_note is not None,
                     prepared.replayed,
                 )
+                if plan_change_request_id:
+                    from app.models.audit import AuditActorType
+                    from app.models.subscription_change import (
+                        SubscriptionChangeRequest,
+                    )
+                    from app.services.audit_adapter import stage_audit_event
+
+                    change_request = db.get(
+                        SubscriptionChangeRequest,
+                        coerce_uuid(plan_change_request_id),
+                    )
+                    if change_request is None:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Plan-change confirmation request was not found",
+                        )
+                    if (
+                        str(change_request.subscription_id) != str(subscription.id)
+                        or str(change_request.requested_offer_id)
+                        != str(target_offer.id)
+                        or change_request.confirmation_preview_fingerprint
+                        != prepared.decision.fingerprint
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Plan-change confirmation does not match this change",
+                        )
+                    change_request.confirmation_snapshot = (
+                        prepared.decision.as_evidence_dict()
+                    )
+                    change_request.confirmed_at = datetime.now(UTC)
+                    change_request.account_adjustment_id = (
+                        prepared.account_adjustment.id
+                        if prepared.account_adjustment
+                        else None
+                    )
+                    change_request.credit_note_id = (
+                        prepared.credit_note.id if prepared.credit_note else None
+                    )
+                    change_request.ledger_entry_id = (
+                        prepared.ledger_entry.id if prepared.ledger_entry else None
+                    )
+                    stage_audit_event(
+                        db,
+                        action="confirm_immediate_plan_change",
+                        entity_type="subscription_change_request",
+                        entity_id=str(change_request.id),
+                        actor_type=(
+                            AuditActorType.user
+                            if plan_change_actor_id
+                            else AuditActorType.system
+                        ),
+                        actor_id=plan_change_actor_id,
+                        metadata={
+                            **prepared.decision.as_evidence_dict(),
+                            "account_adjustment_id": (
+                                str(prepared.account_adjustment.id)
+                                if prepared.account_adjustment
+                                else None
+                            ),
+                            "credit_note_id": (
+                                str(prepared.credit_note.id)
+                                if prepared.credit_note
+                                else None
+                            ),
+                            "ledger_entry_id": (
+                                str(prepared.ledger_entry.id)
+                                if prepared.ledger_entry
+                                else None
+                            ),
+                            "replayed": prepared.replayed,
+                        },
+                    )
 
         # When the offer changes, refresh the snapshotted recurring price to the
         # new offer (unless an explicit unit_price was supplied) so the customer

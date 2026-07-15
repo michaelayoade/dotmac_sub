@@ -104,6 +104,7 @@ class SubscriptionLifecycleCommand:
     target_offer_id: str | None = None
     reason: str | None = None
     expected_head: str | None = None
+    expected_financial_fingerprint: str | None = None
     idempotency_key: str | None = None
 
     def __post_init__(self) -> None:
@@ -150,6 +151,12 @@ class SubscriptionLifecycleCommand:
         if self.expected_head is not None:
             object.__setattr__(
                 self, "expected_head", self.expected_head.strip() or None
+            )
+        if self.expected_financial_fingerprint is not None:
+            object.__setattr__(
+                self,
+                "expected_financial_fingerprint",
+                self.expected_financial_fingerprint.strip() or None,
             )
         if self.idempotency_key is not None:
             object.__setattr__(
@@ -544,7 +551,7 @@ def _billing_impact(
             # explicit effective time. Tests, scheduled jobs, and billing runs
             # can freeze that owner independently of this presentation layer.
             effective_at=_aware_utc(command.effective_at),
-            current_balance=current_balance,
+            prepaid_funding_before=current_balance,
         )
         quote = decision.as_quote_dict()
         return (
@@ -560,7 +567,7 @@ def _billing_impact(
                     Decimal(str(decision.proration.get("credit_amount", "0.00")))
                 ),
                 net_amount=decision.net_amount,
-                available_balance=decision.current_balance,
+                available_balance=decision.prepaid_funding_before,
                 required_amount=decision.required_amount,
                 shortfall=decision.shortfall,
                 collection_blocking_balance=decision.collection_blocking_balance,

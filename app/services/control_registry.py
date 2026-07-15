@@ -93,7 +93,6 @@ _R = SettingDomain.radius
 _SCH = SettingDomain.scheduler
 _G = SettingDomain.gis
 _U = SettingDomain.usage
-_V = SettingDomain.vas
 _PRJ = SettingDomain.projects
 _SUB = SettingDomain.subscriber
 
@@ -376,14 +375,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
             ),
         ),
         description="MikroTik address-list based blocking.",
-    ),
-    Control(
-        key="vas.wallet",
-        layer=Layer.feature,
-        default=False,
-        on_missing=False,
-        legacy=(LegacyAlias(_V, "enabled", "VAS_ENABLED"),),
-        description="VAS wallet and purchases.",
     ),
     Control(
         key="provisioning.compensation_retry",

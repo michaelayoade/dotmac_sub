@@ -26,4 +26,4 @@ Status: MERGED — Merged as PR #523 (100 files, includes /admin/billing/health)
 
 ## Dependency Notes
 
-This PR should follow System / configuration for settings validation work. Customer Portal billing flows, VAS provider/refund work, Reseller billing, CRM billing push, and Reports finance metrics should follow or rebase on this where they depend on billing behavior.
+This PR should follow System / configuration for settings validation work. Customer Portal billing flows, Reseller billing, CRM billing push, and Reports finance metrics should follow or rebase on this where they depend on billing behavior.

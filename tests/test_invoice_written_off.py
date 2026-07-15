@@ -72,16 +72,18 @@ def test_written_off_cannot_be_voided(db_session, subscriber):
     billing_service.invoices.write_off(db_session, str(inv.id))
     with pytest.raises(HTTPException) as e:
         billing_service.invoices.void(db_session, str(inv.id))
-    assert e.value.status_code == 400
+    assert e.value.status_code == 409
 
 
-def test_written_off_transition_table_is_sink_and_reachable():
-    # reachable from active states
+def test_written_off_transition_table_is_owner_only_terminal_sink():
+    # The generic transition table cannot manufacture a write-off; the owner
+    # workflow reaches it while keeping the state terminal.
     assert (
-        InvoiceStatus.written_off in ALLOWED_INVOICE_TRANSITIONS[InvoiceStatus.issued]
+        InvoiceStatus.written_off
+        not in ALLOWED_INVOICE_TRANSITIONS[InvoiceStatus.issued]
     )
     assert (
-        InvoiceStatus.written_off in ALLOWED_INVOICE_TRANSITIONS[InvoiceStatus.overdue]
+        InvoiceStatus.written_off
+        not in ALLOWED_INVOICE_TRANSITIONS[InvoiceStatus.overdue]
     )
-    # terminal sink
     assert ALLOWED_INVOICE_TRANSITIONS[InvoiceStatus.written_off] == set()

@@ -239,9 +239,8 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
         {
             "billing_enabled": "true",
             "payment_period": "Monthly",  # normaliser lower-cases
-            "suspension_grace_hours": "72",
+            "payment_due_days": "72",
             "minimum_balance": "10.50",
-            "auto_suspend_on_overdue": "false",
         },
     )
 
@@ -249,11 +248,9 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
     # Spec-backed boolean gets coerced + typed.
     assert rows["billing_enabled"].value_text == "true"
     assert rows["billing_enabled"].value_type == SettingValueType.boolean
-    assert rows["auto_suspend_on_overdue"].value_text == "false"
-    assert rows["auto_suspend_on_overdue"].value_type == SettingValueType.boolean
     # Spec-backed integer keeps its whole-number text and integer type.
-    assert rows["suspension_grace_hours"].value_text == "72"
-    assert rows["suspension_grace_hours"].value_type == SettingValueType.integer
+    assert rows["payment_due_days"].value_text == "72"
+    assert rows["payment_due_days"].value_type == SettingValueType.integer
     # Decimal-ish value stays a string spec (byte-identical formatting).
     assert rows["minimum_balance"].value_text == "10.50"
     assert rows["minimum_balance"].value_type == SettingValueType.string
@@ -266,7 +263,7 @@ def test_billing_config_save_rejects_non_numeric_integer(db_session):
     with pytest.raises(ValueError):
         web_system_config_service.save_billing_config(
             db_session,
-            {"billing_enabled": "true", "suspension_grace_hours": "abc"},
+            {"billing_enabled": "true", "payment_due_days": "abc"},
         )
 
     # Nothing is committed when validation fails.

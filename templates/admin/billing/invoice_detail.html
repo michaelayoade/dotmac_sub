@@ -84,17 +84,27 @@
                     </button>
                 </form>
                 {% endif %}
-                {% if status_val not in ['paid', 'void', 'written_off'] %}
+                {% if invoice_write_off_capability.allowed or invoice_void_capability.allowed %}
                 <div class="my-1 border-t border-slate-100 dark:border-slate-700"></div>
+                {% endif %}
+                {% if invoice_write_off_capability.allowed %}
                 <form method="post"
-                      action="/admin/billing/invoices/{{ invoice.id }}/void-and-return"
-                      onsubmit="return confirm('Void this invoice? This should only be used when the invoice should never have existed.');">
+                      action="/admin/billing/invoices/{{ invoice.id }}/write-off/preview">
                     {% include "components/forms/csrf_input.html" %}
-                    <input type="hidden" name="next_url" value="/admin/billing/invoices/{{ invoice.id }}">
+                    <button type="submit"
+                            class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-amber-700 transition hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-900/20">
+                        <svg class="h-4 w-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 14l6-6m-5.5-.5h.01m4.99 7h.01M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                        Write off receivable
+                    </button>
+                </form>
+                {% endif %}
+                {% if invoice_void_capability.allowed %}
+                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/void/preview">
+                    {% include "components/forms/csrf_input.html" %}
                     <button type="submit"
                             class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-red-700 transition hover:bg-red-50 dark:text-red-300 dark:hover:bg-red-900/20">
                         <svg class="h-4 w-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                        Void
+                        Void invoice
                     </button>
                 </form>
                 {% endif %}
@@ -239,30 +249,13 @@
         <div class="space-y-6">
             {# Payment Status #}
             {% call card("Payment Status", icon='<svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>', color="emerald") %}
-                {% set totals = namespace(paid=0, credit=0) %}
-                {% if invoice.payments %}
-                    {% for payment in invoice.payments %}
-                        {% if payment.is_active %}
-                            {% set pstatus = payment.status | default('pending') %}
-                            {% set pstatus_val = pstatus.value if pstatus is not string else pstatus %}
-                            {% if pstatus_val == 'succeeded' %}
-                                {% set totals.paid = totals.paid + (payment.amount or 0) %}
-                            {% endif %}
-                        {% endif %}
-                    {% endfor %}
-                {% endif %}
-                {% if invoice.credit_note_applications %}
-                    {% for application in invoice.credit_note_applications %}
-                        {% set totals.credit = totals.credit + (application.amount or 0) %}
-                    {% endfor %}
-                {% endif %}
-
                 <div class="mb-4">
-                    <p class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.balance_due or 0) }}</p>
-                    <p class="text-sm text-slate-500 dark:text-slate-400">Balance due</p>
+                    <p class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_financial_summary.currency }} {{ '{:,.2f}'.format(invoice_financial_summary.receivable_balance) }}</p>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">Invoice receivable</p>
                 </div>
-                {{ metric_row("Payments", invoice_currency ~ " " ~ '{:,.2f}'.format(totals.paid), color="emerald", mono=True) }}
-                {{ metric_row("Credits", invoice_currency ~ " " ~ '{:,.2f}'.format(totals.credit), color="blue", mono=True) }}
+                {{ metric_row("Payments applied", invoice_financial_summary.currency ~ " " ~ '{:,.2f}'.format(invoice_financial_summary.payments_applied), color="emerald", mono=True) }}
+                {{ metric_row("Credit notes applied", invoice_financial_summary.currency ~ " " ~ '{:,.2f}'.format(invoice_financial_summary.credits_applied), color="blue", mono=True) }}
+                <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">This receivable is separate from prepaid service funding and service-access state.</p>
             {% endcall %}
 
             {# Bank Details #}
@@ -293,28 +286,26 @@
 
             {# Apply Credit #}
             {% call card("Apply Credit", icon='<svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald") %}
-                {% if credit_notes %}
-                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/apply-credit" class="space-y-3">
+                {% if credit_application_options %}
+                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/apply-credit/preview" class="space-y-3">
                     {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="idempotency_key" value="{{ credit_application_idempotency_key }}">
                     <div>
                         <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Credit Note</label>
                         <select name="credit_note_id" required
                                 class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Select credit note...</option>
-                            {% for note in credit_notes %}
-                                {% set available = (note.total or 0) - (note.applied_total or 0) %}
-                                {% if available > 0 %}
-                                <option value="{{ note.id }}">
-                                    {{ note.credit_number | default('Credit Note') }} - {{ note.currency or invoice_currency }} {{ '{:,.2f}'.format(available) }} available
+                            {% for option in credit_application_options %}
+                                <option value="{{ option.credit_note_id }}">
+                                    {{ option.credit_number | default('Credit Note') }} - {{ option.currency }} {{ '{:,.2f}'.format(option.available_amount) }} available
                                 </option>
-                                {% endif %}
                             {% endfor %}
                         </select>
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Amount (optional)</label>
-                        <input type="number" name="amount" step="0.01" min="0"
-                               placeholder="Leave blank to apply full available"
+                        <input type="number" name="amount" step="0.01" min="0.01"
+                               placeholder="Leave blank for the maximum applicable amount"
                                class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
                     <div>
@@ -324,7 +315,7 @@
                     </div>
                     <button type="submit"
                             class="inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:shadow-md transition-all">
-                        Apply Credit
+                        Preview Credit Application
                     </button>
                 </form>
                 {% else %}

@@ -180,14 +180,18 @@ def test_reseller_payment_stays_in_the_locked_proof_transaction(
 
     ba = _reseller_billing_account(db_session)
     proof = _submitted_proof(db_session, ba, "500000.00")
-    original_create = billing_service.payments.create
+    original_settle = billing_service.consolidated_payment_settlements.settle_verified
     commit_values = []
 
-    def tracking_create(*args, **kwargs):
+    def tracking_settle(*args, **kwargs):
         commit_values.append(kwargs.get("commit"))
-        return original_create(*args, **kwargs)
+        return original_settle(*args, **kwargs)
 
-    monkeypatch.setattr(billing_service.payments, "create", tracking_create)
+    monkeypatch.setattr(
+        billing_service.consolidated_payment_settlements,
+        "settle_verified",
+        tracking_settle,
+    )
 
     payment_proofs.verify_proof(db_session, str(proof.id), verified_by="reviewer")
 

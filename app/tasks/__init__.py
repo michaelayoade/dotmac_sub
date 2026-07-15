@@ -191,13 +191,6 @@ from app.tasks.usage import (
     run_usage_rating,
 )
 from app.tasks.vacation_holds import resume_expired_holds
-from app.tasks.vas import (
-    reconcile_refund_requests,
-    run_vas_requery,
-    run_vas_review_requery,
-    run_wallet_auto_deduct,
-    sync_vas_catalog,
-)
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
     deliver_webhook,
@@ -219,11 +212,6 @@ __all__ = [
     "cleanup_old_operations",
     "sync_gis_sources",
     "run_batch_geocode_job",
-    "run_vas_requery",
-    "reconcile_refund_requests",
-    "run_vas_review_requery",
-    "run_wallet_auto_deduct",
-    "sync_vas_catalog",
     "run_import_job",
     "run_integration_job",
     "process_due_campaigns",

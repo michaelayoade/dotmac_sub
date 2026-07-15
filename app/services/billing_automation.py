@@ -36,16 +36,15 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
+from app.schemas.billing import InvoiceCreate
 from app.services import control_registry, enforcement_window, settings_spec
-from app.services.billing import (
-    _recalculate_credit_note_totals,
-    _recalculate_invoice_totals,
-)
+from app.services.billing import _recalculate_invoice_totals
+from app.services.billing._common import _calculate_tax_amount
 from app.services.billing.invoice_classification import (
     collectible_ar_invoice_filter,
     prepaid_non_ar_invoice_ids,
 )
-from app.services.billing.invoices import next_invoice_number
+from app.services.billing.invoices import Invoices, next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import (
@@ -96,7 +95,6 @@ def _billing_run_extra(
             "currency_skipped",
             "pending_activated",
             "invoice_reminders_sent",
-            "dunning_escalations_sent",
             "credit_applied",
             "credit_settled_invoices",
             "accounts_restored",
@@ -841,77 +839,6 @@ def _emit_invoice_reminders(
     return sent
 
 
-def _emit_dunning_escalations(
-    db: Session,
-    run_at: datetime,
-) -> int:
-    escalation_days = _parse_day_offsets(
-        settings_spec.resolve_value(
-            db, SettingDomain.billing, "dunning_escalation_days"
-        )
-    )
-    if not escalation_days:
-        return 0
-
-    sent = 0
-    collectible_accounts = accounts_with_collectible_service(db)
-    invoices = (
-        db.query(Invoice)
-        .filter(Invoice.is_active.is_(True))
-        .filter(collectible_ar_invoice_filter())
-        .filter(
-            Invoice.status.in_(
-                [
-                    InvoiceStatus.issued,
-                    InvoiceStatus.partially_paid,
-                    InvoiceStatus.overdue,
-                ]
-            )
-        )
-        .all()
-    )
-    for invoice in invoices:
-        # Skip escalations for accounts whose services are all terminal
-        # (disabled/canceled/expired/…): the real dunning workflow already
-        # excludes them, and a dead service shouldn't keep escalating.
-        if invoice.account_id not in collectible_accounts:
-            continue
-        if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal(
-            "0.00"
-        ):
-            continue
-        if (invoice.metadata_ or {}).get("reconciliation_hold"):
-            continue
-        if apply_prepaid_overlap_hold(db, invoice):
-            continue
-        due_at = _as_utc(invoice.due_at)
-        if due_at is None:
-            continue
-        days_overdue = (run_at.date() - due_at.date()).days
-        if days_overdue not in escalation_days:
-            continue
-        metadata = dict(invoice.metadata_ or {})
-        marker = f"dunning_escalation_sent_{days_overdue}"
-        if metadata.get(marker):
-            continue
-        emit_event(
-            db,
-            EventType.invoice_overdue,
-            {
-                "invoice_id": str(invoice.id),
-                "invoice_number": invoice.invoice_number or "",
-                "amount": str(invoice.balance_due or invoice.total or Decimal("0.00")),
-                "due_date": due_at.date().isoformat(),
-                "days_overdue": str(days_overdue),
-            },
-            invoice_id=invoice.id,
-            account_id=invoice.account_id,
-        )
-        _mark_invoice_metadata_flag(invoice, marker)
-        sent += 1
-    return sent
-
-
 def _log_billing_run_audit(
     db: Session,
     run: BillingRun | None,
@@ -944,7 +871,6 @@ def _log_billing_run_audit(
         "currency_skipped": summary.get("currency_skipped", 0),
         "pending_activated": summary.get("pending_activated", 0),
         "invoice_reminders_sent": summary.get("invoice_reminders_sent", 0),
-        "dunning_escalations_sent": summary.get("dunning_escalations_sent", 0),
         "status": status,
     }
     if error:
@@ -1015,25 +941,23 @@ def run_billing_notifications(
     db: Session,
     run_at: datetime | None = None,
 ) -> dict[str, int | bool]:
-    """Emit invoice reminders + dunning escalations, gated by the send window.
+    """Emit pre-due invoice reminders, gated by the send window.
 
     Intended to run hourly: the send-window gate (``billing_notif_send_hour``)
-    restricts the actual sends to the configured local hour, while the existing
-    per-invoice metadata markers keep them idempotent across the hourly fires.
+    restricts sends to the configured local hour. Overdue notifications and
+    every service-access consequence are owned by policy dunning, not billing
+    automation.
     """
     run_at = run_at or datetime.now(UTC)
     if not enforcement_window.within_send_window(db, run_at):
         return {
             "invoice_reminders_sent": 0,
-            "dunning_escalations_sent": 0,
             "skipped_outside_window": True,
         }
     reminders = _emit_invoice_reminders(db, run_at)
-    escalations = _emit_dunning_escalations(db, run_at)
     db.commit()
     return {
         "invoice_reminders_sent": reminders,
-        "dunning_escalations_sent": escalations,
         "skipped_outside_window": False,
     }
 
@@ -1207,7 +1131,6 @@ def run_invoice_cycle(
         "currency_skipped": 0,
         "pending_activated": 0,
         "invoice_reminders_sent": 0,
-        "dunning_escalations_sent": 0,
         "credit_applied": Decimal("0.00"),
         "credit_settled_invoices": 0,
         "accounts_restored": 0,
@@ -1417,18 +1340,24 @@ def run_invoice_cycle(
                 prepaid_runner_draft_until_funded
                 and subscription.billing_mode == BillingMode.prepaid
             )
-            invoice = Invoice(
-                account_id=subscription.subscriber_id,
-                invoice_number=next_invoice_number(db),
-                status=(InvoiceStatus.draft if prepaid_draft else InvoiceStatus.issued),
-                currency=currency or "NGN",
-                billing_period_start=period_start,
-                billing_period_end=period_end,
-                issued_at=None if prepaid_draft else run_at,
-                due_at=None if prepaid_draft else run_at + timedelta(days=due_days),
+            invoice = Invoices.stage_system_invoice(
+                db,
+                InvoiceCreate(
+                    account_id=subscription.subscriber_id,
+                    invoice_number=next_invoice_number(db),
+                    status=(
+                        InvoiceStatus.draft if prepaid_draft else InvoiceStatus.issued
+                    ),
+                    currency=currency or "NGN",
+                    billing_period_start=period_start,
+                    billing_period_end=period_end,
+                    issued_at=None if prepaid_draft else run_at,
+                    due_at=(
+                        None if prepaid_draft else run_at + timedelta(days=due_days)
+                    ),
+                ),
+                reason="scheduled_billing_run",
             )
-            db.add(invoice)
-            db.flush()
             invoices[invoice_key] = invoice
             newly_created_invoices.append(invoice)
             summary["invoices_created"] += 1
@@ -1552,19 +1481,24 @@ def run_invoice_cycle(
                     continue  # nothing to fund; leave draft
                 # Optimistically issue so a fully-funded settle lands a proper
                 # issued→paid invoice; revert to draft if the wallet can't cover.
-                invoice.status = InvoiceStatus.issued
-                invoice.issued_at = run_at
-                invoice.due_at = run_at
-                db.flush()
+                Invoices.issue_draft_system(
+                    db,
+                    str(invoice.id),
+                    issued_at=run_at,
+                    due_at=run_at,
+                    reason="prepaid_funding_attempt",
+                )
                 settle_single_invoice_from_credit(db, invoice, only_if_full=True)
                 db.flush()
                 _recalculate_invoice_totals(db, invoice)
                 if invoice.status != InvoiceStatus.paid:
                     # Underfunded — no allocation was made (all-or-nothing); return
                     # it to a pure draft so it never becomes a phantom receivable.
-                    invoice.status = InvoiceStatus.draft
-                    invoice.issued_at = None
-                    invoice.due_at = None
+                    Invoices.return_unfunded_prepaid_to_draft_system(
+                        db,
+                        str(invoice.id),
+                        reason="prepaid_funding_attempt_underfunded",
+                    )
                     summary["prepaid_invoices_left_draft"] = (
                         summary.get("prepaid_invoices_left_draft", 0) + 1
                     )
@@ -1695,19 +1629,15 @@ def run_invoice_cycle(
                     event_exc,
                 )
 
-        # When the dedicated hourly notifications runner is enabled it owns the
-        # reminder/escalation emits (so they honour the configured send window);
-        # the daily cycle then skips them to avoid an off-hours duplicate path.
+        # When the dedicated hourly notifications runner is enabled it owns
+        # pre-due reminders so they honour the configured send window. Policy
+        # dunning separately owns every overdue notification and consequence.
         if _hourly_notifications_enabled(db):
             summary["invoice_reminders_sent"] = 0
-            summary["dunning_escalations_sent"] = 0
         else:
             notification_summary = run_billing_notifications(db, run_at)
             summary["invoice_reminders_sent"] = int(
                 notification_summary.get("invoice_reminders_sent", 0)
-            )
-            summary["dunning_escalations_sent"] = int(
-                notification_summary.get("dunning_escalations_sent", 0)
             )
         db.commit()
 
@@ -1879,20 +1809,23 @@ def generate_prorated_invoice(
     due_days = resolve_payment_due_days(db, subscriber=account)
 
     # Create prorated invoice
-    invoice = Invoice(
-        account_id=subscription.subscriber_id,
-        invoice_number=next_invoice_number(db),
-        status=InvoiceStatus.issued,
-        currency=currency or "NGN",
-        # Store the day-floored period_start so the dedupe above is stable across
-        # re-activations on the same day (issued_at keeps the exact instant).
-        billing_period_start=period_start,
-        billing_period_end=period_end,
-        issued_at=activation_date,
-        due_at=activation_date + timedelta(days=due_days),
+    invoice = Invoices.stage_system_invoice(
+        db,
+        InvoiceCreate(
+            account_id=subscription.subscriber_id,
+            invoice_number=next_invoice_number(db),
+            status=InvoiceStatus.issued,
+            currency=currency or "NGN",
+            # Store the day-floored period_start so the dedupe above is stable
+            # across re-activations on the same day (issued_at keeps the exact
+            # instant).
+            billing_period_start=period_start,
+            billing_period_end=period_end,
+            issued_at=activation_date,
+            due_at=activation_date + timedelta(days=due_days),
+        ),
+        reason="prorated_subscription_activation",
     )
-    db.add(invoice)
-    db.flush()
 
     tax_rate_id = _resolve_tax_rate_id(db, subscription)
     offer_name = (
@@ -2023,88 +1956,14 @@ def run_invoice_cycle_with_retry(
     raise RuntimeError("Billing run failed but no exception was captured")
 
 
-def _resolve_suspension_grace_hours(db: Session) -> int:
-    """Resolve billing.suspension_grace_hours (default 48), same as the
-    enforcement handler."""
-    grace_setting = settings_spec.resolve_value(
-        db, SettingDomain.billing, "suspension_grace_hours"
-    )
-    try:
-        return int(str(grace_setting or 48))
-    except (TypeError, ValueError):
-        return 48
-
-
-def _emit_post_grace_suspension_escalation(
-    db: Session,
-    invoice: Invoice,
-    now: datetime,
-    grace_hours: int,
-) -> bool:
-    """Re-emit ``invoice_overdue`` once the suspension grace has elapsed.
-
-    The first overdue emit (within grace) only produces a "suspension in N
-    hours" warning — actual suspension requires a second ``invoice_overdue``
-    event after the grace. Re-emitting here makes suspension land within
-    ~1 hour of grace expiry, independent of the daily billing run's
-    day-3/7/14/30 dunning cadence.
-
-    Emits at most once per invoice: the ``suspension_escalation_sent``
-    metadata flag is written at emit time (regardless of handler outcome),
-    so an hourly runner never spams. Only fires when the warning was
-    actually sent (``suspension_warning_sent_at``) — if grace was zero or
-    auto-suspend is disabled, there is nothing to escalate — and only while
-    the subscriber is still active.
-
-    Returns True when an escalation event was emitted.
-    """
-    metadata = dict(invoice.metadata_ or {})
-    if metadata.get("suspension_escalation_sent"):
-        return False
-    if not metadata.get("suspension_warning_sent_at"):
-        return False
-    if grace_hours <= 0:
-        return False
-    due_at = _as_utc(invoice.due_at)
-    if due_at is None:
-        return False
-    hours_overdue = (now - due_at).total_seconds() / 3600
-    if hours_overdue < grace_hours:
-        return False
-    subscriber = db.get(Subscriber, invoice.account_id)
-    if not subscriber or subscriber.status != SubscriberStatus.active:
-        return False
-    days_overdue = (now.date() - due_at.date()).days
-    emit_event(
-        db,
-        EventType.invoice_overdue,
-        {
-            "invoice_id": str(invoice.id),
-            "invoice_number": invoice.invoice_number or "",
-            "amount": str(invoice.balance_due or invoice.total or Decimal("0.00")),
-            "due_date": due_at.date().isoformat(),
-            "days_overdue": str(days_overdue),
-            "escalation": "post_grace_suspension",
-        },
-        invoice_id=invoice.id,
-        account_id=invoice.account_id,
-    )
-    _mark_invoice_metadata_flag(invoice, "suspension_escalation_sent")
-    return True
-
-
 def mark_overdue_invoices(db: Session) -> dict[str, int]:
     """Mark past-due invoices as overdue and emit events.
 
     Runs independently of the billing cycle. Finds invoices where
     ``due_at <= now``, ``balance_due > 0``, and status is ``issued``
     or ``partially_paid``, then transitions them to ``overdue`` and
-    emits ``invoice_overdue`` events (which trigger the enforcement
-    handler for suspension).
-
-    Already-overdue invoices are re-scanned for a one-time post-grace
-    suspension escalation (see ``_emit_post_grace_suspension_escalation``),
-    so suspension does not depend on the daily billing run being healthy.
+    emits one observational ``invoice_overdue`` event. Policy dunning alone
+    decides overdue notifications and service-access consequences.
     """
     now = datetime.now(UTC)
     invoices = (
@@ -2126,10 +1985,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
     )
     prepaid_non_ar_ids = set(db.scalars(prepaid_non_ar_invoice_ids()))
 
-    grace_hours = _resolve_suspension_grace_hours(db)
-
     marked = 0
-    escalated = 0
     errors = 0
     skipped_on_hold = 0
     for invoice in invoices:
@@ -2146,66 +2002,30 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
             continue
         if invoice.id in prepaid_non_ar_ids:
             continue
-        if metadata.get("overdue_event_sent"):
-            # Already announced in a prior run — just ensure status is overdue
-            if invoice.status != InvoiceStatus.overdue:
-                invoice.status = InvoiceStatus.overdue
-                marked += 1
-            # Post-grace escalation: re-emit once so suspension happens
-            # within ~1 hour of grace expiry (idempotent, never hourly spam).
-            try:
-                if _emit_post_grace_suspension_escalation(
-                    db, invoice, now, grace_hours
-                ):
-                    escalated += 1
-            except Exception as exc:
-                logger.error(
-                    "Failed post-grace escalation for invoice %s: %s",
-                    invoice.id,
-                    exc,
-                )
-                errors += 1
-            continue
-
         try:
-            invoice.status = InvoiceStatus.overdue
-            due_at = _as_utc(invoice.due_at)
-            days_overdue = (now.date() - due_at.date()).days if due_at else 0
-
-            emit_event(
+            transition = Invoices.mark_overdue_system(
                 db,
-                EventType.invoice_overdue,
-                {
-                    "invoice_id": str(invoice.id),
-                    "invoice_number": invoice.invoice_number or "",
-                    "amount": str(
-                        invoice.balance_due or invoice.total or Decimal("0.00")
-                    ),
-                    "due_date": due_at.date().isoformat() if due_at else "",
-                    "days_overdue": str(days_overdue),
-                },
-                invoice_id=invoice.id,
-                account_id=invoice.account_id,
+                str(invoice.id),
+                as_of=now,
+                reason="scheduled_overdue_detection",
             )
-            _mark_invoice_metadata_flag(invoice, "overdue_event_sent")
-            marked += 1
+            if transition.changed or transition.event_emitted:
+                marked += 1
         except Exception as exc:
             logger.error("Failed to process overdue invoice %s: %s", invoice.id, exc)
             errors += 1
 
-    if marked or escalated or skipped_on_hold:
+    if marked or skipped_on_hold:
         db.commit()
 
     logger.info(
-        "Overdue detection: %d marked, %d escalated, %d errors, %d scanned",
+        "Overdue detection: %d marked, %d errors, %d scanned",
         marked,
-        escalated,
         errors,
         len(invoices),
     )
     return {
         "marked_overdue": marked,
-        "escalated": escalated,
         "errors": errors,
         "scanned": len(invoices),
         "skipped_on_hold": skipped_on_hold,
@@ -2222,8 +2042,8 @@ def generate_cancellation_credit(
     (has at least one invoice line). The credit covers the unused portion from
     cancellation date to next_billing_at.
     """
-    from app.models.billing import CreditNote, CreditNoteLine, CreditNoteStatus
-    from app.services import numbering
+    from app.schemas.billing import CreditNoteIssuePreviewRequest
+    from app.services.billing.credit_notes import CreditNotes
 
     # Check if proration is enabled
     proration_enabled = settings_spec.resolve_value(
@@ -2290,48 +2110,44 @@ def generate_cancellation_credit(
     if credit_amount <= Decimal("0.00"):
         return
 
-    credit_number = numbering.generate_number(
-        db,
-        SettingDomain.billing,
-        "credit_note_number",
-        "credit_note_number_enabled",
-        "credit_note_number_prefix",
-        "credit_note_number_padding",
-        "credit_note_number_start",
+    tax_rate = last_line.tax_rate
+    tax_amount = _calculate_tax_amount(
+        credit_amount,
+        tax_rate.rate if tax_rate else Decimal("0.00"),
+        last_line.tax_application,
     )
+    if last_line.tax_application == TaxApplication.inclusive:
+        credit_subtotal = credit_amount - tax_amount
+        credit_total = credit_amount
+    else:
+        credit_subtotal = credit_amount
+        credit_total = credit_amount + tax_amount
 
     offer_name = subscription.offer.name if subscription.offer else "Subscription"
-    credit = CreditNote(
-        account_id=subscription.subscriber_id,
-        invoice_id=last_line.invoice_id,
-        credit_number=credit_number,
-        currency=last_line.invoice.currency,
-        subtotal=credit_amount,
-        tax_total=Decimal("0"),
-        total=credit_amount,
-        status=CreditNoteStatus.issued,
-        issued_at=now,
-        memo=f"Cancellation credit: {offer_name} (unused {int(unused_seconds / 86400)} days)",
+    result = CreditNotes.issue_system(
+        db,
+        CreditNoteIssuePreviewRequest(
+            account_id=subscription.subscriber_id,
+            invoice_id=last_line.invoice_id,
+            currency=last_line.invoice.currency,
+            subtotal=credit_subtotal,
+            tax_total=tax_amount,
+            total=credit_total,
+            memo=(
+                f"Cancellation credit: {offer_name} "
+                f"(unused {int(unused_seconds / 86400)} days)"
+            ),
+            line_description=f"Prorated credit for {offer_name}",
+            line_tax_rate_id=last_line.tax_rate_id,
+            line_tax_application=last_line.tax_application,
+        ),
+        idempotency_key=f"cancel-credit-{subscription.id}-{last_line.id}",
+        commit=False,
     )
-    db.add(credit)
-    db.flush()
-
-    credit_line = CreditNoteLine(
-        credit_note_id=credit.id,
-        description=f"Prorated credit for {offer_name}",
-        unit_price=credit_amount,
-        amount=credit_amount,
-        quantity=Decimal("1"),
-        tax_rate_id=last_line.tax_rate_id,
-        tax_application=last_line.tax_application,
-    )
-    db.add(credit_line)
-    db.flush()
-    _recalculate_credit_note_totals(db, credit)
 
     logger.info(
         "Generated cancellation credit %s for subscription %s: %s",
-        credit_number or credit.id,
+        result.credit_note.credit_number or result.credit_note.id,
         subscription.id,
         credit_amount,
     )

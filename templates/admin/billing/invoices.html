@@ -159,6 +159,29 @@ function invoiceBulkActions(initialContract) {
             }));
         },
 
+        bulkVoid() {
+            if (this.selectedIds.length === 0) return;
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/admin/billing/invoices/bulk/void';
+            const ids = document.createElement('input');
+            ids.type = 'hidden';
+            ids.name = 'invoice_ids';
+            ids.value = this.selectedIds.join(',');
+            form.appendChild(ids);
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
+                              document.querySelector('[name="_csrf_token"]')?.value || '';
+            if (csrfToken) {
+                const csrf = document.createElement('input');
+                csrf.type = 'hidden';
+                csrf.name = '_csrf_token';
+                csrf.value = csrfToken;
+                form.appendChild(csrf);
+            }
+            document.body.appendChild(form);
+            form.submit();
+        },
+
         async previewAction(actionKey) {
             const body = new URLSearchParams({
                 action: actionKey,
@@ -213,6 +236,10 @@ function invoiceBulkActions(initialContract) {
             const action = this.actionDefinition(actionKey);
             const state = this.actionState(actionKey);
             if (!action || !state.enabled || this.busyAction !== null) return;
+            if (actionKey === 'void') {
+                this.bulkVoid();
+                return;
+            }
             if (actionKey === 'export_csv' || actionKey === 'export_pdf') {
                 this.exportSelection(actionKey);
                 return;

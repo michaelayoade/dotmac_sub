@@ -72,7 +72,11 @@ def test_a_small_refund_does_not_un_pay_the_whole_invoice(db_session):
     assert invoice.status == InvoiceStatus.paid
 
     Refunds.process_refund(
-        db_session, str(payment.id), refund_amount=Decimal("500.00"), reason="goodwill"
+        db_session,
+        str(payment.id),
+        refund_amount=Decimal("500.00"),
+        reason="goodwill",
+        idempotency_key=f"refund-test-{uuid.uuid4().hex}",
     )
     db_session.commit()
     db_session.refresh(invoice)
@@ -94,7 +98,11 @@ def test_the_refunded_portion_is_what_becomes_owing(db_session):
     db_session.commit()
 
     Refunds.process_refund(
-        db_session, str(payment.id), refund_amount=Decimal("2500.00"), reason="partial"
+        db_session,
+        str(payment.id),
+        refund_amount=Decimal("2500.00"),
+        reason="partial",
+        idempotency_key=f"refund-test-{uuid.uuid4().hex}",
     )
     db_session.commit()
     db_session.refresh(invoice)
@@ -109,7 +117,12 @@ def test_a_full_refund_still_owes_the_whole_invoice(db_session):
     payment = _pay(db_session, account, invoice, "10000.00")
     db_session.commit()
 
-    Refunds.process_refund(db_session, str(payment.id), reason="full")
+    Refunds.process_refund(
+        db_session,
+        str(payment.id),
+        reason="full",
+        idempotency_key=f"refund-test-{uuid.uuid4().hex}",
+    )
     db_session.commit()
     db_session.refresh(invoice)
 

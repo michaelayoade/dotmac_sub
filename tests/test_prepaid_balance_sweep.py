@@ -177,6 +177,7 @@ def test_activation_floor_prevents_stale_timer_from_immediate_suspension(
     activation_at = _MONDAY_NOON - timedelta(days=1)
     _enable_control(db_session, activation_at=activation_at)
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
+    subscriber_account.grace_period_days = 1
     subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=90)
     db_session.commit()
 
@@ -455,19 +456,14 @@ def test_suspends_after_deactivation_days_elapsed(
     assert any(n.subject == "Service Deactivated" for n in notices)
 
 
-def test_respects_configured_deactivation_days(
+def test_respects_canonical_account_grace_override(
     db_session, subscriber_account, subscription
 ):
     _enable_control(db_session)
-    _set_collections_setting(
-        db_session,
-        "prepaid_deactivation_days",
-        text="5",
-        vtype=SettingValueType.integer,
-    )
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
-    # Armed only 4 days ago; 5-day window has NOT elapsed → no suspend.
-    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=4)
+    subscriber_account.grace_period_days = 5
+    # Armed only 2 days ago; 5-day window has NOT elapsed → warn stays, no suspend.
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=2)
     db_session.commit()
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
@@ -554,13 +550,8 @@ def test_low_balance_rerun_does_not_send_second_warning(
     db_session, subscriber_account, subscription
 ):
     _enable_control(db_session)
-    # 5-day window so no suspend happens; only the warning path is exercised.
-    _set_collections_setting(
-        db_session,
-        "prepaid_deactivation_days",
-        text="5",
-        vtype=SettingValueType.integer,
-    )
+    # A canonical account grace override keeps this focused on warning dedupe.
+    subscriber_account.grace_period_days = 5
     _make_prepaid(db_session, subscriber_account, subscription, credit=Decimal("0"))
 
     run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)

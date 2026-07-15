@@ -30,6 +30,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.catalog import AccessState, BillingMode, SubscriptionStatus
+from app.models.enforcement_lock import AccessRestrictionMode
 from app.models.subscriber import SubscriberStatus
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
@@ -210,7 +211,7 @@ def resolve_customer_billing_access_state(
     subscription,
     *,
     subscriber=None,
-    captive_redirect_enabled: bool | None = None,
+    access_restriction_mode: AccessRestrictionMode | None = None,
 ) -> CustomerBillingAccessState:
     """Resolve the account/subscription billing and access state.
 
@@ -256,11 +257,6 @@ def resolve_customer_billing_access_state(
         and subscription_mode == BillingMode.prepaid
     )
 
-    captive = (
-        bool(captive_redirect_enabled)
-        if captive_redirect_enabled is not None
-        else bool(getattr(subscriber, "captive_redirect_enabled", False))
-    )
     account_hard_reject = _account_radius_hard_reject(
         subscriber_status=subscriber_status,
         account_enabled=account_enabled,
@@ -269,8 +265,17 @@ def resolve_customer_billing_access_state(
     radius_state = (
         derive_access_state(
             subscription_status,
-            captive_redirect_enabled=captive,
-            hard_reject=account_hard_reject,
+            restriction_mode=(
+                AccessRestrictionMode.hard_reject
+                if account_hard_reject
+                and not (
+                    access_restriction_mode == AccessRestrictionMode.captive
+                    and account_enabled
+                    and subscriber_status
+                    in {SubscriberStatus.blocked, SubscriberStatus.suspended}
+                )
+                else access_restriction_mode
+            ),
         )
         if isinstance(subscription_status, SubscriptionStatus)
         else None

@@ -337,12 +337,9 @@ def test_overdue_runner_keeps_ambiguous_line_less_prepaid_invoice_visible(
     assert invoice.status == InvoiceStatus.overdue
 
 
-def test_billing_notifications_ignore_imported_line_less_prepaid_invoice(
+def test_billing_notifications_do_not_emit_overdue_events(
     db_session, subscription, subscriber_account, monkeypatch
 ):
-    from app.models.domain_settings import DomainSetting, SettingDomain
-    from app.models.subscription_engine import SettingValueType
-
     run_at = _activate(
         db_session, subscription, subscriber_account, BillingMode.prepaid
     )
@@ -356,18 +353,7 @@ def test_billing_notifications_ignore_imported_line_less_prepaid_invoice(
         due_at=run_at - timedelta(days=3),
         metadata_={"imported_via": "system_import_wizard"},
     )
-    db_session.add_all(
-        [
-            invoice,
-            DomainSetting(
-                domain=SettingDomain.billing,
-                key="dunning_escalation_days",
-                value_type=SettingValueType.string,
-                value_text="3",
-                is_active=True,
-            ),
-        ]
-    )
+    db_session.add(invoice)
     db_session.commit()
     emitted = []
     monkeypatch.setattr(
@@ -383,7 +369,7 @@ def test_billing_notifications_ignore_imported_line_less_prepaid_invoice(
 
     result = billing_automation.run_billing_notifications(db_session, run_at)
 
-    assert result["dunning_escalations_sent"] == 0
+    assert "dunning_escalations_sent" not in result
     assert emitted == []
 
 

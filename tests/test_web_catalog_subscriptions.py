@@ -2869,13 +2869,14 @@ def test_bulk_change_plan_excludes_suspended_by_default(
         str(target.id),
         request=None,
         actor_id=None,
+        effective_timing="next_cycle",
     )
 
     assert result["changed"] == 1
     assert str(suspended.id) in result["skipped_ids"]
     db_session.refresh(active)
     db_session.refresh(suspended)
-    assert active.offer_id == target.id
+    assert active.offer_id == catalog_offer.id
     assert suspended.offer_id == catalog_offer.id
 
 
@@ -2910,6 +2911,7 @@ def test_bulk_change_plan_include_suspended_opt_in(
         str(target.id),
         request=None,
         actor_id=None,
+        effective_timing="next_cycle",
         include_suspended=True,
     )
 
@@ -2917,8 +2919,8 @@ def test_bulk_change_plan_include_suspended_opt_in(
     assert result["skipped_ids"] == []
     db_session.refresh(active)
     db_session.refresh(suspended)
-    assert active.offer_id == target.id
-    assert suspended.offer_id == target.id
+    assert active.offer_id == catalog_offer.id
+    assert suspended.offer_id == catalog_offer.id
 
 
 def test_bulk_tariff_change_preview_excludes_suspended_by_default(

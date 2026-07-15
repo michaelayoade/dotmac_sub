@@ -47,10 +47,11 @@ class EventType(enum.Enum):
     invoice_paid = "invoice.paid"
     invoice_overdue = "invoice.overdue"
 
-    # Billing - Payment events (3)
+    # Billing - Payment events (4)
     payment_received = "payment.received"
     payment_failed = "payment.failed"
     payment_refunded = "payment.refunded"
+    payment_reversed = "payment.reversed"
 
     # Billing - Consolidated billing account payment (1)
     billing_account_payment_received = "billing_account.payment_received"

@@ -24,7 +24,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.models.billing import Invoice, InvoiceLine
-from app.schemas.billing import CreditNoteCreate
+from app.schemas.billing import CreditNoteIssuePreviewRequest
 from app.services.billing._common import _recalculate_invoice_totals
 from app.services.billing.credit_notes import CreditNotes
 from app.services.common import coerce_uuid
@@ -207,17 +207,20 @@ def _execute(db, item: dict[str, Any]) -> dict[str, Any]:
         }
     if item["action"] == "credit_paid_line":
         amount = _money(line.amount)
-        cn = CreditNotes.create(
+        cn = CreditNotes.issue_system(
             db,
-            CreditNoteCreate(
+            CreditNoteIssuePreviewRequest(
                 account_id=invoice.account_id,
                 invoice_id=invoice.id,
                 subtotal=amount,
                 total=amount,
                 currency=invoice.currency or "NGN",
                 memo=f"Billing-integrity correction for line {line.id}",
+                line_description=f"Billing-integrity correction for line {line.id}",
             ),
-        )
+            idempotency_key=f"billing-remediation-credit-{line.id}",
+            commit=False,
+        ).credit_note
         return {"credit_note_id": str(cn.id), "credit_amount": str(amount)}
     raise ValueError(f"non-write action reached _execute: {item['action']}")
 
@@ -239,7 +242,13 @@ def rollback_remediation(db, manifest: dict[str, Any]) -> dict[str, Any]:
             elif item["action"] == "credit_paid_line":
                 cn_id = (item.get("after") or {}).get("credit_note_id")
                 if cn_id:
-                    CreditNotes.void(db, cn_id)
+                    CreditNotes.void_system(
+                        db,
+                        cn_id,
+                        idempotency_key=f"billing-remediation-void-{cn_id}",
+                        memo="Rollback approved billing remediation",
+                        commit=False,
+                    )
                     reversed_count += 1
             db.commit()
         except Exception:

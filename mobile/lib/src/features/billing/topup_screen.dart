@@ -119,7 +119,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
     }
 
     // Bank transfer: show the account(s) + collect the receipt; staff verify
-    // and credit the wallet. No gateway / verify round-trip here.
+    // and credit the account. No gateway / verify round-trip here.
     if (_isTransfer) {
       final ok = await showSubmitProofSheet(
         context,
@@ -173,7 +173,7 @@ class _TopUpScreenState extends ConsumerState<TopUpScreen> {
             saveCard:
                 cardId == null && _selectedGateway == 'paystack' && _saveCard,
           );
-      // Top-up credits the wallet — refresh balance + ledger + invoices.
+      // Top-up credits the account — refresh balance + ledger + invoices.
       ref.invalidate(invoicesProvider);
       ref.invalidate(balanceProvider);
       ref.invalidate(ledgerProvider);

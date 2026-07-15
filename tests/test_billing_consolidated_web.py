@@ -13,12 +13,22 @@ def test_consolidated_record_payment_route_is_registered():
         "/billing/consolidated-accounts/{billing_account_id}/record-payment",
         ("POST",),
     ) in routes
+    assert (
+        "/billing/consolidated-accounts/{billing_account_id}/record-payment/preview",
+        ("POST",),
+    ) in routes
 
 
 def test_consolidated_payment_template_confirms_and_shows_feedback():
     template = Path("templates/admin/billing/consolidated/detail.html").read_text()
+    confirmation = Path(
+        "templates/admin/billing/consolidated/payment_confirm.html"
+    ).read_text()
 
-    assert "Record and distribute this consolidated payment" in template
+    assert "Preview distribution" in template
+    assert "Exact invoice ledger transactions" in confirmation
+    assert "Confirm and record payment" in confirmation
+    assert "Service access is not decided by this page" in confirmation
     assert "button[type=submit]').disabled = true" in template
     assert 'min="0.01"' in template
     assert "payment_note" in template
@@ -45,6 +55,8 @@ def test_consolidated_record_payment_redirects_with_success(db_session, monkeypa
         currency="NGN",
         memo="bank ref",
         collection_account_id="collection-1",
+        preview_fingerprint="a" * 64,
+        idempotency_key="admin-consolidated-test-1",
         db=db_session,
     )
 
@@ -58,6 +70,9 @@ def test_consolidated_record_payment_redirects_with_success(db_session, monkeypa
         "currency": "NGN",
         "memo": "bank ref",
         "collection_account_id": "collection-1",
+        "preview_fingerprint": "a" * 64,
+        "idempotency_key": "admin-consolidated-test-1",
+        "actor_id": None,
     }
 
 
@@ -87,6 +102,8 @@ def test_consolidated_record_payment_uses_default_currency_when_omitted(
         currency=None,
         memo=None,
         collection_account_id=None,
+        preview_fingerprint="b" * 64,
+        idempotency_key="admin-consolidated-test-2",
         db=db_session,
     )
 
@@ -111,6 +128,8 @@ def test_consolidated_record_payment_redirects_with_safe_error(db_session, monke
         currency="NGN",
         memo=None,
         collection_account_id=None,
+        preview_fingerprint="c" * 64,
+        idempotency_key="admin-consolidated-test-3",
         db=db_session,
     )
 

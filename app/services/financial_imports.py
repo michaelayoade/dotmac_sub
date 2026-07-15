@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, cast
 
@@ -20,6 +21,12 @@ from app.services.catalog.subscriptions import Subscriptions
 from app.services.notification_suppression import suppress_notifications
 
 FINANCIAL_IMPORT_MODULES = frozenset({"subscriptions", "invoices", "payments"})
+
+
+@dataclass(frozen=True)
+class FinancialImportPersistence:
+    record: Invoice | Payment | Subscription
+    created_new: bool
 
 
 @contextmanager
@@ -61,7 +68,7 @@ def _lock_account_import(db: Session, account_id: Any) -> None:
         raise ValueError(f"Subscriber {account_id} was not found")
 
 
-def _import_invoice(db: Session, row: Any, source_name: str) -> Invoice:
+def _import_invoice(db: Session, row: Any, source_name: str) -> tuple[Invoice, bool]:
     _lock_account_import(db, row.account_id)
     if not row.invoice_number:
         raise ValueError("invoice_number is required for idempotent invoice imports")
@@ -90,7 +97,7 @@ def _import_invoice(db: Session, row: Any, source_name: str) -> Invoice:
     if existing is not None:
         _assert_same("invoice total", existing.total, row.total)
         _assert_same("invoice currency", existing.currency, row.currency)
-        return existing
+        return existing, False
 
     invoice = Invoices.create(
         db,
@@ -118,10 +125,10 @@ def _import_invoice(db: Session, row: Any, source_name: str) -> Invoice:
     }
     db.commit()
     db.refresh(invoice)
-    return invoice
+    return invoice, True
 
 
-def _import_payment(db: Session, row: Any) -> Payment:
+def _import_payment(db: Session, row: Any) -> tuple[Payment, bool]:
     _lock_account_import(db, row.account_id)
     external_id = (row.external_id or "").strip()
     if not external_id:
@@ -143,7 +150,7 @@ def _import_payment(db: Session, row: Any) -> Payment:
         _assert_same("payment amount", existing.amount, row.amount)
         _assert_same("payment currency", existing.currency, row.currency)
         _assert_same("payment status", existing.status, PaymentStatus.succeeded)
-        return existing
+        return existing, False
 
     allocations = None
     if row.invoice_number:
@@ -166,22 +173,25 @@ def _import_payment(db: Session, row: Any) -> Payment:
             )
         ]
 
-    return Payments.create(
-        db,
-        PaymentCreate(
-            account_id=row.account_id,
-            amount=row.amount,
-            currency=row.currency,
-            status=row.status,
-            memo=row.memo,
-            external_id=external_id,
-            allocations=allocations,
+    return (
+        Payments.create(
+            db,
+            PaymentCreate(
+                account_id=row.account_id,
+                amount=row.amount,
+                currency=row.currency,
+                status=row.status,
+                memo=row.memo,
+                external_id=external_id,
+                allocations=allocations,
+            ),
+            auto_allocate=allocations is None,
         ),
-        auto_allocate=allocations is None,
+        True,
     )
 
 
-def _import_subscription(db: Session, row: Any) -> Subscription:
+def _import_subscription(db: Session, row: Any) -> tuple[Subscription, bool]:
     _lock_account_import(db, row.subscriber_id)
     existing = (
         db.query(Subscription)
@@ -197,47 +207,61 @@ def _import_subscription(db: Session, row: Any) -> Subscription:
             existing.billing_mode,
             row.billing_mode or BillingMode.prepaid,
         )
-        return existing
+        return existing, False
 
-    return Subscriptions.create(
-        db,
-        SubscriptionCreate(
-            subscriber_id=row.subscriber_id,
-            offer_id=row.offer_id,
-            status=row.status,
-            billing_mode=row.billing_mode or BillingMode.prepaid,
-            start_at=row.start_at,
-            end_at=row.end_at,
-            next_billing_at=row.next_billing_at,
-            canceled_at=row.canceled_at,
-            cancel_reason=row.cancel_reason,
+    return (
+        Subscriptions.create(
+            db,
+            SubscriptionCreate(
+                subscriber_id=row.subscriber_id,
+                offer_id=row.offer_id,
+                status=row.status,
+                billing_mode=row.billing_mode or BillingMode.prepaid,
+                start_at=row.start_at,
+                end_at=row.end_at,
+                next_billing_at=row.next_billing_at,
+                canceled_at=row.canceled_at,
+                cancel_reason=row.cancel_reason,
+            ),
         ),
+        True,
     )
 
 
 def persist_import_row(
-    db: Session, module: str, row: Any, *, source_name: str
-) -> Invoice | Payment | Subscription:
+    db: Session,
+    module: str,
+    row: Any,
+    *,
+    source_name: str,
+    with_provenance: bool = False,
+) -> Invoice | Payment | Subscription | FinancialImportPersistence:
     """Apply one staged row through its owning service and return the local row."""
     if module not in FINANCIAL_IMPORT_MODULES:
         raise ValueError(f"Unsupported financial import module: {module}")
 
     model: type[Invoice] | type[Payment] | type[Subscription]
     record: Invoice | Payment | Subscription
+    created_new: bool
     record_id: Any
     with _owner_session(db) as owner_db, suppress_notifications():
         if module == "invoices":
-            record = _import_invoice(owner_db, row, source_name)
+            record, created_new = _import_invoice(owner_db, row, source_name)
             model = Invoice
         elif module == "payments":
-            record = _import_payment(owner_db, row)
+            record, created_new = _import_payment(owner_db, row)
             model = Payment
         else:
-            record = _import_subscription(owner_db, row)
+            record, created_new = _import_subscription(owner_db, row)
             model = Subscription
         record_id = record.id
 
     persisted = cast(Invoice | Payment | Subscription | None, db.get(model, record_id))
     if persisted is None:
         raise RuntimeError(f"Imported {module} row was not visible after posting")
+    if with_provenance:
+        return FinancialImportPersistence(
+            record=persisted,
+            created_new=created_new,
+        )
     return persisted

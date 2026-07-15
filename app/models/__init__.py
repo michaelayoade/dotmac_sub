@@ -21,11 +21,13 @@ from app.models.auth import (  # noqa: F401
 )
 from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
 from app.models.billing import (  # noqa: F401
+    AccountAdjustment,
     BankAccount,
     BankAccountType,
     BankReconciliationItem,
     BankReconciliationRun,
     BillingAccount,
+    BillingAccountLedgerEntry,
     BillingRun,
     BillingRunSchedule,
     BillingRunStatus,
@@ -34,6 +36,10 @@ from app.models.billing import (  # noqa: F401
     CreditNoteLine,
     CreditNoteStatus,
     Invoice,
+    InvoiceClosure,
+    InvoiceClosureLedgerEvidence,
+    InvoiceClosureOrigin,
+    InvoiceClosureType,
     InvoiceLine,
     InvoicePdfExport,
     InvoicePdfExportStatus,
@@ -110,6 +116,11 @@ from app.models.collections import (  # noqa: F401
     DunningActionLog,
     DunningCase,
     DunningCaseStatus,
+    FinancialAccessAction,
+    FinancialAccessConsequence,
+    FinancialAccessConsequenceEvidence,
+    FinancialAccessEvidenceOperation,
+    FinancialAccessOrigin,
 )
 from app.models.comms import (  # noqa: F401
     CustomerNotificationEvent,
@@ -174,6 +185,7 @@ from app.models.domain_settings import (  # noqa: F401
     SettingDomain,
 )
 from app.models.enforcement_lock import (  # noqa: F401
+    AccessRestrictionMode,
     EnforcementLock,
     EnforcementReason,
 )
@@ -255,6 +267,8 @@ from app.models.imports import (  # noqa: F401
     ImportRun,
     ImportRunRow,
     ImportRunStatus,
+    PaymentImportBatchReversal,
+    PaymentImportBatchReversalItem,
 )
 from app.models.integration import (  # noqa: F401
     IntegrationJob,
@@ -749,21 +763,6 @@ from app.models.usage import (  # noqa: F401
     UsageRatingRunStatus,
     UsageRecord,
     UsageSource,
-)
-from app.models.vas import (  # noqa: F401
-    VasEntryCategory,
-    VasEntryType,
-    VasPartyType,
-    VasRateCard,
-    VasRefundRequest,
-    VasRefundStatus,
-    VasService,
-    VasServiceVariation,
-    VasTopupIntent,
-    VasTransaction,
-    VasTransactionStatus,
-    VasWallet,
-    VasWalletEntry,
 )
 from app.models.vendor_routes import (  # noqa: F401
     AsBuiltLineItem,

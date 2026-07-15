@@ -1,20 +1,25 @@
-"""An import rollback must undo the money, not delete the evidence.
+"""A generic import rollback must not delete settled payment evidence.
 
 This is a regression WE introduced. F19 routed imported payments through
 Payments.create so they would actually settle invoices — which means every
 imported payment now has a LedgerEntry and usually a PaymentAllocation beneath it.
-The rollback path still hard-deleted the Payment row, and it was written back when
-imported payments were childless orphans.
+The old rollback path hard-deleted the Payment row, and it was written back when
+imported payments were childless orphans. The intermediate soft-delete repair is
+also no longer valid once settlement rows structurally own exact evidence: import
+rollback must use a separately previewed reversal workflow.
 
-Neither child FK carries an ondelete, so db.delete() either raises IntegrityError
-(leaving the batch half-rolled-back and unrecoverable) or orphans a live ledger
-credit while the invoice it settled stays paid with balance_due = 0.
+The durable Import Runs workflow now has that batch owner. Generic payment
+deletion still fails closed so every caller must enter through the previewed,
+confirmed batch contract instead of bypassing its provenance and evidence.
 """
 
 from __future__ import annotations
 
 import uuid
 from decimal import Decimal
+
+import pytest
+from fastapi import HTTPException
 
 from app.models.billing import (
     Invoice,
@@ -75,7 +80,7 @@ def _import_payment(db, account, amount: str) -> Payment:
 
 
 def _rollback_payment(db, payment: Payment) -> None:
-    """Drive the owner path the rollback now uses."""
+    """Exercise the generic delete path that the batch owner replaces."""
     from app.services import billing as billing_service
 
     billing_service.payments.delete(db, str(payment.id))
@@ -102,8 +107,8 @@ def test_imported_payment_has_children_that_a_hard_delete_would_orphan(
     assert allocations, "imported payment has no allocation"
 
 
-def test_rollback_reopens_the_invoice_the_import_settled(db_session):
-    """The invoice must not stay paid with no money behind it."""
+def test_generic_delete_cannot_mutate_settled_import_evidence(db_session):
+    """Imported money must enter through the previewed batch owner."""
     account = _account(db_session)
     invoice = _invoice(db_session, account, "5000.00")
 
@@ -111,42 +116,39 @@ def test_rollback_reopens_the_invoice_the_import_settled(db_session):
     db_session.refresh(invoice)
     assert invoice.status == InvoiceStatus.paid
 
-    _rollback_payment(db_session, payment)
-    db_session.commit()
+    with pytest.raises(HTTPException) as blocked:
+        _rollback_payment(db_session, payment)
+    assert blocked.value.status_code == 409
     db_session.refresh(invoice)
 
-    assert invoice.status != InvoiceStatus.paid, (
-        "the rollback left the invoice paid with no payment behind it"
-    )
-    assert invoice.balance_due == Decimal("5000.00")
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
 
 
-def test_rollback_removes_the_ledger_credit_it_imported(db_session):
-    """A hard delete would orphan this credit; the customer would keep the money."""
+def test_rejected_rollback_preserves_the_settlement_ledger(db_session):
     account = _account(db_session)
     # No invoice: the whole payment lands as unallocated account credit.
     payment = _import_payment(db_session, account, "5000.00")
     assert get_account_credit_balance(db_session, str(account.id)) == Decimal("5000.00")
 
-    _rollback_payment(db_session, payment)
-    db_session.commit()
+    with pytest.raises(HTTPException) as blocked:
+        _rollback_payment(db_session, payment)
+    assert blocked.value.status_code == 409
 
-    assert get_account_credit_balance(db_session, str(account.id)) == Decimal("0.00"), (
-        "the rolled-back import left its ledger credit active — the customer "
-        "keeps money that was never really theirs"
-    )
+    assert get_account_credit_balance(db_session, str(account.id)) == Decimal("5000.00")
 
 
-def test_rollback_deactivates_the_payment_and_its_allocation_together(db_session):
+def test_rejected_rollback_preserves_payment_and_allocation_evidence(db_session):
     account = _account(db_session)
     _invoice(db_session, account, "5000.00")
     payment = _import_payment(db_session, account, "5000.00")
 
-    _rollback_payment(db_session, payment)
-    db_session.commit()
+    with pytest.raises(HTTPException) as blocked:
+        _rollback_payment(db_session, payment)
+    assert blocked.value.status_code == 409
     db_session.refresh(payment)
 
-    assert payment.is_active is False
+    assert payment.is_active is True
     live_allocations = (
         db_session.query(PaymentAllocation)
         .filter(PaymentAllocation.payment_id == payment.id)
@@ -159,18 +161,18 @@ def test_rollback_deactivates_the_payment_and_its_allocation_together(db_session
         .filter(LedgerEntry.is_active.is_(True))
         .all()
     )
-    assert not live_allocations, "allocation survived the rollback"
-    assert not live_entries, "ledger credit survived the rollback"
+    assert live_allocations
+    assert live_entries
 
 
-def test_rollback_preserves_the_audit_trail(db_session):
-    """Soft-delete, not hard-delete: the import must remain investigable."""
+def test_rejected_rollback_preserves_the_audit_trail(db_session):
     account = _account(db_session)
     payment = _import_payment(db_session, account, "5000.00")
     payment_id = payment.id
 
-    _rollback_payment(db_session, payment)
-    db_session.commit()
+    with pytest.raises(HTTPException) as blocked:
+        _rollback_payment(db_session, payment)
+    assert blocked.value.status_code == 409
 
     assert db_session.get(Payment, payment_id) is not None, (
         "the payment row was destroyed — a money import that went wrong is now "

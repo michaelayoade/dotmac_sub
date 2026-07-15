@@ -116,7 +116,7 @@ def _build_plan_change_quote(
     subscription: Subscription,
     target_offer: CatalogOffer,
     *,
-    current_balance: Decimal | None = None,
+    prepaid_funding_before: Decimal | None = None,
 ) -> dict[str, object]:
     from app.services.subscription_lifecycle import (
         SubscriptionCommandKind,
@@ -132,7 +132,7 @@ def _build_plan_change_quote(
             source="customer_portal:plan_change_quote",
             target_offer_id=str(target_offer.id),
         ),
-        current_balance=current_balance,
+        current_balance=prepaid_funding_before,
     )
     details = preview.billing_impact.details or {}
     quote = details.get("quote")
@@ -147,7 +147,15 @@ def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
             quote.get("current_remaining_value", Decimal("0.00"))
         ),
         "required_amount": _to_float(quote.get("required_amount", Decimal("0.00"))),
-        "current_balance": _to_float(quote.get("current_balance", Decimal("0.00"))),
+        "prepaid_funding_before": _to_float(
+            quote.get("prepaid_funding_before", Decimal("0.00"))
+        ),
+        "prepaid_funding_after": _to_float(
+            quote.get("prepaid_funding_after", Decimal("0.00"))
+        ),
+        "postpaid_receivables": _to_float(
+            quote.get("postpaid_receivables", Decimal("0.00"))
+        ),
         "currency": str(quote.get("currency") or "NGN"),
         "shortfall": _to_float(quote.get("shortfall", Decimal("0.00"))),
         "collection_blocking_balance": _to_float(
@@ -165,6 +173,14 @@ def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
         "is_upgrade": bool(quote.get("is_upgrade", False)),
         "is_downgrade": bool(quote.get("is_downgrade", False)),
         "reason": quote.get("reason"),
+        "preview_fingerprint": str(quote.get("preview_fingerprint") or ""),
+        "has_financial_effect": bool(quote.get("ledger_entry_type")),
+        "ledger_entry_type": quote.get("ledger_entry_type"),
+        "ledger_source": quote.get("ledger_source"),
+        "ledger_amount": _to_float(quote.get("ledger_amount", Decimal("0.00"))),
+        "access_consequence": str(
+            quote.get("access_consequence") or "none_plan_change_only"
+        ),
     }
 
 
@@ -246,7 +262,7 @@ def get_change_plan_page(
     financial_position = _customer_financial_position(
         db, str(subscription.subscriber_id)
     )
-    wallet_balance = (
+    prepaid_funding = (
         financial_position.prepaid_available_balance
         if financial_position is not None
         else Decimal("0.00")
@@ -280,10 +296,16 @@ def get_change_plan_page(
             str(offer.id): get_offer_price_summary(offer) for offer in migration_offers
         },
         "available_offer_change_quotes": quote_map,
-        "current_wallet_balance": wallet_balance,
+        "prepaid_funding": prepaid_funding,
+        "postpaid_receivables": (
+            financial_position.open_invoice_balance
+            if financial_position is not None
+            else Decimal("0.00")
+        ),
+        "collection_blocking_balance": arrears_amount,
         "migration_options": _build_migration_options(db, subscription),
         "selected_offer_id": None,
-        "insufficient_balance": None,
+        "insufficient_funding": None,
         "next_billing_date": next_billing_date,
         "arrears_amount": _to_float(arrears_amount),
         "in_arrears": arrears_amount > Decimal("0.00"),
@@ -324,16 +346,13 @@ def get_plan_change_quote(
     if target_offer is None or str(target_offer.id) == str(subscription.offer_id):
         return None
 
-    billing_mode_value = str(
-        getattr(subscription.billing_mode, "value", subscription.billing_mode or "")
-    )
-    if billing_mode_value != "prepaid":
-        return {}
-
-    wallet_balance = _customer_credit_balance(db, str(subscription.subscriber_id))
+    prepaid_funding = _customer_credit_balance(db, str(subscription.subscriber_id))
     return _serialize_plan_change_quote(
         _build_plan_change_quote(
-            db, subscription, target_offer, current_balance=wallet_balance
+            db,
+            subscription,
+            target_offer,
+            prepaid_funding_before=prepaid_funding,
         )
     )
 
@@ -408,7 +427,7 @@ def get_change_plan_error_context(
     subscription_id: str,
     *,
     selected_offer_id: str | None = None,
-    insufficient_balance: dict[str, object] | None = None,
+    insufficient_funding: dict[str, object] | None = None,
 ) -> dict:
     """Get context data for re-rendering the change plan form after an error."""
     subscription = catalog_service.subscriptions.get(
@@ -455,8 +474,18 @@ def get_change_plan_error_context(
             if page_data is not None
             else {}
         ),
-        "current_wallet_balance": (
+        "prepaid_funding": (
             error_position.prepaid_available_balance
+            if error_position is not None
+            else Decimal("0.00")
+        ),
+        "postpaid_receivables": (
+            error_position.open_invoice_balance
+            if error_position is not None
+            else Decimal("0.00")
+        ),
+        "collection_blocking_balance": (
+            error_position.collection_blocking_balance
             if error_position is not None
             else Decimal("0.00")
         ),
@@ -464,7 +493,7 @@ def get_change_plan_error_context(
         if subscription
         else [],
         "selected_offer_id": selected_offer_id,
-        "insufficient_balance": insufficient_balance,
+        "insufficient_funding": insufficient_funding,
         "next_billing_date": next_billing_date,
         "arrears_amount": (
             page_data.get("arrears_amount", 0.0) if page_data is not None else 0.0
@@ -592,8 +621,8 @@ def get_plan_change_copy(subscription: Subscription) -> dict[str, str]:
         return {
             "timing_message": "Select a new plan. Changes take effect immediately.",
             "billing_message": (
-                "Because this subscription is prepaid, any same-family upgrade is charged "
-                "from your wallet using the prorated difference for the rest of this billing cycle."
+                "Because this subscription is prepaid, any same-family upgrade uses "
+                "prepaid funding for the prorated difference over the rest of this billing cycle."
             ),
         }
     return {
@@ -611,6 +640,10 @@ def apply_instant_plan_change(
     subscription_id: str,
     offer_id: str,
     notes: str | None = None,
+    *,
+    preview_fingerprint: str,
+    idempotency_key: str,
+    confirmation_origin: str,
 ) -> dict:
     """Instantly apply a plan change for the customer."""
     from fastapi import HTTPException
@@ -627,6 +660,42 @@ def apply_instant_plan_change(
     account_id = optional_customer_account_id(db, customer)
     if not account_id or str(subscription.subscriber_id) != str(account_id):
         raise ValueError("Subscription does not belong to this account")
+
+    replay = (
+        db.query(SubscriptionChangeRequest)
+        .filter(
+            SubscriptionChangeRequest.confirmation_idempotency_key
+            == idempotency_key.strip()
+        )
+        .first()
+    )
+    if replay is not None:
+        if (
+            str(replay.subscription_id) != str(subscription.id)
+            or str(replay.requested_offer_id) != str(offer_id)
+            or replay.confirmation_preview_fingerprint != preview_fingerprint.strip()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=("Plan-change idempotency key belongs to another confirmation"),
+            )
+        if replay.status == SubscriptionChangeStatus.applied:
+            return {
+                "success": True,
+                "replayed": True,
+                "change_request_id": str(replay.id),
+                "account_adjustment_id": (
+                    str(replay.account_adjustment_id)
+                    if replay.account_adjustment_id
+                    else None
+                ),
+                "credit_note_id": (
+                    str(replay.credit_note_id) if replay.credit_note_id else None
+                ),
+                "ledger_entry_id": (
+                    str(replay.ledger_entry_id) if replay.ledger_entry_id else None
+                ),
+            }
 
     new_offer = db.get(CatalogOffer, coerce_uuid(offer_id))
     if not new_offer:
@@ -653,7 +722,7 @@ def apply_instant_plan_change(
 
     # Block self-service plan changes while the account is in arrears. Policy:
     # the customer must settle overdue invoices first (covers prepaid AND
-    # postpaid — the old affordability gate only looked at prepaid wallet credit
+    # postpaid — the old affordability gate only looked at prepaid funding
     # and never considered outstanding debt). Account 100000016 could upgrade
     # while owing because this check did not exist.
     financial_position = _customer_financial_position(
@@ -676,7 +745,7 @@ def apply_instant_plan_change(
     new_price = _get_offer_recurring_price(new_offer)
     old_name = current_offer.name if current_offer else "Unknown"
     new_name = new_offer.name
-    wallet_balance = (
+    prepaid_funding = (
         financial_position.prepaid_available_balance
         if financial_position is not None
         else Decimal("0.00")
@@ -685,8 +754,13 @@ def apply_instant_plan_change(
         db,
         subscription,
         new_offer,
-        current_balance=wallet_balance,
+        prepaid_funding_before=prepaid_funding,
     )
+    if str(quote.get("preview_fingerprint") or "") != preview_fingerprint.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="Financial state changed after preview; preview again",
+        )
     required_amount = Decimal(str(quote["required_amount"]))
     shortfall = Decimal(str(quote["shortfall"]))
     is_prepaid = (
@@ -699,11 +773,11 @@ def apply_instant_plan_change(
     if is_prepaid and required_amount > Decimal("0.00") and shortfall > Decimal("0.00"):
         return {
             "success": False,
-            "reason": "insufficient_balance",
+            "reason": "insufficient_prepaid_funding",
             "selected_offer_id": str(new_offer.id),
             "plan_change_quote": quote,
             "required_amount": required_amount,
-            "current_balance": Decimal(str(quote["current_balance"])),
+            "prepaid_funding_before": Decimal(str(quote["prepaid_funding_before"])),
             "shortfall": shortfall,
         }
 
@@ -712,30 +786,18 @@ def apply_instant_plan_change(
         db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
     )
 
-    change_request = change_service.subscription_change_requests.create(
+    change_request = change_service.subscription_change_requests.confirm_immediate(
         db=db,
         subscription_id=subscription_id,
         new_offer_id=offer_id,
-        effective_date=date.today(),
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
+        confirmation_origin=confirmation_origin,
+        confirmation_snapshot=_serialize_plan_change_quote(quote),
         requested_by_person_id=str(subscriber.id) if subscriber else None,
+        actor_id=str(subscriber.id) if subscriber else None,
         notes=notes,
     )
-
-    change_service.subscription_change_requests.approve(
-        db=db,
-        request_id=str(change_request.id),
-        reviewer_id=None,
-    )
-
-    try:
-        change_service.subscription_change_requests.apply(
-            db=db,
-            request_id=str(change_request.id),
-            plan_change_operation_key=str(change_request.id),
-        )
-    except Exception:
-        db.rollback()
-        raise
 
     return {
         "success": True,
@@ -745,6 +807,22 @@ def apply_instant_plan_change(
         "new_price": new_price,
         "price_difference": new_price - old_price,
         "proration": _serialize_plan_change_quote(quote),
+        "change_request_id": str(change_request.id),
+        "account_adjustment_id": (
+            str(change_request.account_adjustment_id)
+            if change_request.account_adjustment_id
+            else None
+        ),
+        "credit_note_id": (
+            str(change_request.credit_note_id)
+            if change_request.credit_note_id
+            else None
+        ),
+        "ledger_entry_id": (
+            str(change_request.ledger_entry_id)
+            if change_request.ledger_entry_id
+            else None
+        ),
     }
 
 

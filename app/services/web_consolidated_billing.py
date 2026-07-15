@@ -150,10 +150,13 @@ def record_bulk_payment(
     currency: str = "NGN",
     memo: str | None = None,
     collection_account_id: str | None = None,
+    preview_fingerprint: str | None = None,
+    idempotency_key: str | None = None,
+    actor_id: str | None = None,
 ) -> UUID:
-    """Record a bulk payment + auto-allocate FIFO. Returns the Payment.id."""
-    from app.models.billing import PaymentStatus
-    from app.schemas.billing import PaymentCreate
+    """Confirm a previously previewed bulk payment. Returns the Payment.id."""
+    from app.models.billing import PaymentSettlementOrigin
+    from app.schemas.billing import BillingAccountPaymentConfirm
 
     try:
         payment_amount = Decimal(amount)
@@ -162,8 +165,9 @@ def record_bulk_payment(
     if payment_amount <= 0:
         raise ValueError("Amount must be greater than 0")
 
-    payload = PaymentCreate(
-        billing_account_id=UUID(billing_account_id),
+    if not preview_fingerprint or not idempotency_key:
+        raise ValueError("Consolidated payment requires preview confirmation")
+    command = BillingAccountPaymentConfirm(
         amount=payment_amount,
         currency=currency,
         memo=memo,
@@ -171,16 +175,48 @@ def record_bulk_payment(
         if collection_account_id
         else None,
         allocations=None,
-        # An admin recording a received bank transfer is confirmed cash. Omitting
-        # the status fell back to the ``default_payment_status`` setting, whose
-        # default is "pending" — and a pending payment is half-applied: the
-        # allocation and the ledger credit are written regardless of status (and
-        # the surplus credits BillingAccount.balance, immediately spendable), but
-        # _recalculate_invoice_totals counts only succeeded payments.
-        #
-        # So the reseller's transfer credited their balance while EVERY member
-        # invoice stayed unpaid. Say what this is instead of inheriting a setting.
-        status=PaymentStatus.succeeded,
+        auto_allocate=True,
+        preview_fingerprint=preview_fingerprint,
+        idempotency_key=idempotency_key,
     )
-    payment = billing_service.payments.create(db, payload)
-    return payment.id
+    result = billing_service.consolidated_payment_settlements.confirm(
+        db,
+        billing_account_id,
+        command,
+        origin=PaymentSettlementOrigin.manual,
+        actor_id=actor_id,
+    )
+    return result.payment.id
+
+
+def preview_bulk_payment(
+    db: Session,
+    *,
+    billing_account_id: str,
+    amount: str,
+    currency: str = "NGN",
+    memo: str | None = None,
+    collection_account_id: str | None = None,
+):
+    """Preview the exact consolidated payment result without writing money."""
+    from app.schemas.billing import BillingAccountPaymentPreviewRequest
+
+    try:
+        payment_amount = Decimal(amount)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Amount must be a valid number") from exc
+    if payment_amount <= 0:
+        raise ValueError("Amount must be greater than 0")
+    request = BillingAccountPaymentPreviewRequest(
+        amount=payment_amount,
+        currency=currency,
+        memo=memo,
+        collection_account_id=(
+            UUID(collection_account_id) if collection_account_id else None
+        ),
+        allocations=None,
+        auto_allocate=True,
+    )
+    return billing_service.consolidated_payment_settlements.preview(
+        db, billing_account_id, request
+    )

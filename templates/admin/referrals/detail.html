@@ -77,7 +77,7 @@
                 {{ info_row("Reward status", row.reward_status | replace('_', ' ') | title) }}
                 {{ info_row("Issued at", referral.reward_issued_at.strftime('%Y-%m-%d %H:%M') if referral.reward_issued_at else "—") }}
                 {% if reward_credit_id %}
-                {{ info_row("Wallet credit", reward_credit_id) }}
+                {{ info_row("Account credit evidence", reward_credit_id) }}
                 {% endif %}
             {% endcall %}
             <p class="mt-4 text-xs text-slate-500 dark:text-slate-400">
@@ -103,7 +103,7 @@
 
                 {% if row.can_issue %}
                 <form method="post" action="/admin/referrals/{{ row.id }}/issue-reward"
-                      onsubmit="return confirm('Issue {{ row.reward }} to {{ row.referrer }} as a wallet credit? This pays the reward (idempotent — it can never double-credit).');">
+                      onsubmit="return confirm('Issue {{ row.reward }} to {{ row.referrer }} as an account credit? This creates auditable credit-note and ledger evidence and cannot double-credit.');">
                     {% include "components/forms/csrf_input.html" %}
                     <button type="submit"
                             class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">

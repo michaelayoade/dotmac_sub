@@ -1,0 +1,78 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, ambient_background %}
+
+{% block title %}Confirm consolidated payment{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "teal") }}
+<div class="relative mx-auto max-w-5xl space-y-6">
+  {% call(content) page_header(
+      "Confirm consolidated payment",
+      subtitle="Review the owner-produced money effects before recording cash.",
+      icon='',
+      color="cyan",
+      color2="teal",
+      breadcrumbs=[
+        {"label": "Consolidated billing", "href": "/admin/billing/consolidated-accounts/" ~ billing_account_id},
+        {"label": "Confirm payment"}
+      ]
+  ) %}{% endcall %}
+
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-4">
+    <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+      <p class="text-xs font-semibold uppercase text-slate-500">Payment state</p>
+      <p class="mt-2 font-semibold text-slate-900 dark:text-slate-100">{{ preview.payment_state.value|replace('_', ' ')|title }}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+      <p class="text-xs font-semibold uppercase text-slate-500">Confirmed amount</p>
+      <p class="mt-2 font-semibold tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(preview.amount) }}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+      <p class="text-xs font-semibold uppercase text-slate-500">Invoice allocations</p>
+      <p class="mt-2 font-semibold tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(preview.allocated_amount) }}</p>
+    </div>
+    <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+      <p class="text-xs font-semibold uppercase text-slate-500">New consolidated credit</p>
+      <p class="mt-2 font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">{{ preview.currency }} {{ "{:,.2f}".format(preview.unallocated_amount) }}</p>
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="border-b border-slate-200 px-5 py-3 font-semibold dark:border-slate-700">Exact invoice ledger transactions</h2>
+    <table class="w-full text-sm">
+      <thead class="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500 dark:bg-slate-900/40">
+        <tr><th class="px-5 py-3">Invoice</th><th class="px-5 py-3">Subscriber</th><th class="px-5 py-3 text-right">Before</th><th class="px-5 py-3 text-right">Credit</th><th class="px-5 py-3 text-right">After</th></tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+        {% for effect in preview.allocation_effects %}
+        <tr>
+          <td class="px-5 py-3">{{ effect.invoice_number or effect.invoice_id }}</td>
+          <td class="px-5 py-3">{{ effect.account_id }}</td>
+          <td class="px-5 py-3 text-right tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(effect.receivable_before) }}</td>
+          <td class="px-5 py-3 text-right tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(effect.allocation_amount) }}</td>
+          <td class="px-5 py-3 text-right tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(effect.receivable_after) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="px-5 py-5 text-center text-slate-500">No invoice receivable changes. The full amount will remain as consolidated credit.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-900 dark:border-cyan-800 dark:bg-cyan-900/20 dark:text-cyan-100">
+    Consolidated credit changes from {{ preview.currency }} {{ "{:,.2f}".format(preview.consolidated_credit_before) }} to {{ preview.currency }} {{ "{:,.2f}".format(preview.consolidated_credit_after) }}. Service access is not decided by this page; paid member invoices are submitted for reconciliation.
+  </div>
+
+  <form method="post" action="/admin/billing/consolidated-accounts/{{ billing_account_id }}/record-payment" class="flex items-center justify-end gap-3" onsubmit="this.querySelector('button[type=submit]').disabled = true;">
+    {% include "components/forms/csrf_input.html" %}
+    <input type="hidden" name="amount" value="{{ amount }}" />
+    <input type="hidden" name="currency" value="{{ currency }}" />
+    <input type="hidden" name="memo" value="{{ memo }}" />
+    <input type="hidden" name="collection_account_id" value="{{ collection_account_id }}" />
+    <input type="hidden" name="preview_fingerprint" value="{{ preview.fingerprint }}" />
+    <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}" />
+    <a href="/admin/billing/consolidated-accounts/{{ billing_account_id }}" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium dark:border-slate-600">Cancel</a>
+    <button type="submit" class="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">Confirm and record payment</button>
+  </form>
+</div>
+{% endblock %}

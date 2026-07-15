@@ -2,8 +2,7 @@
 
 One place for currency resolution, currency-symbol mapping, money formatting,
 and display-timezone-aware timestamp formatting. The scattered
-``_default_currency`` copies and ``vas_wallet.currency_symbol`` delegate here so
-display behavior is defined once.
+``_default_currency`` copies delegate here so display behavior is defined once.
 
 Default behavior is byte-identical to the historical hardcoded values when the
 relevant settings are unset: currency ``NGN`` / symbol ``₦`` and display
@@ -19,8 +18,6 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
-# NGN/USD/EUR/GBP must match app.services.vas_wallet.currency_symbol exactly so
-# VAS output is unchanged when it delegates here; the rest extend the map.
 _CURRENCY_SYMBOLS: dict[str, str] = {
     "NGN": "₦",
     "USD": "$",
