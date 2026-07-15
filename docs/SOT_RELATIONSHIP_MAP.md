@@ -202,6 +202,12 @@ different time window.
    part of the lifecycle vocabulary.
 3. Status configuration does not own labels, tones, icons, or platform colors;
    those are read-side presentation concerns.
+4. `support.ticket_bulk_commands` owns exact selected membership, normalized
+   shared changes, side-effect-free eligibility preview, confirmation drift
+   detection, and structured outcomes for admin ticket bulk update. Eligible
+   execution delegates through `app.services.support.Tickets.update`; it does
+   not maintain a second status, priority, assignment, SLA, automation,
+   work-order, notification, event, audit, or workqueue path.
 
 Rule: API, admin, customer, reseller, automation, and import adapters request
 ticket mutation through the ticket lifecycle service. Settings may narrow the
@@ -269,6 +275,30 @@ will reject.
     an uncapped export scope. Full-page and HTMX reads render the same
     `_invoices_list.html` and `_invoices_table.html` projections, so status
     totals, filters, canonical URLs, pagination, and rows cannot diverge.
+12. `ui.support_ticket_list_projection` extends the existing
+    `app.services.web_support_tickets` web owner and delegates its filtered
+    domain query to `app.services.support.Tickets`. It owns the declared admin
+    search/filter/sort capabilities, exact count, page clamping, status-summary
+    links, and uncapped CSV scope. Full-page and HTMX reads render the same
+    `_list.html` and `_table.html` projections.
+13. Support-ticket list migration record:
+    - Old owners: the admin route and Jinja fragments independently interpreted
+      sort/page inputs, inferred a next page from one extra row, hand-built URLs,
+      and applied a silent 10,000-row export cap. Advanced filters submitted by
+      the page were not accepted by the export route.
+    - New owner: `app.services.web_support_tickets`, using `ui.list_contracts`
+      and the canonical filtered query in `app.services.support.Tickets`.
+    - Verification phase: contract, query, route/template architecture,
+      filter-before-pagination, stable-order, exact-count, clamped-page,
+      canonical-URL, accessibility, and complete-export tests protect the
+      boundary. A runtime dual-read was not retained because both paths used the
+      same database query and the old implementation had no independent owner.
+    - Cutover gate: support service, web projection, route/template, SOT
+      registry, and focused list tests must remain green.
+    - Fallback retirement: the route no longer owns pagination semantics; the
+      templates no longer assemble sort/filter/page URLs; the one-extra-row page
+      estimate and silent export cap are removed. Legacy `order_by`/`order_dir`
+      inputs remain only as canonicalizing compatibility aliases.
 
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
@@ -313,6 +343,13 @@ rather than the legacy table-field registry.
    selected membership plus each row's eligibility outcome, so a status change
    that expands or shrinks impact after preview fails with HTTP 409. Execution
    re-checks eligibility and audits only processed invoice IDs.
+8. `ui.support_ticket_bulk_action_projection` projects authorized support-ticket
+   update controls and page-row eligibility. Selection is page-only and never
+   implies all filtered tickets.
+9. `support.ticket_bulk_commands` requires an in-modal, side-effect-free preview
+   of exact selected membership, the shared proposed change set, eligible rows,
+   and skipped reasons. Confirmation binds matched count, proposed changes, and
+   every row eligibility outcome; drift returns HTTP 409.
 
 Migration record:
 
@@ -341,6 +378,27 @@ Migration record:
   action buttons, eligibility assumptions, manual query strings, or a second
   HTMX-only table. Other resources remain unchanged until they adopt named list
   and bulk projections.
+
+Support-ticket bulk migration record:
+
+- Old owners: the public bulk API delegated to `Tickets.bulk_update`, but that
+  method directly changed status, priority, and assignment while bypassing the
+  canonical single-ticket lifecycle consequences. The admin list had no
+  selection, authorization projection, impact preview, or drift contract.
+- New owners: `support.ticket_bulk_commands` owns selected membership, change
+  normalization, preview, confirmation, and outcomes;
+  `ui.support_ticket_bulk_action_projection` owns authorized page-selection
+  presentation; `support.ticket_lifecycle` remains the mutation/consequence
+  owner through `Tickets.update`.
+- Verification: service, projection, route-permission, architecture, template,
+  no-selection, preview/no-side-effect, proposal drift, eligibility drift,
+  lifecycle-audit, and structured-outcome tests protect the boundary.
+- Cutover gate: unauthorized users receive no selection controls; empty or
+  filtered scope fails closed; no update executes without the exact server
+  preview; changed membership, eligibility, or proposal returns HTTP 409.
+- Fallback retirement: `Tickets.bulk_update` no longer writes lifecycle fields
+  directly and the admin page exposes no unpreviewed or all-filtered ticket
+  mutation path.
 
 Rule: bulk controls appear only when a selection exists and a canonical command
 supports it. Filtered, customer-visible, financial, destructive, or fleet-wide

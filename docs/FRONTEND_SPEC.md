@@ -137,6 +137,26 @@ confirmation token fingerprints both membership and eligibility, so execution
 returns HTTP 409 if status or scope drift changes the previewed impact. The
 invoice command service re-checks eligibility and audits only processed IDs.
 
+The support-ticket queue is the next list adoption. `app.services.support.Tickets`
+owns the canonical filtered domain query, while
+`app.services.web_support_tickets` declares the admin list capabilities and owns
+query normalization, exact counts, stable sorting, clamped pages, status-summary
+links, and complete CSV scope. The route is a thin adapter, and full-page and
+HTMX reads share `_list.html` and `_table.html`. Advanced filters are validated
+and serialized by the same owner used by export; templates consume `ListQuery`
+and `PageMeta` rather than assembling query strings or estimating totals.
+
+Support-ticket bulk update is page-selection only. The authorized action
+projection comes from `app.services.web_support_ticket_bulk_actions`; templates
+do not infer update permission or row eligibility. The modal submits one shared
+status/priority/primary-assignee change set to
+`app.services.web_support_ticket_bulk`, which previews exact membership,
+proposal-bound eligibility, and skipped reasons without side effects. Confirmed
+execution sends the previewed matched count and scope token, rejects membership,
+eligibility, or proposed-change drift with HTTP 409, and reports processed and
+skipped outcomes. The command delegates eligible rows through
+`app.services.support.Tickets.update`, preserving lifecycle consequences.
+
 ### Semantic status contract
 
 Lifecycle services own raw account, subscription, invoice, payment, outage-incident,
