@@ -38,16 +38,21 @@ def _enable_control(
     enabled: bool = True,
     activation_at: datetime | None = _SATURDAY_NOON - timedelta(days=10),
 ) -> None:
-    from app.services import control_registry
-
-    # Enable through the canonical feature control (effective-state SOT); it
-    # writes prepaid_balance_enforcement_enabled, which the sweep reads.
-    control_registry.update_canonical_feature_controls(
-        db, payload={"collections.prepaid_balance_enforcement": enabled}
-    )
-    # The sweep also gates on an activation timestamp (unchanged by this refactor).
+    settings = [
+        # Canonical feature control (effective-state SOT): modules-domain row keyed
+        # by the control's dotted key with dots→underscores. The legacy
+        # collections/prepaid_balance_enforcement_enabled setting is ignored.
+        DomainSetting(
+            domain=SettingDomain.modules,
+            key="collections_prepaid_balance_enforcement",
+            value_type=SettingValueType.boolean,
+            value_text="true" if enabled else "false",
+            value_json=enabled,
+            is_active=True,
+        )
+    ]
     if activation_at is not None:
-        db.add(
+        settings.append(
             DomainSetting(
                 domain=SettingDomain.collections,
                 key="prepaid_enforcement_activation_at",
@@ -56,7 +61,8 @@ def _enable_control(
                 is_active=True,
             )
         )
-        db.commit()
+    db.add_all(settings)
+    db.commit()
 
 
 def _set_collections_setting(

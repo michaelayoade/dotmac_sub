@@ -243,6 +243,8 @@ DEFAULT_PERMISSIONS = [
     # Inventory
     ("inventory:read", "View inventory"),
     ("inventory:write", "Manage inventory"),
+    ("finance:ap:read", "View accounts-payable resources"),
+    ("finance:ap:write", "Manage accounts-payable resources"),
     # GIS / Mapping
     ("gis:map:view", "View maps and layers"),
     ("gis:map:edit", "Edit map features (markers, polygons)"),

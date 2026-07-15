@@ -34,21 +34,24 @@ def _prepare(db, account, subscription) -> None:
 
 
 def _enable(db) -> None:
-    from app.services import control_registry
-
-    # Enable via the canonical feature control (effective-state SOT); the sweep
-    # also requires an activation timestamp, which is a separate setting.
-    control_registry.update_canonical_feature_controls(
-        db, payload={"collections.prepaid_balance_enforcement": True}
-    )
-    db.add(
-        DomainSetting(
-            domain=SettingDomain.collections,
-            key="prepaid_enforcement_activation_at",
-            value_type=SettingValueType.string,
-            value_text=(_MONDAY_NOON - timedelta(days=10)).isoformat(),
-            is_active=True,
-        )
+    db.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.modules,
+                key="collections_prepaid_balance_enforcement",
+                value_type=SettingValueType.boolean,
+                value_text="true",
+                value_json=True,
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.collections,
+                key="prepaid_enforcement_activation_at",
+                value_type=SettingValueType.string,
+                value_text=(_MONDAY_NOON - timedelta(days=10)).isoformat(),
+                is_active=True,
+            ),
+        ]
     )
     db.commit()
 
