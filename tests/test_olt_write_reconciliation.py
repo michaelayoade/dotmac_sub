@@ -251,7 +251,15 @@ def test_get_ont_status_uses_space_separated_huawei_fsp(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._open_shell",
-        lambda _olt: (_Transport(), _Channel(), None),
+        lambda _olt: (
+            _Transport(),
+            _Channel(),
+            SimpleNamespace(prompt_regex=r"#\s*$"),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._prepare_huawei_read_shell",
+        lambda _channel, prompt: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._read_until_prompt",
