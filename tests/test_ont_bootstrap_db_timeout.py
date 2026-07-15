@@ -26,10 +26,10 @@ def test_other_bootstrap_poll_errors_remain_terminal() -> None:
     assert result.data == {"failure_class": "acs_bootstrap_poll_error"}
 
 
-def test_bootstrap_retry_attempts_have_distinct_idempotency_keys() -> None:
+def test_legacy_bootstrap_retry_attempts_have_distinct_idempotency_keys() -> None:
     first = _bootstrap_wait_idempotency_key("ont-1", "op-1", 0)
     retry = _bootstrap_wait_idempotency_key("ont-1", "op-1", 1)
 
-    assert first == "ont-1:op-1:0"
-    assert retry == "ont-1:op-1:1"
+    assert first == "ont-1:op-1:0:legacy"
+    assert retry == "ont-1:op-1:1:legacy"
     assert first != retry
