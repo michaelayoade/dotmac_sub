@@ -30,6 +30,7 @@ from app.services.network._common import normalize_mac_address
 from app.services.network.equipment_identity import normalize_ont_equipment_id
 from app.services.network.huawei_cli_response import (
     is_huawei_serial_already_registered,
+    project_huawei_result_evidence,
 )
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
@@ -478,7 +479,15 @@ def authorize_autofind_ont(
     steps: list[AuthorizationStepResult] = []
     started_at = monotonic()
 
-    def add_step(name: str, success: bool, message: str, step_started: float) -> None:
+    def add_step(
+        name: str,
+        success: bool,
+        message: str,
+        step_started: float,
+        *,
+        adapter_result: object | None = None,
+    ) -> None:
+        details = project_huawei_result_evidence(adapter_result)
         steps.append(
             AuthorizationStepResult(
                 step=len(steps) + 1,
@@ -486,6 +495,7 @@ def authorize_autofind_ont(
                 success=success,
                 message=message,
                 duration_ms=max(0, int((monotonic() - step_started) * 1000)),
+                details=details,
             )
         )
 
@@ -533,12 +543,24 @@ def authorize_autofind_ont(
         find_result = adapter.find_ont_by_serial(normalized_serial)
         existing = find_result.data.get("registration") if find_result.success else None
         if not find_result.success:
-            add_step("Activate ONT", False, find_result.message, force_started)
+            add_step(
+                "Activate ONT",
+                False,
+                find_result.message,
+                force_started,
+                adapter_result=find_result,
+            )
             return finish(success=False, message=find_result.message, status="error")
         if existing:
             delete_result = adapter.deauthorize_ont(existing.fsp, existing.onu_id)
             if not delete_result.success:
-                add_step("Activate ONT", False, delete_result.message, force_started)
+                add_step(
+                    "Activate ONT",
+                    False,
+                    delete_result.message,
+                    force_started,
+                    adapter_result=delete_result,
+                )
                 return finish(
                     success=False, message=delete_result.message, status="error"
                 )
@@ -606,6 +628,7 @@ def authorize_autofind_ont(
                     True,
                     "ONT serial was already registered on the OLT; reusing registration.",
                     activation_started,
+                    adapter_result=auth_result,
                 )
             else:
                 # On different port - remove and re-add
@@ -617,7 +640,11 @@ def authorize_autofind_ont(
                 delete_result = adapter.deauthorize_ont(existing.fsp, existing.onu_id)
                 if not delete_result.success:
                     add_step(
-                        "Activate ONT", False, delete_result.message, activation_started
+                        "Activate ONT",
+                        False,
+                        delete_result.message,
+                        activation_started,
+                        adapter_result=delete_result,
                     )
                     return finish(
                         success=False, message=delete_result.message, status="error"
@@ -645,7 +672,13 @@ def authorize_autofind_ont(
                 ont_id = auth_result.ont_id
                 if not auth_result.success or ont_id is None:
                     msg = f"Removed old registration, but authorization failed: {auth_result.message}"
-                    add_step("Activate ONT", False, msg, activation_started)
+                    add_step(
+                        "Activate ONT",
+                        False,
+                        msg,
+                        activation_started,
+                        adapter_result=auth_result,
+                    )
                     return finish(success=False, message=msg, status="error")
                 auth_result.message = (
                     f"Removed existing ONT registration on {existing.fsp}; "
@@ -653,7 +686,13 @@ def authorize_autofind_ont(
                 )
         else:
             message = auth_result.message or "Authorization failed"
-            add_step("Activate ONT", False, message, activation_started)
+            add_step(
+                "Activate ONT",
+                False,
+                message,
+                activation_started,
+                adapter_result=auth_result,
+            )
             return finish(success=False, message=message, status="error")
 
     # Create/find ONT record
@@ -708,7 +747,13 @@ def authorize_autofind_ont(
         f"{getattr(authorization_profiles, 'message', '')} "
         f"{auth_result.message} {create_msg} {assignment_msg}".strip()
     )
-    add_step("Activate ONT", True, activation_message, activation_started)
+    add_step(
+        "Activate ONT",
+        True,
+        activation_message,
+        activation_started,
+        adapter_result=auth_result,
+    )
 
     return finish(
         success=True,

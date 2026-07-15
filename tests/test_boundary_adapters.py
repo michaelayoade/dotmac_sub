@@ -78,6 +78,33 @@ def test_adapter_result_base_supports_domain_results() -> None:
     assert failure.error_code == "RuntimeError"
 
 
+def test_olt_result_projects_sanitized_huawei_response_evidence() -> None:
+    from app.services.network.olt_protocol_adapters import OltOperationResult
+
+    result = OltOperationResult(
+        success=False,
+        message="% Unknown command secret-value",
+    )
+
+    assert result.error_code == "unknown_command"
+    assert result.data["huawei_cli_response"]["response_code"] == "unknown_command"
+    assert result.data["huawei_cli_response"]["unsupported"] is True
+    assert "secret-value" not in repr(result.data)
+
+
+def test_olt_result_preserves_explicit_transport_error_code() -> None:
+    from app.services.network.olt_protocol_adapters import OltOperationResult
+
+    result = OltOperationResult(
+        success=False,
+        message="% Unknown command",
+        error_code="TimeoutError",
+    )
+
+    assert result.error_code == "TimeoutError"
+    assert result.data["huawei_cli_response"]["response_code"] == "unknown_command"
+
+
 def test_ssh_iphost_timeout_uses_shared_error_result(monkeypatch) -> None:
     from app.services.network.olt_protocol_adapters import OltProtocolAdapter
 
@@ -215,6 +242,21 @@ def test_operation_result_converts_to_shared_adapter_result() -> None:
     assert shared.data["operation_id"] == "op-1"
     assert round_trip.status == ResultStatus.queued
     assert round_trip.message == "queued"
+
+
+def test_operation_result_preserves_adapter_error_code() -> None:
+    from app.services.adapters.base import AdapterResult
+    from app.services.network.result_adapter import OperationResult
+
+    result = OperationResult.from_adapter_result(
+        AdapterResult(
+            success=False,
+            message="rejected",
+            error_code="unknown_command",
+        )
+    )
+
+    assert result.data == {"error_code": "unknown_command"}
 
 
 def test_rate_limiter_adapter_blocks_after_limit_until_window_resets() -> None:

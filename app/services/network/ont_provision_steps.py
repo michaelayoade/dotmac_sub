@@ -39,6 +39,7 @@ from app.services.network.config_pack_resolution import (
     resolve_effective_config_pack_stage,
 )
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.huawei_cli_response import project_huawei_result_evidence
 from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
@@ -104,9 +105,9 @@ def _action_step(name: str, result: object) -> dict[str, object]:
         "success": bool(getattr(result, "success", False)),
         "message": str(getattr(result, "message", "")),
     }
-    error_code = getattr(result, "error_code", None)
-    if error_code:
-        payload["error_code"] = str(error_code)
+    evidence = project_huawei_result_evidence(result)
+    if evidence is not None:
+        payload.update(evidence)
     if _result_is_queued_acs_delivery(result):
         payload["waiting"] = True
     return payload
@@ -1834,13 +1835,15 @@ def provision_with_reconciliation(
                 }
             )
             raise
-        command_timings.append(
-            {
-                "command": name,
-                "success": bool(getattr(command_result, "success", False)),
-                "duration_ms": int((time.monotonic() - command_started) * 1000),
-            }
-        )
+        timing: dict[str, Any] = {
+            "command": name,
+            "success": bool(getattr(command_result, "success", False)),
+            "duration_ms": int((time.monotonic() - command_started) * 1000),
+        }
+        evidence = project_huawei_result_evidence(command_result)
+        if evidence is not None:
+            timing.update(evidence)
+        command_timings.append(timing)
         return command_result
 
     # 1. Create internet service port (adapter returns success on "already exists")

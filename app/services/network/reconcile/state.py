@@ -328,6 +328,7 @@ class AppliedAction:
     old_value: Any
     new_value: Any
     duration_ms: int
+    evidence: dict[str, Any] | None = None
 
 
 # ── Failure reasons ─────────────────────────────────────────────────────────
@@ -377,6 +378,7 @@ class ReconcileFailure:
 
     reason: str
     message: str
+    evidence: dict[str, Any] | None = None
 
 
 # ── Final reconcile result ──────────────────────────────────────────────────

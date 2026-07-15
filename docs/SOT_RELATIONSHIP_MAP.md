@@ -518,7 +518,9 @@ Dependency order:
    adapters, readback verification, and web workflows consume these projections
    and do not maintain firmware response string tables. A response classified
    as accepted is transport evidence, not proof of convergence; write workflows
-   still require the control-plane intent readback contract.
+   still require the control-plane intent readback contract. Protocol adapter,
+   authorization, provisioning, and reconcile history persist the sanitized
+   classifier projection as operation evidence; raw CLI output is not retained.
 12. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,

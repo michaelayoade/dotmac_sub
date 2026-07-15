@@ -271,8 +271,16 @@ def update_ont_config(
                     "actions_applied": [
                         action.field for action in reconciled.actions_applied
                     ],
+                    "action_evidence": [
+                        {"field": action.field, "evidence": action.evidence}
+                        for action in reconciled.actions_applied
+                        if action.evidence is not None
+                    ],
                     "failure_reason": (
                         reconciled.failure.reason if reconciled.failure else None
+                    ),
+                    "failure_evidence": (
+                        reconciled.failure.evidence if reconciled.failure else None
                     ),
                     "delivery_pending": bool(
                         reconciled.failure

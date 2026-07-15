@@ -96,6 +96,40 @@ def test_reconcile_operation_payload_never_records_secret_values() -> None:
     assert "new-secret" not in repr(payload)
 
 
+def test_reconcile_operation_payload_persists_classifier_evidence() -> None:
+    evidence = {
+        "error_code": "unknown_command",
+        "huawei_cli_response": {
+            "response_code": "unknown_command",
+            "unsupported": True,
+        },
+    }
+    result = ReconcileResult(
+        success=True,
+        sync_status="synced",
+        actions_applied=(
+            AppliedAction(
+                field="olt_description",
+                surface="olt",
+                old_value="old",
+                new_value="new",
+                duration_ms=12,
+                evidence=evidence,
+            ),
+        ),
+        drift_before=(),
+        drift_after=(),
+        observed_after=None,
+        failure=None,
+        duration_ms=25,
+        reconciled_at=datetime.now(UTC),
+    )
+
+    payload = _reconcile_payload(result)
+
+    assert payload["actions"][0]["evidence"] == evidence
+
+
 def test_acs_migration_uses_current_link_as_write_transport() -> None:
     ont = SimpleNamespace(id=uuid.uuid4())
     linked = SimpleNamespace(acs_server_id=uuid.uuid4())
