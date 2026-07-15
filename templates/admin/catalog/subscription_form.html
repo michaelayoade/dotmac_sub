@@ -75,7 +75,7 @@
             <template x-for="s in totalSteps" :key="s">
                 <div class="flex items-center gap-2">
                     <button type="button" @click="step = s"
-                            :class="s <= step ? 'bg-violet-600 text-white shadow-sm' : 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400'"
+                            :class="s <= step ? 'bg-primary-600 text-white shadow-sm' : 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400'"
                             class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all"
                             x-text="s"></button>
                     <span :class="s <= step ? 'text-slate-900 dark:text-white' : 'text-slate-400 dark:text-slate-500'"
@@ -171,17 +171,11 @@
                     </div>
 
                     <div>
-                        <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
-                        <select name="status" id="status" {% if subscription.id %}disabled aria-disabled="true"{% endif %}
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            {% for status in subscription_statuses %}
-                            <option value="{{ status }}" {% if subscription.status == status or (is_new and status == 'pending') %}selected{% endif %}>{{ status | title }}</option>
-                            {% endfor %}
-                        </select>
-                        {% if subscription.id %}<input type="hidden" name="status" value="{{ subscription.status }}">{% endif %}
-                        {% if is_new %}
-                        <p class="mt-1 text-xs text-slate-500">Pending subscriptions create a service order for installation</p>
-                        {% endif %}
+                        <span class="block text-sm font-medium text-slate-700 dark:text-slate-300">Lifecycle State</span>
+                        <div class="mt-1 block w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900/40 dark:text-slate-300">
+                            {{ subscription.status | title if subscription.id else 'Pending' }}
+                        </div>
+                        <input type="hidden" name="status" value="{{ subscription.status if subscription.id else 'pending' }}">
                     </div>
 
                     <div>
@@ -256,7 +250,8 @@
             {% endif %}
         </div>
 
-        {# Advanced options - collapsible #}
+        {% if subscription.id %}
+        {# Lifecycle facts are read-only here and change through reviewed actions. #}
         <div x-data="{ open: {{ 'true' if subscription.id else 'false' }} }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 mt-6">
             <button type="button" @click="open = !open" class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Advanced Options</h2>
@@ -268,7 +263,7 @@
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
                         <label for="start_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Start Date</label>
-                        <input type="datetime-local" name="start_at" id="start_at" {% if subscription.id %}readonly aria-readonly="true"{% endif %}
+                        <input type="datetime-local" name="start_at" id="start_at" readonly aria-readonly="true"
                             value="{{ subscription.start_at }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <p class="mt-1 text-xs text-slate-500">Auto-set when activated</p>
@@ -276,7 +271,7 @@
 
                     <div>
                         <label for="next_billing_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Next Billing Date</label>
-                        <input type="datetime-local" name="next_billing_at" id="next_billing_at" {% if subscription.id %}readonly aria-readonly="true"{% endif %}
+                        <input type="datetime-local" name="next_billing_at" id="next_billing_at" readonly aria-readonly="true"
                             value="{{ subscription.next_billing_at }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <p class="mt-1 text-xs text-slate-500">Auto-calculated from billing cycle</p>
@@ -284,7 +279,7 @@
 
                     <div>
                         <label for="end_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">End Date</label>
-                        <input type="datetime-local" name="end_at" id="end_at" {% if subscription.id %}readonly aria-readonly="true"{% endif %}
+                        <input type="datetime-local" name="end_at" id="end_at" readonly aria-readonly="true"
                             value="{{ subscription.end_at }}"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>
@@ -307,6 +302,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
         </div>{# end step 1 wrapper #}
 
         {# ══════════════════════════════════════════════
@@ -596,8 +592,8 @@
                     <input type="checkbox" name="activate_immediately" value="1"
                            class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                     <div>
-                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Activate immediately</span>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Set status to Active instead of Pending (skips service order)</p>
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Activate after creation</span>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Pending to Active; billing starts; access authorized</p>
                     </div>
                 </label>
                 <label class="flex items-start gap-3 cursor-pointer">
@@ -644,7 +640,7 @@
                 {% endif %}
                 {% if is_new %}
                 <button type="button" x-show="step < totalSteps" @click="validateAndNext()"
-                        class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700">
+                        class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
                     Continue
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
                 </button>
