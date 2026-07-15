@@ -1,126 +1,181 @@
-{% from "components/ui/macros.html" import status_presentation_badge %}
-<div class="overflow-x-auto">
-    <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-        <thead class="bg-slate-50 dark:bg-slate-800/50">
-            <tr>
-                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice #</th>
-                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
-                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Amount</th>
-                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
-                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Issued</th>
-                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Due</th>
-                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Payment Due</th>
-                <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Payment Received</th>
-                <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-            {% if invoices %}
-            {% for invoice in invoices %}
-            {% set invoice_currency = invoice.currency or 'NGN' %}
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                <td class="whitespace-nowrap px-6 py-4">
-                    <a href="/admin/billing/invoices/{{ invoice.id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ invoice.invoice_number | default('Invoice') }}</a>
-                </td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                    {% if invoice.account %}
-                        {{ invoice.account.name }}
+{% from "components/ui/macros.html" import status_presentation_badge, empty_state, row_action, icon_invoice, icon_view, icon_edit %}
+{% set selection_enabled = invoice_bulk_action_contract is defined and invoice_bulk_action_contract.selection_enabled %}
+<div data-invoice-page
+     data-invoice-ids="{% for invoice in invoices %}{{ invoice.id }}{% if not loop.last %},{% endif %}{% endfor %}"
+     data-list-url="{{ list_query.url('/admin/billing/invoices') }}"
+     data-bulk-contract="{{ invoice_bulk_action_contract | tojson | forceescape if invoice_bulk_action_contract is defined else '{}' }}"
+     role="region"
+     aria-label="Invoice results">
+        <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+            Showing invoices {{ page_meta.start_item }} to {{ page_meta.end_item }} of {{ page_meta.total_items }}.
+        </p>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead>
+                    <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                        {% if selection_enabled %}
+                        <th scope="col" class="w-10 px-3 py-2.5">
+                            <input type="checkbox"
+                                   @change="toggleAll($event.target.checked)"
+                                   :checked="selectedIds.length === invoiceIds.length && invoiceIds.length > 0"
+                                   :indeterminate.prop="selectedIds.length > 0 && selectedIds.length < invoiceIds.length"
+                                   aria-label="Select all invoices on this page"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        </th>
+                        {% endif %}
+                        {% set invoice_sort_dir = 'desc' if list_query.sort_by == 'invoice_number' and list_query.sort_dir == 'asc' else 'asc' %}
+                        <th scope="col" aria-sort="{{ list_query.sort_dir ~ 'ending' if list_query.sort_by == 'invoice_number' else 'none' }}" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                            <a href="{{ list_query.url('/admin/billing/invoices', sort_by='invoice_number', sort_dir=invoice_sort_dir) }}"
+                               hx-get="{{ list_query.url('/admin/billing/invoices', sort_by='invoice_number', sort_dir=invoice_sort_dir) }}"
+                               hx-target="#invoice-list" hx-push-url="true" class="hover:text-primary-600">Invoice</a>
+                        </th>
+                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Customer</th>
+                        {% for sort_key, label in [('total', 'Amount'), ('status', 'Status'), ('issued_at', 'Issued'), ('due_at', 'Due')] %}
+                        {% set next_sort_dir = 'desc' if list_query.sort_by == sort_key and list_query.sort_dir == 'asc' else 'asc' %}
+                        <th scope="col" aria-sort="{{ list_query.sort_dir ~ 'ending' if list_query.sort_by == sort_key else 'none' }}" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                            <a href="{{ list_query.url('/admin/billing/invoices', sort_by=sort_key, sort_dir=next_sort_dir) }}"
+                               hx-get="{{ list_query.url('/admin/billing/invoices', sort_by=sort_key, sort_dir=next_sort_dir) }}"
+                               hx-target="#invoice-list" hx-push-url="true" class="hover:text-primary-600">{{ label }}</a>
+                        </th>
+                        {% endfor %}
+                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Payment Due</th>
+                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Payment Received</th>
+                        <th scope="col" class="relative px-3 py-2.5"><span class="sr-only">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
+                    {% if invoices %}
+                    {% for invoice in invoices %}
+                    {% set status = invoice.status | default('draft') %}
+                    {% set status_val = status.value if status is not string else status %}
+                    {% set invoice_currency = invoice.currency or 'NGN' %}
+                    <tr class="transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/40"
+                        :class="{ 'bg-primary-50/30 dark:bg-primary-900/5': selectedIds.includes('{{ invoice.id }}') }">
+                        {% if selection_enabled %}
+                        <td class="whitespace-nowrap px-3 py-2.5">
+                            <input type="checkbox"
+                                   value="{{ invoice.id }}"
+                                   @change="toggleSelection('{{ invoice.id }}')"
+                                   :checked="selectedIds.includes('{{ invoice.id }}')"
+                                   aria-label="Select invoice {{ invoice.invoice_number or invoice.id }}"
+                                   class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                        </td>
+                        {% endif %}
+                        <td class="whitespace-nowrap px-3 py-2.5">
+                            <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400 transition-colors">
+                                {{ invoice.invoice_number | default('INV-' ~ (invoice.id|string)[:8]) }}
+                            </a>
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-2.5">
+                            {% if invoice.account %}
+                            <a href="/admin/customers/person/{{ invoice.account.id }}" class="block">
+                                <p class="text-sm font-medium text-slate-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-400 transition-colors">
+                                    {{ invoice.account.name }}
+                                </p>
+                                {% if invoice.account.account_number %}
+                                <p class="text-xs text-slate-500 dark:text-slate-400 font-mono">{{ invoice.account.account_number }}</p>
+                                {% endif %}
+                            </a>
+                            {% else %}
+                            <span class="text-sm text-slate-400 dark:text-slate-500">No customer</span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-2.5">
+                            <p class="text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</p>
+                            {% if invoice.balance_due and invoice.balance_due > 0 and invoice.balance_due != invoice.total %}
+                            <p class="status-foreground status-tone-warning text-xs font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.balance_due) }} due</p>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-2.5">
+                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-2.5">
+                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else '—' }}</span>
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-2.5">
+                            {% if invoice.due_at %}
+                            <span class="text-sm text-slate-600 dark:text-slate-400">
+                                {{ invoice.due_at.strftime('%b %d, %Y') }}
+                            </span>
+                            {% else %}
+                            <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-2.5 text-sm font-semibold font-mono tabular-nums {% if (invoice.balance_due or 0) > 0 %}status-foreground status-tone-warning{% else %}text-slate-400 dark:text-slate-500{% endif %}">
+                            {{ invoice_currency }} {{ "{:,.2f}".format(invoice.balance_due or 0) }}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-2.5 text-sm font-semibold font-mono tabular-nums {% if ((invoice.total or 0) - (invoice.balance_due or 0)) > 0 %}status-foreground status-tone-positive{% else %}text-slate-400 dark:text-slate-500{% endif %}">
+                            {{ invoice_currency }} {{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}
+                        </td>
+                        <td class="whitespace-nowrap px-3 py-2.5 text-right">
+                            <div class="flex items-center justify-end gap-1">
+                                {{ row_action("/admin/billing/invoices/" ~ invoice.id, icon_view(), "View Details", "primary") }}
+                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/edit", icon_edit(), "Edit", "primary") }}
+                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/pdf", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', "Download PDF", "primary") }}
+                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/pdf", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 17h8M8 13h8m-8-4h8M6 21h12a2 2 0 002-2V7.5a1.5 1.5 0 00-.44-1.06l-3-3A1.5 1.5 0 0015.5 3H6a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>', "Print", "slate") }}
+                                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/send-and-return" class="inline-flex">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="next_url" value="{{ list_query.url('/admin/billing/invoices') }}">
+                                    <button type="submit" class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-slate-500 transition hover:bg-primary-50 hover:text-primary-600 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-primary-400" title="Send Email">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                                    </button>
+                                </form>
+                                {% if status_val in ['issued', 'overdue', 'partially_paid'] %}
+                                {{ row_action("/admin/billing/payments/new?invoice=" ~ invoice.id, '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>', "Record Payment", "semantic-positive") }}
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
                     {% else %}
-                        Account
+                    {{ empty_state("No invoices found", "Create your first invoice to get started", icon=icon_invoice("h-8 w-8 text-slate-400"), color="primary", color2="accent", action_label="New Invoice", action_href="/admin/billing/invoices/new", colspan=10 if selection_enabled else 9) }}
                     {% endif %}
-                </td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</td>
-                <td class="whitespace-nowrap px-6 py-4">
-                    {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
-                </td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if (invoice.balance_due or 0) > 0 %}text-amber-700 dark:text-amber-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.balance_due or 0) }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold font-mono tabular-nums {% if ((invoice.total or 0) - (invoice.balance_due or 0)) > 0 %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">{{ invoice_currency }} {{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-right">
-                    <div class="flex items-center justify-end gap-2">
-                        <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-slate-400 hover:text-primary-600" title="View">
-                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-                        </a>
-                        <a href="/admin/billing/invoices/{{ invoice.id }}/edit" class="text-slate-400 hover:text-amber-600" title="Edit">
-                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                        </a>
-                        <a href="/admin/billing/invoices/{{ invoice.id }}/pdf" class="text-slate-400 hover:text-slate-600" title="Download PDF">
-                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                        </a>
-                        <a href="/admin/billing/invoices/{{ invoice.id }}/pdf" class="text-slate-400 hover:text-slate-600" title="Print">
-                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 17h8M8 13h8m-8-4h8M6 21h12a2 2 0 002-2V7.5a1.5 1.5 0 00-.44-1.06l-3-3A1.5 1.5 0 0015.5 3H6a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-                        </a>
-                        <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/send-and-return" class="inline-flex">
-                            {% include "components/forms/csrf_input.html" %}
-                            <input type="hidden" name="next_url" value="/admin/billing/invoices?page={{ page }}&per_page={{ per_page }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}">
-                            <button type="submit" class="text-slate-400 hover:text-emerald-600" title="Send Email">
-                                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                            </button>
-                        </form>
-                    </div>
-                </td>
-            </tr>
-            {% endfor %}
-            {% else %}
-            <tr><td colspan="10" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No invoices found</td></tr>
-            {% endif %}
-        </tbody>
-    </table>
-</div>
-
-{% if total_pages and total_pages > 1 %}
-{% set start_item = ((page - 1) * per_page) + 1 if total else 0 %}
-{% set end_item = [page * per_page, total] | min if total else 0 %}
-{% set _extra %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}{% endset %}
-<div class="flex flex-col items-center justify-between gap-4 border-t border-slate-200 px-4 py-3 dark:border-slate-700 sm:flex-row">
-    <p class="text-sm text-slate-500 dark:text-slate-400">
-        Showing <span class="font-medium text-slate-700 dark:text-slate-200">{{ start_item }}</span>
-        to <span class="font-medium text-slate-700 dark:text-slate-200">{{ end_item }}</span>
-        of <span class="font-medium text-slate-700 dark:text-slate-200">{{ total }}</span> results
-    </p>
-    <div class="flex items-center gap-4">
-        <div class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-            <span>Show</span>
-            <select onchange="window.location.href='/admin/billing/invoices?page=1&per_page=' + this.value + '{{ _extra | e }}'"
-                    class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-slate-300">
-                {% for size in [10, 25, 50, 100] %}
-                <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
-                {% endfor %}
-            </select>
-            <span>rows</span>
+                </tbody>
+            </table>
         </div>
-        <div class="flex items-center gap-1">
-            {% if page > 1 %}
-            <a href="/admin/billing/invoices?page={{ page - 1 }}&per_page={{ per_page }}{{ _extra }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-            </a>
-            {% else %}
-            <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-            </span>
-            {% endif %}
-
-            {% for p in range(1, total_pages + 1) %}
-                {% if p == page %}
-                <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600 text-sm font-medium text-white">{{ p }}</span>
-                {% elif p == 1 or p == total_pages or (p >= page - 1 and p <= page + 1) %}
-                <a href="/admin/billing/invoices?page={{ p }}&per_page={{ per_page }}{{ _extra }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">{{ p }}</a>
-                {% elif p == page - 2 or p == page + 2 %}
-                <span class="inline-flex h-9 w-9 items-center justify-center text-slate-400">...</span>
+        <div class="flex flex-col items-center justify-between gap-3 border-t border-slate-200 px-3 py-3 dark:border-slate-700 sm:flex-row">
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                Showing <span class="font-medium text-slate-700 dark:text-slate-200">{{ page_meta.start_item }}</span>
+                to <span class="font-medium text-slate-700 dark:text-slate-200">{{ page_meta.end_item }}</span>
+                of <span class="font-medium text-slate-700 dark:text-slate-200">{{ page_meta.total_items }}</span> invoices
+            </p>
+            <div class="flex flex-wrap items-center justify-center gap-3">
+                <label class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                    <span>Rows</span>
+                    <select @change="window.location.href = $event.target.selectedOptions[0].dataset.url"
+                            aria-label="Invoices per page"
+                            class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-slate-300">
+                        {% for size in list_query.definition.per_page_options %}
+                        <option value="{{ size }}" data-url="{{ list_query.url('/admin/billing/invoices', per_page=size) }}" {% if list_query.per_page == size %}selected{% endif %}>{{ size }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                {% if page_meta.total_pages > 1 %}
+                <nav class="flex items-center gap-1" aria-label="Invoice pagination">
+                    {% if page_meta.has_previous %}
+                    {% set previous_url = list_query.url('/admin/billing/invoices', page=page_meta.page - 1) %}
+                    <a href="{{ previous_url }}" hx-get="{{ previous_url }}" hx-target="#invoice-list" hx-push-url="true" class="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Previous</a>
+                    {% else %}
+                    <span aria-disabled="true" class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">Previous</span>
+                    {% endif %}
+                    {% for page_number in page_meta.navigation %}
+                        {% if page_number is none %}
+                        <span class="px-1 text-slate-400" aria-hidden="true">…</span>
+                        {% elif page_number == page_meta.page %}
+                        <span aria-current="page" class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg bg-primary-600 px-2 text-sm font-semibold text-white">{{ page_number }}</span>
+                        {% else %}
+                        {% set page_url = list_query.url('/admin/billing/invoices', page=page_number) %}
+                        <a href="{{ page_url }}" hx-get="{{ page_url }}" hx-target="#invoice-list" hx-push-url="true" class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">{{ page_number }}</a>
+                        {% endif %}
+                    {% endfor %}
+                    {% if page_meta.has_next %}
+                    {% set next_url = list_query.url('/admin/billing/invoices', page=page_meta.page + 1) %}
+                    <a href="{{ next_url }}" hx-get="{{ next_url }}" hx-target="#invoice-list" hx-push-url="true" class="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Next</a>
+                    {% else %}
+                    <span aria-disabled="true" class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">Next</span>
+                    {% endif %}
+                </nav>
                 {% endif %}
-            {% endfor %}
-
-            {% if page < total_pages %}
-            <a href="/admin/billing/invoices?page={{ page + 1 }}&per_page={{ per_page }}{{ _extra }}" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-500 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            </a>
-            {% else %}
-            <span class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            </span>
-            {% endif %}
+            </div>
         </div>
-    </div>
 </div>
-{% endif %}

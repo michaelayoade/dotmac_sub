@@ -60,6 +60,22 @@ def test_customer_bulk_message_preview_does_not_dispatch_delivery(monkeypatch):
     assert dispatch_calls == []
 
 
+def _confirmed_selected_scope(db_session, *customer_ids: str) -> dict[str, object]:
+    selection: dict[str, object] = {
+        "mode": "selected",
+        "ids": list(customer_ids),
+    }
+    resolved = web_customer_actions.resolve_bulk_customer_scope(
+        db_session,
+        {"selection": selection},
+    )
+    return {
+        **selection,
+        "expected_count": resolved.matched_count,
+        "expected_scope_token": resolved.scope_token,
+    }
+
+
 def test_customer_whatsapp_template_lookup_fetch_handles_non_json_errors():
     template = (REPO_ROOT / "templates/admin/customers/index.html").read_text()
 
@@ -135,7 +151,7 @@ def test_customer_bulk_actions_sync_selection_from_checked_rows_before_submit():
     )
 
 
-def test_bulk_update_customers_from_filtered_scope_updates_matching_customers(
+def test_bulk_update_customers_requires_explicit_filtered_scope_preview_and_confirmation(
     db_session,
 ):
     matched = Subscriber(
@@ -157,15 +173,37 @@ def test_bulk_update_customers_from_filtered_scope_updates_matching_customers(
     db_session.add_all([matched, other])
     db_session.commit()
 
+    payload = {
+        "selection": {
+            "mode": "filtered",
+            "filters": {"search": "ada-scope@example.com"},
+        },
+        "updates": {
+            "account_state": "inactive",
+            "billing_enabled": False,
+            "payment_method": "bank_transfer",
+        },
+    }
+    preview = web_customer_actions.bulk_update_customers_from_payload(
+        db_session,
+        {**payload, "preview_only": True},
+    )
+
+    db_session.refresh(matched)
+    assert preview["preview"] is True
+    assert preview["matched_count"] == 1
+    assert matched.is_active is True
+
     result = web_customer_actions.bulk_update_customers_from_payload(
         db_session,
         {
-            "filters": {"search": "ada-scope@example.com"},
-            "updates": {
-                "account_state": "inactive",
-                "billing_enabled": False,
-                "payment_method": "bank_transfer",
+            **payload,
+            "selection": {
+                **payload["selection"],
+                "expected_count": preview["matched_count"],
+                "expected_scope_token": preview["scope_token"],
             },
+            "confirmed": True,
         },
     )
 
@@ -179,6 +217,51 @@ def test_bulk_update_customers_from_filtered_scope_updates_matching_customers(
     assert matched.payment_method == "bank_transfer"
     assert other.is_active is True
     assert other.billing_enabled is True
+
+
+def test_bulk_update_customers_does_not_fall_through_to_filtered_scope(db_session):
+    with pytest.raises(HTTPException, match="Select at least one record"):
+        web_customer_actions.bulk_update_customers_from_payload(
+            db_session,
+            {
+                "customer_ids": [],
+                "filters": {"status": "active"},
+                "updates": {"billing_enabled": False},
+            },
+        )
+
+
+def test_bulk_update_rejects_scope_membership_drift_after_preview(db_session):
+    customer = Subscriber(
+        first_name="Scope",
+        last_name="Changed",
+        email="scope-changed@example.com",
+        user_type=UserType.customer,
+        is_active=True,
+        billing_enabled=True,
+    )
+    db_session.add(customer)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        web_customer_actions.bulk_update_customers_from_payload(
+            db_session,
+            {
+                "selection": {
+                    "mode": "selected",
+                    "ids": [str(customer.id)],
+                    "expected_count": 1,
+                    "expected_scope_token": "stale-preview-token",
+                },
+                "updates": {"billing_enabled": False},
+                "confirmed": True,
+            },
+        )
+
+    db_session.refresh(customer)
+    assert exc.value.status_code == 409
+    assert "scope changed after preview" in exc.value.detail
+    assert customer.billing_enabled is True
 
 
 def test_queue_bulk_message_from_selected_scope_renders_template_and_skips_missing_recipient(
@@ -215,10 +298,11 @@ def test_queue_bulk_message_from_selected_scope_renders_template_and_skips_missi
     result = web_customer_actions.queue_bulk_message_from_payload(
         db_session,
         {
-            "customer_ids": [
-                {"id": str(reachable.id), "type": "person"},
-                {"id": str(missing_phone.id), "type": "person"},
-            ],
+            "selection": _confirmed_selected_scope(
+                db_session,
+                str(reachable.id),
+                str(missing_phone.id),
+            ),
             "channel": "sms",
             "template_id": str(template.id),
             "confirmed": True,
@@ -275,7 +359,7 @@ def test_queue_bulk_email_backfills_common_template_aliases(db_session):
     result = web_customer_actions.queue_bulk_message_from_payload(
         db_session,
         {
-            "customer_ids": [{"id": str(customer.id), "type": "person"}],
+            "selection": _confirmed_selected_scope(db_session, str(customer.id)),
             "channel": "email",
             "template_id": str(template.id),
             "confirmed": True,
@@ -315,7 +399,7 @@ def test_queue_bulk_email_rejects_unavailable_template_variables(db_session):
         web_customer_actions.queue_bulk_message_from_payload(
             db_session,
             {
-                "customer_ids": [{"id": str(customer.id), "type": "person"}],
+                "selection": _confirmed_selected_scope(db_session, str(customer.id)),
                 "channel": "email",
                 "template_id": str(template.id),
                 "confirmed": True,
@@ -348,7 +432,7 @@ def test_queue_bulk_message_preview_does_not_create_rows(db_session):
     result = web_customer_actions.queue_bulk_message_from_payload(
         db_session,
         {
-            "customer_ids": [{"id": str(customer.id), "type": "person"}],
+            "selection": _confirmed_selected_scope(db_session, str(customer.id)),
             "channel": "email",
             "template_id": str(template.id),
             "preview_only": True,
@@ -443,7 +527,7 @@ def test_queue_bulk_whatsapp_respects_template_conditions(db_session):
     result = web_customer_actions.queue_bulk_message_from_payload(
         db_session,
         {
-            "customer_ids": [{"id": str(customer.id), "type": "person"}],
+            "selection": _confirmed_selected_scope(db_session, str(customer.id)),
             "channel": "whatsapp",
             "template_id": str(template.id),
             "confirmed": True,

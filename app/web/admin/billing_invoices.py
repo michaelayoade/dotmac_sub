@@ -1,20 +1,24 @@
 """Admin billing management web routes."""
 
-from typing import Any, cast
+from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services import (
+    web_billing_invoice_bulk_actions as web_billing_invoice_bulk_actions_service,
+)
 from app.services import web_billing_invoice_cache as web_billing_invoice_cache_service
 from app.services import web_billing_invoice_forms as web_billing_invoice_forms_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import web_billing_overview as web_billing_overview_service
 from app.services.auth_dependencies import require_permission
+from app.services.list_query import ListQuery
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -164,43 +168,66 @@ def invoices_list(
     customer_ref: str | None = Query(None),
     search: str | None = Query(None),
     date_range: str | None = Query(None),
+    sort: Literal[
+        "created_at", "invoice_number", "status", "total", "issued_at", "due_at"
+    ] = Query("created_at"),
+    direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=10, le=100),
+    per_page: str | None = Query("25"),
     db: Session = Depends(get_db),
 ):
     """List all invoices with filtering."""
+    try:
+        list_query = web_billing_overview_service.build_invoice_list_query(
+            account_id=account_id,
+            partner_id=partner_id,
+            status=status,
+            proforma_only=proforma_only,
+            customer_ref=customer_ref,
+            search=search,
+            date_range=date_range,
+            sort_by=sort,
+            sort_dir=direction,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     state = web_billing_overview_service.build_invoices_list_data(
         db,
-        account_id=account_id,
-        partner_id=partner_id,
-        status=status,
-        proforma_only=proforma_only,
-        customer_ref=customer_ref,
-        search=search,
-        date_range=date_range,
-        page=page,
-        per_page=per_page,
+        list_query=list_query,
     )
+    effective_query = state["list_query"]
+    assert isinstance(effective_query, ListQuery)
+    invoices = state["invoices"]
+    assert isinstance(invoices, list)
+    state["invoice_bulk_action_contract"] = (
+        web_billing_invoice_bulk_actions_service.build_invoice_bulk_action_contract(
+            db,
+            auth=getattr(request.state, "auth", None) or {},
+            invoices=invoices,
+        )
+    )
+    page_was_clamped = effective_query.page != page
 
     if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(
-            "admin/billing/_invoices_table.html",
+        response = templates.TemplateResponse(
+            "admin/billing/_invoices_list.html",
             {
                 "request": request,
-                "invoices": state["invoices"],
-                "invoice_status_presentations": state["invoice_status_presentations"],
-                "page": state["page"],
-                "per_page": state["per_page"],
-                "total": state["total"],
-                "total_pages": state["total_pages"],
-                "status_totals": state["status_totals"],
-                "status": state["status"],
-                "proforma_only": state["proforma_only"],
-                "customer_ref": state["customer_ref"],
-                "selected_partner_id": state["selected_partner_id"],
-                "search": state["search"],
-                "date_range": state["date_range"],
+                **state,
             },
+        )
+        if page_was_clamped:
+            response.headers["HX-Replace-Url"] = effective_query.url(
+                "/admin/billing/invoices"
+            )
+        return response
+
+    if page_was_clamped:
+        return RedirectResponse(
+            url=effective_query.url("/admin/billing/invoices"),
+            status_code=307,
         )
 
     # Get sidebar stats and current user
@@ -235,23 +262,30 @@ def invoices_export_csv(
     customer_ref: str | None = Query(None),
     search: str | None = Query(None),
     date_range: str | None = Query(None),
+    sort: Literal[
+        "created_at", "invoice_number", "status", "total", "issued_at", "due_at"
+    ] = Query("created_at"),
+    direction: Literal["asc", "desc"] = Query("desc", alias="dir"),
     db: Session = Depends(get_db),
 ):
-    state = web_billing_overview_service.build_invoices_list_data(
-        db,
-        account_id=account_id,
-        partner_id=partner_id,
-        status=status,
-        proforma_only=proforma_only,
-        customer_ref=customer_ref,
-        search=search,
-        date_range=date_range,
-        page=1,
-        per_page=10000,
+    try:
+        list_query = web_billing_overview_service.build_invoice_list_query(
+            account_id=account_id,
+            partner_id=partner_id,
+            status=status,
+            proforma_only=proforma_only,
+            customer_ref=customer_ref,
+            search=search,
+            date_range=date_range,
+            sort_by=sort,
+            sort_dir=direction,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    invoices = web_billing_overview_service.list_invoices_for_scope(
+        db, list_query=list_query
     )
-    content = web_billing_overview_service.render_invoices_csv(
-        cast(list[Any], state["invoices"])
-    )
+    content = web_billing_overview_service.render_invoices_csv(invoices)
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",

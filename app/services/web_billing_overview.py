@@ -21,6 +21,13 @@ from app.models.subscriber import Reseller, Subscriber, UserType
 from app.services import settings_spec
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+    PageMeta,
+    SortDirection,
+)
 from app.services.status_presentation import invoice_status_presentation
 
 logger = logging.getLogger(__name__)
@@ -84,6 +91,93 @@ _UNPAID_INVOICE_STATUSES = (
     InvoiceStatus.partially_paid,
     InvoiceStatus.overdue,
 )
+_INVOICE_STATUS_FILTERS = frozenset(
+    {status.value for status in InvoiceStatus} | {"unpaid"}
+)
+_INVOICE_DATE_FILTERS = frozenset({"today", "week", "month", "quarter"})
+
+INVOICE_LIST_DEFINITION = ListDefinition(
+    key="billing_invoices",
+    fields=(
+        ListFieldDefinition(
+            "invoice_number", "Invoice", searchable=True, sortable=True
+        ),
+        ListFieldDefinition("memo", "Memo", searchable=True),
+        ListFieldDefinition("account_id", "Account", filterable=True),
+        ListFieldDefinition("partner_id", "Partner", filterable=True),
+        ListFieldDefinition("status", "Status", filterable=True, sortable=True),
+        ListFieldDefinition("proforma_only", "Proforma", filterable=True),
+        ListFieldDefinition("customer_ref", "Customer", filterable=True),
+        ListFieldDefinition("date_range", "Date range", filterable=True),
+        ListFieldDefinition("total", "Amount", sortable=True),
+        ListFieldDefinition("issued_at", "Issued", sortable=True),
+        ListFieldDefinition("due_at", "Due", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+
+
+def _normalize_invoice_uuid_filter(value: str | None, name: str) -> str | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        return str(UUID(normalized))
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a valid UUID") from exc
+
+
+def _normalize_invoice_per_page(per_page: int | str | None) -> int:
+    try:
+        normalized = int(str(per_page or "").strip())
+    except ValueError:
+        return INVOICE_LIST_DEFINITION.default_per_page
+    if normalized in INVOICE_LIST_DEFINITION.per_page_options:
+        return normalized
+    return INVOICE_LIST_DEFINITION.default_per_page
+
+
+def build_invoice_list_query(
+    *,
+    account_id: str | None,
+    partner_id: str | None,
+    status: str | None,
+    proforma_only: bool,
+    customer_ref: str | None,
+    search: str | None,
+    date_range: str | None,
+    sort_by: str | None = None,
+    sort_dir: SortDirection | str | None = None,
+    page: int = 1,
+    per_page: int | str | None = 25,
+) -> ListQuery:
+    """Normalize invoice list state through its declared capabilities."""
+
+    normalized_status = str(status or "").strip().lower() or None
+    if normalized_status and normalized_status not in _INVOICE_STATUS_FILTERS:
+        raise ValueError(f"Unsupported status filter: {normalized_status}")
+    normalized_date_range = str(date_range or "").strip().lower() or None
+    if normalized_date_range and normalized_date_range not in _INVOICE_DATE_FILTERS:
+        raise ValueError(f"Unsupported date_range filter: {normalized_date_range}")
+
+    return INVOICE_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "account_id": _normalize_invoice_uuid_filter(account_id, "account_id"),
+            "partner_id": _normalize_invoice_uuid_filter(partner_id, "partner_id"),
+            "status": normalized_status,
+            "proforma_only": "true" if proforma_only else None,
+            "customer_ref": str(customer_ref or "").strip() or None,
+            "date_range": normalized_date_range,
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=_normalize_invoice_per_page(per_page),
+    )
+
 
 # Statuses that represent real accounts-receivable for the aging report (draft
 # is excluded — not yet billed/owed). Aging must query THESE directly: loading
@@ -239,176 +333,234 @@ def build_overview_data(
     return result
 
 
+def _invoice_customer_account_ids(db, customer_ref: str | None) -> tuple[UUID, ...]:
+    if not customer_ref:
+        return ()
+    return tuple(
+        UUID(item["id"])
+        for item in web_billing_customers_service.accounts_for_customer(
+            db, customer_ref
+        )
+    )
+
+
+def _apply_invoice_list_filters(
+    query,
+    *,
+    list_query: ListQuery,
+    customer_account_ids: tuple[UUID, ...],
+    include_status: bool,
+):  # type: ignore[no-untyped-def]
+    scoped = query.filter(Invoice.is_active.is_(True))
+    customer_ref = list_query.filter_value("customer_ref")
+    account_id = list_query.filter_value("account_id")
+    partner_id = list_query.filter_value("partner_id")
+    status = list_query.filter_value("status")
+    date_range = list_query.filter_value("date_range")
+
+    if customer_ref:
+        if not customer_account_ids:
+            return scoped.filter(Invoice.id.is_(None))
+        scoped = scoped.filter(Invoice.account_id.in_(customer_account_ids))
+    elif account_id:
+        scoped = scoped.filter(Invoice.account_id == UUID(account_id))
+    if partner_id:
+        scoped = scoped.filter(
+            Invoice.account.has(Subscriber.reseller_id == UUID(partner_id))
+        )
+
+    if include_status and status:
+        if status == "unpaid":
+            scoped = scoped.filter(Invoice.status.in_(_UNPAID_INVOICE_STATUSES))
+        else:
+            scoped = scoped.filter(
+                Invoice.status == validate_enum(status, InvoiceStatus, "status")
+            )
+    if list_query.filter_value("proforma_only") == "true":
+        scoped = scoped.filter(
+            or_(
+                Invoice.is_proforma.is_(True),
+                Invoice.memo.ilike("%[PROFORMA]%"),
+                Invoice.invoice_number.ilike("PF-%"),
+            )
+        )
+    if list_query.search:
+        term = f"%{list_query.search}%"
+        scoped = scoped.filter(
+            (Invoice.invoice_number.ilike(term)) | (Invoice.memo.ilike(term))
+        )
+    if date_range:
+        now = datetime.now(UTC)
+        if date_range == "today":
+            start = datetime(now.year, now.month, now.day, tzinfo=UTC)
+        elif date_range == "week":
+            start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
+                days=now.weekday()
+            )
+        elif date_range == "month":
+            start = now - timedelta(days=30)
+        else:
+            start = now - timedelta(days=90)
+        scoped = scoped.filter(Invoice.created_at >= start)
+    return scoped
+
+
+def _apply_invoice_list_sort(query, list_query: ListQuery):  # type: ignore[no-untyped-def]
+    expressions = {
+        "invoice_number": func.lower(func.coalesce(Invoice.invoice_number, "")),
+        "status": Invoice.status,
+        "total": Invoice.total,
+        "issued_at": Invoice.issued_at,
+        "due_at": Invoice.due_at,
+        "created_at": Invoice.created_at,
+    }
+    expression = expressions[list_query.sort_by]
+    ordered = expression.asc() if list_query.sort_dir == "asc" else expression.desc()
+    return query.order_by(ordered, Invoice.id.asc())
+
+
+def _invoice_status_summary(status_rows) -> dict[str, dict[str, object]]:
+    summary: dict[str, dict[str, object]] = {
+        key: _empty_invoice_total()
+        for key in ("draft", "issued", "partially_paid", "paid", "overdue", "void")
+    }
+    all_count = 0
+    all_amounts: dict[str, Decimal] = {}
+    all_due_amounts: dict[str, Decimal] = {}
+    all_received_amounts: dict[str, Decimal] = {}
+    for status_val, currency_value, count, amount, due in status_rows:
+        key = (
+            status_val.value
+            if isinstance(status_val, InvoiceStatus)
+            else str(status_val)
+        )
+        if key not in summary:
+            summary[key] = _empty_invoice_total()
+        currency = _currency_code(currency_value)
+        amount_decimal = Decimal(str(amount or 0))
+        due_decimal = Decimal(str(due or 0))
+        received_decimal = max(amount_decimal - due_decimal, Decimal("0"))
+        amounts = summary[key]["amounts"]
+        due_amounts = summary[key]["due_amounts"]
+        received_amounts = summary[key]["received_amounts"]
+        assert isinstance(amounts, dict)
+        assert isinstance(due_amounts, dict)
+        assert isinstance(received_amounts, dict)
+        amounts[currency] = amounts.get(currency, Decimal("0")) + amount_decimal
+        due_amounts[currency] = due_amounts.get(currency, Decimal("0")) + due_decimal
+        received_amounts[currency] = (
+            received_amounts.get(currency, Decimal("0")) + received_decimal
+        )
+        summary[key]["count"] = int(summary[key]["count"]) + int(count or 0)
+        summary[key]["amount"] = float(
+            Decimal(str(summary[key]["amount"])) + amount_decimal
+        )
+        summary[key]["due_total"] = float(
+            Decimal(str(summary[key]["due_total"])) + due_decimal
+        )
+        summary[key]["received_total"] = float(
+            Decimal(str(summary[key]["received_total"])) + received_decimal
+        )
+        all_amounts[currency] = all_amounts.get(currency, Decimal("0")) + amount_decimal
+        all_due_amounts[currency] = (
+            all_due_amounts.get(currency, Decimal("0")) + due_decimal
+        )
+        all_received_amounts[currency] = (
+            all_received_amounts.get(currency, Decimal("0")) + received_decimal
+        )
+        all_count += int(count or 0)
+    for item in summary.values():
+        _finalize_invoice_total(item)
+    summary["all"] = {
+        "count": all_count,
+        "amount": sum(float(amount) for amount in all_amounts.values()),
+        "due_total": sum(float(amount) for amount in all_due_amounts.values()),
+        "received_total": sum(
+            float(amount) for amount in all_received_amounts.values()
+        ),
+        "amounts": all_amounts,
+        "due_amounts": all_due_amounts,
+        "received_amounts": all_received_amounts,
+        "display": _format_currency_groups(all_amounts),
+        "due_display": _format_currency_groups(all_due_amounts),
+        "received_display": _format_currency_groups(all_received_amounts),
+    }
+    return summary
+
+
+def list_invoices_for_scope(db, *, list_query: ListQuery) -> list[Invoice]:
+    """Return the full canonical invoice scope for exports and reconciliation."""
+
+    if list_query.definition.key != INVOICE_LIST_DEFINITION.key:
+        raise ValueError("Invoice scope requires the billing invoice definition")
+    customer_account_ids = _invoice_customer_account_ids(
+        db, list_query.filter_value("customer_ref")
+    )
+    query = _apply_invoice_list_filters(
+        db.query(Invoice),
+        list_query=list_query,
+        customer_account_ids=customer_account_ids,
+        include_status=True,
+    )
+    return _apply_invoice_list_sort(query, list_query).all()
+
+
 def build_invoices_list_data(
     db,
     *,
-    account_id: str | None,
-    partner_id: str | None,
-    status: str | None,
+    list_query: ListQuery | None = None,
+    account_id: str | None = None,
+    partner_id: str | None = None,
+    status: str | None = None,
     proforma_only: bool = False,
-    customer_ref: str | None,
-    search: str | None,
-    date_range: str | None,
-    page: int,
-    per_page: int,
+    customer_ref: str | None = None,
+    search: str | None = None,
+    date_range: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: SortDirection | str | None = None,
+    page: int = 1,
+    per_page: int | str | None = 25,
 ) -> dict[str, object]:
-    def _apply_filters(query, *, include_status: bool):  # type: ignore[no-untyped-def]
-        scoped = query.filter(Invoice.is_active.is_(True))
-        if account_ids:
-            scoped = scoped.filter(Invoice.account_id.in_(account_ids))
-        elif account_id:
-            scoped = scoped.filter(Invoice.account_id == UUID(account_id))
-        if selected_partner_id:
-            scoped = scoped.filter(
-                Invoice.account.has(Subscriber.reseller_id == selected_partner_id)
-            )
+    """Build the canonical invoice-list projection and compatibility context."""
 
-        if include_status and status:
-            if status == "unpaid":
-                scoped = scoped.filter(Invoice.status.in_(_UNPAID_INVOICE_STATUSES))
-            else:
-                scoped = scoped.filter(
-                    Invoice.status == validate_enum(status, InvoiceStatus, "status")
-                )
-        if proforma_only:
-            scoped = scoped.filter(
-                or_(
-                    Invoice.is_proforma.is_(True),
-                    Invoice.memo.ilike("%[PROFORMA]%"),
-                    Invoice.invoice_number.ilike("PF-%"),
-                )
-            )
-
-        if search:
-            term = f"%{search.strip()}%"
-            scoped = scoped.filter(
-                (Invoice.invoice_number.ilike(term)) | (Invoice.memo.ilike(term))
-            )
-
-        if date_range in {"today", "week", "month", "quarter"}:
-            now = datetime.now(UTC)
-            if date_range == "today":
-                start = datetime(now.year, now.month, now.day, tzinfo=UTC)
-            elif date_range == "week":
-                start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
-                    days=now.weekday()
-                )
-            elif date_range == "month":
-                start = now - timedelta(days=30)
-            else:
-                start = now - timedelta(days=90)
-            scoped = scoped.filter(Invoice.created_at >= start)
-        return scoped
-
-    def _build_status_totals(items: list[Invoice]) -> dict[str, dict[str, object]]:
-        summary: dict[str, dict[str, object]] = {
-            key: _empty_invoice_total()
-            for key in ("draft", "issued", "partially_paid", "paid", "overdue", "void")
-        }
-        for invoice in items:
-            raw_status = getattr(invoice, "status", InvoiceStatus.draft)
-            status_key = (
-                raw_status.value
-                if isinstance(raw_status, InvoiceStatus)
-                else str(raw_status)
-            )
-            if status_key not in summary:
-                summary[status_key] = _empty_invoice_total()
-            currency = _currency_code(getattr(invoice, "currency", None))
-            amount = Decimal(str(getattr(invoice, "total", 0) or 0))
-            due = Decimal(str(getattr(invoice, "balance_due", 0) or 0))
-            received = max(amount - due, Decimal("0"))
-            amounts = summary[status_key]["amounts"]
-            due_amounts = summary[status_key]["due_amounts"]
-            received_amounts = summary[status_key]["received_amounts"]
-            assert isinstance(amounts, dict)
-            assert isinstance(due_amounts, dict)
-            assert isinstance(received_amounts, dict)
-            amounts[currency] = amounts.get(currency, Decimal("0")) + amount
-            due_amounts[currency] = due_amounts.get(currency, Decimal("0")) + due
-            received_amounts[currency] = (
-                received_amounts.get(currency, Decimal("0")) + received
-            )
-            summary[status_key]["count"] = int(summary[status_key]["count"]) + 1
-            summary[status_key]["amount"] = float(
-                Decimal(str(summary[status_key]["amount"])) + amount
-            )
-            summary[status_key]["due_total"] = float(
-                Decimal(str(summary[status_key]["due_total"])) + due
-            )
-            summary[status_key]["received_total"] = float(
-                Decimal(str(summary[status_key]["received_total"])) + received
-            )
-
-        all_amounts: dict[str, Decimal] = {}
-        all_due_amounts: dict[str, Decimal] = {}
-        all_received_amounts: dict[str, Decimal] = {}
-        for item in summary.values():
-            _finalize_invoice_total(item)
-            amounts = item["amounts"]
-            due_amounts = item["due_amounts"]
-            received_amounts = item["received_amounts"]
-            assert isinstance(amounts, dict)
-            assert isinstance(due_amounts, dict)
-            assert isinstance(received_amounts, dict)
-            for currency, amount in amounts.items():
-                all_amounts[currency] = all_amounts.get(currency, Decimal("0")) + amount
-            for currency, amount in due_amounts.items():
-                all_due_amounts[currency] = (
-                    all_due_amounts.get(currency, Decimal("0")) + amount
-                )
-            for currency, amount in received_amounts.items():
-                all_received_amounts[currency] = (
-                    all_received_amounts.get(currency, Decimal("0")) + amount
-                )
-        summary["all"] = {
-            "count": len(items),
-            "amount": sum(
-                float(getattr(invoice, "total", 0) or 0) for invoice in items
-            ),
-            "due_total": sum(float(amount) for amount in all_due_amounts.values()),
-            "received_total": sum(
-                float(amount) for amount in all_received_amounts.values()
-            ),
-            "amounts": all_amounts,
-            "due_amounts": all_due_amounts,
-            "received_amounts": all_received_amounts,
-            "display": _format_currency_groups(all_amounts),
-            "due_display": _format_currency_groups(all_due_amounts),
-            "received_display": _format_currency_groups(all_received_amounts),
-        }
-        return summary
-
-    offset = (page - 1) * per_page
-    selected_partner_id = None
-    if partner_id:
-        try:
-            selected_partner_id = UUID(partner_id)
-        except ValueError:
-            selected_partner_id = None
-    account_ids = []
-    customer_filtered = bool(customer_ref)
-    if customer_ref:
-        account_ids = [
-            UUID(item["id"])
-            for item in web_billing_customers_service.accounts_for_customer(
-                db, customer_ref
-            )
-        ]
-
-    invoices: list[Invoice] = []
-    total = 0
-    if account_ids or not customer_filtered:
-        filtered_query = _apply_filters(db.query(Invoice), include_status=True)
-        invoices = (
-            filtered_query.order_by(Invoice.created_at.desc())
-            .offset(offset)
-            .limit(per_page)
-            .all()
+    if list_query is None:
+        list_query = build_invoice_list_query(
+            account_id=account_id,
+            partner_id=partner_id,
+            status=status,
+            proforma_only=proforma_only,
+            customer_ref=customer_ref,
+            search=search,
+            date_range=date_range,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
         )
-        total = filtered_query.count()
-        # Efficient status summary using GROUP BY instead of loading all rows
-        status_summary_query = _apply_filters(
+    if list_query.definition.key != INVOICE_LIST_DEFINITION.key:
+        raise ValueError("Invoice list requires the billing invoice definition")
+
+    customer_account_ids = _invoice_customer_account_ids(
+        db, list_query.filter_value("customer_ref")
+    )
+    filtered_query = _apply_invoice_list_filters(
+        db.query(Invoice),
+        list_query=list_query,
+        customer_account_ids=customer_account_ids,
+        include_status=True,
+    )
+    total = filtered_query.order_by(None).count()
+    page_meta = PageMeta.from_query(list_query, total)
+    effective_query = list_query.with_page(page_meta.page)
+    invoices = (
+        _apply_invoice_list_sort(filtered_query, effective_query)
+        .offset(effective_query.offset)
+        .limit(effective_query.per_page)
+        .all()
+    )
+
+    status_rows = (
+        _apply_invoice_list_filters(
             db.query(
                 Invoice.status,
                 Invoice.currency,
@@ -416,90 +568,25 @@ def build_invoices_list_data(
                 func.coalesce(func.sum(Invoice.total), 0),
                 func.coalesce(func.sum(Invoice.balance_due), 0),
             ),
+            list_query=effective_query,
+            customer_account_ids=customer_account_ids,
+            include_status=False,
+        )
+        .group_by(Invoice.status, Invoice.currency)
+        .all()
+    )
+    status_totals = _invoice_status_summary(status_rows)
+    proforma_count = (
+        _apply_invoice_list_filters(
+            db.query(func.count(Invoice.id)),
+            list_query=effective_query,
+            customer_account_ids=customer_account_ids,
             include_status=True,
-        ).group_by(Invoice.status, Invoice.currency)
-        status_rows = status_summary_query.all()
-
-        summary: dict[str, dict[str, object]] = {
-            key: _empty_invoice_total()
-            for key in ("draft", "issued", "partially_paid", "paid", "overdue", "void")
-        }
-        all_count = 0
-        all_amounts: dict[str, Decimal] = {}
-        all_due_amounts: dict[str, Decimal] = {}
-        all_received_amounts: dict[str, Decimal] = {}
-        for status_val, currency_value, cnt, amount, due in status_rows:
-            key = (
-                status_val.value
-                if isinstance(status_val, InvoiceStatus)
-                else str(status_val)
-            )
-            if key not in summary:
-                summary[key] = _empty_invoice_total()
-            currency = _currency_code(currency_value)
-            amount_decimal = Decimal(str(amount or 0))
-            due_decimal = Decimal(str(due or 0))
-            received_decimal = max(amount_decimal - due_decimal, Decimal("0"))
-            amounts = summary[key]["amounts"]
-            due_amounts = summary[key]["due_amounts"]
-            received_amounts = summary[key]["received_amounts"]
-            assert isinstance(amounts, dict)
-            assert isinstance(due_amounts, dict)
-            assert isinstance(received_amounts, dict)
-            amounts[currency] = amounts.get(currency, Decimal("0")) + amount_decimal
-            due_amounts[currency] = (
-                due_amounts.get(currency, Decimal("0")) + due_decimal
-            )
-            received_amounts[currency] = (
-                received_amounts.get(currency, Decimal("0")) + received_decimal
-            )
-            summary[key]["count"] = int(summary[key]["count"]) + int(cnt or 0)
-            summary[key]["amount"] = float(
-                Decimal(str(summary[key]["amount"])) + amount_decimal
-            )
-            summary[key]["due_total"] = float(
-                Decimal(str(summary[key]["due_total"])) + due_decimal
-            )
-            summary[key]["received_total"] = float(
-                Decimal(str(summary[key]["received_total"])) + received_decimal
-            )
-            all_amounts[currency] = (
-                all_amounts.get(currency, Decimal("0")) + amount_decimal
-            )
-            all_due_amounts[currency] = (
-                all_due_amounts.get(currency, Decimal("0")) + due_decimal
-            )
-            all_received_amounts[currency] = (
-                all_received_amounts.get(currency, Decimal("0")) + received_decimal
-            )
-            all_count += cnt
-        for item in summary.values():
-            _finalize_invoice_total(item)
-        summary["all"] = {
-            "count": all_count,
-            "amount": sum(float(amount) for amount in all_amounts.values()),
-            "due_total": sum(float(amount) for amount in all_due_amounts.values()),
-            "received_total": sum(
-                float(amount) for amount in all_received_amounts.values()
-            ),
-            "amounts": all_amounts,
-            "due_amounts": all_due_amounts,
-            "received_amounts": all_received_amounts,
-            "display": _format_currency_groups(all_amounts),
-            "due_display": _format_currency_groups(all_due_amounts),
-            "received_display": _format_currency_groups(all_received_amounts),
-        }
-        status_totals = summary
-
-        # For proforma summary, only count proforma invoices
-        proforma_count = (
-            _apply_filters(db.query(func.count(Invoice.id)), include_status=True)
-            .filter(Invoice.is_proforma.is_(True))
-            .scalar()
-        ) or 0
-        proforma_summary = {"count": proforma_count}
-
-    total_pages = (total + per_page - 1) // per_page if total > 0 else 1
+        )
+        .filter(Invoice.is_proforma.is_(True))
+        .scalar()
+        or 0
+    )
     partner_options = [
         {"id": str(item.id), "name": item.name}
         for item in db.query(Reseller)
@@ -514,21 +601,21 @@ def build_invoices_list_data(
             for invoice in invoices
         },
         "status_totals": status_totals,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
-        "account_id": account_id,
-        "selected_partner_id": str(selected_partner_id)
-        if selected_partner_id
-        else None,
+        "list_query": effective_query,
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": page_meta.total_items,
+        "total_pages": page_meta.total_pages,
+        "account_id": effective_query.filter_value("account_id"),
+        "selected_partner_id": effective_query.filter_value("partner_id"),
         "partner_options": partner_options,
-        "status": status,
-        "proforma_only": proforma_only,
-        "proforma_summary": proforma_summary,
-        "customer_ref": customer_ref,
-        "search": search,
-        "date_range": date_range,
+        "status": effective_query.filter_value("status"),
+        "proforma_only": effective_query.filter_value("proforma_only") == "true",
+        "proforma_summary": {"count": proforma_count},
+        "customer_ref": effective_query.filter_value("customer_ref"),
+        "search": effective_query.search,
+        "date_range": effective_query.filter_value("date_range"),
     }
 
 

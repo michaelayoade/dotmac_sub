@@ -153,19 +153,54 @@ class ListQuery:
             )
         return replace(self, sort_by=sort_by, sort_dir=sort_dir, page=1)
 
+    def with_filters(self, overrides: Mapping[str, object | None]) -> ListQuery:
+        """Replace declared filters and reset pagination to the first page."""
+
+        unknown_filters = set(overrides) - set(self.definition.filterable_keys)
+        if unknown_filters:
+            names = ", ".join(sorted(unknown_filters))
+            raise ValueError(f"Unsupported filters for {self.definition.key}: {names}")
+        values = dict(self.filters)
+        for key, value in overrides.items():
+            normalized = str(value or "").strip()
+            if normalized:
+                values[key] = normalized
+            else:
+                values.pop(key, None)
+        filters = tuple(
+            (key, values[key])
+            for key in self.definition.filterable_keys
+            if key in values
+        )
+        return replace(self, filters=filters, page=1)
+
+    def with_per_page(self, per_page: int) -> ListQuery:
+        """Change the declared page size and reset pagination."""
+
+        if per_page not in self.definition.per_page_options:
+            allowed = ", ".join(str(size) for size in self.definition.per_page_options)
+            raise ValueError(f"per_page must be one of: {allowed}")
+        return replace(self, per_page=per_page, page=1)
+
     def params(
         self,
         *,
         page: int | None = None,
         sort_by: str | None = None,
         sort_dir: SortDirection | None = None,
+        filters: Mapping[str, object | None] | None = None,
+        per_page: int | None = None,
     ) -> tuple[tuple[str, str], ...]:
         effective = self
+        if filters is not None:
+            effective = effective.with_filters(filters)
         if sort_by is not None or sort_dir is not None:
-            effective = self.with_sort(
-                sort_by or self.sort_by,
-                sort_dir or self.sort_dir,
+            effective = effective.with_sort(
+                sort_by or effective.sort_by,
+                sort_dir or effective.sort_dir,
             )
+        if per_page is not None:
+            effective = effective.with_per_page(per_page)
         if page is not None:
             effective = effective.with_page(page)
 
@@ -190,8 +225,10 @@ class ListQuery:
         page: int | None = None,
         sort_by: str | None = None,
         sort_dir: SortDirection | None = None,
+        filters: Mapping[str, object | None] | None = None,
+        per_page: int | None = None,
     ) -> str:
-        return f"{base_url}?{urlencode(self.params(page=page, sort_by=sort_by, sort_dir=sort_dir))}"
+        return f"{base_url}?{urlencode(self.params(page=page, sort_by=sort_by, sort_dir=sort_dir, filters=filters, per_page=per_page))}"
 
 
 @dataclass(frozen=True, slots=True)

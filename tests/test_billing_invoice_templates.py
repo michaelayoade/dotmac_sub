@@ -33,7 +33,7 @@ def test_invoice_batch_run_button_has_submit_guard():
 def test_billing_money_templates_render_currency_codes_not_naira_glyphs():
     template_paths = [
         "templates/admin/billing/invoice_detail.html",
-        "templates/admin/billing/invoices.html",
+        "templates/admin/billing/_invoices_table.html",
         "templates/admin/billing/ledger.html",
         "templates/admin/billing/ar_aging.html",
     ]

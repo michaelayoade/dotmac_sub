@@ -4,73 +4,43 @@
 {% block title %}Invoices - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-4" x-data="invoiceBulkActions()">
-    {# Floating Bulk Action Bar #}
+<div class="space-y-4"
+     x-data='invoiceBulkActions({{ invoice_bulk_action_contract | tojson }})'
+     x-init="init()">
+    {% if invoice_bulk_action_contract.selection_enabled %}
     <div x-show="selectedIds.length > 0" x-cloak
-         class="fixed inset-x-4 bottom-4 z-50 mx-auto max-w-7xl">
-        <div class="flex items-center gap-2 overflow-x-auto rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-            <span class="shrink-0 text-sm font-medium text-slate-600 dark:text-slate-300">
-                <span x-text="selectedIds.length" class="font-bold text-emerald-600"></span> selected
-            </span>
-            <div class="h-5 w-px shrink-0 bg-slate-200 dark:bg-slate-700"></div>
-            <button type="button" @click="bulkIssue()"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                Issue
-            </button>
-            <button type="button" @click="bulkSend()"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                Send
-            </button>
-            <button type="button" @click="bulkVoid()"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-slate-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                Void
-            </button>
-            <button type="button" @click="bulkMarkPaid()"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                Mark Paid
-            </button>
-            <button type="button" @click="bulkExport()"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v10m0 0l-3-3m3 3l3-3M4 20h16"/></svg>
-                Export Selected
-            </button>
-            <button type="button" @click="bulkExportPdf()"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.5a1.5 1.5 0 00-.44-1.06l-3-3A1.5 1.5 0 0014.5 5H7a2 2 0 00-2 2v12a2 2 0 002 2zm3-8h4m-4 4h4"/></svg>
-                Export PDFs
-            </button>
-            <button type="button" @click="bulkGeneratePdf()"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-fuchsia-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-fuchsia-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2m5-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                Generate PDFs
-            </button>
-            <button type="button" @click="bulkPrepareAndExportPdf()"
-                    :disabled="isPreparingPdfs"
-                    :class="{ 'opacity-70 cursor-not-allowed': isPreparingPdfs }"
-                    class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700">
-                <svg x-show="!isPreparingPdfs" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16"/></svg>
-                <svg x-show="isPreparingPdfs" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-                </svg>
-                <span x-show="!isPreparingPdfs">Generate + Export PDFs</span>
-                <span x-show="isPreparingPdfs">Preparing PDFs...</span>
-            </button>
-            <button type="button" @click="clearSelection()"
-                    class="shrink-0 px-2 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
-                Clear
-            </button>
+         class="fixed inset-x-4 bottom-4 z-50 mx-auto max-w-6xl"
+         role="region"
+         aria-label="Selected invoice actions">
+        <div class="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between">
+            <p class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white"
+               role="status" aria-live="polite" aria-atomic="true">
+                <span x-text="selectedIds.length"></span> selected
+            </p>
+            <div class="flex flex-wrap items-center gap-2">
+                {% for action in invoice_bulk_action_contract.actions %}
+                <button type="button"
+                        @click="runBulkAction('{{ action.key }}')"
+                        :disabled="!actionState('{{ action.key }}').enabled || busyAction !== null"
+                        :title="actionState('{{ action.key }}').reason || '{{ action.description | e }}'"
+                        class="status-tone status-tone-{{ action.tone }} inline-flex shrink-0 items-center rounded-lg px-3 py-2 text-sm font-semibold transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        data-invoice-bulk-action="{{ action.key }}">
+                    {{ action.label }}
+                </button>
+                {% endfor %}
+                <button type="button" @click="clearSelection(true)"
+                        class="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
+                    Clear
+                </button>
+            </div>
         </div>
     </div>
+    {% endif %}
 
     <div class="flex flex-col gap-3 border-b border-slate-200 pb-4 dark:border-slate-700 lg:flex-row lg:items-center lg:justify-between">
         <div>
             <div class="mb-1 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                <a href="/admin/billing" class="hover:text-emerald-600 dark:hover:text-emerald-400">Billing</a>
+                <a href="/admin/billing" class="hover:text-primary-600 dark:hover:text-primary-400">Billing</a>
                 <span>/</span>
                 <span>Invoices</span>
             </div>
@@ -78,249 +48,81 @@
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Track customer invoices, payment status, PDFs, and email delivery.</p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-            {{ action_button("Generate Batch", "/admin/billing/invoices/batch", '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>', "secondary", "emerald", "teal") }}
-            {{ action_button("Export CSV", "/admin/billing/invoices/export.csv?partner_id=" ~ (selected_partner_id or '') ~ "&status=" ~ (status or '') ~ "&proforma_only=" ~ ('true' if proforma_only else 'false') ~ "&customer_ref=" ~ (customer_ref or '') ~ "&search=" ~ (search or '') ~ "&date_range=" ~ (date_range or ''), '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v10m0 0l-3-3m3 3l3-3M4 20h16"/></svg>', "secondary", "emerald", "teal") }}
-            {{ action_button("Charge", "/admin/billing/invoices/new", '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>', "secondary", "emerald", "teal") }}
-            {{ action_button("New Invoice", "/admin/billing/invoices/new", icon_plus("h-5 w-5"), "primary", "emerald", "teal") }}
+            {{ action_button("Generate Batch", "/admin/billing/invoices/batch", '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>', "secondary", "primary", "accent") }}
+            <a :href="filteredExportUrl()" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-primary-200 hover:text-primary-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-primary-700 dark:hover:text-primary-300">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v10m0 0l-3-3m3 3l3-3M4 20h16"/></svg>
+                Export CSV
+            </a>
+            {{ action_button("Charge", "/admin/billing/invoices/new", '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>', "secondary", "primary", "accent") }}
+            {{ action_button("New Invoice", "/admin/billing/invoices/new", icon_plus("h-5 w-5"), "primary", "primary", "accent") }}
         </div>
     </div>
 
-    <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
-        {% for key, label in [('all', 'All'), ('draft', 'Draft'), ('issued', 'Issued'), ('partially_paid', 'Partially paid'), ('paid', 'Paid'), ('overdue', 'Overdue')] %}
-        {% set bucket = status_totals[key] %}
-        {% set href = '/admin/billing/invoices' if key == 'all' else '/admin/billing/invoices?status=' ~ key %}
-        {% set active = (not status and key == 'all') or status == key %}
-        <a href="{{ href }}" class="rounded-xl border px-3 py-2.5 transition {% if active %}border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-100{% else %}border-slate-200 bg-white text-slate-700 hover:border-emerald-200 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-emerald-800{% endif %}">
-            <div class="flex items-center justify-between gap-2">
-                <span class="text-sm font-semibold">{{ label }}</span>
-                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ bucket.count }}</span>
-            </div>
-            <p class="mt-1 truncate text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">{{ bucket.display }}</p>
-        </a>
-        {% endfor %}
-    </div>
-
-    {# Filters #}
-    <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <form hx-get="/admin/billing/invoices" hx-target="#invoices-table" hx-trigger="submit, change from:select" class="grid gap-3 lg:grid-cols-12 lg:items-end">
-            <div class="lg:col-span-3">
-                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Search</label>
-                <div class="relative">
-                    <svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                    </svg>
-                    <input type="text" name="search" placeholder="Search invoices..."
-                           value="{{ search or '' }}"
-                           hx-get="/admin/billing/invoices" hx-target="#invoices-table" hx-trigger="keyup changed delay:300ms" hx-include="closest form"
-                           class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
-                </div>
-            </div>
-            <div class="lg:col-span-2">
-                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Partner</label>
-                <select name="partner_id" class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-9 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="">All Partners</option>
-                    {% for partner in partner_options %}
-                    <option value="{{ partner.id }}" {% if selected_partner_id == partner.id %}selected{% endif %}>{{ partner.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="lg:col-span-2">
-                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Customer</label>
-                <div class="relative" data-typeahead-url="/api/v1/search/customers" data-typeahead-min="2" data-typeahead-limit="8">
-                    <input type="text" data-typeahead-input
-                           placeholder="Search customers..."
-                           class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-3 text-sm text-slate-900 placeholder-slate-500 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:placeholder-slate-400 dark:focus:bg-slate-600" />
-                    <input type="hidden" name="customer_ref" data-typeahead-hidden
-                           hx-get="/admin/billing/invoices" hx-target="#invoices-table" hx-trigger="change" hx-include="closest form"
-                           value="{{ customer_ref or '' }}">
-                    <div data-typeahead-results></div>
-                </div>
-            </div>
-            <div class="lg:col-span-2">
-                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</label>
-                <select name="status" class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-9 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="">All Status</option>
-                    <option value="draft" {% if status == 'draft' %}selected{% endif %}>Draft</option>
-                    <option value="issued" {% if status == 'issued' %}selected{% endif %}>Issued</option>
-                    <option value="partially_paid" {% if status == 'partially_paid' %}selected{% endif %}>Partially Paid</option>
-                    <option value="paid" {% if status == 'paid' %}selected{% endif %}>Paid</option>
-                    <option value="overdue" {% if status == 'overdue' %}selected{% endif %}>Overdue</option>
-                    <option value="void" {% if status == 'void' %}selected{% endif %}>Void</option>
-                </select>
-            </div>
-            <div class="lg:col-span-1">
-                <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Date</label>
-                <select name="date_range" class="block w-full rounded-lg border-0 bg-slate-50 py-2 pl-3 pr-9 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition-all focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white dark:ring-slate-600 dark:focus:bg-slate-600">
-                    <option value="" {% if not date_range %}selected{% endif %}>All Time</option>
-                    <option value="today" {% if date_range == 'today' %}selected{% endif %}>Today</option>
-                    <option value="week" {% if date_range == 'week' %}selected{% endif %}>This Week</option>
-                    <option value="month" {% if date_range == 'month' %}selected{% endif %}>This Month</option>
-                    <option value="quarter" {% if date_range == 'quarter' %}selected{% endif %}>This Quarter</option>
-                </select>
-            </div>
-            <label class="flex min-w-28 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-700/50 lg:col-span-2">
-                <input type="checkbox" name="proforma_only" value="true" {% if proforma_only %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
-                <span class="whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">Proforma</span>
-            </label>
-        </form>
-    </div>
-
-    {# Invoices Table #}
-    <div id="invoices-table" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-                <thead>
-                    <tr class="border-b border-slate-100 dark:border-slate-700/50">
-                        <th scope="col" class="w-10 px-3 py-2.5">
-                            <input type="checkbox"
-                                   @change="toggleAll($event.target.checked)"
-                                   :checked="selectedIds.length === invoiceIds.length && invoiceIds.length > 0"
-                                   :indeterminate.prop="selectedIds.length > 0 && selectedIds.length < invoiceIds.length"
-                                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
-                        </th>
-                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Invoice</th>
-                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Customer</th>
-                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Amount</th>
-                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
-                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Issued</th>
-                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Due</th>
-                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Payment Due</th>
-                        <th scope="col" class="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Payment Received</th>
-                        <th scope="col" class="relative px-3 py-2.5"><span class="sr-only">Actions</span></th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
-                    {% if invoices %}
-                    {% for invoice in invoices %}
-                    {% set status = invoice.status | default('draft') %}
-                    {% set status_val = status.value if status is not string else status %}
-                    {% set invoice_currency = invoice.currency or 'NGN' %}
-                    <tr class="transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/40"
-                        :class="{ 'bg-emerald-50/30 dark:bg-emerald-900/5': selectedIds.includes('{{ invoice.id }}') }">
-                        <td class="whitespace-nowrap px-3 py-2.5">
-                            <input type="checkbox"
-                                   value="{{ invoice.id }}"
-                                   @change="toggleSelection('{{ invoice.id }}')"
-                                   :checked="selectedIds.includes('{{ invoice.id }}')"
-                                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5">
-                            <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400 transition-colors">
-                                {{ invoice.invoice_number | default('INV-' ~ (invoice.id|string)[:8]) }}
-                            </a>
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5">
-                            {% if invoice.account %}
-                            <a href="/admin/customers/person/{{ invoice.account.id }}" class="block">
-                                <p class="text-sm font-medium text-slate-900 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400 transition-colors">
-                                    {{ invoice.account.name }}
-                                </p>
-                                {% if invoice.account.account_number %}
-                                <p class="text-xs text-slate-500 dark:text-slate-400 font-mono">{{ invoice.account.account_number }}</p>
-                                {% endif %}
-                            </a>
-                            {% else %}
-                            <span class="text-sm text-slate-400 dark:text-slate-500">No customer</span>
-                            {% endif %}
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5">
-                            <p class="text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</p>
-                            {% if invoice.balance_due and invoice.balance_due > 0 and invoice.balance_due != invoice.total %}
-                            <p class="text-xs font-mono tabular-nums text-amber-600 dark:text-amber-400">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.balance_due) }} due</p>
-                            {% endif %}
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5">
-                            {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5">
-                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else '—' }}</span>
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5">
-                            {% if invoice.due_at %}
-                            <span class="text-sm text-slate-600 dark:text-slate-400">
-                                {{ invoice.due_at.strftime('%b %d, %Y') }}
-                            </span>
-                            {% else %}
-                            <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
-                            {% endif %}
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5 text-sm font-semibold font-mono tabular-nums {% if (invoice.balance_due or 0) > 0 %}text-amber-700 dark:text-amber-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">
-                            {{ invoice_currency }} {{ "{:,.2f}".format(invoice.balance_due or 0) }}
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5 text-sm font-semibold font-mono tabular-nums {% if ((invoice.total or 0) - (invoice.balance_due or 0)) > 0 %}text-emerald-700 dark:text-emerald-300{% else %}text-slate-400 dark:text-slate-500{% endif %}">
-                            {{ invoice_currency }} {{ "{:,.2f}".format((invoice.total or 0) - (invoice.balance_due or 0)) }}
-                        </td>
-                        <td class="whitespace-nowrap px-3 py-2.5 text-right">
-                            <div class="flex items-center justify-end gap-1">
-                                {{ row_action("/admin/billing/invoices/" ~ invoice.id, icon_view(), "View Details", "emerald") }}
-                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/edit", icon_edit(), "Edit", "emerald") }}
-                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/pdf", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', "Download PDF", "blue") }}
-                                {{ row_action("/admin/billing/invoices/" ~ invoice.id ~ "/pdf", '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 17h8M8 13h8m-8-4h8M6 21h12a2 2 0 002-2V7.5a1.5 1.5 0 00-.44-1.06l-3-3A1.5 1.5 0 0015.5 3H6a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>', "Print", "slate") }}
-                                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/send-and-return" class="inline-flex">
-                                    {% include "components/forms/csrf_input.html" %}
-                                    <input type="hidden" name="next_url" value="/admin/billing/invoices?page={{ page }}&per_page={{ per_page }}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}">
-                                    <button type="submit" class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-slate-500 transition hover:bg-emerald-50 hover:text-emerald-600 dark:text-slate-400 dark:hover:bg-slate-700 dark:hover:text-emerald-400" title="Send Email">
-                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                                    </button>
-                                </form>
-                                {% if status_val in ['issued', 'overdue', 'partially_paid'] %}
-                                {{ row_action("/admin/billing/payments/new?invoice=" ~ invoice.id, '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>', "Record Payment", "emerald") }}
-                                {% endif %}
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                    {% else %}
-                    {{ empty_state("No invoices found", "Create your first invoice to get started", icon=icon_invoice("h-8 w-8 text-slate-400"), color="emerald", color2="teal", action_label="New Invoice", action_href="/admin/billing/invoices/new", colspan=10) }}
-                    {% endif %}
-                </tbody>
-            </table>
-        </div>
-        {% if total_pages and total_pages > 1 %}
-        {% set start_item = ((page - 1) * per_page) + 1 if total else 0 %}
-        {% set end_item = [page * per_page, total] | min if total else 0 %}
-        {% set _extra %}{% if selected_partner_id %}&partner_id={{ selected_partner_id }}{% endif %}{% if status %}&status={{ status }}{% endif %}{% if proforma_only %}&proforma_only=true{% endif %}{% if customer_ref %}&customer_ref={{ customer_ref }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if date_range %}&date_range={{ date_range }}{% endif %}{% endset %}
-        <div class="flex flex-col items-center justify-between gap-3 border-t border-slate-200 px-3 py-3 dark:border-slate-700 sm:flex-row">
-            <p class="text-sm text-slate-500 dark:text-slate-400">
-                Showing <span class="font-medium text-slate-700 dark:text-slate-200">{{ start_item }}</span>
-                to <span class="font-medium text-slate-700 dark:text-slate-200">{{ end_item }}</span>
-                of <span class="font-medium text-slate-700 dark:text-slate-200">{{ total }}</span> invoices
-            </p>
-            <div class="flex flex-wrap items-center justify-center gap-3">
-                <label class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                    <span>Rows</span>
-                    <select onchange="window.location.href='/admin/billing/invoices?page=1&per_page=' + this.value + '{{ _extra | e }}'"
-                            class="rounded-lg border-0 bg-slate-100 py-1 pl-2 pr-7 text-sm text-slate-700 focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-slate-300">
-                        {% for size in [10, 25, 50, 100] %}
-                        <option value="{{ size }}" {% if per_page == size %}selected{% endif %}>{{ size }}</option>
-                        {% endfor %}
-                    </select>
-                </label>
-                <div class="flex items-center gap-1">
-                    {% if page > 1 %}
-                    <a href="/admin/billing/invoices?page={{ page - 1 }}&per_page={{ per_page }}{{ _extra }}" class="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Previous</a>
-                    {% else %}
-                    <span class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">Previous</span>
-                    {% endif %}
-                    <span class="px-2 text-sm text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }}</span>
-                    {% if page < total_pages %}
-                    <a href="/admin/billing/invoices?page={{ page + 1 }}&per_page={{ per_page }}{{ _extra }}" class="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Next</a>
-                    {% else %}
-                    <span class="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-600">Next</span>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-        {% endif %}
+    {# Filters, summaries, and table swap as one canonical HTMX projection. #}
+    <div id="invoice-list" class="space-y-4">
+        {% include "admin/billing/_invoices_list.html" %}
     </div>
 </div>
 
 <script>
-function invoiceBulkActions() {
+function invoiceBulkActions(initialContract) {
     return {
+        contract: initialContract || { actions: [] },
         selectedIds: [],
-        invoiceIds: [{% for invoice in invoices %}'{{ invoice.id }}'{% if not loop.last %}, {% endif %}{% endfor %}],
-        isPreparingPdfs: false,
+        invoiceIds: [],
+        busyAction: null,
+        currentQuery: window.location.search,
+
+        init() {
+            this.syncInvoicePage();
+            document.body.addEventListener('htmx:afterSwap', (event) => {
+                if (event.detail?.target?.id !== 'invoice-list') return;
+                this.clearSelection();
+                this.$nextTick(() => this.syncInvoicePage());
+            });
+        },
+
+        syncInvoicePage() {
+            const page = document.querySelector('#invoices-table [data-invoice-page]');
+            if (page?.dataset.listUrl) {
+                this.currentQuery = new URL(page.dataset.listUrl, window.location.origin).search;
+            }
+            this.invoiceIds = (page?.dataset.invoiceIds || '')
+                .split(',')
+                .map((value) => value.trim())
+                .filter(Boolean);
+            if (page?.dataset.bulkContract) {
+                try {
+                    this.contract = JSON.parse(page.dataset.bulkContract);
+                } catch (error) {
+                    console.error('Invalid invoice bulk-action contract', error);
+                }
+            }
+        },
+
+        actionDefinition(actionKey) {
+            return (this.contract.actions || []).find((action) => action.key === actionKey);
+        },
+
+        actionState(actionKey) {
+            const action = this.actionDefinition(actionKey);
+            if (!action || this.selectedIds.length === 0) {
+                return { enabled: false, reason: 'Select at least one invoice' };
+            }
+            const eligible = new Set(action.eligible_ids || []);
+            const eligibleCount = this.selectedIds.filter((id) => eligible.has(id)).length;
+            if (eligibleCount === 0) {
+                const reasons = this.selectedIds
+                    .map((id) => action.ineligible_reasons?.[id])
+                    .filter(Boolean);
+                return { enabled: false, reason: reasons[0] || 'Not available for this selection' };
+            }
+            const skippedCount = this.selectedIds.length - eligibleCount;
+            return {
+                enabled: true,
+                reason: skippedCount > 0 ? `${skippedCount} selected invoice(s) will be skipped` : '',
+            };
+        },
 
         toggleSelection(id) {
             const index = this.selectedIds.indexOf(id);
@@ -332,188 +134,109 @@ function invoiceBulkActions() {
         },
 
         toggleAll(checked) {
-            if (checked) {
-                this.selectedIds = [...this.invoiceIds];
-            } else {
-                this.selectedIds = [];
-            }
+            this.selectedIds = checked ? [...this.invoiceIds] : [];
         },
 
-        clearSelection() {
+        clearSelection(restoreFocus = false) {
             this.selectedIds = [];
-        },
-
-        async bulkAction(action) {
-            if (this.selectedIds.length === 0) return;
-
-            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
-                             document.querySelector('[name="_csrf_token"]')?.value || '';
-
-            try {
-                const response = await fetch(`/admin/billing/invoices/bulk/${action}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'X-CSRF-Token': csrfToken
-                    },
-                    body: `invoice_ids=${this.selectedIds.join(',')}`
-                });
-
-                if (response.ok) {
-                    const actionLabels = {
-                        'issue': 'issued',
-                        'send': 'sent',
-                        'void': 'voided',
-                        'mark-paid': 'marked as paid',
-                        'generate-pdf': 'queued for PDF generation'
-                    };
-                    const result = await response.json().catch(() => ({}));
-                    const label = actionLabels[action] || `${action}ed`;
-                    // Prefer the server's message: it reports the real count and
-                    // any skipped invoices, instead of assuming every selected row
-                    // succeeded.
-                    const message = result.message || `Successfully ${label} ${this.selectedIds.length} invoices`;
-                    const type = result.count === 0 ? 'info' : 'success';
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message, type }
-                    }));
-                    window.location.reload();
-                } else {
-                    const error = await response.json();
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: error.message || `Failed to ${action} invoices`, type: 'error' }
-                    }));
-                }
-            } catch (error) {
-                console.error('Bulk action error:', error);
+            if (restoreFocus) {
+                this.$nextTick(() => document.querySelector('#invoices-table input[aria-label="Select all invoices on this page"]')?.focus());
             }
         },
 
-        bulkIssue() {
-            if (confirm(`Issue ${this.selectedIds.length} selected invoices?`)) {
-                this.bulkAction('issue');
-            }
+        csrfToken() {
+            return document.querySelector('meta[name="csrf-token"]')?.content ||
+                   document.querySelector('[name="_csrf_token"]')?.value || '';
         },
 
-        bulkSend() {
-            if (confirm(`Send ${this.selectedIds.length} selected invoices via email?`)) {
-                this.bulkAction('send');
-            }
+        filteredExportUrl() {
+            return `/admin/billing/invoices/export.csv${this.currentQuery}`;
         },
 
-        bulkVoid() {
-            if (confirm(`Void ${this.selectedIds.length} selected invoices? This cannot be undone.`)) {
-                this.bulkAction('void');
-            }
+        toast(message, type = 'info') {
+            window.dispatchEvent(new CustomEvent('show-toast', {
+                detail: { message, type },
+            }));
         },
 
-        bulkMarkPaid() {
-            if (confirm(`Mark ${this.selectedIds.length} selected invoices as paid?`)) {
-                this.bulkAction('mark-paid');
+        async previewAction(actionKey) {
+            const body = new URLSearchParams({
+                action: actionKey,
+                invoice_ids: this.selectedIds.join(','),
+            });
+            const response = await fetch('/admin/billing/invoices/bulk/preview', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRF-Token': this.csrfToken(),
+                },
+                body,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload.detail || payload.message || 'Unable to preview invoice action');
             }
+            return payload;
         },
 
-        bulkExport() {
-            if (this.selectedIds.length === 0) return;
+        async executeAction(actionKey, preview) {
+            const endpoint = actionKey.replaceAll('_', '-');
+            const body = new URLSearchParams({
+                invoice_ids: this.selectedIds.join(','),
+                confirmed: 'true',
+                expected_count: String(preview.matched_count),
+                expected_scope_token: preview.scope_token,
+            });
+            const response = await fetch(`/admin/billing/invoices/bulk/${endpoint}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-CSRF-Token': this.csrfToken(),
+                },
+                body,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload.detail || payload.message || 'Invoice action failed');
+            }
+            this.toast(payload.message || 'Invoice action completed', payload.count === 0 ? 'info' : 'success');
+            window.location.reload();
+        },
+
+        exportSelection(actionKey) {
             const query = encodeURIComponent(this.selectedIds.join(','));
-            window.location.href = `/admin/billing/invoices/bulk/export.csv?invoice_ids=${query}`;
+            const endpoint = actionKey === 'export_csv' ? 'export.csv' : 'export.zip';
+            window.location.href = `/admin/billing/invoices/bulk/${endpoint}?invoice_ids=${query}`;
         },
 
-        bulkExportPdf() {
-            if (this.selectedIds.length === 0) return;
-            const query = encodeURIComponent(this.selectedIds.join(','));
-            window.location.href = `/admin/billing/invoices/bulk/export.zip?invoice_ids=${query}`;
-        },
-
-        bulkGeneratePdf() {
-            if (confirm(`Queue PDF generation for ${this.selectedIds.length} selected invoices?`)) {
-                this.bulkAction('generate-pdf');
+        async runBulkAction(actionKey) {
+            const action = this.actionDefinition(actionKey);
+            const state = this.actionState(actionKey);
+            if (!action || !state.enabled || this.busyAction !== null) return;
+            if (actionKey === 'export_csv' || actionKey === 'export_pdf') {
+                this.exportSelection(actionKey);
+                return;
             }
-        },
 
-        async waitForPdfReadiness(invoiceIds, maxAttempts = 15, delayMs = 1200, onProgress = null) {
-            const query = encodeURIComponent(invoiceIds.join(','));
-            let latestStatus = null;
-            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-                try {
-                    const response = await fetch(`/admin/billing/invoices/bulk/pdf-ready?invoice_ids=${query}`);
-                    if (response.ok) {
-                        const status = await response.json();
-                        latestStatus = status;
-                        if (typeof onProgress === 'function') {
-                            onProgress(status, attempt, maxAttempts);
-                        }
-                        if (status.all_ready) {
-                            return { allReady: true, status };
-                        }
-                    }
-                } catch (error) {
-                    console.error('PDF readiness poll failed:', error);
-                }
-                await new Promise((resolve) => setTimeout(resolve, delayMs));
-            }
-            return { allReady: false, status: latestStatus };
-        },
-
-        async bulkPrepareAndExportPdf() {
-            if (this.selectedIds.length === 0) return;
-            if (!confirm(`Queue and then export PDFs for ${this.selectedIds.length} selected invoices?`)) return;
-            if (this.isPreparingPdfs) return;
-
-            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
-                             document.querySelector('[name="_csrf_token"]')?.value || '';
-            this.isPreparingPdfs = true;
-
+            this.busyAction = actionKey;
             try {
-                const response = await fetch('/admin/billing/invoices/bulk/generate-pdf', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                        'X-CSRF-Token': csrfToken
-                    },
-                    body: `invoice_ids=${this.selectedIds.join(',')}`
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: payload.message || 'Failed to queue invoice PDF generation', type: 'error' }
-                    }));
+                const preview = await this.previewAction(actionKey);
+                if (preview.eligible_count === 0) {
+                    this.toast('No selected invoices are eligible for this action', 'info');
                     return;
                 }
-                window.dispatchEvent(new CustomEvent('show-toast', {
-                    detail: { message: payload.message || 'Queued selected invoice PDF generation', type: 'success' }
-                }));
-                const ids = [...this.selectedIds];
-                let lastReadyCount = -1;
-                const readiness = await this.waitForPdfReadiness(ids, 15, 1200, (status, attempt) => {
-                    const total = Number(status.total || 0);
-                    const readyCount = Number(status.ready_count || 0);
-                    if (total <= 0 || readyCount === lastReadyCount) return;
-                    if (attempt === 1 || readyCount > lastReadyCount) {
-                        window.dispatchEvent(new CustomEvent('show-toast', {
-                            detail: {
-                                message: `Preparing PDFs: ${readyCount}/${total} ready`,
-                                type: 'info'
-                            }
-                        }));
-                        lastReadyCount = readyCount;
-                    }
-                });
-                if (!readiness.allReady) {
-                    const total = Number(readiness.status?.total || ids.length);
-                    const readyCount = Number(readiness.status?.ready_count || 0);
-                    window.dispatchEvent(new CustomEvent('show-toast', {
-                        detail: { message: `Still processing PDFs (${readyCount}/${total} ready). Downloading available files now.`, type: 'warning' }
-                    }));
+                let prompt = `${action.label} ${preview.eligible_count} invoice(s)?`;
+                if (preview.skipped_count > 0) {
+                    prompt += ` ${preview.skipped_count} selected invoice(s) will be skipped.`;
                 }
-                const query = encodeURIComponent(ids.join(','));
-                window.location.href = `/admin/billing/invoices/bulk/export.zip?invoice_ids=${query}`;
+                if (action.requires_confirmation && !window.confirm(prompt)) return;
+                await this.executeAction(actionKey, preview);
             } catch (error) {
-                console.error('Bulk generate/export error:', error);
+                this.toast(error.message || 'Invoice action failed', 'error');
             } finally {
-                this.isPreparingPdfs = false;
+                this.busyAction = null;
             }
-        }
+        },
     };
 }
 </script>

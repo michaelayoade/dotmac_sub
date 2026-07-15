@@ -258,6 +258,39 @@ def test_invoices_list_search_filters_invoice_numbers(db_session, subscriber):
     assert result["invoices"][0].invoice_number == "INV-MATCH-1"
 
 
+def test_invoice_status_summary_preserves_other_status_tabs(db_session, subscriber):
+    now = datetime.now(UTC)
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        invoice_number="INV-STATUS-DRAFT",
+        total="30.00",
+        balance_due="30.00",
+        status=InvoiceStatus.draft,
+        created_at=now,
+    )
+    _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        invoice_number="INV-STATUS-ISSUED",
+        total="50.00",
+        balance_due="50.00",
+        status=InvoiceStatus.issued,
+        created_at=now,
+    )
+
+    result = build_invoices_list_data(
+        db_session,
+        status="issued",
+    )
+
+    assert result["total"] == 1
+    assert result["invoices"][0].invoice_number == "INV-STATUS-ISSUED"
+    assert result["status_totals"]["all"]["count"] == 2
+    assert result["status_totals"]["draft"]["count"] == 1
+    assert result["status_totals"]["issued"]["count"] == 1
+
+
 def test_invoices_list_date_range_filters_recent_rows(db_session, subscriber):
     now = datetime.now(UTC)
     _create_invoice(

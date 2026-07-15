@@ -1504,12 +1504,30 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "generate or persist subscriber identifiers."
                 ),
             ),
+            SOTService(
+                name="ui.invoice_list_projection",
+                module="app.services.web_billing_overview",
+                owns=(
+                    "admin invoice searchable fields",
+                    "admin invoice filter semantics",
+                    "admin invoice stable sort semantics",
+                    "admin invoice page and status-summary projection",
+                    "admin invoice export scope",
+                ),
+                depends_on=("ui.list_contracts", "financial.invoices"),
+                notes=(
+                    "The full page and HTMX response share one list partial. "
+                    "Exports consume the same canonical scope without a page cap."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",
             "app.services.subscriber",
             "app.services.table_config",
             "app.web.admin.customers",
+            "app.web.admin.billing_invoices",
+            "templates.admin.billing.invoices",
             "templates.admin.customers",
         ),
         rule=(
@@ -1519,6 +1537,75 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "resource owner and list reads do not mutate domain records. Templates "
             "consume ListQuery and PageMeta, preserve the canonical URL, and do not "
             "rebuild pagination or sort semantics."
+        ),
+    ),
+    DomainSOT(
+        domain="ui_bulk_actions",
+        services=(
+            SOTService(
+                name="ui.bulk_action_contracts",
+                module="app.services.bulk_actions",
+                owns=(
+                    "bulk selection mode normalization",
+                    "bulk action capability presentation",
+                    "bulk preview and confirmation declarations",
+                    "bulk execution-mode presentation",
+                ),
+                depends_on=("ui.list_contracts",),
+                notes=(
+                    "These are read-side interaction contracts. Domain command "
+                    "owners re-check permission, eligibility, scope, and impact "
+                    "when executing a mutation."
+                ),
+            ),
+            SOTService(
+                name="ui.customer_bulk_action_projection",
+                module="app.services.web_customer_bulk_actions",
+                owns=(
+                    "admin customer bulk action visibility",
+                    "admin customer bulk selection presentation",
+                    "admin customer filtered-selection promotion",
+                ),
+                depends_on=(
+                    "ui.bulk_action_contracts",
+                    "ui.customer_list_projection",
+                ),
+            ),
+            SOTService(
+                name="ui.invoice_bulk_action_projection",
+                module="app.services.web_billing_invoice_bulk_actions",
+                owns=(
+                    "admin invoice bulk action visibility",
+                    "admin invoice page-selection presentation",
+                    "admin invoice bulk eligibility presentation",
+                ),
+                depends_on=(
+                    "ui.bulk_action_contracts",
+                    "ui.invoice_list_projection",
+                    "financial.invoices",
+                ),
+                notes=(
+                    "app.services.web_billing_invoice_bulk remains the command "
+                    "eligibility, preview, mutation, audit, and outcome owner."
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.web.admin.customers",
+            "app.web.admin.billing_invoice_bulk",
+            "app.web.admin.billing_invoices",
+            "app.services.web_customer_actions",
+            "app.services.web_billing_invoice_bulk",
+            "templates.admin.billing.invoices",
+            "templates.admin.customers",
+        ),
+        rule=(
+            "No selection means no bulk action. Page select-all selects only the "
+            "visible page; all-filtered scope requires an explicit promotion. "
+            "Adapters submit selected IDs or a canonical filtered query, and "
+            "command owners resolve the scope again, require impact preview and "
+            "confirmation, reject membership or eligibility drift, and report "
+            "structured outcomes."
         ),
     ),
     DomainSOT(
