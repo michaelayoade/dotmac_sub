@@ -278,15 +278,15 @@ def _batch_customer_positions(
     balance owner. Tests compare it with the canonical per-account function.
     """
     from app.models.splynx_transaction import SplynxBillingTransaction
-    from app.services.billing.invoice_classification import (
-        collectible_ar_invoice_filter,
-    )
     from app.services.customer_financial_ledger import (
         INTERNAL_MEMO_EXACT,
         INTERNAL_MEMO_PREFIXES,
         LEGACY_LEDGER_CUTOVER,
         PAYMENT_ACTIVITY_AT,
         SERVICE_ACTIVITY_AT,
+    )
+    from app.services.invoice_classification import (
+        collectible_ar_invoice_filter,
     )
 
     # account_ids=None means "every account" (one whole-table aggregate). Only an
