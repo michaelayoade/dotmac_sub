@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 from app.models.network import OLTDevice
+from app.services.network.huawei_cli_response import is_huawei_no_autofind_entries
 from app.services.network.olt_ssh_session import OltSession, olt_session
 from app.services.network.olt_validators import validate_fsp
 from app.services.network.parsers.loader import AutofindEntry, parse_autofind
-
-_NO_AUTOFIND_ONTS_MARKERS = (
-    "automatically found onts do not exist",
-    "automatically found ont does not exist",
-)
 
 
 def build_autofind_command(port: str | None = None) -> str:
@@ -27,8 +23,7 @@ def parse_autofind_output(output: str) -> list[AutofindEntry]:
 
 
 def _is_no_autofind_entries_output(output: str) -> bool:
-    normalized = " ".join((output or "").lower().split())
-    return any(marker in normalized for marker in _NO_AUTOFIND_ONTS_MARKERS)
+    return is_huawei_no_autofind_entries(output)
 
 
 def query_ont_autofind_session(

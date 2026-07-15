@@ -1,0 +1,119 @@
+{% macro action_form(form) %}
+{% if form.visible %}
+{% set form_id = "action-form-" ~ (form.key | replace('.', '-')) %}
+<section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800"
+         aria-labelledby="{{ form_id }}-title"
+         data-action-form="{{ form.key }}">
+    <div>
+        <h2 id="{{ form_id }}-title" class="text-base font-semibold text-slate-900 dark:text-white">
+            {{ form.title }}
+        </h2>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ form.description }}</p>
+    </div>
+
+    {% if form.impact %}
+    <div class="status-panel status-panel-{{ form.tone.value }} status-foreground status-tone-{{ form.tone.value }} mt-4 rounded-lg border px-3 py-2 text-sm">
+        {{ form.impact }}
+    </div>
+    {% endif %}
+
+    {% if not form.allowed %}
+    <div class="status-panel status-panel-neutral status-foreground status-tone-neutral mt-4 rounded-lg border px-3 py-2 text-sm"
+         role="status">
+        {{ form.disabled_reason }}
+    </div>
+    {% endif %}
+
+    <form method="{{ form.method.value }}"
+          action="{{ form.action_url }}"
+          class="mt-4 space-y-4"
+          {% if form.confirmation %}
+          data-confirm-message="{{ form.confirmation.message }}"
+          onsubmit="return window.confirm(this.dataset.confirmMessage)"
+          {% endif %}>
+        {% include "components/forms/csrf_input.html" %}
+
+        {% if form.general_error %}
+        <div id="{{ form_id }}-error"
+             class="status-panel status-panel-negative status-foreground status-tone-negative rounded-lg border px-3 py-2 text-sm"
+             role="alert"
+             aria-live="assertive">
+            {{ form.general_error }}
+        </div>
+        {% endif %}
+
+        {% for field in form.fields %}
+        {% set field_id = form_id ~ '-' ~ (field.key | replace('_', '-')) %}
+        {% set help_id = field_id ~ '-help' %}
+        {% set error_id = field_id ~ '-error' %}
+        <div>
+            <label for="{{ field_id }}" class="block text-sm font-medium text-slate-700 dark:text-slate-200">
+                {{ field.label }}
+                {% if field.required %}<span aria-hidden="true">*</span><span class="sr-only"> (required)</span>{% endif %}
+            </label>
+
+            {% if field.kind.value == 'select' %}
+            <select id="{{ field_id }}"
+                    name="{{ field.key }}"
+                    class="mt-1 block w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white {% if field.error %}action-form-field-error{% else %}border-slate-300 dark:border-slate-600{% endif %}"
+                    {% if field.required %}required aria-required="true"{% endif %}
+                    {% if field.error %}aria-invalid="true"{% else %}aria-invalid="false"{% endif %}
+                    {% if field.help_text or field.error %}aria-describedby="{% if field.help_text %}{{ help_id }}{% endif %}{% if field.help_text and field.error %} {% endif %}{% if field.error %}{{ error_id }}{% endif %}"{% endif %}
+                    {% if not form.allowed %}disabled{% endif %}>
+                {% for option in field.options %}
+                <option value="{{ option.value }}" {% if option.value == field.value %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+            </select>
+            {% elif field.kind.value == 'textarea' %}
+            <textarea id="{{ field_id }}"
+                      name="{{ field.key }}"
+                      rows="{{ field.rows or 3 }}"
+                      class="mt-1 block w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white {% if field.error %}action-form-field-error{% else %}border-slate-300 dark:border-slate-600{% endif %}"
+                      {% if field.required %}required aria-required="true"{% endif %}
+                      {% if field.max_length %}maxlength="{{ field.max_length }}"{% endif %}
+                      {% if field.placeholder %}placeholder="{{ field.placeholder }}"{% endif %}
+                      {% if field.error %}aria-invalid="true"{% else %}aria-invalid="false"{% endif %}
+                      {% if field.help_text or field.error %}aria-describedby="{% if field.help_text %}{{ help_id }}{% endif %}{% if field.help_text and field.error %} {% endif %}{% if field.error %}{{ error_id }}{% endif %}"{% endif %}
+                      {% if not form.allowed %}disabled{% endif %}>{{ field.value }}</textarea>
+            {% else %}
+            <input id="{{ field_id }}"
+                   name="{{ field.key }}"
+                   type="{{ 'number' if field.kind.value == 'decimal' else 'text' }}"
+                   value="{{ field.value }}"
+                   class="mt-1 block w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white {% if field.error %}action-form-field-error{% else %}border-slate-300 dark:border-slate-600{% endif %}"
+                   {% if field.kind.value == 'decimal' %}inputmode="decimal"{% endif %}
+                   {% if field.required %}required aria-required="true"{% endif %}
+                   {% if field.min_value %}min="{{ field.min_value }}"{% endif %}
+                   {% if field.step %}step="{{ field.step }}"{% endif %}
+                   {% if field.max_length %}maxlength="{{ field.max_length }}"{% endif %}
+                   {% if field.placeholder %}placeholder="{{ field.placeholder }}"{% endif %}
+                   {% if field.error %}aria-invalid="true"{% else %}aria-invalid="false"{% endif %}
+                   {% if field.help_text or field.error %}aria-describedby="{% if field.help_text %}{{ help_id }}{% endif %}{% if field.help_text and field.error %} {% endif %}{% if field.error %}{{ error_id }}{% endif %}"{% endif %}
+                   {% if not form.allowed %}disabled{% endif %} />
+            {% endif %}
+
+            {% if field.help_text %}
+            <p id="{{ help_id }}" class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ field.help_text }}</p>
+            {% endif %}
+            {% if field.error %}
+            <p id="{{ error_id }}" class="action-form-error mt-1 text-sm" role="alert">{{ field.error }}</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        {% if form.confirmation %}
+        <p class="text-xs text-slate-500 dark:text-slate-400">
+            <span class="font-semibold">{{ form.confirmation.title }}:</span>
+            {{ form.confirmation.message }}
+        </p>
+        {% endif %}
+
+        <button type="submit"
+                class="action-form-submit status-tone-{{ form.tone.value }} inline-flex w-full items-center justify-center rounded-lg border px-4 py-2.5 text-sm font-semibold shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                {% if not form.allowed %}disabled aria-disabled="true"{% endif %}>
+            {{ form.submit_label }}
+        </button>
+    </form>
+</section>
+{% endif %}
+{% endmacro %}

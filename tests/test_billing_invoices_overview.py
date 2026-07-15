@@ -103,6 +103,30 @@ def test_build_overview_data_cache_is_scoped_by_filters(db_session, monkeypatch)
     assert calls["count"] == 2
 
 
+def test_empty_invoice_totals_use_display_owner_default_currency(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.services.display_format.default_currency",
+        lambda _db: "USD",
+    )
+
+    result = build_invoices_list_data(
+        db_session,
+        account_id=None,
+        partner_id=None,
+        status=None,
+        customer_ref=None,
+        search=None,
+        date_range=None,
+        page=1,
+        per_page=25,
+    )
+
+    assert result["status_totals"]["all"]["display"] == "USD 0.00"
+    assert result["status_totals"]["draft"]["due_display"] == "USD 0.00"
+
+
 def _create_invoice(
     db_session,
     *,

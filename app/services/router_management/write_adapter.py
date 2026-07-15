@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlencode
 
 from app.models.router_management import Router
+from app.services.device_adapter_binding import AdapterBinding, DeviceIdentity
 from app.services.router_management.connection import (
     RouterConnectionService,
     RouterTransportError,
@@ -21,6 +23,8 @@ from app.services.router_management.sot_policy import (
 _SUPPORTED_ACTIONS = frozenset({"add", "set", "remove", "enable", "disable"})
 _SELECTOR_KEYS = (".id", "id", "numbers")
 _SECRET_MARKERS = ("password", "secret", "private-key", "token")
+_ROUTEROS_REST_ADAPTER_REVISION = "1"
+_ROUTEROS_MAJOR = re.compile(r"^(\d+)")
 
 
 class RouterWriteAdapterError(RuntimeError):
@@ -41,6 +45,29 @@ class RouterPostWriteReadbackError(RouterWriteAdapterError):
 
 class RouterWriteRejected(RouterWriteAdapterError):
     """RouterOS explicitly rejected a write after earlier commands may have applied."""
+
+
+def routeros_adapter_binding(router: Router) -> AdapterBinding:
+    """Resolve the RouterOS REST adapter from observed hardware/software identity."""
+    try:
+        identity = DeviceIdentity.from_device(router, vendor="MikroTik")
+    except ValueError as exc:
+        raise RouterWriteUnsupported(str(exc)) from exc
+    version = identity.firmware_version
+    match = _ROUTEROS_MAJOR.match(version or "")
+    if match is None:
+        raise RouterWriteUnsupported(
+            "Observed RouterOS version is required before configuration writes"
+        )
+    if int(match.group(1)) != 7:
+        raise RouterWriteUnsupported(
+            f"RouterOS REST writes require a mapped v7 profile; observed {version}"
+        )
+    return AdapterBinding(
+        adapter_name="mikrotik-routeros-rest-v7",
+        adapter_revision=_ROUTEROS_REST_ADAPTER_REVISION,
+        identity=identity,
+    )
 
 
 @dataclass(frozen=True)

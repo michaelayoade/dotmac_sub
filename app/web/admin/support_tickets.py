@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import (
     HTMLResponse,
     RedirectResponse,
@@ -17,8 +27,14 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import web_support_ticket_bulk as support_ticket_bulk_service
+from app.services import (
+    web_support_ticket_bulk_actions as support_ticket_bulk_actions_service,
+)
 from app.services import web_support_tickets as support_web_service
 from app.services.auth_dependencies import require_permission
+from app.services.list_query import ListQuery
+from app.web.request_parsing import parse_json_body
 
 router = APIRouter(prefix="/support/tickets", tags=["web-admin-support-tickets"])
 templates = Jinja2Templates(directory="templates")
@@ -78,35 +94,75 @@ def tickets_list(
     site_coordinator_person_id: str | None = Query(default=None),
     subscriber_id: str | None = Query(default=None),
     filters: str | None = Query(default=None),
-    order_by: str = Query(default="created_at"),
-    order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    sort: Literal["created_at", "updated_at", "due_at", "priority", "status", "number"]
+    | None = Query(default=None),
+    direction: Literal["asc", "desc"] | None = Query(default=None, alias="dir"),
+    order_by: str | None = Query(default=None),
+    order_dir: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=25, ge=10, le=100),
+    per_page: str | None = Query(default="25"),
     db: Session = Depends(get_db),
 ):
-    context = _ctx(request, db)
-    context.update(
-        support_web_service.build_tickets_list_context(
-            db,
+    if sort and order_by and sort != order_by:
+        raise HTTPException(status_code=422, detail="Conflicting ticket sort fields")
+    if direction and order_dir and direction != order_dir:
+        raise HTTPException(
+            status_code=422, detail="Conflicting ticket sort directions"
+        )
+    try:
+        list_query = support_web_service.build_ticket_list_query(
             search=search,
             status=status,
             ticket_type=ticket_type,
             assigned_to_me=assigned_to_me,
-            actor_id=_actor_id(request),
             project_manager_person_id=project_manager_person_id,
             site_coordinator_person_id=site_coordinator_person_id,
             subscriber_id=subscriber_id,
             filters=filters,
-            order_by=order_by,
-            order_dir=order_dir,
+            sort_by=sort or order_by or "created_at",
+            sort_dir=direction or order_dir or "desc",
             page=page,
             per_page=per_page,
-            visible_columns_cookie=request.cookies.get("ticket_columns"),
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    context = _ctx(request, db)
+    state = support_web_service.build_tickets_list_context(
+        db,
+        list_query=list_query,
+        actor_id=_actor_id(request),
+        visible_columns_cookie=request.cookies.get("ticket_columns"),
+    )
+    state["support_ticket_bulk_action_contract"] = (
+        support_ticket_bulk_actions_service.build_support_ticket_bulk_action_contract(
+            db,
+            auth=getattr(request.state, "auth", None) or {},
+            tickets=state["tickets"],
+        )
+    )
+    context.update(state)
+    effective_query = state["list_query"]
+    assert isinstance(effective_query, ListQuery)
+    canonicalization_needed = (
+        effective_query.page != page
+        or order_by is not None
+        or order_dir is not None
+        or str(per_page or "") != str(effective_query.per_page)
     )
 
     if request.headers.get("HX-Request"):
-        return templates.TemplateResponse("admin/support/tickets/_table.html", context)
+        response = templates.TemplateResponse(
+            "admin/support/tickets/_list.html", context
+        )
+        if canonicalization_needed:
+            response.headers["HX-Replace-Url"] = effective_query.url(
+                "/admin/support/tickets"
+            )
+        return response
+    if canonicalization_needed:
+        return RedirectResponse(
+            url=effective_query.url("/admin/support/tickets"), status_code=307
+        )
     return templates.TemplateResponse("admin/support/tickets/index.html", context)
 
 
@@ -123,23 +179,40 @@ def tickets_export_csv(
     project_manager_person_id: str | None = Query(default=None),
     site_coordinator_person_id: str | None = Query(default=None),
     subscriber_id: str | None = Query(default=None),
-    order_by: str = Query(default="created_at"),
-    order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    filters: str | None = Query(default=None),
+    sort: Literal["created_at", "updated_at", "due_at", "priority", "status", "number"]
+    | None = Query(default=None),
+    direction: Literal["asc", "desc"] | None = Query(default=None, alias="dir"),
+    order_by: str | None = Query(default=None),
+    order_dir: str | None = Query(default=None),
     columns: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
+    if sort and order_by and sort != order_by:
+        raise HTTPException(status_code=422, detail="Conflicting ticket sort fields")
+    if direction and order_dir and direction != order_dir:
+        raise HTTPException(
+            status_code=422, detail="Conflicting ticket sort directions"
+        )
+    try:
+        list_query = support_web_service.build_ticket_list_query(
+            search=search,
+            status=status,
+            ticket_type=ticket_type,
+            assigned_to_me=assigned_to_me,
+            project_manager_person_id=project_manager_person_id,
+            site_coordinator_person_id=site_coordinator_person_id,
+            subscriber_id=subscriber_id,
+            filters=filters,
+            sort_by=sort or order_by or "created_at",
+            sort_dir=direction or order_dir or "desc",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     content = support_web_service.render_tickets_csv(
         db,
-        search=search,
-        status=status,
-        ticket_type=ticket_type,
-        assigned_to_me=assigned_to_me,
+        list_query=list_query,
         actor_id=_actor_id(request),
-        project_manager_person_id=project_manager_person_id,
-        site_coordinator_person_id=site_coordinator_person_id,
-        subscriber_id=subscriber_id,
-        order_by=order_by,
-        order_dir=order_dir,
         visible_columns_cookie=columns or request.cookies.get("ticket_columns"),
     )
     return StreamingResponse(
@@ -147,6 +220,45 @@ def tickets_export_csv(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="tickets_export.csv"'},
     )
+
+
+@router.post(
+    "/bulk/preview",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def tickets_bulk_preview(
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    try:
+        preview = support_ticket_bulk_service.preview_support_ticket_bulk_update(
+            db, data
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return preview.as_response()
+
+
+@router.post(
+    "/bulk/update",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def tickets_bulk_update(
+    request: Request,
+    data: dict = Depends(parse_json_body),
+    db: Session = Depends(get_db),
+):
+    try:
+        return support_ticket_bulk_service.execute_support_ticket_bulk_update(
+            db,
+            data,
+            actor_id=_actor_id(request),
+            request=request,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(

@@ -7,11 +7,11 @@ counts as success until the device configuration GET readback converges.
 from __future__ import annotations
 
 import copy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import AccessType, Subscription
@@ -442,6 +442,15 @@ def request_apply(
     if locked_intent is None:
         raise UispIntentError("UISP intent not found")
     intent = locked_intent
+    try:
+        profile = require_apply_ready(db, intent)
+    except UispWriteUnsupported as exc:
+        intent.status = UispIntentStatus.manual_required
+        intent.last_error = str(exc)
+        db.commit()
+        raise UispIntentError(str(exc)) from exc
+    if profile.binding is None:
+        raise UispIntentError("UISP adapter capability binding could not be resolved")
     revision = intent.desired_revision
     try:
         assert_intent_head(
@@ -464,6 +473,9 @@ def request_apply(
     )
     input_payload = redact_config(intent.desired_state)
     input_payload["_control_plane"] = target.as_payload()
+    from app.services.device_adapter_binding import attach_adapter_binding
+
+    input_payload = attach_adapter_binding(input_payload, profile.binding)
     operation = network_operations.start(
         db,
         (
@@ -726,6 +738,7 @@ def list_intents(
     *,
     subscription_id: UUID | None = None,
     status: UispIntentStatus | None = None,
+    health: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> list[UispDeviceIntent]:
@@ -734,6 +747,7 @@ def list_intents(
         query = query.filter(UispDeviceIntent.subscription_id == subscription_id)
     if status is not None:
         query = query.filter(UispDeviceIntent.status == status)
+    query = _filter_intent_health(query, health)
     return (
         query.order_by(UispDeviceIntent.updated_at.desc())
         .offset(offset)
@@ -747,13 +761,32 @@ def count_intents(
     *,
     subscription_id: UUID | None = None,
     status: UispIntentStatus | None = None,
+    health: str | None = None,
 ) -> int:
     query = db.query(func.count(UispDeviceIntent.id))
     if subscription_id is not None:
         query = query.filter(UispDeviceIntent.subscription_id == subscription_id)
     if status is not None:
         query = query.filter(UispDeviceIntent.status == status)
+    query = _filter_intent_health(query, health)
     return int(query.scalar() or 0)
+
+
+def _filter_intent_health(query, health: str | None):
+    """Apply the operator-facing attention filters used by the UISP console."""
+    if health == "drift":
+        return query.filter(UispDeviceIntent.status == UispIntentStatus.drifted)
+    if health == "unmapped":
+        return query.filter(UispDeviceIntent.status == UispIntentStatus.manual_required)
+    if health == "stale":
+        cutoff = datetime.now(UTC) - timedelta(hours=24)
+        return query.filter(
+            or_(
+                UispDeviceIntent.last_observed_at.is_(None),
+                UispDeviceIntent.last_observed_at < cutoff,
+            )
+        )
+    return query
 
 
 def intent_status_counts(db: Session) -> dict[str, int]:

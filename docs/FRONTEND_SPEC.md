@@ -137,6 +137,26 @@ confirmation token fingerprints both membership and eligibility, so execution
 returns HTTP 409 if status or scope drift changes the previewed impact. The
 invoice command service re-checks eligibility and audits only processed IDs.
 
+The support-ticket queue is the next list adoption. `app.services.support.Tickets`
+owns the canonical filtered domain query, while
+`app.services.web_support_tickets` declares the admin list capabilities and owns
+query normalization, exact counts, stable sorting, clamped pages, status-summary
+links, and complete CSV scope. The route is a thin adapter, and full-page and
+HTMX reads share `_list.html` and `_table.html`. Advanced filters are validated
+and serialized by the same owner used by export; templates consume `ListQuery`
+and `PageMeta` rather than assembling query strings or estimating totals.
+
+Support-ticket bulk update is page-selection only. The authorized action
+projection comes from `app.services.web_support_ticket_bulk_actions`; templates
+do not infer update permission or row eligibility. The modal submits one shared
+status/priority/primary-assignee change set to
+`app.services.web_support_ticket_bulk`, which previews exact membership,
+proposal-bound eligibility, and skipped reasons without side effects. Confirmed
+execution sends the previewed matched count and scope token, rejects membership,
+eligibility, or proposed-change drift with HTTP 409, and reports processed and
+skipped outcomes. The command delegates eligible rows through
+`app.services.support.Tickets.update`, preserving lifecycle consequences.
+
 ### Semantic status contract
 
 Lifecycle services own raw account, subscription, invoice, payment, outage-incident,
@@ -336,6 +356,7 @@ Import what you need:
 | `submit_button` | `label, loading_label, icon, color, size` | Form submit with loading state |
 | `danger_button` | `label, confirm_title, confirm_message, action_url, method, size, icon` | Delete with confirmation modal |
 | `warning_button` | `label, confirm_title, confirm_message, action_url, method, size, icon` | Warning action with confirmation |
+| `action_form` | `form` (`ActionForm`) | Server-owned action fields, impact, confirmation, disabled reason, submitted values, and structured errors |
 | `search_input` | `name, value, placeholder, color, hx_attrs` | Search input with icon |
 | `filter_select` | `name, options, value, label, color, attrs` | Styled select dropdown |
 | `validated_input` | `name, label, type, value, placeholder, required, validation_url, help_text, icon` | Input with real-time validation |
@@ -1679,6 +1700,29 @@ Template listens:
 
 ## Form Patterns
 
+### Server-owned action forms
+
+High-impact and lifecycle action forms use
+`app.services.action_forms.ActionForm` and the shared
+`components/forms/action_form.html` renderer. The resource projection composes
+RBAC visibility with eligibility and typed errors from the command owner. It
+declares impact, confirmation, fields/options, defaults, and submitted values;
+templates do not branch on raw state or hand-map domain failures.
+
+The first adopted resource is payment-proof review. Its contract is built by
+`app.services.web_billing_payment_proofs`, while
+`app.services.payment_proofs` remains authoritative for review eligibility,
+duplicate-reference policy, payment/WHT consequences, validation, locking, and
+execution. Unauthorized verify/reject forms are absent. An unavailable verify
+action may remain visible with the owner-provided duplicate reason when reject
+is still valid.
+
+Failed submissions re-render the detail page with the operator's declared
+values and `aria-invalid` field errors or one `role="alert"` general error.
+Successful submissions use POST-Redirect-GET. Financial, destructive, or
+customer-visible action contracts show impact and require explicit confirmation.
+Concrete action colors resolve through branding-owned semantic role tokens.
+
 ### CSRF Token (Required on every POST form)
 ```html
 <form method="POST" action="/admin/billing/invoices/create">
@@ -1754,15 +1798,29 @@ lookups and include a non-color distinction.
 
 ### Data Formatting
 
-| Type | Template Pattern | Example |
-|------|-----------------|---------|
-| Currency | `{{ "%.2f"\|format(invoice.total) }}` | `5,000.00` |
-| Bandwidth | `{{ offer.speed_download_mbps }} Mbps` | `100 Mbps` |
-| IP address | `<span class="font-mono">{{ ip }}</span>` | `192.168.1.1` |
-| MAC address | `<span class="font-mono">{{ mac }}</span>` | `AA:BB:CC:DD:EE:FF` |
-| Date (recent) | Relative: `2 hours ago` | |
-| Date (older) | ISO: `2024-01-15` | |
-| Percentage | `{{ "%.1f"\|format(value) }}%` | `95.5%` |
+`app.services.display_format` is the code-native owner for currency-code
+normalization, money display, multi-currency summary ordering, configured
+display timezone, and timestamp strings. Web projection services provide the
+formatted value; migrated templates do not call Python number/date formatting
+or invent NGN/Africa-Lagos defaults.
+
+| Type | Owner-provided projection | Example |
+|------|---------------------------|---------|
+| Single-currency money | `display_format.format_money(amount, currency=code)` | `₦5,000.00` |
+| Mixed-currency total | `display_format.format_currency_groups(amounts)` | `NGN 5,000.00, USD 25.00` |
+| Timestamp | `display_format.format_timestamp(value, db)` | `2026-07-14 15:30 WAT` |
+| Missing scalar fact | Owner-provided missing state | `—` |
+| Bandwidth | Declared value plus declared unit | `100 Mbps` |
+| IP address | Owner-provided identifier, rendered `font-mono` | `192.168.1.1` |
+| MAC address | Owner-provided identifier, rendered `font-mono` | `AA:BB:CC:DD:EE:FF` |
+| Percentage | Owner-provided precision plus explicit `%` unit | `95.5%` |
+
+Domain services own the raw amount, ISO currency, unit, timestamp, and
+availability facts. Formatting must not convert currencies, sum unlike
+currencies, or turn unknown/stale/unavailable values into zero. Empty aggregates
+may explicitly project zero; missing scalar facts use the shared em-dash marker.
+The mobile `Fmt` helper is a platform renderer and
+must consume the same declared facts instead of becoming a parallel owner.
 
 ### Safe Filter Rules
 

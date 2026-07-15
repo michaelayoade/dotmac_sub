@@ -10,19 +10,6 @@ FSP_PREFIX_RE = re.compile(r"^(?:x?g?pon|epon|port|gei|ge|eth)[-_]?", re.IGNOREC
 
 HUAWEI_OPTIONAL_ARG_PROMPT = r"\{[^\r\n{}]*\}\s*:?\s*$"
 
-HUAWEI_ERROR_PATTERNS = (
-    "failure",
-    "error",
-    "% parameter error",
-    "% unknown command",
-    "command not found",
-    "invalid",
-    "unrecognized",
-    "incomplete command",
-    "\u5931\u8d25",  # Chinese: "failure"
-    "\u9519\u8bef",  # Chinese: "error"
-)
-
 READONLY_COMMAND_PREFIXES = (
     "display",
     "show",
@@ -80,9 +67,10 @@ def validate_serial(serial_number: str) -> tuple[bool, str]:
 
 
 def is_error_output(output: str) -> bool:
-    """Check if Huawei CLI output indicates an error."""
-    lower = output.lower()
-    return any(pattern in lower for pattern in HUAWEI_ERROR_PATTERNS)
+    """Backward-compatible projection of the Huawei response classifier."""
+    from app.services.network.huawei_cli_response import has_huawei_cli_error
+
+    return has_huawei_cli_error(output)
 
 
 def needs_huawei_command_confirm(output: str) -> bool:

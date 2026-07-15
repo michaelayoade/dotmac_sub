@@ -1565,7 +1565,7 @@ class Tickets:
         return ticket
 
     @staticmethod
-    def list(
+    def query(
         db: Session,
         search: str | None = None,
         status: str | None = None,
@@ -1574,16 +1574,14 @@ class Tickets:
         project_manager_person_id: str | None = None,
         site_coordinator_person_id: str | None = None,
         subscriber_id: str | None = None,
-        order_by: str = "created_at",
-        order_dir: str = "desc",
-        limit: int = 50,
-        offset: int = 0,
         priority: str | None = None,
         channel: str | None = None,
         created_by_person_id: str | None = None,
         is_active: bool | None = None,
         filters: str | None = None,
-    ) -> list[Ticket]:
+    ):
+        """Build the canonical filtered ticket query before ordering/pagination."""
+
         query = db.query(Ticket).options(selectinload(Ticket.assignees))
         # Default (None) keeps the legacy active-only behavior.
         if is_active is None or is_active:
@@ -1640,6 +1638,82 @@ class Tickets:
             if filter_clause is not None:
                 query = query.filter(filter_clause)
 
+        return query
+
+    @staticmethod
+    def count(
+        db: Session,
+        search: str | None = None,
+        status: str | None = None,
+        ticket_type: str | None = None,
+        assigned_to_person_id: str | None = None,
+        project_manager_person_id: str | None = None,
+        site_coordinator_person_id: str | None = None,
+        subscriber_id: str | None = None,
+        priority: str | None = None,
+        channel: str | None = None,
+        created_by_person_id: str | None = None,
+        is_active: bool | None = None,
+        filters: str | None = None,
+    ) -> int:
+        """Count the same canonical ticket scope consumed by list projections."""
+
+        return int(
+            Tickets.query(
+                db,
+                search=search,
+                status=status,
+                ticket_type=ticket_type,
+                assigned_to_person_id=assigned_to_person_id,
+                project_manager_person_id=project_manager_person_id,
+                site_coordinator_person_id=site_coordinator_person_id,
+                subscriber_id=subscriber_id,
+                priority=priority,
+                channel=channel,
+                created_by_person_id=created_by_person_id,
+                is_active=is_active,
+                filters=filters,
+            )
+            .order_by(None)
+            .count()
+        )
+
+    @staticmethod
+    def list(
+        db: Session,
+        search: str | None = None,
+        status: str | None = None,
+        ticket_type: str | None = None,
+        assigned_to_person_id: str | None = None,
+        project_manager_person_id: str | None = None,
+        site_coordinator_person_id: str | None = None,
+        subscriber_id: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int | None = 50,
+        offset: int = 0,
+        priority: str | None = None,
+        channel: str | None = None,
+        created_by_person_id: str | None = None,
+        is_active: bool | None = None,
+        filters: str | None = None,
+    ) -> list[Ticket]:
+        query = Tickets.query(
+            db,
+            search=search,
+            status=status,
+            ticket_type=ticket_type,
+            assigned_to_person_id=assigned_to_person_id,
+            project_manager_person_id=project_manager_person_id,
+            site_coordinator_person_id=site_coordinator_person_id,
+            subscriber_id=subscriber_id,
+            priority=priority,
+            channel=channel,
+            created_by_person_id=created_by_person_id,
+            is_active=is_active,
+            filters=filters,
+        )
+
         query = apply_ordering(
             query,
             order_by,
@@ -1653,6 +1727,9 @@ class Tickets:
                 "number": Ticket.number,
             },
         )
+        query = query.order_by(Ticket.id.asc())
+        if limit is None:
+            return query.all()
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
@@ -1831,23 +1908,37 @@ class Tickets:
         actor_id: str | None = None,
         request=None,
     ) -> list[Ticket]:
-        updated: list[Ticket] = []
+        prepared: list[tuple[str, TicketUpdate]] = []
         for item in payload.items:
             ticket = Tickets.get(db, str(item.ticket_id))
             _assert_crm_ticket_user_writes_enabled(ticket, "bulk editing")
             _ensure_not_merged_source(ticket)
-            if item.status is not None:
-                transition_ticket_status(
-                    ticket, item.status, source="admin_bulk", allow_reopen=True
-                )
-            if item.priority is not None:
-                ticket.priority = item.priority
-            if item.assigned_to_person_id is not None:
-                ticket.assigned_to_person_id = item.assigned_to_person_id
-            Tickets._apply_status_timestamp_rules(
-                ticket, item.model_dump(exclude_unset=True)
+            if item.status is not None and item.status not in _VALID_TICKET_STATUSES:
+                raise ValueError(f"Invalid ticket status: {item.status!r}")
+            update_data = {
+                key: value
+                for key, value in item.model_dump(
+                    exclude={"ticket_id"}, exclude_unset=True
+                ).items()
+                if value is not None
+            }
+            prepared.append(
+                (str(item.ticket_id), TicketUpdate.model_validate(update_data))
             )
-            updated.append(ticket)
+
+        # The single-ticket owner applies SLA, automation, assignment,
+        # work-order, notification, event, audit, and workqueue consequences.
+        # Bulk adapters must not maintain a second mutation path.
+        updated = [
+            Tickets.update(
+                db,
+                ticket_id,
+                update,
+                actor_id=actor_id,
+                request=request,
+            )
+            for ticket_id, update in prepared
+        ]
 
         log_audit_event(
             db=db,

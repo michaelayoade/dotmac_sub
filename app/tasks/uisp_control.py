@@ -22,6 +22,10 @@ from app.services.control_plane_intent import (
     assert_intent_head,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.device_adapter_binding import (
+    AdapterBindingError,
+    assert_adapter_binding,
+)
 from app.services.network_operations import network_operations
 from app.services.uisp import UispApiError, UispClient, UispClientError
 from app.services.uisp_control_plane import redact_config
@@ -131,6 +135,34 @@ def execute_uisp_apply(
                     "outcome": "superseded",
                     "message": message,
                 }
+        try:
+            from app.services.uisp_write_adapter import require_apply_ready
+
+            profile = require_apply_ready(db, intent)
+            if profile.binding is None:
+                raise AdapterBindingError(
+                    "UISP adapter capability binding could not be resolved"
+                )
+            assert_adapter_binding(operation.input_payload, profile.binding)
+        except (AdapterBindingError, UispWriteUnsupported) as exc:
+            message = f"UISP operation requires replanning: {exc}"
+            intent.status = UispIntentStatus.manual_required
+            intent.last_error = message
+            network_operations.mark_warning(
+                db,
+                operation_id,
+                message,
+                output_payload={
+                    "outcome": "adapter_changed",
+                    "verified": False,
+                },
+            )
+            db.commit()
+            return {
+                "success": False,
+                "outcome": "adapter_changed",
+                "message": message,
+            }
         network_operations.mark_running(db, operation_id)
         intent.status = UispIntentStatus.applying
         intent.last_error = None

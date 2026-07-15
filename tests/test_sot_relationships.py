@@ -27,6 +27,8 @@ def test_domain_sot_relationships_cover_expected_domains():
         "integration_control_plane",
         "ui_list_projection",
         "ui_bulk_actions",
+        "ui_display_formatting",
+        "ui_action_forms",
         "ui_semantic_presentation",
     ]
 
@@ -131,6 +133,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "ui.list_contracts",
         "financial.invoices",
     )
+    assert sot_relationships.dependencies_for("ui.support_ticket_list_projection") == (
+        "ui.list_contracts",
+        "support.ticket_lifecycle",
+        "support.ticket_configuration",
+    )
     assert sot_relationships.dependencies_for("ui.bulk_action_contracts") == (
         "ui.list_contracts",
     )
@@ -142,6 +149,18 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "ui.bulk_action_contracts",
         "ui.invoice_list_projection",
         "financial.invoices",
+    )
+    assert sot_relationships.dependencies_for("support.ticket_bulk_commands") == (
+        "support.ticket_lifecycle",
+        "support.ticket_configuration",
+        "ui.bulk_action_contracts",
+    )
+    assert sot_relationships.dependencies_for(
+        "ui.support_ticket_bulk_action_projection"
+    ) == (
+        "ui.bulk_action_contracts",
+        "ui.support_ticket_list_projection",
+        "support.ticket_bulk_commands",
     )
     assert sot_relationships.dependencies_for("ui.status_presentation") == (
         "financial.invoices",

@@ -1178,6 +1178,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vocabulary and do not own semantic colors or tones."
                 ),
             ),
+            SOTService(
+                name="support.ticket_bulk_commands",
+                module="app.services.web_support_ticket_bulk",
+                owns=(
+                    "selected support-ticket bulk membership resolution",
+                    "support-ticket bulk change normalization",
+                    "support-ticket bulk update eligibility preview",
+                    "support-ticket bulk confirmation drift detection",
+                    "structured support-ticket bulk update outcomes",
+                ),
+                depends_on=(
+                    "support.ticket_lifecycle",
+                    "support.ticket_configuration",
+                    "ui.bulk_action_contracts",
+                ),
+                notes=(
+                    "Execution delegates each eligible mutation to "
+                    "app.services.support.Tickets.update through Tickets.bulk_update "
+                    "so SLA, automation, assignment, work-order, notification, "
+                    "event, audit, and workqueue consequences have one owner."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.support",
@@ -1694,6 +1716,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Exports consume the same canonical scope without a page cap."
                 ),
             ),
+            SOTService(
+                name="ui.support_ticket_list_projection",
+                module="app.services.web_support_tickets",
+                owns=(
+                    "admin support-ticket searchable fields",
+                    "admin support-ticket filter semantics",
+                    "admin support-ticket stable sort semantics",
+                    "admin support-ticket page and status-summary projection",
+                    "admin support-ticket export scope",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "support.ticket_lifecycle",
+                    "support.ticket_configuration",
+                ),
+                notes=(
+                    "app.services.support.Tickets owns the canonical filtered "
+                    "domain query. The web projection declares list capabilities, "
+                    "normalizes request state, and renders full-page and HTMX "
+                    "reads through one partial. Exports consume the same complete "
+                    "scope without a silent row cap."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",
@@ -1701,8 +1746,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.services.table_config",
             "app.web.admin.customers",
             "app.web.admin.billing_invoices",
+            "app.web.admin.support_tickets",
             "templates.admin.billing.invoices",
             "templates.admin.customers",
+            "templates.admin.support.tickets",
         ),
         rule=(
             "List routes normalize request parameters through one declared list "
@@ -1763,15 +1810,36 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "eligibility, preview, mutation, audit, and outcome owner."
                 ),
             ),
+            SOTService(
+                name="ui.support_ticket_bulk_action_projection",
+                module="app.services.web_support_ticket_bulk_actions",
+                owns=(
+                    "admin support-ticket bulk action visibility",
+                    "admin support-ticket page-selection presentation",
+                    "admin support-ticket row eligibility presentation",
+                ),
+                depends_on=(
+                    "ui.bulk_action_contracts",
+                    "ui.support_ticket_list_projection",
+                    "support.ticket_bulk_commands",
+                ),
+                notes=(
+                    "Selection is page-only. The command owner previews exact "
+                    "membership, proposed changes, and eligibility before execution."
+                ),
+            ),
         ),
         entrypoints=(
             "app.web.admin.customers",
             "app.web.admin.billing_invoice_bulk",
             "app.web.admin.billing_invoices",
+            "app.web.admin.support_tickets",
             "app.services.web_customer_actions",
             "app.services.web_billing_invoice_bulk",
+            "app.services.web_support_ticket_bulk",
             "templates.admin.billing.invoices",
             "templates.admin.customers",
+            "templates.admin.support.tickets",
         ),
         rule=(
             "No selection means no bulk action. Page select-all selects only the "
@@ -1780,6 +1848,86 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "command owners resolve the scope again, require impact preview and "
             "confirmation, reject membership or eligibility drift, and report "
             "structured outcomes."
+        ),
+    ),
+    DomainSOT(
+        domain="ui_display_formatting",
+        services=(
+            SOTService(
+                name="ui.display_formatting",
+                module="app.services.display_format",
+                owns=(
+                    "display currency-code normalization",
+                    "single-value money formatting",
+                    "multi-currency summary grouping and ordering",
+                    "display-timezone resolution",
+                    "timestamp display formatting",
+                    "missing-value display marker",
+                ),
+                depends_on=("control.settings_spec",),
+                notes=(
+                    "Domain services own amount, currency, unit, timestamp, and "
+                    "missing-value facts. Web and mobile renderers consume this "
+                    "projection and do not invent default currency or timezone."
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.services.web_billing_overview",
+            "app.services.web_billing_payments",
+            "app.services.web_billing_ledger",
+            "app.services.web_billing_reconciliation",
+            "app.web.brand_globals",
+            "mobile.lib.src.core.formatters",
+        ),
+        rule=(
+            "Domain owners provide typed amount, currency, unit, timestamp, and "
+            "availability facts. Display owners normalize and format them once. "
+            "Mixed currencies remain separate and explicitly labeled; UI callers "
+            "do not maintain local currency defaults or formatter copies."
+        ),
+    ),
+    DomainSOT(
+        domain="ui_action_forms",
+        services=(
+            SOTService(
+                name="ui.action_form_contracts",
+                module="app.services.action_forms",
+                owns=(
+                    "action visibility and disabled-reason projection",
+                    "action impact and confirmation presentation",
+                    "action field and option metadata",
+                    "submitted action values and structured error binding",
+                ),
+                notes=(
+                    "Domain command services still own authorization, eligibility, "
+                    "validation, locking, execution, and audit consequences."
+                ),
+            ),
+            SOTService(
+                name="ui.payment_proof_review_projection",
+                module="app.services.web_billing_payment_proofs",
+                owns=(
+                    "payment-proof review action visibility",
+                    "payment-proof verify and reject form projection",
+                    "payment-proof failed-submission presentation",
+                ),
+                depends_on=(
+                    "ui.action_form_contracts",
+                    "financial.payment_proofs",
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.web.admin.billing_payment_proofs",
+            "templates.admin.billing.payment_proof_detail",
+            "templates.components.forms.action_form",
+        ),
+        rule=(
+            "Action forms render owner-provided eligibility, impact, confirmation, "
+            "declared fields, submitted values, and structured errors. Unauthorized "
+            "actions are omitted. Routes remain adapters, and command owners lock "
+            "and recheck permission and eligibility before mutation."
         ),
     ),
     DomainSOT(

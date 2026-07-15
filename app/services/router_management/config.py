@@ -36,10 +36,15 @@ from app.schemas.router_management import (
     RouterConfigTemplateCreate,
     RouterConfigTemplateUpdate,
 )
+from app.services.device_adapter_binding import attach_adapter_binding
 from app.services.network_operations import network_operations
 from app.services.router_management.sot_policy import (
     RouterSotPolicyError,
     parse_routeros_sot_intents,
+)
+from app.services.router_management.write_adapter import (
+    RouterWriteUnsupported,
+    routeros_adapter_binding,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,6 +185,13 @@ class RouterConfigService:
         inactive = [router.name for router in routers if not router.is_active]
         if inactive:
             raise ValueError(f"Router targets are inactive: {', '.join(inactive)}")
+        adapter_bindings = {}
+        if not dry_run:
+            for router in routers:
+                try:
+                    adapter_bindings[router.id] = routeros_adapter_binding(router)
+                except RouterWriteUnsupported as exc:
+                    raise ValueError(f"{router.name}: {exc}") from exc
 
         push = RouterConfigPush(
             template_id=template_id,
@@ -213,17 +225,22 @@ class RouterConfigService:
         push.operation_id = parent_operation.id
 
         for rid in unique_router_ids:
+            child_payload = {
+                "push_id": str(push.id),
+                "intent_count": len(intents),
+                "dry_run": dry_run,
+            }
+            if not dry_run:
+                child_payload = attach_adapter_binding(
+                    child_payload, adapter_bindings[rid]
+                )
             child_operation = network_operations.start(
                 db,
                 NetworkOperationType.router_config_push,
                 NetworkOperationTargetType.router,
                 str(rid),
                 correlation_key=f"router-config-push:{push.id}:{rid}",
-                input_payload={
-                    "push_id": str(push.id),
-                    "intent_count": len(intents),
-                    "dry_run": dry_run,
-                },
+                input_payload=child_payload,
                 parent_id=str(parent_operation.id),
                 initiated_by=str(initiated_by),
             )

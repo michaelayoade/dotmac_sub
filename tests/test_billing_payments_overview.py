@@ -13,6 +13,7 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
+from app.services import display_format
 from app.services.web_billing_payments import (
     build_payments_list_data,
     render_payments_csv,
@@ -116,6 +117,27 @@ def test_build_payments_list_data_filters_by_status_and_method(db_session, subsc
         {"value": "reversed", "label": "Reversed"},
         {"value": "canceled", "label": "Canceled"},
     ]
+
+
+def test_empty_payment_totals_use_display_owner_default_currency(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr(display_format, "default_currency", lambda _db: "USD")
+
+    result = build_payments_list_data(
+        db_session,
+        page=1,
+        per_page=25,
+        customer_ref=None,
+        partner_id=None,
+        status=None,
+        method=None,
+        search=None,
+        date_range=None,
+    )
+
+    assert result["status_totals"]["all"]["display"] == "USD 0.00"
+    assert result["status_totals"]["pending"]["display"] == "USD 0.00"
 
 
 def test_build_payments_list_data_search_and_date_range(db_session, subscriber):

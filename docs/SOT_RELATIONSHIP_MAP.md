@@ -663,6 +663,12 @@ different time window.
    part of the lifecycle vocabulary.
 3. Status configuration does not own labels, tones, icons, or platform colors;
    those are read-side presentation concerns.
+4. `support.ticket_bulk_commands` owns exact selected membership, normalized
+   shared changes, side-effect-free eligibility preview, confirmation drift
+   detection, and structured outcomes for admin ticket bulk update. Eligible
+   execution delegates through `app.services.support.Tickets.update`; it does
+   not maintain a second status, priority, assignment, SLA, automation,
+   work-order, notification, event, audit, or workqueue path.
 
 Rule: API, admin, customer, reseller, automation, and import adapters request
 ticket mutation through the ticket lifecycle service. Settings may narrow the
@@ -730,6 +736,30 @@ will reject.
     an uncapped export scope. Full-page and HTMX reads render the same
     `_invoices_list.html` and `_invoices_table.html` projections, so status
     totals, filters, canonical URLs, pagination, and rows cannot diverge.
+12. `ui.support_ticket_list_projection` extends the existing
+    `app.services.web_support_tickets` web owner and delegates its filtered
+    domain query to `app.services.support.Tickets`. It owns the declared admin
+    search/filter/sort capabilities, exact count, page clamping, status-summary
+    links, and uncapped CSV scope. Full-page and HTMX reads render the same
+    `_list.html` and `_table.html` projections.
+13. Support-ticket list migration record:
+    - Old owners: the admin route and Jinja fragments independently interpreted
+      sort/page inputs, inferred a next page from one extra row, hand-built URLs,
+      and applied a silent 10,000-row export cap. Advanced filters submitted by
+      the page were not accepted by the export route.
+    - New owner: `app.services.web_support_tickets`, using `ui.list_contracts`
+      and the canonical filtered query in `app.services.support.Tickets`.
+    - Verification phase: contract, query, route/template architecture,
+      filter-before-pagination, stable-order, exact-count, clamped-page,
+      canonical-URL, accessibility, and complete-export tests protect the
+      boundary. A runtime dual-read was not retained because both paths used the
+      same database query and the old implementation had no independent owner.
+    - Cutover gate: support service, web projection, route/template, SOT
+      registry, and focused list tests must remain green.
+    - Fallback retirement: the route no longer owns pagination semantics; the
+      templates no longer assemble sort/filter/page URLs; the one-extra-row page
+      estimate and silent export cap are removed. Legacy `order_by`/`order_dir`
+      inputs remain only as canonicalizing compatibility aliases.
 
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
@@ -774,6 +804,13 @@ rather than the legacy table-field registry.
    selected membership plus each row's eligibility outcome, so a status change
    that expands or shrinks impact after preview fails with HTTP 409. Execution
    re-checks eligibility and audits only processed invoice IDs.
+8. `ui.support_ticket_bulk_action_projection` projects authorized support-ticket
+   update controls and page-row eligibility. Selection is page-only and never
+   implies all filtered tickets.
+9. `support.ticket_bulk_commands` requires an in-modal, side-effect-free preview
+   of exact selected membership, the shared proposed change set, eligible rows,
+   and skipped reasons. Confirmation binds matched count, proposed changes, and
+   every row eligibility outcome; drift returns HTTP 409.
 
 Migration record:
 
@@ -803,12 +840,133 @@ Migration record:
   HTMX-only table. Other resources remain unchanged until they adopt named list
   and bulk projections.
 
+Support-ticket bulk migration record:
+
+- Old owners: the public bulk API delegated to `Tickets.bulk_update`, but that
+  method directly changed status, priority, and assignment while bypassing the
+  canonical single-ticket lifecycle consequences. The admin list had no
+  selection, authorization projection, impact preview, or drift contract.
+- New owners: `support.ticket_bulk_commands` owns selected membership, change
+  normalization, preview, confirmation, and outcomes;
+  `ui.support_ticket_bulk_action_projection` owns authorized page-selection
+  presentation; `support.ticket_lifecycle` remains the mutation/consequence
+  owner through `Tickets.update`.
+- Verification: service, projection, route-permission, architecture, template,
+  no-selection, preview/no-side-effect, proposal drift, eligibility drift,
+  lifecycle-audit, and structured-outcome tests protect the boundary.
+- Cutover gate: unauthorized users receive no selection controls; empty or
+  filtered scope fails closed; no update executes without the exact server
+  preview; changed membership, eligibility, or proposal returns HTTP 409.
+- Fallback retirement: `Tickets.bulk_update` no longer writes lifecycle fields
+  directly and the admin page exposes no unpreviewed or all-filtered ticket
+  mutation path.
+
 Rule: bulk controls appear only when a selection exists and a canonical command
 supports it. Filtered, customer-visible, financial, destructive, or fleet-wide
 operations require explicit impact preview and confirmation. WCAG 2.2 AA labels,
 indeterminate state, selected-count announcements, and focus/keyboard behavior
 are part of the contract; hidden controls are never authorization enforcement.
+## UI Action Forms
 
+## UI Display Formatting
+
+1. `ui.display_formatting` / `app.services.display_format` owns the code-native
+   display rules for normalized currency codes, currency symbols, single-value
+   money, ordered multi-currency summaries, configured display timezone, and
+   timestamp strings. Missing scalar facts use one explicit em-dash marker;
+   only a caller-declared aggregate absence becomes zero.
+2. Financial, network, usage, and other domain owners retain the typed facts:
+   amount, ISO currency, unit, timestamp, and whether a value is zero, unknown,
+   stale, or unavailable. Formatting never changes or derives those facts.
+3. Single-currency values may use the declared symbol form. Mixed-currency
+   totals use explicit ISO-style codes, group normalized codes independently,
+   sort them deterministically, and never add unlike currencies together.
+4. `control.settings_spec` owns the configured billing default currency and
+   scheduler timezone. `ui.display_formatting` resolves those settings for
+   display; templates and mobile clients do not independently default to NGN or
+   Africa/Lagos when a projection declares another value.
+5. `mobile/lib/src/core/formatters.dart` is the existing platform renderer for
+   mobile layout and locale mechanics. It is not a second owner of currency,
+   timezone, missing-value, or unit facts.
+6. First adoption: billing overview/invoice/aging, payments/import history,
+   ledger, and reconciliation delegate their multi-currency summary strings to
+   `app.services.display_format`. Their former private currency-code, amount,
+   and grouped-total formatter copies are retired.
+
+Migration record:
+
+- Old owners: four billing web projection modules each carried equivalent
+  `_currency_code`, `_format_currency_amount`, and `_format_currency_groups`
+  implementations. Their behavior could drift independently from the existing
+  global money filter and configured display settings.
+- New owner: `app.services.display_format`; billing services still assemble
+  domain-owned totals and request a display projection from that owner.
+- Missing-state correction: the prior scalar `format_money` helper rendered
+  missing or invalid values as currency zero. It now renders the shared em-dash
+  marker; aggregate callers request zero explicitly through the grouped/amount
+  functions.
+- Verification phase: formatter behavior tests cover normalization, explicit
+  ISO labels, deterministic grouping, duplicate normalized codes, empty totals,
+  and setting resolution. Existing billing overview, payment import, ledger,
+  and reconciliation tests prove byte-compatible output.
+- Cutover gate: the four pilot modules import `display_format` and contain no
+  private currency normalization or formatter definitions.
+- Fallback retirement: the private formatter copies are removed. Other screens
+  migrate incrementally; no second shared formatter or template-local default
+  may be introduced.
+
+Rule: formatting projects authoritative facts; it does not repair missing data,
+convert currency, select business precision, or collapse unknown into zero.
+Callers must make aggregate-zero behavior explicit and keep unlike currencies
+separate.
+
+1. `ui.action_form_contracts` owns the code-native interaction projection for
+   an action: visibility, disabled reason, semantic tone, impact preview,
+   confirmation requirement, declared fields/options, submitted values, and
+   structured field/general errors.
+2. Domain command and transition services still own authorization, business
+   eligibility, validation, locking, mutation, audit, and consequences. A form
+   contract is a read projection, not an execution bypass. The command owner
+   rechecks every decision when the form is submitted.
+3. Unauthorized actions are omitted. State-ineligible actions are shown
+   disabled only when the owner-provided reason helps the operator understand
+   what must change.
+4. `ui.payment_proof_review_projection` is the first adopted resource.
+   `financial.payment_proofs` owns submitted/verified/rejected eligibility,
+   duplicate-reference policy, payment creation/allocation, WHT consequences,
+   and typed command errors. The web projection adapts those facts into the
+   shared verify/reject forms.
+5. Failed payment-proof submissions render the same detail page with declared
+   values preserved and typed field or general errors. Successful mutations
+   keep POST-Redirect-GET. Templates do not map domain error strings back to
+   fields or infer review availability from raw status.
+6. High-impact actions expose their consequence before submit and require an
+   explicit confirmation supplied by the action contract. Web rendering uses
+   branding-owned semantic roles and WCAG 2.2 AA labels, descriptions, focus,
+   invalid-state, and live-error semantics.
+
+Migration record:
+
+- Old owner: payment-proof detail Jinja selected review actions from raw status,
+  declared fields/defaults, hardcoded impact/confirmation copy, and redirected
+  failed submissions through one unstructured query-string error.
+- New owners: `app.services.payment_proofs` supplies typed eligibility and
+  command errors; `app.services.web_billing_payment_proofs` builds the resource
+  projection through `app.services.action_forms`; the shared Jinja macro only
+  renders that contract.
+- Verification phase: contract, domain eligibility, route/RBAC, submitted-value,
+  structured-error, template architecture, accessibility, payment, duplicate,
+  and WHT tests.
+- Cutover gate: the payment-proof template contains no raw verify/reject form,
+  status-based action branch, local confirmation copy, or domain-error mapping.
+- Fallback retirement: the successful redirect remains; the old failed-action
+  redirect is removed. Other forms migrate incrementally only after their
+  command owner exposes equivalent eligibility and error contracts.
+
+Rule: UI action projections explain and collect a command; they do not decide or
+execute it. Routes pass submissions to the named owner, templates render only
+declared controls, and the owner rechecks permission and eligibility under the
+same lock or transaction that protects the mutation.
 ## UI Semantic Presentation
 
 1. Account, subscription, invoice, payment, outage-incident, support-ticket, and
@@ -973,11 +1131,18 @@ Dependency order:
    lifecycle, control-plane target/revision identity, and vendor status
    projections. Vendor adapters project through this one
    desired-to-readback lifecycle.
-11. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+11. `network.huawei_cli_response`: owns Huawei CLI response classification,
+   stable error codes, expected-absence predicates, unsupported-command
+   detection, and idempotent response semantics. Huawei SSH sessions, protocol
+   adapters, readback verification, and web workflows consume these projections
+   and do not maintain firmware response string tables. A response classified
+   as accepted is transport evidence, not proof of convergence; write workflows
+   still require the control-plane intent readback contract.
+12. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
    and it projects through `network.control_plane_intent`.
-12. `network.operation_ledger`: owns the tracked device operation lifecycle and
+13. `network.operation_ledger`: owns the tracked device operation lifecycle and
    status vocabulary, the terminal-transition guard, correlation-key duplicate
    suppression, stale-active reclamation, parent/child rollup, and whether an
    operation may run, resume, or be re-executed. Celery is transport: tasks

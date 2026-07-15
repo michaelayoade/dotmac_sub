@@ -133,7 +133,18 @@ def push_detail_context(
 ) -> dict[str, object]:
     context = _base_context(request, db)
     push = RouterConfigService.get_push(db, push_id)
-    context.update({"push": push, "results": push.results})
+    from app.services.control_plane_identity_view import router_identity_view
+
+    context.update(
+        {
+            "push": push,
+            "results": push.results,
+            "identity_views": {
+                str(result.id): router_identity_view(result.router, result=result)
+                for result in push.results
+            },
+        }
+    )
     return context
 
 
@@ -152,7 +163,15 @@ def detail_context(
 ) -> dict[str, object]:
     context = _base_context(request, db)
     router = RouterInventory.get(db, router_id)
-    context.update({"router": router, "tab": tab})
+    from app.services.control_plane_identity_view import router_identity_view
+
+    context.update(
+        {
+            "router": router,
+            "tab": tab,
+            "identity_view": router_identity_view(router),
+        }
+    )
 
     if tab == "interfaces":
         context["interfaces"] = RouterInventory.list_interfaces(db, router_id)
