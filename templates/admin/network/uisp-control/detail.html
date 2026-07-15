@@ -17,11 +17,19 @@
             {% set can_write = identity.write_allowed if identity else (profile and profile.apply_ready and not busy and intent.status.value != 'verified') %}
             {% if can_write %}
             {% set replan = identity and identity.binding_changed %}
-            <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/{{ 'replan' if replan else 'apply' }}" data-confirm="{{ 'Create a new plan against the currently observed device identity and apply it? Success requires device readback.' if replan else 'Apply this desired-state revision to the device? Success requires device readback.' }}" data-confirm-variant="warning" data-confirm-label="{{ 'Re-plan and apply' if replan else 'Apply configuration' }}">
+            {% if replan %}
+            <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/replan" data-confirm="Create a new plan against the currently observed device identity and apply it? Success requires device readback." data-confirm-variant="warning" data-confirm-label="Re-plan and apply">
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="expected_revision" value="{{ intent.desired_revision }}">
-                <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">{{ 'Re-plan and apply' if replan else 'Apply configuration' }}</button>
+                <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Re-plan and apply</button>
             </form>
+            {% else %}
+            <form method="post" action="/admin/network/uisp-control/{{ intent.id }}/apply" data-confirm="Apply this desired-state revision to the device? Success requires device readback." data-confirm-variant="warning" data-confirm-label="Apply configuration">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="expected_revision" value="{{ intent.desired_revision }}">
+                <button class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Apply configuration</button>
+            </form>
+            {% endif %}
             {% elif identity %}
             <button type="button" disabled title="{{ identity.write_reason }}" class="cursor-not-allowed rounded-lg bg-slate-200 px-4 py-2 text-sm font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-400">Apply unavailable</button>
             {% endif %}
