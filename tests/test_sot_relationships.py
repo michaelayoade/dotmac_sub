@@ -26,6 +26,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "service_intent_control_plane",
         "integration_control_plane",
         "ui_list_projection",
+        "ui_bulk_actions",
         "ui_semantic_presentation",
     ]
 
@@ -108,6 +109,22 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert customer_api_mapping.name == "ui.customer_list_projection"
     assert sot_relationships.dependencies_for("ui.subscriber_list_projection") == (
         "ui.list_contracts",
+    )
+    assert sot_relationships.dependencies_for("ui.invoice_list_projection") == (
+        "ui.list_contracts",
+        "financial.invoices",
+    )
+    assert sot_relationships.dependencies_for("ui.bulk_action_contracts") == (
+        "ui.list_contracts",
+    )
+    assert sot_relationships.dependencies_for("ui.customer_bulk_action_projection") == (
+        "ui.bulk_action_contracts",
+        "ui.customer_list_projection",
+    )
+    assert sot_relationships.dependencies_for("ui.invoice_bulk_action_projection") == (
+        "ui.bulk_action_contracts",
+        "ui.invoice_list_projection",
+        "financial.invoices",
     )
     assert sot_relationships.dependencies_for("ui.status_presentation") == (
         "financial.invoices",

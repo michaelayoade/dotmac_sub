@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import csv
+import hmac
 import io
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
@@ -53,6 +55,11 @@ from app.services import subscriber as subscriber_service
 from app.services import web_customer_lists as web_customer_lists_service
 from app.services.account_lifecycle import compute_account_status, derive_account_status
 from app.services.branding_config import get_brand
+from app.services.bulk_actions import (
+    BulkSelection,
+    membership_scope_token,
+    parse_bulk_selection,
+)
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
 from app.services.customer_financial_position import get_customer_financial_position
@@ -430,43 +437,59 @@ def bulk_delete_customers_from_payload(
     return bulk_delete_customers(db=db, customer_ids=customer_ids)
 
 
-def _normalize_scope_filters(payload: dict[str, Any]) -> dict[str, str | None]:
-    filters = payload.get("filters") or {}
-    if not isinstance(filters, dict):
-        raise HTTPException(status_code=400, detail="filters must be an object")
-    return {
-        "search": str(filters.get("search") or "").strip() or None,
-        "status": str(filters.get("status") or "").strip() or None,
-        "customer_type": str(filters.get("customer_type") or "").strip() or None,
-        "nas_id": str(filters.get("nas_id") or "").strip() or None,
-        "pop_site_id": str(filters.get("pop_site_id") or "").strip() or None,
-    }
+_CUSTOMER_BULK_FILTER_KEYS = (
+    "search",
+    "status",
+    "customer_type",
+    "nas_id",
+    "pop_site_id",
+)
 
 
-def _selected_scope_ids(payload: dict[str, Any]) -> list[str]:
-    customer_ids = payload.get("customer_ids") or []
-    if not isinstance(customer_ids, list):
-        raise HTTPException(status_code=400, detail="customer_ids must be a list")
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for item in customer_ids:
-        if not isinstance(item, dict):
-            continue
-        customer_id = str(item.get("id") or "").strip()
-        if not customer_id or customer_id in seen:
-            continue
-        seen.add(customer_id)
-        normalized.append(customer_id)
-    return normalized
+@dataclass(slots=True)
+class ResolvedCustomerBulkScope:
+    """Canonical customers resolved from one explicit selection request."""
+
+    selection: BulkSelection
+    customers: list[Subscriber]
+    missing_ids: tuple[str, ...] = ()
+
+    @property
+    def scope(self) -> str:
+        return self.selection.mode
+
+    @property
+    def matched_count(self) -> int:
+        return len(self.customers)
+
+    @property
+    def scope_token(self) -> str:
+        """Fingerprint exact resolved membership, independent of row ordering."""
+
+        return membership_scope_token(
+            self.scope, [str(customer.id) for customer in self.customers]
+        )
+
+
+def _parse_customer_bulk_selection(payload: dict[str, Any]) -> BulkSelection:
+    try:
+        return parse_bulk_selection(
+            payload,
+            allowed_filter_keys=_CUSTOMER_BULK_FILTER_KEYS,
+            filtered_selection_supported=True,
+            legacy_id_key="customer_ids",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def resolve_bulk_customer_scope(
     db: Session, payload: dict[str, Any]
-) -> tuple[list[Subscriber], str]:
-    selected_ids = _selected_scope_ids(payload)
-    if selected_ids:
+) -> ResolvedCustomerBulkScope:
+    selection = _parse_customer_bulk_selection(payload)
+    if selection.mode == "selected":
         try:
-            parsed_ids = [coerce_uuid(item) for item in selected_ids]
+            parsed_ids = [coerce_uuid(item) for item in selection.ids]
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid customer id") from exc
         query = (
@@ -483,19 +506,65 @@ def resolve_bulk_customer_scope(
             .all()
         )
         ordered = {str(subscriber.id): subscriber for subscriber in query}
-        customers = [ordered[item] for item in selected_ids if item in ordered]
-        return customers, "selected"
+        customers = [ordered[item] for item in selection.ids if item in ordered]
+        missing_ids = tuple(item for item in selection.ids if item not in ordered)
+        return ResolvedCustomerBulkScope(
+            selection=selection,
+            customers=customers,
+            missing_ids=missing_ids,
+        )
 
-    filters = _normalize_scope_filters(payload)
+    try:
+        list_query = web_customer_lists_service.build_customer_list_query(
+            search=selection.filter_value("search"),
+            status=selection.filter_value("status"),
+            customer_type=selection.filter_value("customer_type"),
+            nas_id=selection.filter_value("nas_id"),
+            pop_site_id=selection.filter_value("pop_site_id"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     customers = web_customer_lists_service.list_customers_for_scope(
         db,
-        search=filters["search"],
-        status=filters["status"],
-        customer_type=filters["customer_type"],
-        nas_id=filters["nas_id"],
-        pop_site_id=filters["pop_site_id"],
+        search=list_query.search,
+        status=list_query.filter_value("status"),
+        customer_type=list_query.filter_value("customer_type"),
+        nas_id=list_query.filter_value("nas_id"),
+        pop_site_id=list_query.filter_value("pop_site_id"),
     )
-    return customers, "filtered"
+    return ResolvedCustomerBulkScope(selection=selection, customers=customers)
+
+
+def _require_bulk_execution_confirmation(
+    payload: dict[str, Any],
+    *,
+    resolved: ResolvedCustomerBulkScope,
+    action_label: str,
+) -> None:
+    if not bool(payload.get("confirmed")):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{action_label} confirmation required",
+        )
+    expected_count = resolved.selection.expected_count
+    expected_scope_token = resolved.selection.expected_scope_token
+    if expected_count is None or expected_scope_token is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Preview {action_label.lower()} before confirming",
+        )
+    scope_changed = expected_count != resolved.matched_count or not hmac.compare_digest(
+        expected_scope_token,
+        resolved.scope_token,
+    )
+    if scope_changed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The selected customer scope changed after preview. "
+                "Review the updated impact before confirming again."
+            ),
+        )
 
 
 def _coerce_bool_value(value: Any, field_name: str) -> bool:
@@ -578,13 +647,46 @@ def _normalize_bulk_updates(payload: dict[str, Any]) -> dict[str, Any]:
 def bulk_update_customers_from_payload(
     db: Session, payload: dict[str, Any]
 ) -> dict[str, object]:
-    customers, scope = resolve_bulk_customer_scope(db, payload)
-    if not customers:
+    resolved = resolve_bulk_customer_scope(db, payload)
+    if not resolved.customers:
         raise HTTPException(status_code=400, detail="No customers matched this scope")
     updates = _normalize_bulk_updates(payload)
-    return bulk_update_customers(
-        db=db, customers=customers, updates=updates, scope=scope
+    preview_only = bool(payload.get("preview_only"))
+    if preview_only:
+        return {
+            "success": True,
+            "preview": True,
+            "scope": resolved.scope,
+            "matched_count": resolved.matched_count,
+            "scope_token": resolved.scope_token,
+            "missing_ids": list(resolved.missing_ids),
+            "update_fields": sorted(updates),
+        }
+
+    _require_bulk_execution_confirmation(
+        payload,
+        resolved=resolved,
+        action_label="Bulk customer update",
     )
+    result = bulk_update_customers(
+        db=db,
+        customers=resolved.customers,
+        updates=updates,
+        scope=resolved.scope,
+    )
+    errors = result["errors"]
+    if isinstance(errors, list):
+        errors.extend(
+            {"id": customer_id, "error": "Customer not found"}
+            for customer_id in resolved.missing_ids
+        )
+    return {
+        **result,
+        "preview": False,
+        "matched_count": resolved.matched_count,
+        "scope_token": resolved.scope_token,
+        "missing_ids": list(resolved.missing_ids),
+    }
 
 
 def bulk_update_customers(
@@ -937,18 +1039,29 @@ def queue_bulk_message_from_payload(
             detail="Template channel does not match selected channel",
         )
 
-    customers, scope = resolve_bulk_customer_scope(db, payload)
+    resolved = resolve_bulk_customer_scope(db, payload)
+    customers = resolved.customers
     if not customers:
         raise HTTPException(status_code=400, detail="No customers matched this scope")
 
     preview_only = bool(payload.get("preview_only"))
-    if not preview_only and not bool(payload.get("confirmed")):
-        raise HTTPException(
-            status_code=400, detail="Bulk message confirmation required"
+    if not preview_only:
+        _require_bulk_execution_confirmation(
+            payload,
+            resolved=resolved,
+            action_label="Bulk message",
         )
     created_count = 0
     notification_ids: list[str] = []
     skipped: list[dict[str, str]] = []
+    skipped.extend(
+        {
+            "id": customer_id,
+            "name": customer_id,
+            "reason": "Customer not found",
+        }
+        for customer_id in resolved.missing_ids
+    )
     suppressed: list[dict[str, str]] = []
     queued_count = 0
     suppressed_count = 0
@@ -1108,8 +1221,10 @@ def queue_bulk_message_from_payload(
     return {
         "success": True,
         "preview": preview_only,
-        "scope": scope,
+        "scope": resolved.scope,
         "matched_count": len(customers),
+        "scope_token": resolved.scope_token,
+        "missing_ids": list(resolved.missing_ids),
         "created_count": created_count,
         "queued_count": queued_count,
         "suppressed_count": suppressed_count,

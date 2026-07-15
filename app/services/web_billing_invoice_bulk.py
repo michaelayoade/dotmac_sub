@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import io
 import logging
 import zipfile
@@ -18,6 +19,7 @@ from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services.audit_adapter import record_audit_event
+from app.services.bulk_actions import membership_scope_token
 from app.services.object_storage import ObjectNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -70,9 +72,164 @@ class BulkInvoiceActionResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class InvoiceBulkActionPreview:
+    """Server-owned eligibility and membership snapshot for one action."""
+
+    action: str
+    selected_ids: tuple[str, ...]
+    resolved_ids: tuple[str, ...]
+    eligible_ids: tuple[str, ...]
+    skipped: tuple[dict[str, str], ...]
+
+    @property
+    def scope_token(self) -> str:
+        eligible = set(self.eligible_ids)
+        skipped_reasons = {item["id"]: item["reason"] for item in self.skipped}
+        outcomes = [
+            (
+                f"{invoice_id}:eligible"
+                if invoice_id in eligible
+                else f"{invoice_id}:skipped:{skipped_reasons.get(invoice_id, 'unknown')}"
+            )
+            for invoice_id in self.selected_ids
+        ]
+        return membership_scope_token(f"selected:{self.action}", outcomes)
+
+    def as_response(self) -> dict[str, object]:
+        return {
+            "action": self.action,
+            "selected_count": len(self.selected_ids),
+            "matched_count": len(self.resolved_ids),
+            "eligible_count": len(self.eligible_ids),
+            "skipped_count": len(self.skipped),
+            "eligible_ids": list(self.eligible_ids),
+            "skipped": list(self.skipped),
+            "scope_token": self.scope_token,
+        }
+
+
 def parse_ids_csv(ids_csv: str) -> list[str]:
     """Parse comma-separated IDs into a cleaned list."""
-    return [item.strip() for item in ids_csv.split(",") if item and item.strip()]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in ids_csv.split(","):
+        invoice_id = item.strip()
+        if not invoice_id or invoice_id in seen:
+            continue
+        seen.add(invoice_id)
+        normalized.append(invoice_id)
+    return normalized
+
+
+def invoice_bulk_action_ineligibility(invoice, action: str) -> str | None:
+    """Return the canonical reason an invoice cannot receive an action."""
+
+    if action == "issue":
+        return None if invoice.status == InvoiceStatus.draft else "Already issued"
+    if action == "send":
+        if invoice.status in {
+            InvoiceStatus.draft,
+            InvoiceStatus.void,
+            InvoiceStatus.written_off,
+        }:
+            return "Only issued invoices can be sent"
+        account = getattr(invoice, "account", None)
+        if not account or not getattr(account, "email", None):
+            return "Customer has no email address"
+        return None
+    if action == "void":
+        if invoice.status in {
+            InvoiceStatus.paid,
+            InvoiceStatus.void,
+            InvoiceStatus.written_off,
+        }:
+            return "Paid or closed invoices cannot be voided"
+        return None
+    if action == "mark_paid":
+        if invoice.status not in {
+            InvoiceStatus.issued,
+            InvoiceStatus.overdue,
+            InvoiceStatus.partially_paid,
+        }:
+            return "Invoice is not open for payment"
+        if (invoice.balance_due or Decimal("0")) <= 0:
+            return "Invoice has no outstanding balance"
+        return None
+    if action in {"export_csv", "export_pdf", "generate_pdf"}:
+        return None
+    raise ValueError("Unsupported invoice bulk action")
+
+
+def preview_invoice_bulk_action(
+    db, *, action: str, invoice_ids_csv: str
+) -> InvoiceBulkActionPreview:
+    """Resolve exact membership and action eligibility without side effects."""
+
+    selected_ids = tuple(parse_ids_csv(invoice_ids_csv))
+    if not selected_ids:
+        raise ValueError("Select at least one invoice before using a bulk action")
+    resolved_ids: list[str] = []
+    eligible_ids: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for invoice_id in selected_ids:
+        try:
+            invoice = billing_service.invoices.get(db, invoice_id)
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                raise
+            invoice = None
+        except (TypeError, ValueError):
+            # UI selections contain UUIDs, but the adapter remains a public
+            # trust boundary. Treat malformed identifiers like missing rows
+            # instead of allowing UUID coercion to surface as a 500 response.
+            invoice = None
+        if not invoice:
+            skipped.append({"id": invoice_id, "reason": "Invoice not found"})
+            continue
+        resolved_id = str(invoice.id)
+        resolved_ids.append(resolved_id)
+        reason = invoice_bulk_action_ineligibility(invoice, action)
+        if reason:
+            skipped.append({"id": resolved_id, "reason": reason})
+        else:
+            eligible_ids.append(resolved_id)
+    return InvoiceBulkActionPreview(
+        action=action,
+        selected_ids=selected_ids,
+        resolved_ids=tuple(resolved_ids),
+        eligible_ids=tuple(eligible_ids),
+        skipped=tuple(skipped),
+    )
+
+
+def require_invoice_bulk_confirmation(
+    db,
+    *,
+    action: str,
+    invoice_ids_csv: str,
+    expected_count: int | None,
+    expected_scope_token: str | None,
+) -> InvoiceBulkActionPreview:
+    """Reject execution when membership changed after the server preview."""
+
+    if expected_count is None or not expected_scope_token:
+        raise ValueError("Preview the invoice action before confirming")
+    preview = preview_invoice_bulk_action(
+        db, action=action, invoice_ids_csv=invoice_ids_csv
+    )
+    scope_changed = expected_count != len(
+        preview.resolved_ids
+    ) or not hmac.compare_digest(expected_scope_token, preview.scope_token)
+    if scope_changed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The selected invoice scope changed after preview. "
+                "Review the updated impact before confirming again."
+            ),
+        )
+    return preview
 
 
 def list_invoices_by_ids(db, invoice_ids_csv: str):
@@ -101,7 +258,7 @@ def bulk_issue(db, invoice_ids_csv: str) -> list[str]:
     for invoice_id in parse_ids_csv(invoice_ids_csv):
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice and invoice.status == InvoiceStatus.draft:
+            if invoice and invoice_bulk_action_ineligibility(invoice, "issue") is None:
                 invoice.status = InvoiceStatus.issued
                 invoice.issued_at = datetime.now(UTC)
                 db.commit()
@@ -120,7 +277,7 @@ def bulk_issue_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
     for invoice_id in result.selected_ids:
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice and invoice.status == InvoiceStatus.draft:
+            if invoice and invoice_bulk_action_ineligibility(invoice, "issue") is None:
                 invoice.status = InvoiceStatus.issued
                 invoice.issued_at = datetime.now(UTC)
                 db.commit()
@@ -151,7 +308,7 @@ def bulk_send(db, invoice_ids_csv: str) -> list[str]:
     for invoice_id in parse_ids_csv(invoice_ids_csv):
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice:
+            if invoice and invoice_bulk_action_ineligibility(invoice, "send") is None:
                 web_billing_invoices_service.maybe_send_invoice_notification(
                     db,
                     invoice=invoice,
@@ -172,7 +329,7 @@ def bulk_send_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
     for invoice_id in result.selected_ids:
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice:
+            if invoice and invoice_bulk_action_ineligibility(invoice, "send") is None:
                 web_billing_invoices_service.maybe_send_invoice_notification(
                     db,
                     invoice=invoice,
@@ -205,11 +362,7 @@ def bulk_void(db, invoice_ids_csv: str) -> list[str]:
     for invoice_id in parse_ids_csv(invoice_ids_csv):
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice and invoice.status not in [
-                InvoiceStatus.paid,
-                InvoiceStatus.void,
-                InvoiceStatus.written_off,
-            ]:
+            if invoice and invoice_bulk_action_ineligibility(invoice, "void") is None:
                 # Use the canonical void so debit ledger entries are reversed
                 # (previously bulk void only flipped the status, leaving the AR
                 # ledger out of sync).
@@ -229,11 +382,7 @@ def bulk_void_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
     for invoice_id in result.selected_ids:
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice and invoice.status not in [
-                InvoiceStatus.paid,
-                InvoiceStatus.void,
-                InvoiceStatus.written_off,
-            ]:
+            if invoice and invoice_bulk_action_ineligibility(invoice, "void") is None:
                 billing_service.invoices.void(db, invoice_id)
                 result.processed_ids.append(invoice_id)
             else:
@@ -259,21 +408,14 @@ def bulk_void_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
 def bulk_mark_paid(db, invoice_ids_csv: str) -> list[str]:
     """Mark eligible invoices as paid; return IDs that were updated."""
     updated: list[str] = []
-    eligible_statuses = {
-        InvoiceStatus.issued,
-        InvoiceStatus.overdue,
-        InvoiceStatus.partially_paid,
-    }
     for invoice_id in parse_ids_csv(invoice_ids_csv):
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
             if not invoice:
                 continue
-            if invoice.status not in eligible_statuses:
+            if invoice_bulk_action_ineligibility(invoice, "mark_paid") is not None:
                 continue
             balance = invoice.balance_due or Decimal("0")
-            if balance <= 0:
-                continue
             # Record a real succeeded payment allocated to the invoice instead
             # of poking status=paid+balance=0 raw. The raw write had no backing
             # PaymentAllocation, so the next _recalculate_invoice_totals (any
@@ -306,21 +448,16 @@ def bulk_mark_paid(db, invoice_ids_csv: str) -> list[str]:
 def bulk_mark_paid_result(db, invoice_ids_csv: str) -> BulkInvoiceActionResult:
     """Mark eligible invoices as paid and report processed/skipped/failed counts."""
     result = BulkInvoiceActionResult(selected_ids=parse_ids_csv(invoice_ids_csv))
-    eligible_statuses = {
-        InvoiceStatus.issued,
-        InvoiceStatus.overdue,
-        InvoiceStatus.partially_paid,
-    }
     for invoice_id in result.selected_ids:
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
-            if not invoice or invoice.status not in eligible_statuses:
+            if (
+                not invoice
+                or invoice_bulk_action_ineligibility(invoice, "mark_paid") is not None
+            ):
                 result.skipped_ids.append(invoice_id)
                 continue
             balance = invoice.balance_due or Decimal("0")
-            if balance <= 0:
-                result.skipped_ids.append(invoice_id)
-                continue
             billing_service.payments.create(
                 db,
                 PaymentCreate(

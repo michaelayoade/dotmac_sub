@@ -32,6 +32,9 @@ from app.services import (
     web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
 )
 from app.services import web_customer_actions as web_customer_actions_service
+from app.services import (
+    web_customer_bulk_actions as web_customer_bulk_actions_service,
+)
 from app.services import web_customer_details as web_customer_details_service
 from app.services import web_customer_lists as web_customer_lists_service
 from app.services import web_customer_user_access as web_customer_user_access_service
@@ -332,6 +335,12 @@ def customers_list(
     subscription_action_permissions = _subscription_action_permission_context(
         request, db
     )
+    customer_bulk_action_contract = (
+        web_customer_bulk_actions_service.build_customer_bulk_action_contract(
+            db,
+            auth=getattr(request.state, "auth", None) or {},
+        )
+    )
 
     effective_query = page_data["list_query"]
     page_was_clamped = effective_query.page != page
@@ -344,6 +353,7 @@ def customers_list(
                 "request": request,
                 **page_data,
                 **subscription_action_permissions,
+                "customer_bulk_action_contract": customer_bulk_action_contract,
             },
         )
         if page_was_clamped:
@@ -368,6 +378,7 @@ def customers_list(
             "request": request,
             **page_data,
             **subscription_action_permissions,
+            "customer_bulk_action_contract": customer_bulk_action_contract,
             **web_notifications_service.bulk_notification_setup_context(db),
             "active_page": "customers",
             "active_menu": "operations",
