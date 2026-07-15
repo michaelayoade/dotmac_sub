@@ -181,6 +181,12 @@ def test_wifi_intent_queues_without_false_success_and_rejects_plaintext_secret(
     assert operation.status == NetworkOperationStatus.pending
     assert operation.output_payload is None
     assert operation.error is None
+    binding = operation.input_payload["_adapter_binding"]
+    assert binding["adapter_name"] == "uisp-airos"
+    assert binding["capability_id"]
+    assert binding["capability_revision"]
+    assert binding["identity"]["model"] == "LBE-5AC-Gen2"
+    assert binding["binding_fingerprint"]
     desired_snapshot = (
         db_session.query(UispConfigSnapshot)
         .filter(

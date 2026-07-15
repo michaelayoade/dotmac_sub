@@ -65,15 +65,41 @@ class TestOltTypeRegistry:
         assert caps.supports_ont_wan_config is True
         assert caps.supports_ont_wifi_config is False  # Not until V100R019
 
-    def test_unknown_olt_defaults_enabled(self):
-        """Unknown OLTs should default to all capabilities enabled."""
+    def test_unknown_olt_fails_closed(self):
+        """Unknown OLTs must not inherit model-dependent write capabilities."""
         caps = olt_type_registry.get_capabilities(
             model="UnknownModel",
             firmware="V999R999",
         )
-        # Default OltCapabilities has everything True except wifi
-        assert caps.supports_ont_internet_config is True
-        assert caps.supports_ont_wan_config is True
+        assert caps.supports_ont_internet_config is False
+        assert caps.supports_ont_wan_config is False
+        assert caps.supports_ont_port_vlan is False
+        assert caps.supports_traffic_table is False
+        assert caps.command_profile_name == "unsupported"
+
+    def test_unmapped_huawei_firmware_uses_read_only_profile(self):
+        caps = olt_type_registry.get_capabilities(
+            vendor="Huawei",
+            model="MA5608T",
+            firmware="V800R099C00",
+        )
+
+        assert caps.command_profile_name == "huawei-generic"
+        assert caps.supports_ont_internet_config is False
+        assert caps.supports_ont_port_vlan is False
+
+    def test_resolved_binding_pins_model_firmware_and_profile_revision(self):
+        binding = olt_type_registry.resolve_binding(
+            vendor="Huawei",
+            model="MA5800-X7",
+            firmware="V100R019C11",
+        )
+
+        assert binding is not None
+        assert binding.adapter_name == "huawei-ma5800-v100r019"
+        assert binding.adapter_revision
+        assert binding.identity.model == "MA5800-X7"
+        assert binding.identity.firmware_version == "V100R019C11"
 
     def test_find_adapter_by_model_and_firmware(self):
         """Find adapter matching both model and firmware."""

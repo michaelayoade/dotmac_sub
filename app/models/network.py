@@ -371,6 +371,7 @@ class CPEDevice(Base):
     serial_number: Mapped[str | None] = mapped_column(String(120))
     model: Mapped[str | None] = mapped_column(String(120))
     vendor: Mapped[str | None] = mapped_column(String(120))
+    firmware_version: Mapped[str | None] = mapped_column(String(120))
     mac_address: Mapped[str | None] = mapped_column(String(64))
     installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)

@@ -442,6 +442,15 @@ def request_apply(
     if locked_intent is None:
         raise UispIntentError("UISP intent not found")
     intent = locked_intent
+    try:
+        profile = require_apply_ready(db, intent)
+    except UispWriteUnsupported as exc:
+        intent.status = UispIntentStatus.manual_required
+        intent.last_error = str(exc)
+        db.commit()
+        raise UispIntentError(str(exc)) from exc
+    if profile.binding is None:
+        raise UispIntentError("UISP adapter capability binding could not be resolved")
     revision = intent.desired_revision
     try:
         assert_intent_head(
@@ -464,6 +473,9 @@ def request_apply(
     )
     input_payload = redact_config(intent.desired_state)
     input_payload["_control_plane"] = target.as_payload()
+    from app.services.device_adapter_binding import attach_adapter_binding
+
+    input_payload = attach_adapter_binding(input_payload, profile.binding)
     operation = network_operations.start(
         db,
         (
