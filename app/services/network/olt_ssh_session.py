@@ -17,7 +17,6 @@ Example usage:
 from __future__ import annotations
 
 import logging
-import re
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -28,6 +27,11 @@ from typing import TYPE_CHECKING
 from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
 from paramiko.transport import Transport
+
+from app.services.network.huawei_cli_response import (
+    HuaweiCliErrorCode as ErrorCode,
+)
+from app.services.network.huawei_cli_response import classify_huawei_cli_response
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
@@ -43,83 +47,6 @@ SLOW_SEND_CHAR_DELAY = 0.1
 # ---------------------------------------------------------------------------
 # Structured Error Detection
 # ---------------------------------------------------------------------------
-
-
-class ErrorCode(Enum):
-    """Structured error codes for OLT CLI responses.
-
-    Using structured error codes instead of string matching provides:
-    - Consistent error handling across the codebase
-    - Explicit handling of idempotent success (ALREADY_EXISTS)
-    - Better localization support (patterns can match multiple languages)
-    """
-
-    NONE = "none"  # No error
-    ALREADY_EXISTS = "already_exists"  # Resource exists - idempotent success
-    VLAN_NOT_EXIST = "vlan_not_exist"  # VLAN not configured on OLT
-    ONT_OFFLINE = "ont_offline"  # ONT is not online
-    ONT_NOT_EXIST = "ont_not_exist"  # ONT not found/authorized
-    PARAMETER_ERROR = "parameter_error"  # Invalid parameter
-    UNKNOWN_COMMAND = "unknown_command"  # Command not recognized
-    PERMISSION_DENIED = "permission_denied"  # Insufficient privileges
-    RESOURCE_BUSY = "resource_busy"  # Resource locked/in use
-    INDEX_OUT_OF_RANGE = "index_out_of_range"  # Index exceeds limits
-    PROFILE_NOT_EXIST = "profile_not_exist"  # Profile not found
-    CONNECTION_ERROR = "connection_error"  # SSH/transport error
-    TIMEOUT = "timeout"  # Command timeout
-    UNKNOWN_ERROR = "unknown_error"  # Unrecognized error
-
-
-# Error patterns mapped to ErrorCode
-# Patterns are checked in order; first match wins
-# Includes English and Chinese (Huawei OLT) error messages
-_ERROR_PATTERNS: list[tuple[str, ErrorCode]] = [
-    # Idempotent success - resource already exists
-    (r"service virtual port has existed already", ErrorCode.ALREADY_EXISTS),
-    (r"already exists", ErrorCode.ALREADY_EXISTS),
-    (r"conflicted service virtual port index", ErrorCode.ALREADY_EXISTS),
-    (r"tr069.*server.*profile.*already.*bindw", ErrorCode.ALREADY_EXISTS),
-    # VLAN errors
-    (r"vlan.*does not exist", ErrorCode.VLAN_NOT_EXIST),
-    (r"vlan.*not.*configured", ErrorCode.VLAN_NOT_EXIST),
-    (r"vlan.*is not exist", ErrorCode.VLAN_NOT_EXIST),
-    # ONT errors
-    (r"ont is not online", ErrorCode.ONT_OFFLINE),
-    (r"ont.*offline", ErrorCode.ONT_OFFLINE),
-    (r"ont.*does not exist", ErrorCode.ONT_NOT_EXIST),
-    (r"ont.*is not exist", ErrorCode.ONT_NOT_EXIST),
-    (r"ont.*not found", ErrorCode.ONT_NOT_EXIST),
-    # Profile errors
-    (r"profile.*does not exist", ErrorCode.PROFILE_NOT_EXIST),
-    (r"profile.*is not exist", ErrorCode.PROFILE_NOT_EXIST),
-    (r"tr069.*server.*profile.*does not exist", ErrorCode.PROFILE_NOT_EXIST),
-    # Index/range errors
-    (r"index.*out of range", ErrorCode.INDEX_OUT_OF_RANGE),
-    (r"exceeds.*maximum", ErrorCode.INDEX_OUT_OF_RANGE),
-    (r"ip-index.*invalid", ErrorCode.INDEX_OUT_OF_RANGE),
-    # Parameter errors
-    (r"% parameter error", ErrorCode.PARAMETER_ERROR),
-    (r"invalid parameter", ErrorCode.PARAMETER_ERROR),
-    (r"invalid input", ErrorCode.PARAMETER_ERROR),
-    # Command errors
-    (r"% unknown command", ErrorCode.UNKNOWN_COMMAND),
-    (r"unrecognized", ErrorCode.UNKNOWN_COMMAND),
-    (r"command not found", ErrorCode.UNKNOWN_COMMAND),
-    (r"incomplete command", ErrorCode.UNKNOWN_COMMAND),
-    # Permission errors
-    (r"permission denied", ErrorCode.PERMISSION_DENIED),
-    (r"access denied", ErrorCode.PERMISSION_DENIED),
-    # Resource busy
-    (r"resource.*busy", ErrorCode.RESOURCE_BUSY),
-    (r"locked", ErrorCode.RESOURCE_BUSY),
-    # Chinese error messages (Huawei OLT)
-    (r"\u5931\u8d25", ErrorCode.UNKNOWN_ERROR),  # 失败 (failure)
-    (r"\u9519\u8bef", ErrorCode.UNKNOWN_ERROR),  # 错误 (error)
-    # Generic error patterns (last resort)
-    (r"failure", ErrorCode.UNKNOWN_ERROR),
-    (r"failed", ErrorCode.UNKNOWN_ERROR),
-    (r"error:", ErrorCode.UNKNOWN_ERROR),
-]
 
 
 @dataclass
@@ -156,20 +83,19 @@ def parse_command_result(output: str) -> CommandResult:
     Returns:
         CommandResult with success/error classification.
     """
-    lower = output.lower()
+    response = classify_huawei_cli_response(output)
+    if response.error_code != ErrorCode.NONE:
+        if response.is_idempotent_success:
+            label = "Idempotent success"
+        else:
+            label = "Accepted" if response.accepted else "Error"
+        return CommandResult(
+            success=response.accepted,
+            output=output,
+            error_code=response.error_code,
+            message=f"{label}: {response.error_code.value}",
+        )
 
-    for pattern, code in _ERROR_PATTERNS:
-        if re.search(pattern, lower, re.IGNORECASE):
-            # ALREADY_EXISTS is treated as success (idempotent)
-            is_success = code == ErrorCode.ALREADY_EXISTS
-            return CommandResult(
-                success=is_success,
-                output=output,
-                error_code=code,
-                message=f"{'Idempotent success' if is_success else 'Error'}: {code.value}",
-            )
-
-    # No error pattern matched - assume success
     return CommandResult(
         success=True,
         output=output,

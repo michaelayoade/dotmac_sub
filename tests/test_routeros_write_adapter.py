@@ -12,8 +12,34 @@ from app.services.router_management.write_adapter import (
     RouterWriteUnsupported,
     parse_routeros_rest_command,
     redact_router_data,
+    routeros_adapter_binding,
     verify_routeros_readback,
 )
+
+
+def test_routeros_adapter_binding_requires_observed_v7_identity():
+    router = SimpleNamespace(
+        board_name="CCR2004-1G-12S+2XS",
+        routeros_version="7.16.2 (stable)",
+        architecture="arm64",
+    )
+
+    binding = routeros_adapter_binding(router)
+
+    assert binding.adapter_name == "mikrotik-routeros-rest-v7"
+    assert binding.identity.model == "CCR2004-1G-12S+2XS"
+    assert binding.identity.firmware_version == "7.16.2 (stable)"
+
+
+def test_routeros_adapter_binding_rejects_unknown_version():
+    router = SimpleNamespace(
+        board_name="CCR2004-1G-12S+2XS",
+        routeros_version=None,
+        architecture="arm64",
+    )
+
+    with pytest.raises(RouterWriteUnsupported, match="version is required"):
+        routeros_adapter_binding(router)
 
 
 def test_parse_rejects_malformed_json() -> None:

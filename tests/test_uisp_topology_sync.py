@@ -88,6 +88,7 @@ def _device(
     ap_device_id=None,
     parent_id=None,
     model="LBE-5AC-Gen2",
+    firmware_version=None,
 ):
     attributes = {}
     if ap_device_id:
@@ -95,18 +96,21 @@ def _device(
     if parent_id:
         attributes["parentId"] = parent_id
         attributes["isPartOfOlt"] = True
+    identification = {
+        "id": device_id,
+        "name": name,
+        "model": model,
+        "mac": mac,
+        "role": role,
+        "type": device_type,
+        "site": (
+            {"id": site_id, "name": "Site", "type": "endpoint"} if site_id else None
+        ),
+    }
+    if firmware_version:
+        identification["firmwareVersion"] = firmware_version
     return {
-        "identification": {
-            "id": device_id,
-            "name": name,
-            "model": model,
-            "mac": mac,
-            "role": role,
-            "type": device_type,
-            "site": (
-                {"id": site_id, "name": "Site", "type": "endpoint"} if site_id else None
-            ),
-        },
+        "identification": identification,
         "ipAddress": ip,
         "overview": {"status": status},
         "attributes": attributes or None,
@@ -211,6 +215,24 @@ def test_second_run_is_idempotent(db_session, subscriber, catalog_offer):
     assert second["edges_set"] == 0
     assert second["matched"] == 0
     assert db_session.query(CPEDevice).count() == 1
+
+
+def test_sync_refreshes_observed_cpe_firmware(db_session, subscriber, catalog_offer):
+    _ap_node(db_session)
+    _active_subscription(db_session, subscriber, catalog_offer, STATION_MAC)
+    first_payload = _wireless_payload()
+    first_payload[1]["identification"]["firmwareVersion"] = "8.7.19"
+    sync(db_session, FakeUispClient(devices=first_payload))
+    cpe = db_session.query(CPEDevice).filter_by(uisp_device_id=STATION_ID).one()
+    assert cpe.firmware_version == "8.7.19"
+
+    second_payload = _wireless_payload()
+    second_payload[1]["identification"]["firmwareVersion"] = "8.7.20"
+    result = sync(db_session, FakeUispClient(devices=second_payload))
+
+    db_session.refresh(cpe)
+    assert cpe.firmware_version == "8.7.20"
+    assert result["updated"] == 1
 
 
 def test_sync_never_overwrites_human_set_fields(db_session, subscriber):

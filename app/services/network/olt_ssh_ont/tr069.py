@@ -8,6 +8,10 @@ import re
 from paramiko.ssh_exception import SSHException
 
 from app.models.network import OLTDevice
+from app.services.network.huawei_cli_response import (
+    is_huawei_cli_unsupported,
+    is_huawei_ont_offline,
+)
 from app.services.network.huawei_command_profiles import get_huawei_command_profile
 from app.services.network.olt_ssh_ont._common import (
     _SSH_CONNECTION_ERRORS,
@@ -270,7 +274,7 @@ def bind_tr069_server_profile(
 
         cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
-        if core.is_error_output(output) and "unknown command" in output.lower():
+        if core.is_error_output(output) and is_huawei_cli_unsupported(output):
             # Some Huawei builds expect only the ONT ID after entering
             # `interface gpon F/S`; the port is already implied by context.
             fallback_cmd = f"ont tr069-server-config {ont_id} profile-id {profile_id}"
@@ -302,7 +306,7 @@ def bind_tr069_server_profile(
         if core.is_error_output(reset_out):
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            if "ont is not online" in reset_out.lower():
+            if is_huawei_ont_offline(reset_out):
                 logger.info(
                     "TR-069 bind succeeded but reset skipped because ONT is offline: olt=%s fsp=%s ont_id=%s profile_id=%s",
                     olt.name,

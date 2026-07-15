@@ -25,6 +25,10 @@ from app.models.router_management import (
     RouterStatus,
 )
 from app.services.db_session_adapter import db_session_adapter
+from app.services.device_adapter_binding import (
+    AdapterBindingError,
+    assert_adapter_binding,
+)
 from app.services.network_operations import network_operations
 from app.services.router_management.config import RouterConfigService
 from app.services.router_management.config_export import fetch_config_export
@@ -38,6 +42,8 @@ from app.services.router_management.write_adapter import (
     RouterPostWriteReadbackError,
     RouterSotWriteAdapter,
     RouterWriteRejected,
+    RouterWriteUnsupported,
+    routeros_adapter_binding,
 )
 
 logger = logging.getLogger(__name__)
@@ -350,6 +356,22 @@ def execute_config_push(push_id: str) -> dict:
                 db.commit()
                 skipped_count += 1
                 continue
+
+            if not push.dry_run:
+                try:
+                    operation = network_operations.get(db, str(result.operation_id))
+                    assert_adapter_binding(
+                        operation.input_payload,
+                        routeros_adapter_binding(router),
+                    )
+                except (AdapterBindingError, RouterWriteUnsupported) as exc:
+                    message = f"RouterOS operation requires replanning: {exc}"
+                    _mark_result_failed(db, result, message)
+                    db.commit()
+                    fail_count += 1
+                    if push.failure_policy == "abort":
+                        abort_remaining = True
+                    continue
 
             start_time = time.time()
             apply_payload: dict | None = None

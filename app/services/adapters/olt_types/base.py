@@ -14,8 +14,14 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
+
+from app.services.device_adapter_binding import (
+    AdapterBinding,
+    DeviceIdentity,
+    stable_revision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +55,22 @@ class OltCapabilities:
     supports_ont_port_vlan: bool = True
     supports_traffic_table: bool = True
 
+    @classmethod
+    def conservative(cls) -> OltCapabilities:
+        """Return a profile that permits no model-dependent OLT writes."""
+        return cls(
+            wan_provisioning_mode=WanProvisioningMode.TR069_ONLY.value,
+            command_profile_name="unsupported",
+            requires_slow_send=True,
+            supports_ont_internet_config=False,
+            supports_ont_wan_config=False,
+            supports_ont_home_gateway_config=False,
+            supports_slash_fsp_display=False,
+            supports_ont_wifi_config=False,
+            supports_ont_port_vlan=False,
+            supports_traffic_table=False,
+        )
+
 
 @dataclass
 class OltTypeAdapter:
@@ -74,6 +96,40 @@ class OltTypeAdapter:
 
     # Notes
     notes: str | None = None
+
+    @property
+    def revision(self) -> str:
+        """Deterministic code-profile revision pinned into planned operations."""
+        return stable_revision(
+            {
+                "name": self.name,
+                "vendor": self.vendor,
+                "model_patterns": self.model_patterns,
+                "firmware_patterns": self.firmware_patterns,
+                "capabilities": asdict(self.capabilities),
+            }
+        )
+
+    def binding(
+        self,
+        *,
+        vendor: str,
+        model: str,
+        firmware: str | None = None,
+        software_version: str | None = None,
+        hardware_revision: str | None = None,
+    ) -> AdapterBinding:
+        return AdapterBinding(
+            adapter_name=self.name,
+            adapter_revision=self.revision,
+            identity=DeviceIdentity(
+                vendor=vendor,
+                model=model,
+                firmware_version=firmware,
+                software_version=software_version,
+                hardware_revision=hardware_revision,
+            ),
+        )
 
     def matches_model(self, model: str | None) -> bool:
         """Check if this adapter matches the given model."""
@@ -141,6 +197,7 @@ class OltTypeRegistry:
     def find(
         self,
         *,
+        vendor: str | None = None,
         model: str | None = None,
         firmware: str | None = None,
     ) -> OltTypeAdapter | None:
@@ -149,26 +206,49 @@ class OltTypeRegistry:
         Returns first matching adapter or None.
         """
         for adapter in self._adapters:
+            if vendor and adapter.vendor.casefold() not in vendor.casefold():
+                continue
             if adapter.matches(model=model, firmware=firmware):
                 return adapter
         return None
 
+    def resolve_binding(
+        self,
+        *,
+        vendor: str,
+        model: str,
+        firmware: str | None = None,
+        software_version: str | None = None,
+        hardware_revision: str | None = None,
+    ) -> AdapterBinding | None:
+        """Resolve the exact model/firmware profile and identity as one unit."""
+        adapter = self.find(vendor=vendor, model=model, firmware=firmware)
+        if adapter is None:
+            return None
+        return adapter.binding(
+            vendor=vendor,
+            model=model,
+            firmware=firmware,
+            software_version=software_version,
+            hardware_revision=hardware_revision,
+        )
+
     def get_capabilities(
         self,
         *,
+        vendor: str | None = None,
         model: str | None = None,
         firmware: str | None = None,
     ) -> OltCapabilities:
         """Get capabilities for an OLT based on model/firmware.
 
-        Returns matched adapter's capabilities, or default capabilities
-        (all features enabled) if no match.
+        Returns the matched adapter's capabilities. Unknown hardware is
+        read-only: model-dependent writes are disabled until mapped.
         """
-        adapter = self.find(model=model, firmware=firmware)
+        adapter = self.find(vendor=vendor, model=model, firmware=firmware)
         if adapter:
             return adapter.capabilities
-        # Default: all capabilities enabled
-        return OltCapabilities()
+        return OltCapabilities.conservative()
 
     def names(self) -> list[str]:
         """Return all registered adapter names."""

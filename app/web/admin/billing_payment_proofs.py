@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_billing_payment_proofs as web_payment_proofs_service
-from app.services.auth_dependencies import require_permission
+from app.services.action_forms import ActionFormSubmission
+from app.services.auth_dependencies import has_permission, require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -52,7 +53,6 @@ def payment_proofs_list(
 @router.get(
     "/payment-proofs/{proof_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:proof:read"))],
 )
 def payment_proofs_detail(
     request: Request,
@@ -60,8 +60,36 @@ def payment_proofs_detail(
     error: str | None = None,
     message: str | None = None,
     db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission("billing:proof:read")),
 ):
-    state = web_payment_proofs_service.detail_data(db, proof_id=str(proof_id))
+    return _detail_response(
+        request,
+        proof_id,
+        db=db,
+        auth=auth,
+        error=error,
+        message=message,
+    )
+
+
+def _detail_response(
+    request: Request,
+    proof_id: UUID,
+    *,
+    db: Session,
+    auth: dict,
+    error: str | None = None,
+    message: str | None = None,
+    submission: ActionFormSubmission | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    can_review = has_permission(auth, db, "billing:proof:verify")
+    state = web_payment_proofs_service.detail_data(
+        db,
+        proof_id=str(proof_id),
+        can_review=can_review,
+        submission=submission,
+    )
     if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -82,6 +110,7 @@ def payment_proofs_detail(
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
+        status_code=status_code,
     )
 
 
@@ -124,7 +153,23 @@ def payment_proofs_verify(
             review_notes=review_notes,
         )
     except HTTPException as exc:
-        return _redirect(proof_id, error=str(exc.detail))
+        submission = web_payment_proofs_service.review_error_submission(
+            action_key=web_payment_proofs_service.VERIFY_ACTION_KEY,
+            values={
+                "amount": amount,
+                "auto_allocate": auto_allocate,
+                "review_notes": review_notes,
+            },
+            error=exc,
+        )
+        return _detail_response(
+            request,
+            proof_id,
+            db=db,
+            auth=auth,
+            submission=submission,
+            status_code=exc.status_code,
+        )
     return _redirect(proof_id, message="Proof verified and payment recorded")
 
 
@@ -148,7 +193,19 @@ def payment_proofs_reject(
             review_notes=review_notes,
         )
     except HTTPException as exc:
-        return _redirect(proof_id, error=str(exc.detail))
+        submission = web_payment_proofs_service.review_error_submission(
+            action_key=web_payment_proofs_service.REJECT_ACTION_KEY,
+            values={"review_notes": review_notes},
+            error=exc,
+        )
+        return _detail_response(
+            request,
+            proof_id,
+            db=db,
+            auth=auth,
+            submission=submission,
+            status_code=exc.status_code,
+        )
     return _redirect(proof_id, message="Proof rejected")
 
 
