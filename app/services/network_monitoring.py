@@ -178,6 +178,24 @@ def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeRepo
     return items
 
 
+def bandwidth_summary(db: Session, *, window_seconds: int = 600) -> dict[str, float]:
+    """Aggregate current downstream throughput across monitored devices.
+
+    Canonical read owner for the overview's live bandwidth figure: sums the most
+    recent ``rx_bps`` device metrics within the window. Returns raw bits/second;
+    unit formatting (Gbps/Mbps/Kbps) is a presentation concern for the caller.
+    """
+    cutoff = datetime.now(UTC) - timedelta(seconds=window_seconds)
+    total_bps = db.scalar(
+        select(func.coalesce(func.sum(DeviceMetric.value), 0)).where(
+            DeviceMetric.metric_type == MetricType.rx_bps,
+            DeviceMetric.recorded_at > cutoff,
+            DeviceMetric.value > 0,
+        )
+    )
+    return {"total_bps": float(total_bps or 0)}
+
+
 def uptime_report(db: Session, payload: UptimeReportRequest) -> UptimeReportResponse:
     if payload.period_end <= payload.period_start:
         raise HTTPException(
