@@ -1,7 +1,7 @@
 """Add prepaid cutover readiness evidence and retire duplicate min balance.
 
-Revision ID: 319_prepaid_enforcement_readiness
-Revises: 318_consolidated_settlement_reconciliation
+Revision ID: 320_prepaid_enforcement_readiness
+Revises: 319_device_projection_table
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "319_prepaid_enforcement_readiness"
-down_revision = "318_consolidated_settlement_reconciliation"
+revision = "320_prepaid_enforcement_readiness"
+down_revision = "319_device_projection_table"
 branch_labels = None
 depends_on = None
 
