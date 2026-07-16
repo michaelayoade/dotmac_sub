@@ -97,7 +97,6 @@ app.services.nas.backups
 app.services.nas.connection_rules
 app.services.nas.logs
 app.services.nas.templates
-app.services.nas.web_builders
 app.services.network._resolve
 app.services.network.acs_reachability
 app.services.network.authorization_presets
@@ -230,7 +229,6 @@ app.services.vendor_admin
 app.services.vendor_portal_operations
 app.services.vendor_purchase_invoices
 app.services.web_billing_invoice_batch
-app.services.web_billing_payments
 app.services.web_billing_reconciliation
 app.services.web_catalog_offers
 app.services.web_catalog_subscription_workflows

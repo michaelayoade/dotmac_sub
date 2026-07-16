@@ -1976,6 +1976,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ui.payments_list_projection",
+                module="app.services.web_billing_payments",
+                owns=(
+                    "admin payments searchable fields",
+                    "admin payments filter semantics",
+                    "admin payments stable sort and default-order semantics",
+                    "admin payments list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts", "financial.payments"),
+                notes=(
+                    "PAYMENTS_LIST_DEFINITION declares the list capabilities and "
+                    "build_payments_list_query normalizes/validates request state; "
+                    "build_payments_list_data remains the read owner that issues the "
+                    "SQL, status totals, and enrichment. The route validates through "
+                    "the contract and delegates. The CSV export intentionally reuses "
+                    "the read owner without a page cap (same canonical filter scope, "
+                    "no pagination). Gated by the existing granular "
+                    "billing:payment:read. Read-only: no admin bulk command declared, "
+                    "so no selection or bulk. Follow-up: decompose the read owner so "
+                    "list and export share a hoisted filter helper."
+                ),
+            ),
+            SOTService(
                 name="ui.support_ticket_list_projection",
                 module="app.services.web_support_tickets",
                 owns=(
@@ -2078,6 +2101,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Read-only: audit events are immutable observations with no admin "
                     "bulk command, so no selection or bulk is declared. Gated by the "
                     "existing granular audit:read."
+                ),
+            ),
+            SOTService(
+                name="ui.nas_list_projection",
+                module="app.services.nas.web_builders",
+                owns=(
+                    "admin NAS dashboard searchable fields",
+                    "admin NAS dashboard filter semantics",
+                    "admin NAS dashboard sort and default-order semantics",
+                    "admin NAS dashboard list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts", "network.nas_inventory"),
+                notes=(
+                    "NAS_LIST_DEFINITION declares the list capabilities and "
+                    "build_nas_list_query normalizes/validates request state; "
+                    "build_nas_dashboard_data is the read owner. SQL-expressible "
+                    "filters (vendor/nas_type/status/pop_site/search) paginate and "
+                    "count in the database via NasDevices.list/count; partner_org_id "
+                    "(tag) and olt_status (ping cache) are post-query filters that "
+                    "page over a bounded in-memory scan (logged if the bound is hit) "
+                    "rather than the prior unconditional 1000-row load-then-slice. "
+                    "Gated by the router-level granular network:nas:read/write. "
+                    "Read-only list: no admin bulk command declared."
                 ),
             ),
         ),
