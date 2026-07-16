@@ -1,7 +1,7 @@
 """Add reviewed consolidated-credit consumption reconciliation evidence.
 
-Revision ID: 320_consolidated_credit_consumption_reconciliation
-Revises: 319_device_projection_table
+Revision ID: 323_consolidated_credit_consumption_reconciliation
+Revises: 322_ledger_customer_position_effect
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "320_consolidated_credit_consumption_reconciliation"
-down_revision = "319_device_projection_table"
+revision = "323_consolidated_credit_consumption_reconciliation"
+down_revision = "322_ledger_customer_position_effect"
 branch_labels = None
 depends_on = None
 

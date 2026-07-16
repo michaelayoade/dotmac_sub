@@ -504,7 +504,7 @@ financial service:
   subscriber `LedgerEntry` it produced. `BillingAccount.balance` is updated only
   alongside the canonical ledger transaction.
 - Historical boundary: revision
-  `320_consolidated_credit_consumption_reconciliation` adds reviewed provenance
+  `323_consolidated_credit_consumption_reconciliation` adds reviewed provenance
   for a legacy transfer that changed a member receivable without recording the
   exact source-consumption structure. Inspection keeps the recorded balance,
   ledger-evidenced credit, projection drift, valid source credits, unlinked
@@ -557,7 +557,7 @@ Consolidated refunds and payment reversals remain under that scoped owner:
 - Cutover gate: revision `317_consolidated_payment_returns.py`, partial-surplus,
   full-refund, reversal, stale-preview, replay, dual-ledger, provider dispatch,
   admin/API dispatch, and sole-writer tests must remain green.
-- Historical boundary: revision `321_consolidated_return_reconciliation` adds
+- Historical boundary: revision `324_consolidated_return_reconciliation` adds
   read-only inspection, fingerprint-bound preview, locked confirmation,
   idempotent replay, actor audit, and one reviewed provenance row for an
   existing historical consolidated `PaymentRefund` or `PaymentReversal`.
@@ -575,24 +575,26 @@ Consolidated refunds and payment reversals remain under that scoped owner:
   than being reconstructed from a UI value, memo, current eligibility, or
   inferred billing state.
 - Missing-document boundary: revision
-  `322_consolidated_return_document_reconstruction` covers the narrower case
+  `325_consolidated_return_document_reconstruction` covers the narrower case
   where a historical consolidated payment already carries a return-compatible
   status and exact unclaimed return debits exist, but the `PaymentRefund` or
   `PaymentReversal` document is absent. The status is a consistency gate, not
   financial evidence. Preview binds a proposed document ID, explicit reviewed
-  amount, external source reference, exact selected debit partition, and exact
+  amount, non-secret external evidence reference, exact selected debit partition,
+  and exact
   processed provider event when provider-backed. Confirmation creates only the
   missing return document and reconstruction provenance, then composes the
-  revision-321 evidence owner for every structural link and derived payment
+  revision-324 evidence owner for every structural link and derived payment
   field. It posts no money, changes no billing-account balance, invoice,
   allocation consequence, or access state, and replays idempotently.
 - Reconstruction refusal: the selected evidence must derive the same
   `refunded`, `partially_refunded`, or `reversed` state already recorded on the
   historical payment. Succeeded/failed status, missing or synthetic settlement,
   projection drift, an existing reversal, incomplete/reused evidence, or an
-  existing return document that has not completed revision-321 reconciliation
+  existing return document that has not completed revision-324 reconciliation
   blocks reconstruction. No amount, type, or source reference is inferred from
-  the historical status.
+  the historical status. Bank rows, narrations, account details, credentials,
+  and other raw statement data are never stored in the reference.
 
 Imported-payment batch reversal is a separate migrated wrapper owner:
 
