@@ -2719,7 +2719,6 @@ class ConsolidatedPaymentReturnReconciliations:
         lock: bool = False,
         record_override: PaymentRefund | PaymentReversal | None = None,
         record_is_new: bool = False,
-        fingerprint_context: dict[str, object] | None = None,
     ) -> BillingAccountPaymentReturnReconciliationPreviewRead:
         if record_override is None:
             payment, record = cls._record(
@@ -3069,7 +3068,6 @@ class ConsolidatedPaymentReturnReconciliations:
             allocation_amount=allocation_amount,
             effects=effects,
             lock=lock,
-            fingerprint_context=fingerprint_context,
         )
 
     @classmethod
@@ -3094,7 +3092,6 @@ class ConsolidatedPaymentReturnReconciliations:
         allocation_amount: Decimal,
         effects: list[BillingAccountPaymentReturnAllocationEvidenceRead],
         lock: bool,
-        fingerprint_context: dict[str, object] | None,
     ) -> BillingAccountPaymentReturnReconciliationPreviewRead:
         provider_event: PaymentProviderEvent | None = None
         if payment.provider_id is not None:
@@ -3210,8 +3207,6 @@ class ConsolidatedPaymentReturnReconciliations:
                 "none_historical_return_evidence_no_access_decision"
             ),
         }
-        if fingerprint_context is not None:
-            values.update(fingerprint_context)
         fingerprint = hashlib.sha256(
             json.dumps(
                 values,

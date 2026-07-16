@@ -25,11 +25,16 @@ from app.schemas.billing import (
     BillingAccountCreditConsumptionReconciliationPreviewRead,
     BillingAccountCreditConsumptionReconciliationRequest,
     BillingAccountCreditConsumptionReconciliationResultRead,
+    BillingAccountMissingPaymentReturnEvidenceInspectionRead,
     BillingAccountPaymentConfirm,
     BillingAccountPaymentPreviewRead,
     BillingAccountPaymentPreviewRequest,
     BillingAccountPaymentRefundPreviewRead,
     BillingAccountPaymentRefundRequest,
+    BillingAccountPaymentReturnDocumentReconstructionConfirm,
+    BillingAccountPaymentReturnDocumentReconstructionPreviewRead,
+    BillingAccountPaymentReturnDocumentReconstructionRequest,
+    BillingAccountPaymentReturnDocumentReconstructionResultRead,
     BillingAccountPaymentReturnEvidenceInspectionRead,
     BillingAccountPaymentReturnReconciliationConfirm,
     BillingAccountPaymentReturnReconciliationPreviewRead,
@@ -1939,6 +1944,69 @@ def reconcile_consolidated_payment_return_evidence(
         payment_id,
         return_type,
         return_id,
+        payload,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    )
+
+
+@router.get(
+    "/consolidated-payments/{payment_id}/return-document-reconstruction/{return_type}/evidence",
+    response_model=BillingAccountMissingPaymentReturnEvidenceInspectionRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:read"))],
+)
+def inspect_missing_consolidated_payment_return_document(
+    payment_id: str,
+    return_type: str,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_return_reconciliations.inspect_missing_document_evidence(
+            db, payment_id, return_type
+        ),
+    )
+
+
+@router.post(
+    "/consolidated-payments/{payment_id}/return-document-reconstruction/{return_type}/preview",
+    response_model=BillingAccountPaymentReturnDocumentReconstructionPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:write"))],
+)
+def preview_missing_consolidated_payment_return_document(
+    payment_id: str,
+    return_type: str,
+    payload: BillingAccountPaymentReturnDocumentReconstructionRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_return_reconciliations.preview_document_reconstruction(
+            db, payment_id, return_type, payload
+        ),
+    )
+
+
+@router.post(
+    "/consolidated-payments/{payment_id}/return-document-reconstruction/{return_type}/reconstruct",
+    response_model=BillingAccountPaymentReturnDocumentReconstructionResultRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+)
+def reconstruct_missing_consolidated_payment_return_document(
+    payment_id: str,
+    return_type: str,
+    payload: BillingAccountPaymentReturnDocumentReconstructionConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    actor_type, actor_id = _financial_actor(principal)
+    return billing_service.consolidated_payment_return_reconciliations.reconstruct_missing_document(
+        db,
+        payment_id,
+        return_type,
         payload,
         actor_type=actor_type,
         actor_id=actor_id,

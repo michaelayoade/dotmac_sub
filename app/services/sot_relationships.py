@@ -198,6 +198,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "consolidated return idempotency and actor audit evidence",
                     "historical consolidated refund/reversal evidence reconciliation",
                     "exact historical consolidated return provenance links",
+                    "historical consolidated return document reconstruction",
+                    "reviewed historical return source references",
                     "consolidated payment access-reconciliation handoff",
                 ),
                 depends_on=(
