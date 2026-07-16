@@ -131,6 +131,17 @@ def native_read_enabled(db: Session) -> bool:
     return control_registry.is_enabled(db, "referrals.native_read")
 
 
+def native_write_enabled(db: Session) -> bool:
+    """Phase 3 write-flip flag (§4.3): native refer-a-friend capture vs the
+    CRM write-through. OFF (default) — ``POST /me/referrals`` and the portal
+    form write through ``referrals_mirror`` (409 for subscribers without a
+    CRM link); ON — ``Referrals.refer_a_friend`` captures natively (no CRM
+    link required). Reward crediting is owned by ``financial.credit_notes``
+    behind the shared ``referral:{id}`` idempotency namespace either way.
+    """
+    return control_registry.is_enabled(db, "referrals.native_write")
+
+
 def share_url(code: str) -> str:
     """The public share link for a referral code (the ``/r/{code}`` deep link).
 
