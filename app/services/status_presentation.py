@@ -15,8 +15,8 @@ from app.models.catalog import SubscriptionStatus
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.catalog import OfferStatus
 from app.models.project import ProjectStatus, ProjectTaskStatus
-from app.models.provisioning import AppointmentStatus, ServiceOrderStatus
-from app.models.sales import QuoteStatus, SalesOrderStatus, TaskStatus
+from app.models.provisioning import AppointmentStatus, ServiceOrderStatus, TaskStatus
+from app.models.sales import QuoteStatus, SalesOrderStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
 from app.models.vendor_routes import VendorPurchaseInvoiceStatus
