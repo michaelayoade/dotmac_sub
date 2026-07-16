@@ -641,6 +641,44 @@ class TestBuildBeatSchedule:
         assert row.enabled is True
         assert row.interval_seconds == 900
 
+    def test_disables_ont_reconcile_row_via_canonical_control(
+        self, db_session, monkeypatch
+    ):
+        db_session.add(
+            ScheduledTask(
+                name="ont_reconcile_sweep",
+                task_name="app.tasks.ont_reconcile.run_ont_reconcile_sweep",
+                schedule_type=ScheduleType.interval,
+                interval_seconds=900,
+                enabled=True,
+            )
+        )
+        db_session.commit()
+        control_registry.update_canonical_feature_controls(
+            db_session, payload={"network.ont_reconcile": False}
+        )
+        db_session.commit()
+        monkeypatch.setattr(db_session, "close", lambda: None)
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=db_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        row = (
+            db_session.query(ScheduledTask)
+            .filter(
+                ScheduledTask.task_name
+                == "app.tasks.ont_reconcile.run_ont_reconcile_sweep"
+            )
+            .first()
+        )
+        assert row is not None
+        assert row.enabled is False
+
     def test_excludes_gis_sync_when_canonical_control_disabled(self, monkeypatch):
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
         monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)

@@ -211,6 +211,14 @@ def test_default_off_feature_stays_off_until_enabled(db_session):
     assert control_registry.is_enabled(db_session, "network.olt_profile_sync") is True
 
 
+def test_ont_reconcile_defaults_on_and_can_be_disabled(db_session):
+    assert control_registry.is_enabled(db_session, "network.ont_reconcile") is True
+
+    _set_canonical(db_session, "network.ont_reconcile", False)
+
+    assert control_registry.is_enabled(db_session, "network.ont_reconcile") is False
+
+
 def test_retired_alias_rows_do_not_change_registered_controls(db_session):
     from app.models.domain_settings import SettingDomain
 

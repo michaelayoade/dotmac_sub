@@ -19,7 +19,9 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.services.adapters.base import AdapterResult
 from app.services.network.huawei_cli_response import (
+    HuaweiCliErrorCode,
     HuaweiCliResource,
+    classify_huawei_cli_response,
     is_huawei_resource_absent,
 )
 
@@ -47,6 +49,16 @@ class OltOperationResult(AdapterResult):
 
     # For create_service_port: the assigned service-port index
     service_port_index: int | None = None
+
+    def __post_init__(self) -> None:
+        """Attach sanitized Huawei response evidence before callers project it."""
+        response = classify_huawei_cli_response(self.message)
+        if response.error_code == HuaweiCliErrorCode.NONE:
+            return
+        self.data = dict(self.data or {})
+        self.data.setdefault("huawei_cli_response", response.to_evidence())
+        if self.error_code is None:
+            self.error_code = response.error_code.value
 
 
 @runtime_checkable
