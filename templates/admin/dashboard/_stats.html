@@ -66,16 +66,6 @@
         "%d offline" % dev_offline if dev_offline else "All reachable",
         progress=dev_pct
     ) }}
-    {{ kpi_tile(
-        "ONT Service",
-        "%d / %d" | format(ont_on, ont_total),
-        "/admin/network/onts",
-        "violet",
-        "%d low signal · PON %d/%d" | format(ont_low_signal, ont_olt_on, ont_olt_off)
-            if ont_total else
-        "No ONTs monitored yet",
-        progress=ont_pct
-    ) }}
     {% endif %}
     {% if show_financials %}
     {{ kpi_tile(
@@ -100,15 +90,6 @@
         "/admin/network/alarms",
         "rose",
         "%d critical" % stats.alarms_critical
-    ) }}
-    {% endif %}
-    {% if show_network %}
-    {{ kpi_tile(
-        "PON Interfaces",
-        "%d / %d" | format(pon_up, pon_total),
-        "/admin/network/pon-interfaces",
-        "cyan",
-        "%d down, %d unknown" % (pon_down, pon_unknown) if pon_total else "No monitored PON interfaces"
     ) }}
     {% endif %}
 </section>

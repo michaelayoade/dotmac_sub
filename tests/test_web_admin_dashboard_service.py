@@ -3,10 +3,8 @@ from app.models.network_monitoring import (
     InterfaceStatus,
     NetworkDevice,
 )
-from app.services.web_admin_dashboard import (
-    _build_online_customer_summary,
-    _build_pon_interface_summary,
-)
+from app.services.network_monitoring import pon_interface_summary
+from app.services.web_admin_dashboard import _build_online_customer_summary
 
 
 def test_build_online_customer_summary_counts_distinct_customers(
@@ -100,7 +98,7 @@ def test_build_pon_interface_summary_counts_only_pon_like_interfaces(db_session)
     )
     db_session.commit()
 
-    summary = _build_pon_interface_summary(db_session)
+    summary = pon_interface_summary(db_session)
 
     assert summary == {
         "up": 1,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -116,3 +116,18 @@ def persist_authorized_ont_inventory(
         candidate.resolved_at = now
 
     db.flush()
+
+
+def pending_candidate_count(db: Session) -> int:
+    """Count active autofind candidates awaiting configuration.
+
+    Canonical owner of the overview's "unconfigured ONTs" figure.
+    """
+    return int(
+        db.scalar(
+            select(func.count(OltAutofindCandidate.id)).where(
+                OltAutofindCandidate.is_active.is_(True)
+            )
+        )
+        or 0
+    )
