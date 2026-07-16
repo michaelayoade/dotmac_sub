@@ -1,19 +1,19 @@
-"""Export independently reconstructed prepaid funding facts for owner planning.
+"""Export a sealed, independently reconstructed prepaid funding manifest.
 
-This command is the bridge between the billing alignment replay and
-``plan_prepaid_balance_sweep.py --funding-snapshot``. It does not decide who is
-prepaid, how much funding is required, whether an account is shielded, or what
-access consequence follows:
+This command is the bridge between the billing alignment replay and the final
+prepaid funding reconstruction owner. It does not decide who is prepaid, how
+much funding is required, whether an account is shielded, or what access
+consequence follows:
 
 * ``financial.prepaid_enforcement`` selects the candidate cohort;
 * the alignment replay reconstructs available funding from the final Splynx
   position plus proven post-legacy facts;
-* ``financial.prepaid_threshold`` supplies the canonical required balance;
-* the enforcement planner applies profile, activation, grace, shield, health,
-  and lifecycle policy.
+* the reconstruction owner verifies and materializes the sealed baseline;
+* enforcement services apply profile, activation, shield, health, and lifecycle
+  policy from config-owned inputs.
 
 The export is complete-or-error. If any candidate lacks a source baseline or
-has an incomplete replay, no planner-consumable funding file is written. An
+has an incomplete replay, no sealed reconstruction file is written. An
 optional blocker manifest contains UUIDs and reason codes only—no customer
 identity, credentials, free text, or delivery coordinates.
 
@@ -38,9 +38,17 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
+from app.services import display_format
 from app.services.prepaid_enforcement_planner import candidate_prepaid_account_ids
-from app.services.prepaid_threshold import resolve_prepaid_thresholds
+from app.services.prepaid_funding_attestation import (
+    RECONSTRUCTION_MANIFEST_SCHEMA,
+    candidate_cohort_sha256,
+    canonical_payload_sha256,
+    sign_prepaid_funding_manifest,
+)
+from app.services.secrets import is_openbao_ref, resolve_secret
 from scripts.one_off.billing_alignment_audit import (
+    LEGACY_FINANCIAL_REPLAY_AT,
     _batch_reconstructed_positions,
     _configure_read_only_session,
 )
@@ -56,60 +64,116 @@ def _money(value: Decimal) -> str:
     return f"{value:.2f}"
 
 
+def _payload_sha256(payload: dict[str, Any]) -> str:
+    return canonical_payload_sha256(payload)
+
+
 @dataclass(frozen=True)
 class FundingSnapshotExport:
     captured_at: datetime
     source: str
+    currency: str
     candidate_ids: tuple[str, ...]
     positions: dict[str, Decimal]
-    thresholds: dict[str, Decimal]
     incomplete: dict[str, tuple[str, ...]]
     missing_baseline: tuple[str, ...]
-    missing_threshold: tuple[str, ...]
 
     @property
     def ready(self) -> bool:
-        return not (self.incomplete or self.missing_baseline or self.missing_threshold)
+        return not (self.incomplete or self.missing_baseline)
 
     def funding_payload(self) -> dict[str, Any]:
         if not self.ready:
-            raise ValueError("funding snapshot is blocked by incomplete provenance")
+            raise ValueError(
+                "funding reconstruction is blocked by incomplete provenance"
+            )
+        blocker_manifest = self.blocker_manifest_payload()
         return {
+            "schema": RECONSTRUCTION_MANIFEST_SCHEMA,
             "source": self.source,
             "captured_at": self.captured_at.isoformat().replace("+00:00", "Z"),
+            "currency": self.currency,
+            "candidate_accounts": len(self.candidate_ids),
+            "candidate_cohort_sha256": blocker_manifest["candidate_cohort_sha256"],
+            "blocker_manifest_sha256": _payload_sha256(blocker_manifest),
+            "blocker_count": len(blocker_manifest["blockers"]),
+            "blocker_manifest": blocker_manifest,
             "accounts": [
                 {
                     "account_id": account_id,
                     "available_balance": _money(self.positions[account_id]),
-                    "required_balance": _money(self.thresholds[account_id]),
                 }
                 for account_id in self.candidate_ids
             ],
         }
 
+    def sealed_funding_payload(
+        self,
+        *,
+        private_key_pem: str,
+        signed_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        return sign_prepaid_funding_manifest(
+            self.funding_payload(),
+            private_key_pem=private_key_pem,
+            signed_at=signed_at,
+        )
+
+    def blocker_manifest_payload(self) -> dict[str, Any]:
+        blockers = {
+            (account_id, reason)
+            for account_id, reasons in self.incomplete.items()
+            for reason in reasons
+        }
+        blockers.update(
+            (account_id, "missing_source_baseline")
+            for account_id in self.missing_baseline
+        )
+        return {
+            "schema": "dotmac.prepaid_funding_blockers.v1",
+            "source": self.source,
+            "captured_at": self.captured_at.isoformat().replace("+00:00", "Z"),
+            "financial_handoff_at": LEGACY_FINANCIAL_REPLAY_AT.isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "currency": self.currency,
+            "candidate_accounts": len(self.candidate_ids),
+            "candidate_cohort_sha256": candidate_cohort_sha256(self.candidate_ids),
+            "blockers": [
+                {"account_id": account_id, "reason": reason}
+                for account_id, reason in sorted(blockers)
+            ],
+        }
+
+    @property
+    def blocker_manifest_sha256(self) -> str:
+        return _payload_sha256(self.blocker_manifest_payload())
+
     def diagnostics_payload(self) -> dict[str, Any]:
         reason_counts = Counter(
             reason for reasons in self.incomplete.values() for reason in reasons
         )
+        blocker_manifest = self.blocker_manifest_payload()
         return {
             "source": self.source,
             "captured_at": self.captured_at.isoformat().replace("+00:00", "Z"),
+            "currency": self.currency,
             "ready": self.ready,
             "candidate_accounts": len(self.candidate_ids),
             "reconstructed_accounts": len(self.positions),
             "blocker_counts": {
                 "incomplete_replay": len(self.incomplete),
                 "missing_source_baseline": len(self.missing_baseline),
-                "missing_threshold": len(self.missing_threshold),
             },
             "incomplete_reason_counts": dict(sorted(reason_counts.items())),
+            "blocker_manifest_sha256": _payload_sha256(blocker_manifest),
+            "blocker_manifest": blocker_manifest,
             "blockers": {
                 "incomplete_replay": [
                     {"account_id": account_id, "reasons": list(reasons)}
                     for account_id, reasons in sorted(self.incomplete.items())
                 ],
                 "missing_source_baseline": list(self.missing_baseline),
-                "missing_threshold": list(self.missing_threshold),
             },
         }
 
@@ -134,12 +198,6 @@ def build_prepaid_funding_snapshot(
         list(candidate_ids),
         snapshot_at=captured_at,
     )
-    thresholds = resolve_prepaid_thresholds(
-        db,
-        list(candidate_ids),
-        now=captured_at,
-    )
-
     candidate_set = set(candidate_ids)
     positions = {
         account_id: amount
@@ -154,22 +212,14 @@ def build_prepaid_funding_snapshot(
     missing_baseline = tuple(
         account_id for account_id in candidate_ids if account_id not in positions
     )
-    missing_threshold = tuple(
-        account_id for account_id in candidate_ids if account_id not in thresholds
-    )
     return FundingSnapshotExport(
         captured_at=captured_at,
         source=source_label,
+        currency=display_format.default_currency(db),
         candidate_ids=candidate_ids,
         positions=positions,
-        thresholds={
-            account_id: thresholds[account_id]
-            for account_id in candidate_ids
-            if account_id in thresholds
-        },
         incomplete=incomplete,
         missing_baseline=missing_baseline,
-        missing_threshold=missing_threshold,
     )
 
 
@@ -203,12 +253,28 @@ def _parse_timestamp(value: str) -> datetime:
     return _as_utc(parsed)
 
 
+def _resolve_signing_key(reference: str | None) -> str:
+    normalized = str(reference or "").strip()
+    if not is_openbao_ref(normalized):
+        raise RuntimeError(
+            "ready export requires --signing-key-ref with an OpenBao reference"
+        )
+    resolved = str(resolve_secret(normalized) or "").strip()
+    if not resolved:
+        raise RuntimeError("prepaid reconstruction signing key is empty")
+    return resolved
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot-at", type=_parse_timestamp, required=True)
     parser.add_argument("--source", required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--blockers-out", type=Path)
+    parser.add_argument(
+        "--signing-key-ref",
+        help="OpenBao reference to the Ed25519 private signing key",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
         "--statement-timeout-ms",
@@ -241,7 +307,11 @@ def main() -> int:
         diagnostics = export.diagnostics_payload()
         print(
             json.dumps(
-                {key: value for key, value in diagnostics.items() if key != "blockers"},
+                {
+                    key: value
+                    for key, value in diagnostics.items()
+                    if key not in {"blockers", "blocker_manifest"}
+                },
                 indent=2,
                 sort_keys=True,
             )
@@ -249,10 +319,13 @@ def main() -> int:
         if args.blockers_out is not None:
             _write_json(args.blockers_out, diagnostics, overwrite=args.overwrite)
         if not export.ready:
-            print("BLOCKED - no planner-consumable funding snapshot was written")
+            print("BLOCKED - no sealed funding reconstruction was written")
             return 2
-        _write_json(args.out, export.funding_payload(), overwrite=args.overwrite)
-        print(f"Funding snapshot written: {args.out}")
+        sealed = export.sealed_funding_payload(
+            private_key_pem=_resolve_signing_key(args.signing_key_ref),
+        )
+        _write_json(args.out, sealed, overwrite=args.overwrite)
+        print(f"Sealed funding reconstruction written: {args.out}")
         return 0
     finally:
         db.rollback()

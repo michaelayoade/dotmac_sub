@@ -24,7 +24,6 @@ from sqlalchemy.orm import Session
 from app.models.catalog import Subscription
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber
-from app.services.access_resolution import resolve_prepaid_funding
 from app.services.account_lifecycle import (
     SUSPENDED_EQUIVALENT,
     compute_account_status,
@@ -34,6 +33,9 @@ from app.services.account_lifecycle import (
     restore_subscription,
 )
 from app.services.collections import has_overdue_balance
+from app.services.customer_financial_position import (
+    get_native_customer_financial_balance,
+)
 
 _TRIGGER = "admin"
 _RESOLVED_BY = "stale_overdue_lock_reconcile"
@@ -62,11 +64,23 @@ class ReconcileResult:
 
 
 def _ledger_covers_account(db: Session, subscriber_id) -> tuple[bool, Decimal, Decimal]:
+    """Decide an overdue repair from the native signed receivable position.
+
+    The reason being reconciled is ``overdue``, so billing mode does not change
+    the decision owner. Prepaid affordability belongs to the separate prepaid
+    lock resolver. Archived Splynx transactions are never a runtime fallback.
+    """
     account = db.get(Subscriber, subscriber_id)
     if account is None:
         return False, Decimal("0.00"), Decimal("0.00")
-    funding = resolve_prepaid_funding(db, account)
-    return funding.funded, funding.available_balance, funding.required_balance
+    position = get_native_customer_financial_balance(db, account.id)
+    if not position.automation_safe:
+        return False, position.available_balance, Decimal("0.00")
+    return (
+        position.available_balance >= Decimal("0.00"),
+        position.available_balance,
+        Decimal("0.00"),
+    )
 
 
 def find_candidates(
@@ -102,9 +116,11 @@ def reconcile(
 
     Default mode restores only accounts with no overdue debt. With
     ``restore_ledger_covered=True``, accounts that still have overdue invoice
-    rows are also eligible when local available balance covers their minimum
-    required balance. That is the production repair for pre-gate dunning locks:
-    it resolves the enforcement lock without changing invoices or money.
+    rows are also eligible when the native signed financial position is
+    non-negative. That is the production repair for pre-gate dunning locks: it
+    resolves the enforcement lock without changing invoices or money. Archived
+    Splynx rows and prepaid affordability thresholds are not inputs to an
+    ``overdue``-reason repair.
     """
     candidates = find_candidates(db, sub_ids=sub_ids, limit=limit)
     result = ReconcileResult(applied=apply, candidates=0)

@@ -71,6 +71,24 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.prepaid_threshold",
         "customer.financial_position",
     )
+    assert sot_relationships.dependencies_for("customer.financial_position") == (
+        "financial.ledger",
+        "financial.prepaid_funding_reconstruction",
+    )
+    assert sot_relationships.dependencies_for("financial.prepaid_enforcement") == (
+        "financial.prepaid_funding_reconstruction",
+        "financial.access_resolution",
+        "financial.billing_profile",
+        "financial.prepaid_threshold",
+        "financial.grace_policy",
+    )
+    assert sot_relationships.dependencies_for(
+        "financial.prepaid_enforcement_readiness"
+    ) == (
+        "financial.prepaid_funding_reconstruction",
+        "financial.prepaid_enforcement",
+        "financial.access_resolution",
+    )
     assert sot_relationships.dependencies_for("financial.billing_scheduled") == (
         "financial.ledger",
         "financial.access_resolution",
@@ -79,10 +97,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     financial_services = sot_relationships.service_names_for_domain("financial_access")
     assert "financial.payment_arrangements" in financial_services
     assert "financial.billing_health" in financial_services
+    assert "financial.prepaid_funding_reconstruction" in financial_services
     assert sot_relationships.dependencies_for("financial.collections_scheduled") == (
         "financial.dunning",
         "financial.access_resolution",
         "financial.prepaid_enforcement",
+        "financial.prepaid_enforcement_readiness",
     )
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
         "financial.payment_provider_events",

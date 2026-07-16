@@ -57,7 +57,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "customer-visible financial position",
                     "bounded cohort financial projections",
                 ),
-                depends_on=("financial.ledger",),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.prepaid_funding_reconstruction",
+                ),
             ),
             SOTService(
                 name="customer.service_status",
@@ -127,6 +130,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "append-only ledger record lifecycle",
                     "ledger reversal invariants",
                     "financial transaction history",
+                ),
+            ),
+            SOTService(
+                name="financial.prepaid_funding_reconstruction",
+                module="app.services.prepaid_funding_reconstruction",
+                owns=(
+                    "reviewed full-cohort prepaid funding manifests",
+                    "prepaid opening-position baselines and supersession",
+                    "final prepaid funding authority cutover",
+                    "opening balance plus post-cutover native funding projection",
+                ),
+                depends_on=("financial.ledger",),
+                notes=(
+                    "The first approved batch permanently retires Splynx funding "
+                    "authority. Missing pre-cutover opening balances fail closed; "
+                    "later corrections are reviewed append-only supersessions. "
+                    "Splynx exports and bank statements are migration evidence, "
+                    "never runtime money sources or fallbacks."
                 ),
             ),
             SOTService(
@@ -359,13 +380,33 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "prepaid enforcement candidate cohort",
                     "prepaid warn/suspend/restore planning",
-                    "prepaid enforcement readiness reporting",
+                    "prepaid policy projection consumed by dry-run and execution",
                 ),
                 depends_on=(
-                    "financial.ledger",
+                    "financial.prepaid_funding_reconstruction",
+                    "financial.access_resolution",
                     "financial.billing_profile",
                     "financial.prepaid_threshold",
                     "financial.grace_policy",
+                ),
+            ),
+            SOTService(
+                name="financial.prepaid_enforcement_readiness",
+                module="app.services.prepaid_enforcement_readiness",
+                owns=(
+                    "prepaid independent-funding cutover comparison",
+                    "prepaid enforcement activation prerequisite",
+                    "prepaid funding readiness evidence",
+                ),
+                depends_on=(
+                    "financial.prepaid_funding_reconstruction",
+                    "financial.prepaid_enforcement",
+                    "financial.access_resolution",
+                ),
+                notes=(
+                    "Readiness proves full-cohort parity and gates activation. It "
+                    "never supplies a runtime balance; live suspension and restore "
+                    "always resolve funding from Sub's financial owners."
                 ),
             ),
             SOTService(
@@ -430,8 +471,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "billable service classification",
                     "RADIUS access decision",
-                    "postpaid/prepaid enforcement cohorts",
                     "financial suspension/restoration eligibility",
+                    "currency-bound prepaid funding decision",
                 ),
                 depends_on=(
                     "financial.billing_profile",
@@ -503,6 +544,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.dunning",
                     "financial.access_resolution",
                     "financial.prepaid_enforcement",
+                    "financial.prepaid_enforcement_readiness",
                 ),
             ),
             SOTService(

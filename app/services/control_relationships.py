@@ -127,6 +127,18 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
         rule="Sync precedes native reads; native reads precede the write flip.",
     ),
     ControlRelationship(
+        name="prepaid_enforcement_cutover",
+        mode=RelationshipMode.chain,
+        members=(
+            "financial.prepaid_funding_reconciliation",
+            "collections.prepaid_balance_enforcement",
+        ),
+        rule=(
+            "A fresh full-cohort funding reconciliation must be recorded before "
+            "prepaid enforcement is enabled."
+        ),
+    ),
+    ControlRelationship(
         name="notification_channels",
         mode=RelationshipMode.fanout,
         members=("web", "email", "push", "nextcloud", "whatsapp"),
@@ -615,6 +627,27 @@ def audit_feature_control_relationships(
                 ),
             )
         )
+    if enabled("collections.prepaid_balance_enforcement"):
+        from app.services.prepaid_enforcement_readiness import (
+            prepaid_enforcement_readiness_block_reason,
+        )
+
+        reason = prepaid_enforcement_readiness_block_reason(db)
+        if reason:
+            findings.append(
+                ControlFinding(
+                    code=reason,
+                    severity="error",
+                    message=(
+                        "Prepaid enforcement requires a current, full-cohort "
+                        f"funding readiness record ({reason})."
+                    ),
+                    members=(
+                        "financial.prepaid_funding_reconciliation",
+                        "collections.prepaid_balance_enforcement",
+                    ),
+                )
+            )
     return findings
 
 

@@ -531,6 +531,14 @@ The merge is a safety boundary, not authorization to enable enforcement; the
 control remains off pending a complete independent-funding snapshot and the
 explicit policy/activation decision.
 
+**Current-policy update (2026-07-16):** the temporary three-day activation
+floor described above is superseded. Grace is resolved from account → policy
+set → billing-mode configuration, the approved prepaid default is zero, and
+zero means first-sweep enforcement. Activation no longer rewrites old timers.
+A durable full-cohort funding-parity record now gates both the feature-control
+writer and runtime adverse actions; the independent snapshot remains evidence,
+not a runtime balance source.
+
 No persistent production table, RADIUS table, lock, timer or setting was
 written. Every temporary file was deleted from the production container and
 verified absent.

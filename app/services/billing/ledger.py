@@ -55,6 +55,7 @@ class LedgerEntries(ListResponseMixin):
         db: Session,
         payload: LedgerEntryCreate,
         *,
+        affects_customer_position: bool = True,
         commit: bool = True,
     ) -> LedgerEntry:
         """Post a validated ledger entry.
@@ -69,7 +70,10 @@ class LedgerEntries(ListResponseMixin):
             str(payload.invoice_id) if payload.invoice_id else None,
             str(payload.payment_id) if payload.payment_id else None,
         )
-        entry = LedgerEntry(**payload.model_dump())
+        entry = LedgerEntry(
+            **payload.model_dump(),
+            affects_customer_position=affects_customer_position,
+        )
         db.add(entry)
         if commit:
             db.commit()
@@ -238,6 +242,7 @@ class LedgerEntries(ListResponseMixin):
             currency=original.currency,
             memo=memo_text,
             reversal_of_entry_id=original.id,
+            affects_customer_position=original.affects_customer_position,
         )
         db.add(reversal)
         if commit:

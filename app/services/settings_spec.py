@@ -1008,10 +1008,21 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="prepaid_default_min_balance",
-        env_var="PREPAID_DEFAULT_MIN_BALANCE",
-        value_type=SettingValueType.string,
-        default="0.00",
+        key="prepaid_readiness_max_age_minutes",
+        env_var="PREPAID_READINESS_MAX_AGE_MINUTES",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=1,
+        label="Prepaid funding readiness maximum age (minutes)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="prepaid_activation_max_grace_days",
+        env_var="PREPAID_ACTIVATION_MAX_GRACE_DAYS",
+        value_type=SettingValueType.integer,
+        default=0,
+        min_value=0,
+        label="Maximum prepaid grace allowed at activation (days)",
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -1599,6 +1610,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="prepaid_reconstruction_attestation_public_key_ref",
+        env_var="PREPAID_RECONSTRUCTION_ATTESTATION_PUBLIC_KEY_REF",
+        value_type=SettingValueType.string,
+        default=None,
+        required=True,
+        is_secret=True,
+        label="Prepaid reconstruction attestation public key reference",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="default_invoice_status",
         env_var="BILLING_DEFAULT_INVOICE_STATUS",
         value_type=SettingValueType.string,
@@ -2093,6 +2114,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="0.00",
         label="Prepaid Default Minimum Balance",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="prepaid_enforcement_currency",
+        env_var="BILLING_PREPAID_ENFORCEMENT_CURRENCY",
+        value_type=SettingValueType.string,
+        default="NGN",
+        label="Prepaid Enforcement Currency",
     ),
     # ── Postpaid customer defaults ──
     SettingSpec(
