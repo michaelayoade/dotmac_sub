@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services import work_order_views
 
 
@@ -23,8 +23,8 @@ def _subscriber(db, **overrides) -> Subscriber:
     return sub
 
 
-def _work_order(db, subscriber: Subscriber, **overrides) -> WorkOrderMirror:
-    row = WorkOrderMirror(
+def _work_order(db, subscriber: Subscriber, **overrides) -> WorkOrder:
+    row = WorkOrder(
         crm_work_order_id=overrides.pop("crm_work_order_id", f"wo-{uuid4().hex[:8]}"),
         subscriber_id=subscriber.id,
         title=overrides.pop("title", "Fibre install"),

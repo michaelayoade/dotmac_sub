@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.models.dispatch import TechnicianProfile
 from app.models.field_location import FieldTechPresence
 from app.models.field_movement import FieldWorkOrderMovement
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 
 
 def _now() -> datetime:
@@ -114,26 +114,24 @@ def list_movement_work_orders(db: Session, *, limit: int = 200) -> list[dict]:
     """Distinct work orders that have recorded travel legs (playback picker)."""
     rows = (
         db.query(
-            FieldWorkOrderMovement.crm_work_order_id,
-            WorkOrderMirror.title,
+            WorkOrder.public_id,
+            WorkOrder.title,
         )
-        .outerjoin(
-            WorkOrderMirror,
-            WorkOrderMirror.id == FieldWorkOrderMovement.work_order_mirror_id,
+        .join(
+            FieldWorkOrderMovement,
+            WorkOrder.id == FieldWorkOrderMovement.work_order_mirror_id,
         )
         .order_by(FieldWorkOrderMovement.started_at.desc())
         .all()
     )
     seen: dict[str, str] = {}
-    for crm_work_order_id, title in rows:
-        if crm_work_order_id in seen:
+    for public_id, title in rows:
+        if public_id in seen:
             continue
-        seen[crm_work_order_id] = (title or "").strip() or crm_work_order_id
+        seen[public_id] = (title or "").strip() or public_id
         if len(seen) >= limit:
             break
-    return [
-        {"crm_work_order_id": wo_id, "label": label} for wo_id, label in seen.items()
-    ]
+    return [{"public_id": wo_id, "label": label} for wo_id, label in seen.items()]
 
 
 def list_movement_points(
@@ -153,9 +151,14 @@ def list_movement_points(
     """
     query = db.query(FieldWorkOrderMovement)
     if crm_work_order_id:
-        query = query.filter(
-            FieldWorkOrderMovement.crm_work_order_id == crm_work_order_id
+        wo_id = (
+            db.query(WorkOrder.id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
+            .scalar()
         )
+        if wo_id is None:
+            return {"leg_count": 0, "point_count": 0, "points": []}
+        query = query.filter(FieldWorkOrderMovement.work_order_mirror_id == wo_id)
     if technician_id:
         query = query.filter(
             FieldWorkOrderMovement.actor_technician_id == technician_id

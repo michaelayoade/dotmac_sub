@@ -887,14 +887,14 @@ class Tickets:
         if not ticket.subscriber_id:
             return
 
-        from app.models.work_order_mirror import WorkOrderMirror
+        from app.models.work_order import WorkOrder
 
         metadata = dict(ticket.metadata_ or {})
         existing_order_id = str(metadata.get("work_order_id") or "").strip()
         if existing_order_id:
             existing = (
-                db.query(WorkOrderMirror)
-                .filter(WorkOrderMirror.crm_work_order_id == existing_order_id)
+                db.query(WorkOrder)
+                .filter(WorkOrder.public_id == existing_order_id)
                 .first()
             )
             if existing is not None:
@@ -908,12 +908,12 @@ class Tickets:
         # Belt-and-braces dedupe on the ticket linkage itself (e.g. the ticket
         # metadata was edited away but the work order exists).
         linked = (
-            db.query(WorkOrderMirror)
-            .filter(WorkOrderMirror.crm_ticket_id == str(ticket.id))
+            db.query(WorkOrder)
+            .filter(WorkOrder.crm_ticket_id == str(ticket.id))
             .first()
         )
         if linked is not None:
-            metadata["work_order_id"] = linked.crm_work_order_id
+            metadata["work_order_id"] = linked.public_id
             ticket.metadata_ = metadata
             return
 

@@ -16,7 +16,7 @@ from app.models.field_location import FieldTechLocationPing
 from app.models.subscriber import Subscriber, UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.location_tracking import field_location_tracking
 
@@ -73,8 +73,8 @@ def _work_order(
     *,
     crm_work_order_id: str = "wo-geofence",
     status: str = "dispatched",
-) -> WorkOrderMirror:
-    row = WorkOrderMirror(
+) -> WorkOrder:
+    row = WorkOrder(
         crm_work_order_id=crm_work_order_id,
         subscriber_id=subscriber.id,
         title="Geofence install",

@@ -13,7 +13,7 @@ from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.expense_requests import field_expense_requests
 from app.services.field.jobs import field_jobs
@@ -69,8 +69,8 @@ def _subscriber(db_session) -> Subscriber:
     return subscriber
 
 
-def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrderMirror:
-    row = WorkOrderMirror(
+def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
+    row = WorkOrder(
         crm_work_order_id=overrides.pop("crm_work_order_id", f"wo-{uuid4().hex[:8]}"),
         subscriber_id=subscriber.id,
         title=overrides.pop("title", "Manager job"),

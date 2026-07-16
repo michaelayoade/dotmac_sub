@@ -18,7 +18,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import _location, _profile_from_principal, _scoped_query
 from app.services.field.transitions import field_transitions
 
@@ -87,12 +87,12 @@ def evaluate(
         if distance > radius:
             continue
 
-        client_event_id = uuid.uuid5(_GEOFENCE_NS, f"start:{row.crm_work_order_id}")
+        client_event_id = uuid.uuid5(_GEOFENCE_NS, f"start:{row.public_id}")
         try:
             result = field_transitions.apply(
                 db,
                 principal,
-                row.crm_work_order_id,
+                row.public_id,
                 event="start",
                 client_event_id=client_event_id,
                 latitude=latitude,
@@ -106,7 +106,7 @@ def evaluate(
         if not result.get("replayed"):
             fired.append(
                 {
-                    "crm_work_order_id": row.crm_work_order_id,
+                    "crm_work_order_id": row.public_id,
                     "event": "start",
                     "distance_m": round(distance, 1),
                 }
@@ -124,9 +124,9 @@ def _setting_row(db: Session, key: str) -> DomainSetting | None:
     )
 
 
-def _arrivable_jobs(db: Session, profile) -> list[WorkOrderMirror]:
+def _arrivable_jobs(db: Session, profile) -> list[WorkOrder]:
     return (
         _scoped_query(db, profile)
-        .filter(WorkOrderMirror.status.in_(_ARRIVABLE_STATUSES))
+        .filter(WorkOrder.status.in_(_ARRIVABLE_STATUSES))
         .all()
     )

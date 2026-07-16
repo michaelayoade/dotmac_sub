@@ -16,7 +16,7 @@ from app.models.dispatch import (
     WorkOrderAssignmentQueue,
 )
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
     WorkOrderAssignmentQueueCreate,
     WorkOrderHeaderCreate,
@@ -103,8 +103,8 @@ def _clean(value: str | None) -> str | None:
 
 def _work_order_counts(db: Session) -> dict[str, int]:
     rows = (
-        db.query(WorkOrderMirror.status, func.count(WorkOrderMirror.id))
-        .group_by(WorkOrderMirror.status)
+        db.query(WorkOrder.status, func.count(WorkOrder.id))
+        .group_by(WorkOrder.status)
         .all()
     )
     counts = {str(status or "unknown"): int(count) for status, count in rows}
@@ -121,9 +121,7 @@ def _work_order_counts(db: Session) -> dict[str, int]:
     }
 
 
-def _queue_status_by_work_order(
-    db: Session, rows: list[WorkOrderMirror]
-) -> dict[str, str]:
+def _queue_status_by_work_order(db: Session, rows: list[WorkOrder]) -> dict[str, str]:
     ids = [row.id for row in rows]
     if not ids:
         return {}
@@ -251,7 +249,7 @@ def list_page(
     }
 
 
-def create_from_form(db: Session, form: dict[str, Any]) -> WorkOrderMirror:
+def create_from_form(db: Session, form: dict[str, Any]) -> WorkOrder:
     payload = WorkOrderHeaderCreate(
         public_id=_clean(form.get("public_id")),
         subscriber_id=coerce_uuid(str(form.get("subscriber_id"))),
@@ -277,7 +275,7 @@ def create_from_form(db: Session, form: dict[str, Any]) -> WorkOrderMirror:
 
 def update_from_form(
     db: Session, work_order_id: str, form: dict[str, Any]
-) -> WorkOrderMirror:
+) -> WorkOrder:
     payload = WorkOrderHeaderUpdate(
         title=_clean(form.get("title")),
         status=_clean(form.get("status")),

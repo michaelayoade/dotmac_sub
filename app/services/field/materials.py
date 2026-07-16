@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.field_material import FieldWorkOrderMaterial
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import (
@@ -123,11 +123,11 @@ def _scoped_work_order(
     db: Session,
     principal: dict[str, Any],
     crm_work_order_id: str,
-) -> WorkOrderMirror:
+) -> WorkOrder:
     profile = _profile_from_principal(db, principal)
     row = (
         _scoped_query(db, profile)
-        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+        .filter(WorkOrder.public_id == crm_work_order_id)
         .one_or_none()
     )
     if row is None:
@@ -149,7 +149,7 @@ def _quantity(value) -> int:
     return quantity
 
 
-def _mark_sub_authoritative(row: WorkOrderMirror) -> None:
+def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "materials")
 
 

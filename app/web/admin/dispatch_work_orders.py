@@ -72,7 +72,7 @@ def create_dispatch_work_order(
     except (HTTPException, ValidationError, ValueError) as exc:
         detail = getattr(exc, "detail", None) or str(exc)
         return _redirect(error=detail)
-    return _redirect(notice=f"Work order {row.crm_work_order_id} created")
+    return _redirect(notice=f"Work order {row.public_id} created")
 
 
 @router.post(

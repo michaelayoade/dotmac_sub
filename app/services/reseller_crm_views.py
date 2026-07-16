@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.project import Project
 from app.models.project_mirror import ProjectMirror
 from app.models.quote_mirror import QuoteMirror
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services import projects as projects_service
 from app.services import quotes_mirror, reseller_portal
 from app.services.sales import selfserve as selfserve_service
@@ -174,9 +174,9 @@ def work_orders_for_reseller(db: Session, reseller_id: str) -> dict:
     if not names:
         return {"work_orders": [], "total": 0, "upcoming": 0}
     rows = db.scalars(
-        select(WorkOrderMirror)
-        .where(WorkOrderMirror.subscriber_id.in_(list(names)))
-        .order_by(WorkOrderMirror.created_at.desc())
+        select(WorkOrder)
+        .where(WorkOrder.subscriber_id.in_(list(names)))
+        .order_by(WorkOrder.created_at.desc())
     ).all()
     items = []
     for r in rows:

@@ -24,7 +24,7 @@ from app.models.field_expense import FieldExpenseRequest
 from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.jobs import (
     OPEN_STATUSES,
@@ -77,18 +77,18 @@ def _subscriber_label(subscriber: Subscriber | None) -> str | None:
 
 def _active_orders_by_technician(
     db: Session, profiles: list[TechnicianProfile]
-) -> dict[Any, WorkOrderMirror]:
+) -> dict[Any, WorkOrder]:
     """First open work order per technician profile id."""
     if not profiles:
         return {}
     open_orders = (
-        db.query(WorkOrderMirror)
-        .filter(WorkOrderMirror.is_active.is_(True))
-        .filter(WorkOrderMirror.status.in_(OPEN_STATUSES))
-        .order_by(WorkOrderMirror.updated_at.desc())
+        db.query(WorkOrder)
+        .filter(WorkOrder.is_active.is_(True))
+        .filter(WorkOrder.status.in_(OPEN_STATUSES))
+        .order_by(WorkOrder.updated_at.desc())
         .all()
     )
-    by_crm_person: dict[str, list[WorkOrderMirror]] = {}
+    by_crm_person: dict[str, list[WorkOrder]] = {}
     for order in open_orders:
         if order.assigned_to_crm_person_id:
             by_crm_person.setdefault(order.assigned_to_crm_person_id, []).append(order)
@@ -106,7 +106,7 @@ def _active_orders_by_technician(
         for entry in queue_rows:
             queue_by_mirror[entry.work_order_mirror_id] = entry.assigned_technician_id
 
-    result: dict[Any, WorkOrderMirror] = {}
+    result: dict[Any, WorkOrder] = {}
     for profile in profiles:
         if profile.crm_person_id and profile.crm_person_id in by_crm_person:
             result[profile.id] = by_crm_person[profile.crm_person_id][0]
@@ -188,7 +188,7 @@ class FieldManager:
                     else None,
                     "active_work_order": (
                         {
-                            "id": order.crm_work_order_id,
+                            "id": order.public_id,
                             "title": order.title,
                             "status": order.status,
                             "status_presentation": work_order_status_presentation(
@@ -212,17 +212,17 @@ class FieldManager:
             db, stale_after_seconds=stale_after_seconds
         )
         open_query = (
-            db.query(WorkOrderMirror)
-            .filter(WorkOrderMirror.is_active.is_(True))
-            .filter(WorkOrderMirror.status.in_(OPEN_STATUSES))
+            db.query(WorkOrder)
+            .filter(WorkOrder.is_active.is_(True))
+            .filter(WorkOrder.status.in_(OPEN_STATUSES))
         )
         open_jobs = open_query.count()
         assigned_mirror_ids = select(
             WorkOrderAssignmentQueue.work_order_mirror_id
         ).filter(WorkOrderAssignmentQueue.assigned_technician_id.isnot(None))
         unassigned_jobs = (
-            open_query.filter(WorkOrderMirror.assigned_to_crm_person_id.is_(None))
-            .filter(WorkOrderMirror.id.notin_(assigned_mirror_ids))
+            open_query.filter(WorkOrder.assigned_to_crm_person_id.is_(None))
+            .filter(WorkOrder.id.notin_(assigned_mirror_ids))
             .count()
         )
         pending_expenses = (
@@ -251,17 +251,17 @@ class FieldManager:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
-        query = db.query(WorkOrderMirror).filter(WorkOrderMirror.is_active.is_(True))
+        query = db.query(WorkOrder).filter(WorkOrder.is_active.is_(True))
         if status:
-            query = query.filter(WorkOrderMirror.status == status)
+            query = query.filter(WorkOrder.status == status)
         else:
-            query = query.filter(WorkOrderMirror.status.in_(OPEN_STATUSES))
+            query = query.filter(WorkOrder.status.in_(OPEN_STATUSES))
         if assigned_to_person_id:
             profile = _technician_by_person_id(db, assigned_to_person_id)
             query = _filter_assigned_to(db, query, profile)
         query = query.order_by(
-            WorkOrderMirror.scheduled_start.asc().nullslast(),
-            WorkOrderMirror.created_at.desc(),
+            WorkOrder.scheduled_start.asc().nullslast(),
+            WorkOrder.created_at.desc(),
         )
         rows = apply_pagination(query, limit, offset).all()
         return [FieldManager._job_payload(db, row) for row in rows]
@@ -282,9 +282,9 @@ class FieldManager:
                 status_code=422, detail=f"Unsupported status: {next_status}"
             )
         row = (
-            db.query(WorkOrderMirror)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
-            .filter(WorkOrderMirror.is_active.is_(True))
+            db.query(WorkOrder)
+            .filter(WorkOrder.public_id == crm_work_order_id)
+            .filter(WorkOrder.is_active.is_(True))
             .one_or_none()
         )
         if row is None:
@@ -300,7 +300,7 @@ class FieldManager:
         if entry is None:
             entry = WorkOrderAssignmentQueue(
                 work_order_mirror_id=row.id,
-                crm_work_order_id=row.crm_work_order_id,
+                crm_work_order_id=row.public_id,
                 reason="manager_assign",
             )
             db.add(entry)
@@ -330,7 +330,7 @@ class FieldManager:
         return FieldManager._job_payload(db, row)
 
     @staticmethod
-    def _job_payload(db: Session, row: WorkOrderMirror) -> dict:
+    def _job_payload(db: Session, row: WorkOrder) -> dict:
         location = _location(row)
         subscriber = db.get(Subscriber, row.subscriber_id)
         profile = _assigned_profile(db, row)
@@ -338,7 +338,7 @@ class FieldManager:
         if assigned_label is None and profile is not None:
             assigned_label = _technician_name(profile, _system_user(db, profile))
         return {
-            "id": row.crm_work_order_id,
+            "id": row.public_id,
             "work_order_mirror_id": row.id,
             "title": row.title,
             "description": row.description,
@@ -377,7 +377,7 @@ def _technician_by_person_id(db: Session, person_id: str) -> TechnicianProfile:
     return profile
 
 
-def _assigned_profile(db: Session, row: WorkOrderMirror) -> TechnicianProfile | None:
+def _assigned_profile(db: Session, row: WorkOrder) -> TechnicianProfile | None:
     if row.assigned_to_crm_person_id:
         profile = (
             db.query(TechnicianProfile)
@@ -403,11 +403,9 @@ def _filter_assigned_to(db: Session, query, profile: TechnicianProfile):
     assignment_ids = select(WorkOrderAssignmentQueue.work_order_mirror_id).filter(
         WorkOrderAssignmentQueue.assigned_technician_id == profile.id
     )
-    clauses: list[Any] = [WorkOrderMirror.id.in_(assignment_ids)]
+    clauses: list[Any] = [WorkOrder.id.in_(assignment_ids)]
     if profile.crm_person_id:
-        clauses.append(
-            WorkOrderMirror.assigned_to_crm_person_id == profile.crm_person_id
-        )
+        clauses.append(WorkOrder.assigned_to_crm_person_id == profile.crm_person_id)
     return query.filter(or_(*clauses))
 
 

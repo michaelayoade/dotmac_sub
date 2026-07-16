@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from app.models.field_note import FieldWorkOrderNote
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from scripts.migration.backfill_crm_work_orders import (
     ANONYMOUS_AUTHOR_KEY,
     is_crm_origin,
@@ -80,8 +80,8 @@ def _subscriber(db, crm_id=None) -> Subscriber:
     return sub
 
 
-def _mirror_row(db, sub, wo_id="wo-open-1", status="in_progress") -> WorkOrderMirror:
-    row = WorkOrderMirror(
+def _mirror_row(db, sub, wo_id="wo-open-1", status="in_progress") -> WorkOrder:
+    row = WorkOrder(
         subscriber_id=sub.id,
         crm_work_order_id=wo_id,
         title="Repair",

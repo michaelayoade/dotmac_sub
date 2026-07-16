@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.dispatch import TechnicianProfile
 from app.models.field_movement import FieldWorkOrderMovement
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _location
 
@@ -56,7 +56,7 @@ def serialize_movement(movement: FieldWorkOrderMovement) -> dict:
     }
 
 
-def list_for_job(db: Session, row: WorkOrderMirror) -> list[dict]:
+def list_for_job(db: Session, row: WorkOrder) -> list[dict]:
     movements = (
         db.query(FieldWorkOrderMovement)
         .filter(FieldWorkOrderMovement.work_order_mirror_id == row.id)
@@ -69,7 +69,7 @@ def list_for_job(db: Session, row: WorkOrderMirror) -> list[dict]:
     return [serialize_movement(movement) for movement in movements]
 
 
-def validate_destination_payload(row: WorkOrderMirror, payload: dict | None) -> None:
+def validate_destination_payload(row: WorkOrder, payload: dict | None) -> None:
     movement_id = (payload or {}).get("movement_session_id")
     if movement_id:
         try:
@@ -95,7 +95,7 @@ def is_customer_destination(payload: dict | None) -> bool:
 
 def start_movement(
     db: Session,
-    row: WorkOrderMirror,
+    row: WorkOrder,
     profile: TechnicianProfile,
     *,
     client_ref: UUID,
@@ -113,7 +113,7 @@ def start_movement(
         return existing
     movement = FieldWorkOrderMovement(
         work_order_mirror_id=row.id,
-        crm_work_order_id=row.crm_work_order_id,
+        crm_work_order_id=row.public_id,
         actor_technician_id=profile.id,
         actor_person_id=profile.person_id,
         actor_system_user_id=profile.system_user_id,
@@ -130,7 +130,7 @@ def start_movement(
 
 def arrive_movement(
     db: Session,
-    row: WorkOrderMirror,
+    row: WorkOrder,
     profile: TechnicianProfile,
     *,
     client_ref: UUID,
@@ -159,7 +159,7 @@ def arrive_movement(
     if movement is None:
         movement = FieldWorkOrderMovement(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.crm_work_order_id,
+            crm_work_order_id=row.public_id,
             actor_technician_id=profile.id,
             actor_person_id=profile.person_id,
             actor_system_user_id=profile.system_user_id,
@@ -196,7 +196,7 @@ def _movement_from_payload(
     return db.get(FieldWorkOrderMovement, movement_uuid)
 
 
-def _destination_payload(row: WorkOrderMirror, payload: dict | None) -> dict[str, Any]:
+def _destination_payload(row: WorkOrder, payload: dict | None) -> dict[str, Any]:
     data = dict(payload or {})
     destination_type = (
         str(data.get("destination_type") or _CUSTOMER_DESTINATION).strip().lower()

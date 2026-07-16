@@ -25,7 +25,7 @@ from app.models.field_erp_sync import (
 from app.models.field_material import FieldInventoryItem, FieldMaterialRequest
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.dotmac_erp import material_sync, outbox
 from app.services.field import material_requests as material_requests_module
 from app.services.field.material_requests import field_material_requests
@@ -85,8 +85,8 @@ def _subscriber(db) -> Subscriber:
     return subscriber
 
 
-def _work_order(db, subscriber: Subscriber, **overrides) -> WorkOrderMirror:
-    row = WorkOrderMirror(
+def _work_order(db, subscriber: Subscriber, **overrides) -> WorkOrder:
+    row = WorkOrder(
         crm_work_order_id=overrides.pop("crm_work_order_id", "wo-material"),
         subscriber_id=subscriber.id,
         title=overrides.pop("title", "Field material"),

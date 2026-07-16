@@ -47,7 +47,7 @@ class FieldFiberTestResult(Base):
     )
     work_order_mirror_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("work_order_mirror.id", ondelete="CASCADE"),
+        ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
     crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -82,5 +82,5 @@ class FieldFiberTestResult(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
-    work_order = relationship("WorkOrderMirror")
+    work_order = relationship("WorkOrder")
     technician = relationship("TechnicianProfile")

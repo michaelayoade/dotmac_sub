@@ -6,7 +6,7 @@ from enum import StrEnum
 
 
 class WorkOrderStatus(StrEnum):
-    """Statuses persisted on ``WorkOrderMirror`` by CRM or native field flows."""
+    """Statuses persisted on ``WorkOrder`` by CRM or native field flows."""
 
     draft = "draft"
     scheduled = "scheduled"

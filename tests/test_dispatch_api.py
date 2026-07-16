@@ -10,7 +10,7 @@ from app.api.dispatch import router
 from app.db import get_db
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 
 
@@ -40,7 +40,7 @@ def _system_user(db_session) -> SystemUser:
     return user
 
 
-def _work_order(db_session) -> WorkOrderMirror:
+def _work_order(db_session) -> WorkOrder:
     sub = Subscriber(
         first_name="Adaeze",
         last_name="Nwosu",
@@ -48,7 +48,7 @@ def _work_order(db_session) -> WorkOrderMirror:
     )
     db_session.add(sub)
     db_session.flush()
-    row = WorkOrderMirror(
+    row = WorkOrder(
         crm_work_order_id="wo-api-1",
         subscriber_id=sub.id,
         title="Fibre install",

@@ -46,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app.models.dispatch import TechnicianProfile  # noqa: E402
 from app.models.field_note import FieldWorkOrderNote  # noqa: E402
 from app.models.subscriber import Subscriber  # noqa: E402
-from app.models.work_order_mirror import WorkOrderMirror  # noqa: E402
+from app.models.work_order import WorkOrder  # noqa: E402
 from app.services import work_orders_mirror  # noqa: E402
 from app.services.crm_client import CRMClientError  # noqa: E402
 
@@ -146,7 +146,7 @@ def _author_profile(db: Session, crm_person_id: str | None) -> TechnicianProfile
 def _import_notes_for_row(
     db: Session,
     client,
-    row: WorkOrderMirror,
+    row: WorkOrder,
     *,
     dry_run: bool,
     stats: dict[str, int],
@@ -232,7 +232,7 @@ def run(
         open_rows = [
             row
             for row in db.scalars(
-                select(WorkOrderMirror).where(WorkOrderMirror.is_active.is_(True))
+                select(WorkOrder).where(WorkOrder.is_active.is_(True))
             ).all()
             if is_crm_origin(row.crm_work_order_id) and is_open_status(row.status)
         ]

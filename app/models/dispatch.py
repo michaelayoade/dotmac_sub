@@ -210,7 +210,7 @@ class WorkOrderAssignmentQueue(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     work_order_mirror_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("work_order_mirror.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("work_order.id"), nullable=False
     )
     crm_work_order_id: Mapped[str] = mapped_column(
         String(64), nullable=False, index=True
@@ -234,6 +234,6 @@ class WorkOrderAssignmentQueue(Base):
         onupdate=lambda: datetime.now(UTC),
     )
 
-    work_order = relationship("WorkOrderMirror")
+    work_order = relationship("WorkOrder")
     dispatch_rule = relationship("DispatchRule")
     assigned_technician = relationship("TechnicianProfile")

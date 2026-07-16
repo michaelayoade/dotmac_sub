@@ -11,7 +11,7 @@ from app.db import get_db
 from app.models.dispatch import TechnicianProfile
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.routing import field_routing
 
@@ -64,8 +64,8 @@ def _subscriber(db_session) -> Subscriber:
     return sub
 
 
-def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrderMirror:
-    row = WorkOrderMirror(
+def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
+    row = WorkOrder(
         crm_work_order_id=overrides.pop("crm_work_order_id"),
         subscriber_id=subscriber.id,
         title=overrides.pop("title", "Field job"),

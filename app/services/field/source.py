@@ -5,13 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 
 SUB_AUTHORITATIVE_SOURCE = "sub"
 
 
 def mark_sub_authoritative(
-    row: WorkOrderMirror,
+    row: WorkOrder,
     activity: str,
     *,
     details: dict[str, Any] | None = None,

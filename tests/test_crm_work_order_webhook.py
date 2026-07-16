@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from app.api.crm_webhooks import receive_crm_work_order_event
 from app.config import settings
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 
 SECRET = "test-webhook-secret"
 
@@ -104,7 +104,7 @@ def test_valid_event_reaches_service(db_session):
     assert code == 200, resp
     assert resp["status"] == "ok"
     assert (
-        db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-1").count()
+        db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").count()
         == 1
     )
 
@@ -134,7 +134,7 @@ def test_event_noop_when_pull_disabled(monkeypatch, db_session):
     }
     push.assert_not_called()
     assert (
-        db_session.query(WorkOrderMirror)
+        db_session.query(WorkOrder)
         .filter_by(crm_work_order_id="wo-killed")
         .count()
         == 0
