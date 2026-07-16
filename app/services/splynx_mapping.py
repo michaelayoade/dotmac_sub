@@ -168,7 +168,9 @@ def sync_status(db: Session, *, healthy_age_seconds: int = 7200) -> dict[str, ob
     total_mappings = int(db.scalar(select(func.count(SplynxIdMapping.id))) or 0)
     is_healthy = False
     if last_sync is not None:
-        aware = last_sync if last_sync.tzinfo is not None else last_sync.replace(tzinfo=UTC)
+        aware = (
+            last_sync if last_sync.tzinfo is not None else last_sync.replace(tzinfo=UTC)
+        )
         is_healthy = (datetime.now(UTC) - aware).total_seconds() < healthy_age_seconds
     return {
         "last_sync": last_sync,

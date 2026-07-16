@@ -11,13 +11,11 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditActorType
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.subscriber import Subscriber
 from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_whats_new as admin_whats_new_service
-from app.services import settings_spec
 from app.services import infrastructure_health as infrastructure_health_service
+from app.services import settings_spec
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -31,12 +29,12 @@ from app.services import web_system_health as web_system_health_service
 from app.services.audit_adapter import audit_adapter
 from app.services.audit_helpers import (
     build_recent_activity_feed,
-    load_audit_actor_subscribers,
     extract_changes,
     format_audit_datetime,
     format_changes,
     humanize_action,
     humanize_entity,
+    load_audit_actor_subscribers,
     resolve_actor_name,
 )
 
@@ -92,7 +90,6 @@ def _rollback_after_failed_query(db: Session) -> None:
         logger.debug("Failed to roll back dashboard session", exc_info=True)
 
 
-
 def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
     """Return ONT status from locally persisted monitoring fields.
 
@@ -105,9 +102,7 @@ def _build_cached_ont_status_summary(db: Session) -> dict[str, int]:
     thresholds = _build_health_thresholds(db)
     return ont_status_summary(
         db,
-        low_signal_threshold_dbm=float(
-            thresholds.get("ont_signal_warning_dbm") or -25
-        ),
+        low_signal_threshold_dbm=float(thresholds.get("ont_signal_warning_dbm") or -25),
     )
 
 

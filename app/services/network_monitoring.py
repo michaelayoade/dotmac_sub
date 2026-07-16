@@ -204,7 +204,9 @@ def _pon_interface_clause():
     """SQL clause classifying monitoring interfaces as PON-facing."""
     clauses = []
     for pattern in _PON_NAME_PATTERNS:
-        clauses.append(func.lower(func.coalesce(DeviceInterface.name, "")).like(pattern))
+        clauses.append(
+            func.lower(func.coalesce(DeviceInterface.name, "")).like(pattern)
+        )
         clauses.append(
             func.lower(func.coalesce(DeviceInterface.description, "")).like(pattern)
         )

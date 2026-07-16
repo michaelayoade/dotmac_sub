@@ -25,6 +25,10 @@ _ALLOWED_MODEL_IMPORTS = {
     "app.models.domain_settings",
     "app.models.audit",
     "app.models.subscriber",  # legacy actor-lookup typing only; no queries
+    # Known legacy: the session-user RBAC visibility fallback fetches the
+    # SystemUser by id to map role names -> show_* flags. Authorization lookups
+    # belong to the RBAC owner; replace with an auth-service API, then remove.
+    "app.models.system_user",
 }
 
 
