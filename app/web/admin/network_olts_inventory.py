@@ -30,13 +30,13 @@ from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_lifecycle import get_deletion_impact
+from app.services.network.ont_provisioning_commands import request_ont_authorization
 from app.services.network.ont_scope import (
     can_authorize_ont_from_request,
     resolve_authorization_redirect_ont,
     submitted_authorization_ont_matches_scope,
 )
 from app.services.olt_detail_adapter import olt_detail_adapter
-from app.services.queue_adapter import enqueue_task
 from app.web.request_parsing import parse_form_data_sync
 
 logger = logging.getLogger(__name__)
@@ -1291,31 +1291,27 @@ def olt_authorize_ont(
     # Normalize preset_id: empty string means no preset selected
     effective_preset_id = preset_id.strip() if preset_id else None
     try:
-        dispatch = enqueue_task(
-            "app.tasks.ont_provisioning.authorize_ont",
-            kwargs={
-                "olt_id": olt_id,
-                "fsp": fsp,
-                "serial_number": serial_number,
-                "force_reauthorize": force,
-                "preset_id": effective_preset_id,
-                "scoped_ont_id": scoped_ont_id or None,
-                "initiated_by": actor_label(request),
-            },
-            correlation_id=f"ont_authorize:{olt_id}:{fsp}:{serial_number}",
-            source="admin_olt_authorize_ont",
+        command = request_ont_authorization(
+            db,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+            force_reauthorize=force,
+            preset_id=effective_preset_id,
+            scoped_ont_id=scoped_ont_id or None,
+            initiated_by=actor_label(request),
         )
     except Exception as exc:
         logger.exception(
-            "Failed to queue ONT authorization olt_id=%s fsp=%s serial=%s",
+            "Failed to stage ONT authorization olt_id=%s fsp=%s serial=%s",
             olt_id,
             fsp,
             serial_number,
         )
-        dispatch = None
-        auth_msg = f"Authorization queue failed: {exc}"
+        command = None
+        auth_msg = f"Authorization could not be started: {exc}"
 
-    if dispatch and dispatch.queued:
+    if command and command.accepted:
         auth_msg = (
             f"Authorization started for ONT {serial_number}. "
             "The ONT detail page will show progress and next actions."
@@ -1350,7 +1346,10 @@ def olt_authorize_ont(
     auth_msg = (
         auth_msg
         if "auth_msg" in locals()
-        else f"Authorization queue failed: {getattr(dispatch, 'error', 'unknown error')}"
+        else (
+            "Authorization could not be started: "
+            f"{getattr(command, 'message', 'unknown error')}"
+        )
     )
 
     # On failure, redirect back to where user came from with error message

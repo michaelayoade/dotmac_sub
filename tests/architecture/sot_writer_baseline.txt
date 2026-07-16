@@ -82,7 +82,6 @@ app.services.file_storage
 app.services.financial_imports
 app.services.fup
 app.services.fup_state
-app.services.gis_sync
 app.services.import_runs
 app.services.infrastructure_availability_snapshot
 app.services.ip_assignment_repair
@@ -159,6 +158,7 @@ app.services.network.subscriber_wan_ipam
 app.services.network.tr069_seed
 app.services.network.vendor_capabilities
 app.services.network.zones
+app.services.network_operation_recovery
 app.services.network_subscriber_bridge
 app.services.network_topology
 app.services.network_vendor_polling

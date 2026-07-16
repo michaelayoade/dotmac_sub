@@ -12,10 +12,12 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services.network.ont_action_common import ActionResult, get_ont_strict_or_error
+from app.services.network_operation_dispatch import (
+    NetworkOperationCommand,
+    NetworkOperationDispatchError,
+    stage_dispatch,
+)
 from app.services.network_operations import network_operations
-from app.services.queue_adapter import enqueue_task
-
-FIRMWARE_TASK_NAME = "app.tasks.ont_firmware.apply_huawei_ont_firmware"
 
 
 def normalized_version(value: object) -> str:
@@ -85,7 +87,15 @@ def request_firmware_upgrade(
             },
             initiated_by=initiated_by,
         )
+        dispatch = stage_dispatch(
+            db,
+            operation,
+            NetworkOperationCommand.ont_firmware_upgrade_v1,
+        )
         db.commit()
+    except NetworkOperationDispatchError as exc:
+        db.rollback()
+        return ActionResult(success=False, message=exc.message)
     except HTTPException as exc:
         if exc.status_code != 409:
             raise
@@ -93,26 +103,6 @@ def request_firmware_upgrade(
             success=True,
             waiting=True,
             message="A firmware upgrade is already in progress for this ONT.",
-        )
-
-    dispatch = enqueue_task(
-        FIRMWARE_TASK_NAME,
-        args=(ont_id, str(image.id), str(operation.id)),
-        correlation_id=operation.correlation_key,
-        source="ont_firmware_upgrade",
-        actor_id=initiated_by,
-    )
-    if not dispatch.queued:
-        network_operations.mark_failed(
-            db,
-            str(operation.id),
-            dispatch.error or "Unable to queue firmware upgrade.",
-        )
-        db.commit()
-        return ActionResult(
-            success=False,
-            message="Unable to queue firmware upgrade.",
-            data={"operation_id": str(operation.id)},
         )
 
     return ActionResult(
@@ -124,7 +114,7 @@ def request_firmware_upgrade(
         ),
         data={
             "operation_id": str(operation.id),
-            "task_id": dispatch.task_id,
+            "dispatch_id": str(dispatch.id),
             "target_version": image.version,
             "verified": False,
         },

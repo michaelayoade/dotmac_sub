@@ -40,6 +40,32 @@
                 {% if op.duration %}{{ op.duration }}{% endif %}
             </p>
             {% endif %}
+            {% if op.redrive_of_id %}
+            <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Retry {{ op.retry_count }} of {{ op.max_retries }} from operation
+                <span class="font-mono">{{ op.redrive_of_id[:8] }}</span>
+                {% if op.redrive_reason %}&middot; {{ op.redrive_reason }}{% endif %}
+            </p>
+            {% endif %}
+            {% if op.dispatch %}
+            <p class="mt-0.5 text-xs {% if op.dispatch.attention_required %}text-red-600 dark:text-red-400{% else %}text-slate-500 dark:text-slate-400{% endif %}">
+                {{ op.dispatch.label }}
+                {% if op.dispatch.attempts %}&middot; delivery attempt {{ op.dispatch.attempts }} of {{ op.dispatch.max_attempts }}{% endif %}
+                {% if op.dispatch.last_error %}&middot; {{ op.dispatch.last_error }}{% endif %}
+            </p>
+            {% endif %}
+            {% if can_redrive_network_operations and op.can_retry %}
+            <form method="post" action="/admin/network/operations/{{ op.id }}/redrive" class="mt-2 flex max-w-xl flex-wrap items-center gap-2" data-confirm="Create a new recovery attempt from the current device state? The failed operation remains unchanged." data-confirm-variant="warning" data-confirm-label="Retry operation">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="expected_head" value="{{ op.redrive_expected_head }}">
+                <input type="hidden" name="idempotency_key" value="{{ op.redrive_idempotency_key }}">
+                <input type="text" name="reason" required minlength="8" maxlength="500" aria-label="Reason for retry" placeholder="Reason for retry" class="min-w-0 flex-1 border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                <button type="submit" title="Retry operation" class="inline-flex items-center gap-1.5 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">
+                    <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v6h6M20 20v-6h-6M5.5 15a7 7 0 0012 2M18.5 9a7 7 0 00-12-2"/></svg>
+                    Retry
+                </button>
+            </form>
+            {% endif %}
         </div>
         <div class="flex flex-shrink-0 items-center gap-2">
             {% if op.occurred_at %}
