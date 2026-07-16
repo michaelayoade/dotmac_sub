@@ -82,7 +82,6 @@ app.services.file_storage
 app.services.financial_imports
 app.services.fup
 app.services.fup_state
-app.services.gis_sync
 app.services.import_runs
 app.services.infrastructure_availability_snapshot
 app.services.ip_assignment_repair
