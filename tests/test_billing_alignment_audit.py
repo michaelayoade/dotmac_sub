@@ -52,13 +52,11 @@ from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Subscriber
 from app.schemas.billing import CreditNoteIssuePreviewRequest
 from app.services.billing.credit_notes import CreditNotes
-from app.services.customer_financial_ledger import (
+from app.services.customer_financial_ledger import calculate_customer_balance
+from scripts.one_off.billing_alignment_audit import (
     LEGACY_LEDGER_CUTOVER,
     PAYMENT_ACTIVITY_AT,
     SERVICE_ACTIVITY_AT,
-    calculate_customer_balance,
-)
-from scripts.one_off.billing_alignment_audit import (
     _batch_customer_positions,
     _batch_ledger_credit,
     _batch_reconstructed_positions,
@@ -231,7 +229,9 @@ def test_batch_position_uses_constant_query_count(db_session, subscriber):
     assert statements <= 6
 
 
-def test_batch_position_matches_canonical_migrated_balance(db_session, subscriber):
+def test_historical_batch_position_is_not_the_native_runtime_balance(
+    db_session, subscriber
+):
     db_session.add(
         SplynxBillingTransaction(
             splynx_transaction_id=900001,
@@ -308,8 +308,8 @@ def test_batch_position_matches_canonical_migrated_balance(db_session, subscribe
     expected = calculate_customer_balance(db_session, str(subscriber.id))
     actual = _batch_customer_positions(db_session, [subscriber.id], currency="NGN")
 
-    assert expected == Decimal("108.00")
-    assert actual[(str(subscriber.id), "NGN")] == expected
+    assert expected == Decimal("23.00")
+    assert actual[(str(subscriber.id), "NGN")] == Decimal("108.00")
 
 
 def test_batch_position_preserves_per_currency_balances(db_session, subscriber):

@@ -19,7 +19,10 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.catalog import BillingMode
-from app.models.prepaid_funding import PrepaidFundingBaseline
+from app.models.prepaid_funding import (
+    PrepaidFundingBaseline,
+    PrepaidFundingReconstructionBatch,
+)
 from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Subscriber
 from app.services import customer_financial_ledger, prepaid_funding_attestation
@@ -45,6 +48,15 @@ from tests.prepaid_funding_test_support import (
 @pytest.fixture(autouse=True)
 def _trust_reconstruction_signer(monkeypatch):  # noqa: ANN001
     trust_test_reconstruction_signer(monkeypatch)
+
+
+@pytest.fixture(autouse=True)
+def _remove_native_install_bootstrap(db_session):  # noqa: ANN001
+    db_session.query(PrepaidFundingReconstructionBatch).filter(
+        PrepaidFundingReconstructionBatch.source
+        == "pytest-empty-native-install-cutover"
+    ).delete(synchronize_session=False)
+    db_session.commit()
 
 
 def _payload(position_at: datetime, balances: dict[object, str]) -> dict:

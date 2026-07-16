@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
+from app.models.prepaid_funding import PrepaidFundingReconstructionBatch
+from app.services import prepaid_funding_attestation
 from app.services.prepaid_funding_reconstruction import (
     apply_prepaid_funding_reconstruction,
     parse_reconstruction_manifest,
+)
+from tests.prepaid_funding_test_support import (
+    ephemeral_public_signing_key_pem,
+    sealed_reconstruction_payload,
 )
 
 TEST_PREPAID_POSITION_AT = datetime(2026, 3, 16, tzinfo=UTC)
@@ -35,26 +42,30 @@ def materialize_test_prepaid_opening_balances(
     position_at: datetime = TEST_PREPAID_POSITION_AT,
 ) -> None:
     """Materialize a complete test cohort in one reviewed batch."""
-    payload = {
-        "source": "pytest-reviewed-opening-balance",
-        "position_at": position_at.isoformat().replace("+00:00", "Z"),
-        "currency": "NGN",
-        "accounts": [
-            {
-                "account_id": str(account_id),
-                "available_balance": f"{Decimal(str(amount)):.2f}",
-            }
-            for account_id, amount in balances.items()
-        ],
-    }
-    digest = parse_reconstruction_manifest(payload).manifest_sha256
-    apply_prepaid_funding_reconstruction(
-        db,
-        payload,
-        expected_manifest_sha256=digest,
-        evidence_ref="pytest:prepaid-opening-balance",
-        approved_by="pytest",
-        expected_account_ids=set(balances),
-        now=position_at + timedelta(minutes=1),
+    db.query(PrepaidFundingReconstructionBatch).filter(
+        PrepaidFundingReconstructionBatch.source
+        == "pytest-empty-native-install-cutover",
+        PrepaidFundingReconstructionBatch.account_count == 0,
+    ).delete(synchronize_session=False)
+    db.flush()
+    payload = sealed_reconstruction_payload(
+        position_at,
+        balances,
+        source="pytest-reviewed-opening-balance",
     )
+    digest = parse_reconstruction_manifest(payload["manifest"]).manifest_sha256
+    with patch.object(
+        prepaid_funding_attestation,
+        "resolve_trusted_public_key_pem",
+        return_value=ephemeral_public_signing_key_pem(),
+    ):
+        apply_prepaid_funding_reconstruction(
+            db,
+            payload,
+            expected_manifest_sha256=digest,
+            evidence_ref="pytest:prepaid-opening-balance",
+            approved_by="pytest",
+            expected_account_ids=set(balances),
+            now=position_at + timedelta(minutes=1),
+        )
     db.commit()

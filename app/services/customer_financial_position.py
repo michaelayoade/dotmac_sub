@@ -135,7 +135,6 @@ def get_native_customer_financial_balance(
     raw = customer_financial_balances_by_currency(
         db,
         [account_uuid],
-        include_legacy_mirror=False,
     ).get(account_uuid, {})
     normalized: dict[str, Decimal] = {}
     for code, amount in raw.items():

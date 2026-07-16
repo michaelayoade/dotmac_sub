@@ -6,18 +6,14 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
-import pytest
-
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.notification import Notification
 from app.models.prepaid_enforcement import PrepaidEnforcementReadiness
 from app.models.subscriber import SubscriberStatus
-from app.services.access_resolution import PrepaidFundingDecision
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
 from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
-    PrepaidFundingSnapshot,
     plan_prepaid_enforcement,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
@@ -156,67 +152,41 @@ def test_plan_classifies_financial_shield_without_mutation(
     assert subscription.status == SubscriptionStatus.active
 
 
-def test_plan_uses_independent_funding_snapshot_without_local_money_fallback(
+def test_plan_always_uses_materialized_funding_owner(
     db_session, subscriber_account, subscription, monkeypatch
 ):
     _prepare(db_session, subscriber_account, subscription)
+    calls: list[str] = []
+
+    def _funding(db, account, *, now):  # noqa: ANN001
+        from app.services.access_resolution import PrepaidFundingDecision
+
+        calls.append(str(account.id))
+        return PrepaidFundingDecision(
+            account_id=str(account.id),
+            available_balance=Decimal("500.00"),
+            required_balance=Decimal("100.00"),
+            currency="NGN",
+        )
+
     monkeypatch.setattr(
         "app.services.prepaid_enforcement_planner.resolve_prepaid_funding",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("local funding resolver must not run")
-        ),
-    )
-    snapshot = PrepaidFundingSnapshot(
-        captured_at=_MONDAY_NOON,
-        source="splynx-cutover-plus-native-events:prod-2026-07-14",
-        currency="NGN",
-        decisions=(
-            PrepaidFundingDecision(
-                account_id=str(subscriber_account.id),
-                available_balance=Decimal("500.00"),
-                required_balance=Decimal("100.00"),
-                currency="NGN",
-            ),
-        ),
+        _funding,
     )
 
     plan = plan_prepaid_enforcement(
         db_session,
-        funding_snapshot=snapshot,
+        now=_MONDAY_NOON,
+        account_ids=[subscriber_account.id],
         activation_at=_MONDAY_NOON,
     )
 
     assert plan.generated_at == _MONDAY_NOON
-    assert plan.funding_source == snapshot.source
-    assert plan.funding_snapshot_at == _MONDAY_NOON
+    assert plan.funding_owner == "financial.prepaid_funding_reconstruction"
+    assert plan.funding_observed_at == _MONDAY_NOON
     assert plan.items[0].available_balance == Decimal("500.00")
     assert plan.items[0].action == PrepaidEnforcementAction.ok
-
-
-def test_plan_rejects_incomplete_independent_funding_snapshot(
-    db_session, subscriber_account, subscription
-):
-    _prepare(db_session, subscriber_account, subscription)
-    snapshot = PrepaidFundingSnapshot(
-        captured_at=_MONDAY_NOON,
-        source="cutover-reconstruction",
-        currency="NGN",
-        decisions=(
-            PrepaidFundingDecision(
-                account_id="f7a996e4-8a25-4c33-9d73-e69da71cf406",
-                available_balance=Decimal("0.00"),
-                required_balance=Decimal("100.00"),
-                currency="NGN",
-            ),
-        ),
-    )
-
-    with pytest.raises(ValueError, match="missing selected account"):
-        plan_prepaid_enforcement(
-            db_session,
-            account_ids=[subscriber_account.id],
-            funding_snapshot=snapshot,
-        )
+    assert calls == [str(subscriber_account.id)]
 
 
 def test_plan_reports_deactivation_marker_without_prepaid_lock_as_drift(

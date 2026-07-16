@@ -13,7 +13,7 @@ from app.db import Base
 
 
 class PrepaidEnforcementReadiness(Base):
-    """Verified parity between independent funding evidence and Sub's ledger.
+    """Reviewed live-owner plan after signed funding materialization.
 
     This record authorizes only the initial feature cutover. It is not a balance
     source and is never consulted for an individual suspension after activation.

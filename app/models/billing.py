@@ -1675,6 +1675,13 @@ class LedgerEntry(Base):
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
     memo: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # True only when this row is itself a customer-position event. Some ledger
+    # rows are immutable structural evidence for a document-owned movement
+    # (for example, consuming account credit during a payment allocation). The
+    # explicit flag keeps money semantics independent of free-text memo labels.
+    affects_customer_position: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
 
     # The entry this one reverses. The ledger is append-only: an entry's effect is
     # undone by posting its opposite, and this is the structural link between the

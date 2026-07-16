@@ -3961,6 +3961,7 @@ class PaymentAllocations(ListResponseMixin):
                 amount=preview.amount,
                 currency=payment.currency,
                 memo=(f"{_PAYMENT_ALLOCATION_CONSUMPTION_MEMO_PREFIX} {invoice.id}"),
+                affects_customer_position=False,
             )
             db.add(consumption_entry)
             db.flush()
@@ -4937,6 +4938,7 @@ class Refunds:
                             f"{_REFUND_CONSUMPTION_MEMO_PREFIX} payment {payment.id}"
                         ),
                     ),
+                    affects_customer_position=False,
                     commit=False,
                 )
             refund = PaymentRefund(
@@ -5272,6 +5274,7 @@ class Refunds:
                         f"ledger {entry.id}"
                     ),
                 ),
+                affects_customer_position=False,
                 commit=False,
             )
         refund = PaymentRefund(
@@ -5779,6 +5782,7 @@ class PaymentReversals:
                             f"{_REVERSAL_CONSUMPTION_MEMO_PREFIX} payment {payment.id}"
                         ),
                     ),
+                    affects_customer_position=False,
                     commit=False,
                 )
             reversal = PaymentReversal(
@@ -6073,6 +6077,7 @@ class PaymentReversals:
                         f"reversal ledger {entry.id}"
                     ),
                 ),
+                affects_customer_position=False,
                 commit=False,
             )
         reversal = PaymentReversal(

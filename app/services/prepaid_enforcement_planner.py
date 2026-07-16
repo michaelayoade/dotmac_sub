@@ -8,7 +8,6 @@ or sends network commands.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -25,7 +24,6 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.access_resolution import (
     PrepaidFundingDecision,
-    resolve_prepaid_enforcement_currency,
     resolve_prepaid_funding,
 )
 from app.services.billing_communication_policy import (
@@ -119,8 +117,8 @@ class PrepaidEnforcementPlan:
     generated_at: datetime
     control_enabled: bool
     policy: PrepaidEnforcementPolicy
-    funding_source: str
-    funding_snapshot_at: datetime
+    funding_owner: str
+    funding_observed_at: datetime
     items: tuple[PrepaidEnforcementPlanItem, ...]
 
     @property
@@ -133,8 +131,8 @@ class PrepaidEnforcementPlan:
             "generated_at": self.generated_at,
             "control_enabled": self.control_enabled,
             "policy": self.policy.report_values(),
-            "funding_source": self.funding_source,
-            "funding_snapshot_at": self.funding_snapshot_at,
+            "funding_owner": self.funding_owner,
+            "funding_observed_at": self.funding_observed_at,
             "accounts": len(self.items),
             "action_counts": self.action_counts,
             "account_status_drift": sum(
@@ -146,45 +144,6 @@ class PrepaidEnforcementPlan:
         }
         if include_items:
             result["items"] = [item.to_dict() for item in self.items]
-        return result
-
-
-@dataclass(frozen=True)
-class PrepaidFundingSnapshot:
-    """Independent funding facts supplied to the enforcement owner.
-
-    The caller owns reconstruction of the financial position (for example from
-    the Splynx cutover baseline plus native post-cutover events). The prepaid
-    enforcement owner still owns every policy, shield, health, and lifecycle
-    decision. A named source and capture time make it impossible for a report
-    to silently present supplied money as a live local-ledger calculation.
-    """
-
-    captured_at: datetime
-    source: str
-    currency: str
-    decisions: tuple[PrepaidFundingDecision, ...]
-
-    def by_account(self) -> dict[str, PrepaidFundingDecision]:
-        source = self.source.strip()
-        if not source:
-            raise ValueError("funding snapshot source must not be empty")
-        unit = self.currency.strip().upper()
-        if len(unit) != 3 or not unit.isalpha():
-            raise ValueError("funding snapshot currency must be a three-letter code")
-        if not self.decisions:
-            raise ValueError("funding snapshot decisions must not be empty")
-        result: dict[str, PrepaidFundingDecision] = {}
-        for decision in self.decisions:
-            account_id = str(coerce_uuid(decision.account_id))
-            if account_id in result:
-                raise ValueError(f"duplicate funding decision for account {account_id}")
-            if decision.currency.strip().upper() != unit:
-                raise ValueError(
-                    f"funding decision for account {account_id} uses "
-                    f"{decision.currency}, expected {unit}"
-                )
-            result[account_id] = decision
         return result
 
 
@@ -577,22 +536,10 @@ def plan_prepaid_enforcement(
     now: datetime | None = None,
     account_ids: list[Any] | None = None,
     limit: int | None = None,
-    funding_snapshot: PrepaidFundingSnapshot | None = None,
     activation_at: datetime | None = None,
 ) -> PrepaidEnforcementPlan:
     """Build a deterministic, side-effect-free production readiness report."""
-    generated_at = (
-        _as_utc(now)
-        if now is not None
-        else (
-            _as_utc(funding_snapshot.captured_at)
-            if funding_snapshot is not None
-            else datetime.now(UTC)
-        )
-    )
-    supplied_funding: Mapping[str, PrepaidFundingDecision] | None = None
-    if funding_snapshot is not None:
-        supplied_funding = funding_snapshot.by_account()
+    generated_at = _as_utc(now) if now is not None else datetime.now(UTC)
     raw_ids = (
         list(account_ids)
         if account_ids is not None
@@ -632,37 +579,10 @@ def plan_prepaid_enforcement(
             activation_at=_as_utc(activation_at),
             activation_error=None,
         )
-    if supplied_funding is None:
-        funding_by_account = {
-            account.id: resolve_prepaid_funding(db, account, now=generated_at)
-            for account in accounts
-        }
-        funding_source = "canonical_live_resolver"
-        funding_snapshot_at = generated_at
-    else:
-        assert funding_snapshot is not None
-        configured_currency = resolve_prepaid_enforcement_currency(db)
-        if funding_snapshot.currency.strip().upper() != configured_currency:
-            raise ValueError(
-                "funding snapshot currency "
-                f"{funding_snapshot.currency.strip().upper()} does not match "
-                f"configured prepaid enforcement currency {configured_currency}"
-            )
-        missing = [
-            str(account.id)
-            for account in accounts
-            if str(account.id) not in supplied_funding
-        ]
-        if missing:
-            raise ValueError(
-                "funding snapshot is missing selected account(s): "
-                + ", ".join(sorted(missing))
-            )
-        funding_by_account = {
-            account.id: supplied_funding[str(account.id)] for account in accounts
-        }
-        funding_source = funding_snapshot.source.strip()
-        funding_snapshot_at = _as_utc(funding_snapshot.captured_at)
+    funding_by_account = {
+        account.id: resolve_prepaid_funding(db, account, now=generated_at)
+        for account in accounts
+    }
     lock_counts = _prepaid_lock_counts(db, resolved_ids)
     dedicated_accounts = _dedicated_bundle_account_ids(db, resolved_ids)
     shield_reasons = _bulk_dunning_shield_reasons(db, set(resolved_ids))
@@ -690,7 +610,7 @@ def plan_prepaid_enforcement(
         generated_at=generated_at,
         control_enabled=prepaid_balance_enforcement_enabled(db),
         policy=policy,
-        funding_source=funding_source,
-        funding_snapshot_at=funding_snapshot_at,
+        funding_owner="financial.prepaid_funding_reconstruction",
+        funding_observed_at=generated_at,
         items=items,
     )

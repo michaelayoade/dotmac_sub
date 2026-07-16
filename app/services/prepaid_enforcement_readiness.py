@@ -1,8 +1,9 @@
 """Cutover gate for prepaid enforcement funding provenance.
 
-Independent reconstruction proves that Sub's canonical financial resolver has a
-complete opening position. The resulting record authorizes the feature cutover;
-it never supplies a runtime balance or replaces the financial ledger owner.
+The signed, materialized reconstruction proves that Sub's canonical financial
+resolver has a complete opening position. Readiness records one fresh plan from
+that same live owner; it never accepts another balance input or supplies a
+runtime balance itself.
 """
 
 from __future__ import annotations
@@ -23,11 +24,11 @@ from app.services.access_resolution import resolve_prepaid_enforcement_currency
 from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
     PrepaidEnforcementPlan,
-    PrepaidFundingSnapshot,
     candidate_prepaid_account_ids,
     plan_prepaid_enforcement,
     resolve_prepaid_enforcement_policy,
 )
+from app.services.prepaid_funding_reconstruction import authority_cutover_batch
 
 
 @dataclass(frozen=True)
@@ -89,18 +90,16 @@ def _configuration_hash(db: Session, plan: PrepaidEnforcementPlan) -> str:
     )
 
 
-def _funding_hash(snapshot: PrepaidFundingSnapshot) -> str:
+def _funding_hash(plan: PrepaidEnforcementPlan) -> str:
     return _hash(
         [
             {
-                "account_id": str(decision.account_id),
-                "currency": decision.currency.strip().upper(),
-                "available_balance": decision.available_balance,
-                "required_balance": decision.required_balance,
+                "account_id": item.account_id,
+                "currency": item.currency,
+                "available_balance": item.available_balance,
+                "required_balance": item.required_balance,
             }
-            for decision in sorted(
-                snapshot.decisions, key=lambda item: str(item.account_id)
-            )
+            for item in sorted(plan.items, key=lambda value: value.account_id)
         ]
     )
 
@@ -139,39 +138,33 @@ def _max_activation_grace_days(db: Session) -> int:
     return days
 
 
-def compare_prepaid_funding_snapshot(
+def evaluate_prepaid_enforcement_readiness(
     db: Session,
-    snapshot: PrepaidFundingSnapshot,
     *,
     activation_at: datetime,
+    now: datetime | None = None,
 ) -> PrepaidReadinessComparison:
-    """Compare independent funding evidence to the exact live cutover cohort."""
-    captured_at = _as_utc(snapshot.captured_at)
+    """Evaluate the exact live cohort through the materialized funding owner."""
+    captured_at = _as_utc(now or datetime.now(UTC))
     intended_activation_at = _as_utc(activation_at)
     configured_currency = resolve_prepaid_enforcement_currency(db)
-    supplied = snapshot.by_account()
     account_ids = sorted(
         (str(value) for value in candidate_prepaid_account_ids(db)), key=str
     )
     blockers: list[str] = []
-    if captured_at > datetime.now(UTC):
-        blockers.append("funding_snapshot_captured_in_future")
-
-    supplied_ids = set(supplied)
-    candidate_ids = set(account_ids)
-    for account_id in sorted(candidate_ids - supplied_ids):
-        blockers.append(f"missing_independent_funding:{account_id}")
-    for account_id in sorted(supplied_ids - candidate_ids):
-        blockers.append(f"unexpected_independent_funding:{account_id}")
-    if snapshot.currency.strip().upper() != configured_currency:
-        blockers.append(
-            "snapshot_currency_mismatch:"
-            f"{snapshot.currency.strip().upper()}!={configured_currency}"
+    if authority_cutover_batch(db) is None:
+        return PrepaidReadinessComparison(
+            candidate_account_count=len(account_ids),
+            candidate_account_ids_hash=_candidate_hash(account_ids),
+            configuration_hash="0" * 64,
+            funding_decisions_hash="0" * 64,
+            currency=configured_currency,
+            blockers=("prepaid_funding_authority_cutover_missing",),
         )
     if intended_activation_at < captured_at:
-        blockers.append("activation_precedes_funding_snapshot")
+        blockers.append("activation_precedes_readiness_observation")
     if intended_activation_at - captured_at > _max_snapshot_age(db):
-        blockers.append("funding_snapshot_too_old_for_activation")
+        blockers.append("readiness_observation_too_old_for_activation")
 
     local_plan = plan_prepaid_enforcement(
         db,
@@ -179,19 +172,13 @@ def compare_prepaid_funding_snapshot(
         account_ids=account_ids,
         activation_at=intended_activation_at,
     )
-    local_by_id = {item.account_id: item for item in local_plan.items}
     max_activation_grace_days = _max_activation_grace_days(db)
-    for account_id in sorted(candidate_ids & supplied_ids):
-        independent = supplied[account_id]
-        local = local_by_id[account_id]
-        if independent.currency.strip().upper() != local.currency:
+    for local in local_plan.items:
+        account_id = local.account_id
+        if local.currency != configured_currency:
             blockers.append(f"currency_mismatch:{account_id}")
-        if independent.available_balance != local.available_balance:
-            blockers.append(f"available_balance_mismatch:{account_id}")
-        if independent.required_balance != local.required_balance:
-            blockers.append(f"required_balance_mismatch:{account_id}")
         if (
-            not independent.funded
+            local.available_balance < local.required_balance
             and local.action
             in {PrepaidEnforcementAction.warn, PrepaidEnforcementAction.waiting}
             and local.grace_days > max_activation_grace_days
@@ -202,7 +189,7 @@ def compare_prepaid_funding_snapshot(
         candidate_account_count=len(account_ids),
         candidate_account_ids_hash=_candidate_hash(account_ids),
         configuration_hash=_configuration_hash(db, local_plan),
-        funding_decisions_hash=_funding_hash(snapshot),
+        funding_decisions_hash=_funding_hash(local_plan),
         currency=configured_currency,
         blockers=tuple(blockers),
     )
@@ -210,21 +197,24 @@ def compare_prepaid_funding_snapshot(
 
 def record_prepaid_enforcement_readiness(
     db: Session,
-    snapshot: PrepaidFundingSnapshot,
     *,
     activation_at: datetime,
     evidence_ref: str,
     verified_by: str,
+    now: datetime | None = None,
 ) -> PrepaidEnforcementReadiness:
-    """Persist a successful full-cohort comparison as cutover evidence."""
+    """Persist a successful full-cohort live-owner review as cutover evidence."""
     evidence = evidence_ref.strip()
     actor = verified_by.strip()
     if not evidence:
         raise ValueError("evidence_ref is required")
     if not actor:
         raise ValueError("verified_by is required")
-    comparison = compare_prepaid_funding_snapshot(
-        db, snapshot, activation_at=activation_at
+    observed_at = _as_utc(now or datetime.now(UTC))
+    comparison = evaluate_prepaid_enforcement_readiness(
+        db,
+        activation_at=activation_at,
+        now=observed_at,
     )
     if comparison.blockers:
         raise ValueError(
@@ -235,10 +225,13 @@ def record_prepaid_enforcement_readiness(
         .where(PrepaidEnforcementReadiness.is_active.is_(True))
         .values(is_active=False)
     )
+    batch = authority_cutover_batch(db)
+    if batch is None:
+        raise ValueError("prepaid funding authority cutover is missing")
     record = PrepaidEnforcementReadiness(
         intended_activation_at=_as_utc(activation_at),
-        snapshot_captured_at=_as_utc(snapshot.captured_at),
-        source=snapshot.source.strip(),
+        snapshot_captured_at=observed_at,
+        source=(f"financial.prepaid_funding_reconstruction:{batch.manifest_sha256}"),
         evidence_ref=evidence,
         currency=comparison.currency,
         candidate_account_count=comparison.candidate_account_count,
