@@ -13,7 +13,7 @@ from enum import Enum
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import SubscriptionStatus
 from app.models.payment_proof import WithholdingTaxStatus
-from app.models.provisioning import AppointmentStatus, ServiceOrderStatus
+from app.models.provisioning import AppointmentStatus, ServiceOrderStatus, TaskStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
 from app.models.vendor_routes import VendorPurchaseInvoiceStatus
@@ -405,6 +405,26 @@ _SERVICE_ORDER_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     ServiceOrderStatus.failed.value: ("Failed", StatusTone.negative, StatusIcon.x),
 }
 
+_TASK_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    TaskStatus.pending.value: ("Pending", StatusTone.neutral, StatusIcon.clock),
+    TaskStatus.in_progress.value: (
+        "In progress",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    TaskStatus.blocked.value: (
+        "Blocked",
+        StatusTone.warning,
+        StatusIcon.alert,
+    ),
+    TaskStatus.completed.value: (
+        "Completed",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    TaskStatus.failed.value: ("Failed", StatusTone.negative, StatusIcon.x),
+}
+
 _APPOINTMENT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     AppointmentStatus.proposed.value: (
         "Proposed",
@@ -475,6 +495,13 @@ def service_order_status_presentation(
 ) -> StatusPresentation:
     """Project a provisioning service-order status without changing workflow."""
     return _presentation(_status_value(status), _SERVICE_ORDER_PRESENTATIONS)
+
+
+def provisioning_task_status_presentation(
+    status: TaskStatus | str | None,
+) -> StatusPresentation:
+    """Project a provisioning-task status without changing workflow state."""
+    return _presentation(_status_value(status), _TASK_PRESENTATIONS)
 
 
 def appointment_status_presentation(
