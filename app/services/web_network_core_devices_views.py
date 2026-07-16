@@ -1600,6 +1600,18 @@ def onts_list_page_data(
             ),
         }
 
+    try:
+        from app.services.network.ont_status_refresh import (
+            request_stale_ont_status_refreshes,
+        )
+
+        status_refresh_admission = request_stale_ont_status_refreshes(
+            db, displayed_onts
+        )
+    except Exception:
+        logger.warning("Failed to request stale ONT status refresh", exc_info=True)
+        status_refresh_admission = None
+
     # Summary counts use cached inventory state; native polling runs out of band.
     total_cpes_count = db.scalar(select(func.count()).select_from(CPEDevice)) or 0
     stats_filters = [OntUnit.is_active.is_(True)]
@@ -1829,6 +1841,7 @@ def onts_list_page_data(
         "stats": stats,
         "status_filter": status_filter,
         "signal_data": signal_data,
+        "status_refresh_admission": status_refresh_admission,
         "assignment_info": assignment_info,
         "serial_display_by_ont_id": serial_display_by_ont_id,
         "hex_serial_by_ont_id": hex_serial_by_ont_id,

@@ -667,6 +667,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("runtime.infrastructure_polling",),
             ),
             SOTService(
+                name="network.ont_status_refresh",
+                module="app.services.network.ont_status_refresh",
+                owns=(
+                    "stale ONT runtime-status refresh admission",
+                    "OLT-level status refresh rate limiting",
+                    "safe background refresh request projection",
+                ),
+                depends_on=(
+                    "network.device_state",
+                    "network.operation_dispatch",
+                ),
+                notes=(
+                    "Read surfaces may request refresh through this owner, but "
+                    "must not poll OLTs directly. Huawei refreshes are admitted "
+                    "as bounded OLT-level background jobs; UISP-managed ONTs "
+                    "remain owned by the UISP topology sync source."
+                ),
+            ),
+            SOTService(
                 name="network.device_projection",
                 module="app.services.device_projection_reconcile",
                 owns=(
