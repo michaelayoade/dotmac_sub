@@ -77,5 +77,9 @@ def test_landing_template_contract_anatomy():
     assert '"/reseller"' in footer, "reseller sign-in should live in the footer"
     # ...and not promoted anywhere above the footer.
     body = source.split("<footer", 1)[0]
-    assert '"/admin"' not in body, "admin entry must not be promoted on the landing page"
-    assert '"/reseller"' not in body, "reseller entry must not be promoted above the footer"
+    assert '"/admin"' not in body, (
+        "admin entry must not be promoted on the landing page"
+    )
+    assert '"/reseller"' not in body, (
+        "reseller entry must not be promoted above the footer"
+    )
