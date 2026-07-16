@@ -26,6 +26,7 @@ from app.models.tr069 import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.genieacs_config import GENIEACS_CONFIG_ENTRIES
 from app.services.genieacs_service import genieacs_service
+from app.services.network_operation_dispatch import managed_network_operation_dispatch
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
@@ -44,119 +45,12 @@ def _bootstrap_wait_idempotency_key(
     operation_id: str | None = None,
     service_retry_count: int = 0,
     *_args,
+    _network_dispatch_id: str | None = None,
     **_kwargs,
 ) -> str:
     """Deduplicate one bootstrap attempt without suppressing later retries."""
-    return f"{ont_id}:{operation_id or 'no-op'}:{service_retry_count}"
-
-
-def _sync_bootstrap_parent(
-    db,
-    *,
-    operation_id: str,
-    ont_id: str,
-    payload: dict[str, object],
-) -> None:
-    """Project a bootstrap verifier outcome onto its parent and bulk item."""
-    from app.services.network_operations import network_operations
-
-    operation = network_operations.get(db, operation_id)
-    if not operation.parent_id:
-        return
-
-    parent = network_operations.update_parent_status(db, str(operation.parent_id))
-    parent.output_payload = {
-        **(parent.output_payload or {}),
-        "device_confirmation": payload,
-        "waiting": parent.status.value in {"pending", "running", "waiting"},
-    }
-    bulk_item_id = (parent.input_payload or {}).get("bulk_item_id")
-    if not bulk_item_id or parent.status.value not in {
-        "succeeded",
-        "warning",
-        "failed",
-    }:
-        return
-
-    from app.services.network.bulk_provisioning import mark_bulk_item_completed
-
-    confirmed = parent.status.value == "succeeded"
-    mark_bulk_item_completed(
-        db,
-        str(bulk_item_id),
-        {
-            "success": confirmed,
-            "waiting": False,
-            "message": str(payload.get("message") or ""),
-            "ont_id": ont_id,
-            "operation_id": str(parent.id),
-            "confirmation_operation_id": operation_id,
-            "device_confirmation": payload,
-        },
-    )
-
-
-def _complete_waiting_bootstrap_after_inform(
-    db,
-    *,
-    ont_id: str,
-    result,
-    reason: str,
-) -> bool:
-    """Close a waiting bootstrap operation after saved intent applies on Inform."""
-    from app.models.network_operation import (
-        NetworkOperation,
-        NetworkOperationStatus,
-        NetworkOperationType,
-    )
-    from app.services.network_operations import network_operations
-
-    bootstrap_operation = db.scalars(
-        select(NetworkOperation)
-        .where(
-            NetworkOperation.operation_type == NetworkOperationType.tr069_bootstrap,
-            NetworkOperation.target_id == ont_id,
-            NetworkOperation.status.in_(
-                {
-                    NetworkOperationStatus.pending,
-                    NetworkOperationStatus.running,
-                    NetworkOperationStatus.waiting,
-                }
-            ),
-        )
-        .order_by(NetworkOperation.created_at.desc())
-        .limit(1)
-    ).first()
-    if bootstrap_operation is None:
-        return False
-
-    confirmation_payload = {
-        "success": True,
-        "waiting": False,
-        "message": result.message,
-        "service_config": {
-            "step_name": result.step_name,
-            "success": result.success,
-            "message": result.message,
-            "duration_ms": result.duration_ms,
-            "waiting": result.waiting,
-            "skipped": result.skipped,
-            "data": result.data or {},
-        },
-        "confirmation_source": reason,
-    }
-    network_operations.mark_succeeded(
-        db,
-        str(bootstrap_operation.id),
-        output_payload=confirmation_payload,
-    )
-    _sync_bootstrap_parent(
-        db,
-        operation_id=str(bootstrap_operation.id),
-        ont_id=ont_id,
-        payload=confirmation_payload,
-    )
-    return True
+    dispatch_scope = _network_dispatch_id or "legacy"
+    return f"{ont_id}:{operation_id or 'no-op'}:{service_retry_count}:{dispatch_scope}"
 
 
 @celery_app.task(name="app.tasks.tr069.sync_all_acs_devices")
@@ -273,167 +167,70 @@ def sync_all_acs_devices() -> dict[str, int]:
 
 
 @celery_app.task(name="app.tasks.tr069.wait_for_ont_bootstrap")
+@managed_network_operation_dispatch("app.tasks.tr069.wait_for_ont_bootstrap")
 @idempotent_task(key_func=_bootstrap_wait_idempotency_key)
 def wait_for_ont_bootstrap(
     ont_id: str,
     operation_id: str | None = None,
     service_retry_count: int = 0,
+    *,
+    _network_dispatch_id: str | None = None,
 ) -> dict[str, object]:
     """Wait for an ONT to become resolvable in GenieACS after TR-069 binding."""
-    from app.services.network.ont_provision_steps import (
-        apply_saved_service_config,
-        wait_tr069_bootstrap,
+    if not operation_id:
+        return {
+            "success": False,
+            "waiting": False,
+            "message": "Tracked bootstrap operation is required.",
+        }
+    if not _network_dispatch_id:
+        from app.services.network.ont_provisioning_commands import (
+            stage_bootstrap_attempt,
+        )
+        from app.services.network_operations import network_operations
+
+        db = SessionLocal()
+        try:
+            operation = network_operations.get(db, operation_id)
+            dispatch = stage_bootstrap_attempt(
+                db,
+                operation,
+                attempt=service_retry_count,
+            )
+            db.commit()
+            return {
+                "success": True,
+                "waiting": True,
+                "message": "Legacy bootstrap envelope moved to durable dispatch.",
+                "operation_id": operation_id,
+                "dispatch_id": str(dispatch.id),
+                "legacy_envelope_rehomed": True,
+            }
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+    from app.services.network.ont_provisioning_execution import (
+        execute_bootstrap_verification,
     )
-    from app.services.network_operations import network_operations
 
     logger.info("Starting TR-069 bootstrap wait for ONT %s", ont_id)
     db = SessionLocal()
     try:
-        if operation_id:
-            existing_operation = network_operations.get(db, operation_id)
-            if existing_operation.status.value in {
-                "succeeded",
-                "warning",
-                "failed",
-                "canceled",
-            }:
-                return dict(
-                    existing_operation.output_payload
-                    or {
-                        "success": existing_operation.status.value == "succeeded",
-                        "waiting": False,
-                        "message": existing_operation.error
-                        or "Bootstrap operation already completed.",
-                    }
-                )
-            network_operations.mark_running(db, operation_id)
-            db.commit()
-
-        result = wait_tr069_bootstrap(db, ont_id, allow_blocking=True)
-        apply_result = None
-        if result.success:
-            apply_result = apply_saved_service_config(db, ont_id)
-        service_waiting = bool(apply_result.waiting) if apply_result else False
-        payload = {
-            "step_name": result.step_name,
-            "success": result.success
-            and (apply_result.success if apply_result else True)
-            and not service_waiting,
-            "message": result.message,
-            "duration_ms": result.duration_ms,
-            "waiting": result.waiting or service_waiting,
-            "data": result.data or {},
-        }
-        if apply_result is not None:
-            payload["service_config"] = {
-                "step_name": apply_result.step_name,
-                "success": apply_result.success,
-                "message": apply_result.message,
-                "duration_ms": apply_result.duration_ms,
-                "waiting": apply_result.waiting,
-                "skipped": apply_result.skipped,
-                "data": apply_result.data or {},
-            }
-            if apply_result.message:
-                payload["message"] = f"{result.message} {apply_result.message}"
-
-        if operation_id:
-            if payload["success"]:
-                network_operations.mark_succeeded(
-                    db,
-                    operation_id,
-                    output_payload=payload,
-                )
-            elif payload["waiting"]:
-                network_operations.mark_waiting(
-                    db,
-                    operation_id,
-                    str(payload["message"]),
-                )
-                if service_retry_count < 4:
-                    from app.services.queue_adapter import enqueue_task
-
-                    # Exponential backoff: 30s -> 60s -> 120s -> 240s with ±10% jitter
-                    retry_delays = [30, 60, 120, 240]
-                    base_countdown = retry_delays[
-                        min(service_retry_count, len(retry_delays) - 1)
-                    ]
-                    jitter = _retry_jitter_random.uniform(-0.1, 0.1) * base_countdown
-                    countdown = int(base_countdown + jitter)
-
-                    logger.info(
-                        "Scheduling TR-069 bootstrap retry %d for ONT %s in %ds",
-                        service_retry_count + 1,
-                        ont_id,
-                        countdown,
-                    )
-
-                    dispatch = enqueue_task(
-                        "app.tasks.tr069.wait_for_ont_bootstrap",
-                        args=[ont_id, operation_id, service_retry_count + 1],
-                        correlation_id=f"tr069_bootstrap:{ont_id}",
-                        source="ont_provision_step_retry",
-                        countdown=countdown,
-                    )
-                    if not dispatch.queued:
-                        payload["waiting"] = False
-                        payload["success"] = False
-                        payload["message"] = (
-                            "TR-069 verification retry could not be queued: "
-                            f"{dispatch.error or 'unknown queue error'}"
-                        )
-                        network_operations.mark_failed(
-                            db,
-                            operation_id,
-                            str(payload["message"]),
-                            output_payload=payload,
-                        )
-                else:
-                    payload["message"] = (
-                        f"{payload['message']} Active retries exhausted; saved intent "
-                        "remains pending and will be retried on the next Inform."
-                    )
-            else:
-                network_operations.mark_failed(
-                    db,
-                    operation_id,
-                    str(payload["message"]),
-                    output_payload=payload,
-                )
-            _sync_bootstrap_parent(
-                db,
-                operation_id=operation_id,
-                ont_id=ont_id,
-                payload=payload,
-            )
-            db.commit()
-        else:
-            db.rollback()
-
-        return payload
-    except Exception as exc:
+        return execute_bootstrap_verification(
+            db,
+            ont_id=ont_id,
+            operation_id=operation_id,
+            service_retry_count=service_retry_count,
+        )
+    except Exception:
         db.rollback()
-        if operation_id:
-            try:
-                network_operations.mark_failed(db, operation_id, str(exc))
-                _sync_bootstrap_parent(
-                    db,
-                    operation_id=operation_id,
-                    ont_id=ont_id,
-                    payload={
-                        "success": False,
-                        "waiting": False,
-                        "message": str(exc),
-                    },
-                )
-                db.commit()
-            except Exception:
-                db.rollback()
-                logger.warning(
-                    "Failed to mark TR-069 bootstrap operation %s failed",
-                    operation_id,
-                    exc_info=True,
-                )
+        logger.warning(
+            "TR-069 bootstrap operation %s failed during execution",
+            operation_id,
+            exc_info=True,
+        )
         raise
     finally:
         db.close()
@@ -455,7 +252,11 @@ def apply_saved_ont_service_config(
     try:
         result = apply_saved_service_config(db, ont_id)
         if result.success:
-            _complete_waiting_bootstrap_after_inform(
+            from app.services.network.ont_provisioning_execution import (
+                complete_waiting_bootstrap_after_inform,
+            )
+
+            complete_waiting_bootstrap_after_inform(
                 db,
                 ont_id=ont_id,
                 result=result,

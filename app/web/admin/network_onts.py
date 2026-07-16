@@ -23,7 +23,7 @@ from app.services import web_network_onts as web_network_onts_service
 from app.services import web_network_operations as web_network_operations_service
 from app.services import web_network_service_ports as web_network_service_ports_service
 from app.services.audit_helpers import build_audit_activities
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
 from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.action_logging import log_network_action_result
 from app.web.request_parsing import parse_form_data_sync
@@ -37,12 +37,15 @@ def _base_context(
 ) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    auth = getattr(request.state, "auth", None) or {}
     return {
         "request": request,
         "active_page": active_page,
         "active_menu": active_menu,
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "can_redrive_network_operations": bool(auth)
+        and has_permission(auth, db, "network:operation:redrive"),
     }
 
 

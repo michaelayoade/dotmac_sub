@@ -6,30 +6,24 @@ from types import SimpleNamespace
 from sqlalchemy import select
 
 
-class _SessionContext:
-    def __init__(self, session):
-        self.session = session
-
-    def __enter__(self):
-        return self.session
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-
-def test_provision_ont_task_marks_waiting_result_as_waiting_operation(
+def test_provisioning_execution_marks_waiting_result_as_waiting_operation(
     db_session,
     monkeypatch,
 ) -> None:
-    import app.tasks.ont_provisioning as provisioning_task_module
     from app.models.network import OntUnit
     from app.models.network_operation import (
         NetworkOperation,
+        NetworkOperationDispatch,
         NetworkOperationStatus,
         NetworkOperationType,
     )
     from app.services.network.ont_provisioning.result import StepResult
-    from app.tasks.ont_provisioning import provision_ont
+    from app.services.network.ont_provisioning_commands import (
+        request_ont_provisioning,
+    )
+    from app.services.network.ont_provisioning_execution import (
+        execute_ont_provisioning,
+    )
 
     ont = OntUnit(serial_number="WAITING-PROVISION-TASK")
     db_session.add(ont)
@@ -50,19 +44,24 @@ def test_provision_ont_task_marks_waiting_result_as_waiting_operation(
         "app.services.network.ont_provision_steps.apply_authorization_baseline",
         fake_apply_authorization_baseline,
     )
-    monkeypatch.setattr(
-        "app.services.queue_adapter.enqueue_task",
-        lambda *args, **kwargs: SimpleNamespace(
-            queued=True, task_id="bootstrap-task", error=None
-        ),
+    command = request_ont_provisioning(
+        db_session,
+        str(ont.id),
+        initiated_by="admin",
     )
-    monkeypatch.setattr(
-        provisioning_task_module.db_session_adapter,
-        "session",
-        lambda: _SessionContext(db_session),
-    )
+    assert command.accepted is True
 
-    result = provision_ont.run(str(ont.id), initiated_by="admin")
+    result = execute_ont_provisioning(
+        db_session,
+        ont_id=str(ont.id),
+        dry_run=False,
+        initiated_by="admin",
+        correlation_key=f"provision:{ont.id}",
+        bulk_run_id=None,
+        bulk_item_id=None,
+        allow_low_optical_margin=False,
+        operation_id=command.operation_id,
+    )
 
     assert result["success"] is True
     assert result["waiting"] is True
@@ -84,6 +83,12 @@ def test_provision_ont_task_marks_waiting_result_as_waiting_operation(
         select(NetworkOperation).where(NetworkOperation.parent_id == op.id)
     ).one()
     assert child.status == NetworkOperationStatus.waiting
+    child_dispatch = db_session.scalars(
+        select(NetworkOperationDispatch).where(
+            NetworkOperationDispatch.operation_id == child.id
+        )
+    ).one()
+    assert result["follow_up_dispatch_id"] == str(child_dispatch.id)
 
 
 def test_bootstrap_confirmation_completes_parent_and_bulk_item(db_session):
@@ -99,8 +104,8 @@ def test_bootstrap_confirmation_completes_parent_and_bulk_item(db_session):
         NetworkOperationTargetType,
         NetworkOperationType,
     )
+    from app.services.network.ont_provisioning_execution import sync_bootstrap_parent
     from app.services.network_operations import network_operations
-    from app.tasks.tr069 import _sync_bootstrap_parent
 
     ont = OntUnit(serial_number="BOOTSTRAP-CONFIRMED")
     run = BulkProvisioningRun(
@@ -144,7 +149,7 @@ def test_bootstrap_confirmation_completes_parent_and_bulk_item(db_session):
         output_payload={"success": True},
     )
 
-    _sync_bootstrap_parent(
+    sync_bootstrap_parent(
         db_session,
         operation_id=str(child.id),
         ont_id=str(ont.id),
@@ -165,8 +170,10 @@ def test_inform_apply_completes_waiting_bootstrap_parent(db_session):
         NetworkOperationType,
     )
     from app.services.network.ont_provisioning.result import StepResult
+    from app.services.network.ont_provisioning_execution import (
+        complete_waiting_bootstrap_after_inform,
+    )
     from app.services.network_operations import network_operations
-    from app.tasks.tr069 import _complete_waiting_bootstrap_after_inform
 
     ont = OntUnit(serial_number="BOOTSTRAP-INFORM-CONFIRMED")
     db_session.add(ont)
@@ -191,7 +198,7 @@ def test_inform_apply_completes_waiting_bootstrap_parent(db_session):
     network_operations.mark_waiting(db_session, str(child.id), "next_inform")
     network_operations.update_parent_status(db_session, str(parent.id))
 
-    completed = _complete_waiting_bootstrap_after_inform(
+    completed = complete_waiting_bootstrap_after_inform(
         db_session,
         ont_id=str(ont.id),
         result=StepResult(
@@ -212,7 +219,12 @@ def test_inform_apply_completes_waiting_bootstrap_parent(db_session):
 
 
 def test_admin_provision_route_queues_device_write(db_session, monkeypatch):
+    from app.models.network import OntUnit
     from app.web.admin import network_onts_provisioning
+
+    ont = OntUnit(serial_number="ADMIN-PROVISION-COMMAND")
+    db_session.add(ont)
+    db_session.commit()
 
     monkeypatch.setattr(
         network_onts_provisioning,
@@ -229,16 +241,9 @@ def test_admin_provision_route_queues_device_write(db_session, monkeypatch):
         "log_network_action_result",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(
-        "app.services.queue_adapter.enqueue_task",
-        lambda *args, **kwargs: SimpleNamespace(
-            queued=True, task_id="provision-task", error=None
-        ),
-    )
-
     response = network_onts_provisioning.provision_ont_direct(
         SimpleNamespace(headers={}),
-        "00000000-0000-0000-0000-000000000001",
+        str(ont.id),
         dry_run=False,
         async_execution=False,
         db=db_session,
@@ -247,4 +252,5 @@ def test_admin_provision_route_queues_device_write(db_session, monkeypatch):
     payload = json.loads(response.body)
     assert response.status_code == 202
     assert payload["waiting"] is True
-    assert payload["data"]["task_id"] == "provision-task"
+    assert payload["data"]["operation_id"]
+    assert payload["data"]["dispatch_id"]

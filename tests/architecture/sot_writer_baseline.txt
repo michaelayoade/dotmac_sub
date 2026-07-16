@@ -158,6 +158,7 @@ app.services.network.subscriber_wan_ipam
 app.services.network.tr069_seed
 app.services.network.vendor_capabilities
 app.services.network.zones
+app.services.network_operation_recovery
 app.services.network_subscriber_bridge
 app.services.network_topology
 app.services.network_vendor_polling
