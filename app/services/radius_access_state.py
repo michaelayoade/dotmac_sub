@@ -21,6 +21,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.enforcement_lock import AccessRestrictionMode
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
 from app.services.radius import (
@@ -115,7 +116,7 @@ _GROUP_FOR_STATE: dict[AccessState, str] = {
 def derive_access_state(
     subscription_status: SubscriptionStatus,
     *,
-    captive_redirect_enabled: bool = False,
+    restriction_mode: AccessRestrictionMode | None = None,
     hard_reject: bool = False,
 ) -> AccessState | None:
     """Pure mapping: subscription.status (+ flags) → AccessState.
@@ -124,19 +125,21 @@ def derive_access_state(
     (pending, hidden, archived). Callers should treat None as "no
     radusergroup row should exist for this user".
 
-    Blocked statuses map to ``captive`` (soft walled-garden — keeps the
-    pay-page path) ONLY when the subscriber has opted in via
-    ``captive_redirect_enabled``. By default (opt-out) a blocked subscriber
-    maps to ``suspended`` (Auth-Type := Reject — hard offline): the captive
-    redirect is a per-customer opt-in, not applied to every account.
-    ``hard_reject=True`` forces ``suspended`` regardless (abuse/fraud tier).
+    Blocked statuses map to ``captive`` only after the canonical walled-garden
+    policy resolved a persisted restriction to that effective mode.
     """
     if subscription_status in _ACTIVE_STATUSES:
         return AccessState.active
     if subscription_status in _BLOCKED_STATUSES:
-        if hard_reject or not captive_redirect_enabled:
-            return AccessState.suspended
-        return AccessState.captive
+        if restriction_mode is None:
+            restriction_mode = AccessRestrictionMode.hard_reject
+        if hard_reject:
+            restriction_mode = AccessRestrictionMode.hard_reject
+        return (
+            AccessState.captive
+            if restriction_mode == AccessRestrictionMode.captive
+            else AccessState.suspended
+        )
     if subscription_status in _TERMINATED_STATUSES:
         return AccessState.terminated
     # Unprovisioned (pending/hidden/archived) or any future
@@ -169,22 +172,31 @@ def derive_subscriber_access_state(
     Returns None only when the subscriber has zero subs, OR when every
     sub maps to None (all pending/hidden/archived).
     """
-    rows = list(
-        db.execute(
-            select(Subscription.status, Subscriber.captive_redirect_enabled)
-            .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
-            .where(Subscription.subscriber_id == coerce_uuid(subscriber_id))
+    subscriptions = list(
+        db.scalars(
+            select(Subscription).where(
+                Subscription.subscriber_id == coerce_uuid(subscriber_id)
+            )
         ).all()
     )
-    if not rows:
+    if not subscriptions:
         return None
-    # subscriber.captive_redirect_enabled is a subscriber-level flag —
-    # same value on every row of the join. Read it once.
-    captive_flag = bool(rows[0][1])
-    states = {
-        derive_access_state(status, captive_redirect_enabled=captive_flag)
-        for status, _ in rows
-    }
+    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+    from app.services.walled_garden_policy import resolve_subscription_restriction
+
+    states = set()
+    for subscription in subscriptions:
+        restriction = resolve_subscription_restriction(
+            db,
+            subscription,
+            account=subscriber,
+        )
+        states.add(
+            derive_access_state(
+                subscription.status,
+                restriction_mode=(restriction.effective_mode if restriction else None),
+            )
+        )
     for candidate in _STATE_PRIORITY:
         if candidate in states:
             return candidate

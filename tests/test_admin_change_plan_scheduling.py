@@ -23,6 +23,7 @@ from app.services.subscription_changes import subscription_change_requests
 
 # Reuse the offer/subscription builders from the prepaid plan-change suite.
 from tests.test_customer_plan_change_prepaid import (
+    _confirmation_kwargs,
     _make_offer,
     _make_subscription,
     _stub_plan_change_side_effects,
@@ -46,7 +47,7 @@ def _same_family_offers(db_session):
 
 
 def test_instant_change_swaps_offer_now(db_session, subscriber, monkeypatch):
-    """Default (instant) timing swaps the offer immediately — unchanged behavior."""
+    """One owner-previewed instant change swaps now with exact evidence."""
     _stub_plan_change_side_effects(monkeypatch)
     current, target = _same_family_offers(db_session)
     subscription = _make_subscription(
@@ -74,18 +75,24 @@ def test_instant_change_swaps_offer_now(db_session, subscriber, monkeypatch):
         str(target.id),
         request=None,
         actor_id=None,
+        preview_fingerprint=_confirmation_kwargs(db_session, subscription, target)[
+            "preview_fingerprint"
+        ],
+        idempotency_key="admin-instant-test",
     )
 
     assert result["changed"] == 1
     db_session.refresh(subscription)
     assert str(subscription.offer_id) == str(target.id)
-    # No scheduled change row is created on the instant path.
-    assert (
+    request = (
         db_session.query(SubscriptionChangeRequest)
         .filter(SubscriptionChangeRequest.subscription_id == subscription.id)
-        .count()
-        == 0
+        .one()
     )
+    assert request.status == SubscriptionChangeStatus.applied
+    assert request.confirmation_preview_fingerprint
+    assert request.account_adjustment_id is not None
+    assert request.ledger_entry_id is not None
 
 
 def test_next_cycle_records_scheduled_change_without_swapping(

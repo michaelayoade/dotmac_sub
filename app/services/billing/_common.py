@@ -5,11 +5,12 @@ billing service modules.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -23,6 +24,7 @@ from app.models.billing import (
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
+    LedgerSource,
     Payment,
     PaymentAllocation,
     PaymentChannel,
@@ -38,6 +40,62 @@ from app.services.common import get_by_id, round_money, to_decimal
 from app.services.locking import lock_for_update
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class InvoiceSettlementAmounts:
+    """Canonical invoice settlement components used by writes and read models."""
+
+    payments_applied: Decimal
+    credits_applied: Decimal
+
+
+def resolve_invoice_settlement_amounts(
+    db: Session, invoice_id: object
+) -> InvoiceSettlementAmounts:
+    """Resolve cash and credit-note effects without mixing their meanings."""
+    # A partially-refunded payment still paid for most of this invoice. The
+    # refund is attributed proportionally across allocations because one
+    # payment may settle several invoices.
+    allocation_rows = (
+        db.query(
+            PaymentAllocation.amount,
+            Payment.amount.label("payment_amount"),
+            Payment.refunded_amount,
+            Payment.status,
+        )
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
+        .filter(PaymentAllocation.invoice_id == invoice_id)
+        .filter(PaymentAllocation.is_active.is_(True))
+        .filter(Payment.is_active.is_(True))
+        .filter(
+            Payment.status.in_(
+                [PaymentStatus.succeeded, PaymentStatus.partially_refunded]
+            )
+        )
+        .all()
+    )
+    paid_amount = Decimal("0.00")
+    for row in allocation_rows:
+        allocated = to_decimal(row.amount)
+        if row.status != PaymentStatus.partially_refunded:
+            paid_amount += allocated
+            continue
+        gross = to_decimal(row.payment_amount)
+        refunded = to_decimal(row.refunded_amount)
+        if gross <= 0:
+            continue
+        paid_amount += allocated * (gross - refunded) / gross
+
+    credit_amount = (
+        db.query(func.coalesce(func.sum(CreditNoteApplication.amount), 0))
+        .filter(CreditNoteApplication.invoice_id == invoice_id)
+        .scalar()
+    )
+    return InvoiceSettlementAmounts(
+        payments_applied=round_money(paid_amount),
+        credits_applied=round_money(to_decimal(credit_amount)),
+    )
 
 
 def _validate_account(db: Session, account_id: str):
@@ -88,6 +146,17 @@ def get_account_credit_balance(
         .filter(LedgerEntry.invoice_id.is_(None))
         .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
         .filter(LedgerEntry.is_active.is_(True))
+        # Payment-linked refund rows are the exact accounting evidence for the
+        # total refund. The payment document already reduces customer funding;
+        # only the separate internal consumption debit affects unallocated
+        # account credit. Counting both would double-debit the wallet.
+        .filter(
+            or_(
+                LedgerEntry.source.is_(None),
+                LedgerEntry.source.notin_([LedgerSource.refund, LedgerSource.payment]),
+                LedgerEntry.payment_id.is_(None),
+            )
+        )
     )
     if currency is not None:
         debit_query = debit_query.filter(LedgerEntry.currency == currency)
@@ -220,36 +289,20 @@ def _validate_invoice_currency(invoice: Invoice, currency: str | None):
         raise HTTPException(status_code=400, detail="Currency does not match invoice")
 
 
-# Allowed manual invoice status transitions (the raw ``Invoices.update`` /
-# PATCH path). ``void`` is a terminal sink; ``paid`` may only move to ``void``
-# (write-off) — the ledger-driven reopen (paid→issued/overdue on refund) goes
-# through ``_recalculate_invoice_totals``, not this path. This blocks the
-# resurrection edges the review found reachable via the API: void→anything and
-# paid→draft/issued.
+# Allowed non-financial manual invoice status transitions (the raw
+# ``Invoices.update`` / PATCH path). Payment settlement, void, and write-off
+# transitions are absent: their named owners write exact evidence and update
+# status atomically. Ledger-driven reopen after refund/reversal goes through
+# ``_recalculate_invoice_totals``, not this table.
 ALLOWED_INVOICE_TRANSITIONS: dict[InvoiceStatus, set[InvoiceStatus]] = {
-    InvoiceStatus.draft: {InvoiceStatus.issued, InvoiceStatus.void},
-    InvoiceStatus.issued: {
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.paid,
-        InvoiceStatus.overdue,
-        InvoiceStatus.void,
-        InvoiceStatus.written_off,
-    },
+    InvoiceStatus.draft: {InvoiceStatus.issued},
+    InvoiceStatus.issued: {InvoiceStatus.overdue},
     InvoiceStatus.partially_paid: {
-        InvoiceStatus.paid,
         InvoiceStatus.overdue,
         InvoiceStatus.issued,
-        InvoiceStatus.void,
-        InvoiceStatus.written_off,
     },
-    InvoiceStatus.overdue: {
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.paid,
-        InvoiceStatus.issued,
-        InvoiceStatus.void,
-        InvoiceStatus.written_off,
-    },
-    InvoiceStatus.paid: {InvoiceStatus.void},
+    InvoiceStatus.overdue: {InvoiceStatus.issued},
+    InvoiceStatus.paid: set(),
     InvoiceStatus.void: set(),
     # Bad debt is closed; no transitions out (the ledger records any recovery).
     InvoiceStatus.written_off: set(),
@@ -367,57 +420,7 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         invoice.tax_total = tax_total
         invoice.total = round_money(subtotal + tax_total)
 
-    # A partially-refunded payment still paid for most of this invoice.
-    #
-    # This used to count ONLY ``succeeded``, so a payment that had been partially
-    # refunded contributed ZERO: refunding NGN 500 of a NGN 50,000 payment dropped
-    # the invoice's paid amount from 50,000 to 0, reverted it to fully unpaid, and
-    # sent a customer who had paid into overdue and dunning over a NGN 500 refund.
-    #
-    # Count it net of what was given back. The refund is applied PROPORTIONALLY
-    # across the payment's allocations, which is the only rule that stays correct
-    # when one payment settles several invoices — the refund cannot be attributed
-    # to any single one of them.
-    #
-    # A FULLY refunded payment needs no special case: process_refund deactivates
-    # its allocations, so it drops out on the is_active filter above.
-    allocation_rows = (
-        db.query(
-            PaymentAllocation.amount,
-            Payment.amount.label("payment_amount"),
-            Payment.refunded_amount,
-            Payment.status,
-        )
-        .join(Payment, Payment.id == PaymentAllocation.payment_id)
-        .filter(PaymentAllocation.invoice_id == invoice.id)
-        .filter(PaymentAllocation.is_active.is_(True))
-        .filter(Payment.is_active.is_(True))
-        .filter(
-            Payment.status.in_(
-                [PaymentStatus.succeeded, PaymentStatus.partially_refunded]
-            )
-        )
-        .all()
-    )
-    paid_amount = Decimal("0.00")
-    for row in allocation_rows:
-        allocated = to_decimal(row.amount)
-        if row.status != PaymentStatus.partially_refunded:
-            paid_amount += allocated
-            continue
-        gross = to_decimal(row.payment_amount)
-        refunded = to_decimal(row.refunded_amount)
-        if gross <= 0:
-            continue
-        net_share = allocated * (gross - refunded) / gross
-        paid_amount += net_share
-    paid_amount = round_money(paid_amount)
-    credit_amount = (
-        db.query(func.coalesce(func.sum(CreditNoteApplication.amount), 0))
-        .filter(CreditNoteApplication.invoice_id == invoice.id)
-        .scalar()
-    )
-    credit_amount = round_money(to_decimal(credit_amount))
+    settlement = resolve_invoice_settlement_amounts(db, invoice.id)
     # Void and written_off are terminal: never recompute their balance or
     # derive a status — both carry balance_due 0, and the paid-branch below
     # would otherwise resurrect them to 'paid' (the void→paid bug; the same
@@ -426,7 +429,10 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
     if invoice.status in (InvoiceStatus.void, InvoiceStatus.written_off):
         return
     invoice.balance_due = max(
-        Decimal("0.00"), round_money(invoice.total - paid_amount - credit_amount)
+        Decimal("0.00"),
+        round_money(
+            invoice.total - settlement.payments_applied - settlement.credits_applied
+        ),
     )
     # A draft is pre-issue: keep its computed balance for display but do NOT
     # auto-advance it to paid/partially_paid (it must be explicitly issued).
@@ -436,7 +442,7 @@ def _recalculate_invoice_totals(db: Session, invoice: Invoice):
         invoice.status = InvoiceStatus.paid
         if not invoice.paid_at:
             invoice.paid_at = datetime.now(UTC)
-    elif paid_amount > 0 or credit_amount > 0:
+    elif settlement.payments_applied > 0 or settlement.credits_applied > 0:
         invoice.status = InvoiceStatus.partially_paid
     elif invoice.status in (InvoiceStatus.paid, InvoiceStatus.partially_paid):
         # The invoice is fully unpaid again (e.g. its payment was refunded or

@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
@@ -37,6 +37,7 @@ from app.services.billing_enforcement_guards import (
 from app.services.billing_profile import resolve_billing_profile
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.collections._core import _bulk_dunning_shield_reasons
+from app.services.collections.grace_policy import resolve_grace_decision
 from app.services.common import coerce_uuid
 
 PREPAID_BALANCE_ENFORCEMENT_CONTROL = "collections.prepaid_balance_enforcement"
@@ -62,7 +63,6 @@ class PrepaidEnforcementAction(str, Enum):
 
 @dataclass(frozen=True)
 class PrepaidEnforcementPolicy:
-    deactivation_days: int
     activation_at: datetime | None
     activation_error: str | None
     warning_subject: str
@@ -76,7 +76,6 @@ class PrepaidEnforcementPolicy:
     def report_values(self) -> dict[str, Any]:
         """Return operational policy without customer-message templates."""
         return {
-            "deactivation_days": self.deactivation_days,
             "activation_at": self.activation_at,
             "activation_ready": self.activation_error is None,
             "activation_error": self.activation_error,
@@ -101,6 +100,9 @@ class PrepaidEnforcementPlanItem:
     suspended_subscription_count: int
     active_prepaid_lock_count: int
     prepaid_low_balance_at: datetime | None
+    grace_days: int
+    grace_source: str
+    grace_policy_set_id: str | None
     deactivation_due_at: datetime | None
     prepaid_deactivation_at: datetime | None
     notice_suppression_reason: str | None
@@ -185,14 +187,6 @@ def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
         value = settings_spec.resolve_value(db, SettingDomain.collections, key)
         return str(value) if value is not None else ""
 
-    days_raw = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_deactivation_days"
-    )
-    try:
-        deactivation_days = max(1, int(str(days_raw))) if days_raw is not None else 3
-    except (TypeError, ValueError):
-        deactivation_days = 3
-
     activation_raw = settings_spec.resolve_value(
         db, SettingDomain.collections, "prepaid_enforcement_activation_at"
     )
@@ -210,7 +204,6 @@ def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
             activation_at = parsed_activation_at
         except ValueError:
             activation_error = "prepaid_enforcement_activation_at_invalid"
-
     holidays_raw = settings_spec.resolve_value(
         db, SettingDomain.collections, "prepaid_skip_holidays"
     )
@@ -223,7 +216,6 @@ def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
         db, SettingDomain.collections, "prepaid_blocking_time"
     )
     return PrepaidEnforcementPolicy(
-        deactivation_days=deactivation_days,
         activation_at=activation_at,
         activation_error=activation_error,
         warning_subject=_string("prepaid_warning_subject"),
@@ -424,11 +416,13 @@ def plan_prepaid_account(
         grace_started_at is None or grace_started_at < policy.activation_at
     ):
         grace_started_at = policy.activation_at
-    due_at = (
-        grace_started_at + timedelta(days=policy.deactivation_days)
-        if low_at is not None and grace_started_at is not None
-        else None
+    grace = resolve_grace_decision(
+        db,
+        account,
+        starts_at=grace_started_at if low_at is not None else None,
+        as_of=now,
     )
+    due_at = grace.ends_at
 
     action = PrepaidEnforcementAction.ok
     reason = "funded_and_aligned"
@@ -471,7 +465,7 @@ def plan_prepaid_account(
     elif account.prepaid_low_balance_at is None:
         action = PrepaidEnforcementAction.warn
         reason = "low_balance_timer_not_armed"
-    elif due_at is not None and now < due_at:
+    elif grace.phase != "actionable":
         action = PrepaidEnforcementAction.waiting
         reason = "deactivation_grace_not_elapsed"
     elif window_reason := _window_block_reason(db, now=now, policy=policy):
@@ -516,6 +510,11 @@ def plan_prepaid_account(
         suspended_subscription_count=suspended_count,
         active_prepaid_lock_count=active_prepaid_lock_count,
         prepaid_low_balance_at=account.prepaid_low_balance_at,
+        grace_days=grace.policy.days,
+        grace_source=grace.policy.source,
+        grace_policy_set_id=(
+            str(grace.policy.policy_set_id) if grace.policy.policy_set_id else None
+        ),
         deactivation_due_at=due_at,
         prepaid_deactivation_at=account.prepaid_deactivation_at,
         notice_suppression_reason=notice_suppression_reason,

@@ -437,7 +437,12 @@ def _validate_rows(
 
 
 def _persist_row(
-    db: Session, module: str, parsed_row: Any, *, source_name: str | None = None
+    db: Session,
+    module: str,
+    parsed_row: Any,
+    *,
+    source_name: str | None = None,
+    with_provenance: bool = False,
 ) -> Any:
     from app.services.financial_imports import (
         FINANCIAL_IMPORT_MODULES,
@@ -450,6 +455,7 @@ def _persist_row(
             module,
             parsed_row,
             source_name=source_name or "import",
+            with_provenance=with_provenance,
         )
     if module == "subscribers":
         obj = Subscriber(
@@ -793,9 +799,10 @@ def rollback_import(
 
     if str(entry.get("module") or "") in FINANCIAL_IMPORT_MODULES:
         raise ValueError(
-            "Posted financial and subscription imports cannot be raw-deleted. "
-            "Use invoice void/write-off, payment reversal/refund, or subscription "
-            "lifecycle commands so compensating records remain auditable."
+            "Legacy financial and subscription import history cannot be raw-deleted. "
+            "Payment batches with durable creation provenance use the Import Runs "
+            "previewed batch-reversal owner; other financial modules use their "
+            "named append-only lifecycle owners."
         )
     if bool(entry.get("dry_run")):
         raise ValueError("Dry-run imports cannot be rolled back")
@@ -827,44 +834,8 @@ def rollback_import(
     deleted_rows = 0
     missing_rows = 0
 
-    # PASS 1 — undo the money, through its owner.
-    #
-    # This must run BEFORE any invoice row is deleted: an invoice still carrying a
-    # payment allocation cannot be deleted, and clearing that allocation is exactly
-    # what the owner does. It also cannot be a db.delete(): imported payments now
-    # have a LedgerEntry and usually a PaymentAllocation beneath them (they became
-    # real payments when the import was routed through Payments.create), and
-    # neither child FK carries an ondelete. A hard delete would either raise
-    # IntegrityError — leaving the batch half-rolled-back and unrecoverable — or
-    # orphan a live ledger credit while the invoice it settled stayed paid with
-    # balance_due = 0.
-    for record in created_records:
-        if not isinstance(record, dict):
-            continue
-        if str(record.get("module") or entry.get("module") or "") != "payments":
-            continue
-        raw_payment_id = str(record.get("id") or "").strip()
-        if not raw_payment_id:
-            missing_rows += 1
-            continue
-        try:
-            payment_id = UUID(raw_payment_id)
-        except ValueError:
-            missing_rows += 1
-            continue
-        if db.get(Payment, payment_id) is None:
-            missing_rows += 1
-            continue
-
-        from app.services import billing as billing_service
-
-        # Soft-deletes the payment, drops its allocations and ledger credits
-        # together, and recomputes every invoice it had settled — so the invoice
-        # goes back to unpaid instead of staying paid with no money behind it.
-        billing_service.payments.delete(db, str(payment_id))
-        deleted_rows += 1
-
-    # PASS 2 — everything else.
+    # Financial modules were rejected above. Legacy settings-history rollback is
+    # intentionally limited to nonfinancial records that can still be removed.
     for record in created_records:
         if not isinstance(record, dict):
             continue
@@ -886,10 +857,6 @@ def rollback_import(
         obj = db.get(model_cls, record_id)
         if obj is None:
             missing_rows += 1
-            continue
-
-        # Already undone through the payment owner in pass 1.
-        if module == "payments":
             continue
 
         db.delete(obj)

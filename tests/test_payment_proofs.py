@@ -172,10 +172,12 @@ def test_reject_requires_reason_and_notifies(db_session):
         amount="2500",
         file_path="uploads/payment_proofs/y.png",
     )
-    with pytest.raises(HTTPException):
+    with pytest.raises(svc.PaymentProofReviewError) as exc:
         svc.reject_proof(
             db_session, proof["id"], verified_by="admin-1", review_notes="  "
         )
+    assert exc.value.code == "rejection_reason_required"
+    assert exc.value.field == "review_notes"
     out = svc.reject_proof(
         db_session,
         proof["id"],
@@ -214,11 +216,16 @@ def test_verify_rejects_invalid_or_nonpositive_amount(db_session):
     with pytest.raises(HTTPException) as exc:
         svc.verify_proof(db_session, proof["id"], verified_by="admin-1", amount="0")
     assert exc.value.status_code == 400
-    with pytest.raises(HTTPException) as exc:
+    assert isinstance(exc.value, svc.PaymentProofReviewError)
+    assert exc.value.code == "verified_amount_non_positive"
+    assert exc.value.field == "amount"
+    with pytest.raises(svc.PaymentProofReviewError) as exc:
         svc.verify_proof(
             db_session, proof["id"], verified_by="admin-1", amount="not-a-number"
         )
     assert exc.value.status_code == 400
+    assert exc.value.code == "invalid_verified_amount"
+    assert exc.value.field == "amount"
 
 
 def test_verify_without_auto_allocate_keeps_money_as_credit(db_session):
@@ -288,6 +295,8 @@ def test_verify_blocked_when_reference_already_verified(db_session):
         svc.verify_proof(db_session, second["id"], verified_by="admin-1")
     assert exc.value.status_code == 409
     assert "TRF-TWICE" in exc.value.detail
+    assert isinstance(exc.value, svc.PaymentProofReviewError)
+    assert exc.value.code == "duplicate_transfer_reference"
 
     # Only one payment was created for that reference.
     payments = (

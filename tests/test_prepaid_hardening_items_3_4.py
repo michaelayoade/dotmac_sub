@@ -1,7 +1,7 @@
 """Items 3 & 4 of the prepaid deposit-is-truth alignment.
 
 Item 3: a prepaid mid-cycle plan-change on the generic/admin path must draw the
-price difference down from the wallet (a ledger debit), never mint an issued
+price difference down from prepaid funding (a ledger debit), never mint an issued
 invoice — matching the customer-portal instant-change path.
 
 Item 4: the customer-facing service status must resolve billing mode through the
@@ -32,7 +32,10 @@ from app.models.catalog import (
     ServiceType,
     SubscriptionStatus,
 )
-from app.services.prepaid_plan_changes import prepare_immediate_prepaid_plan_change
+from app.services.prepaid_plan_changes import (
+    prepare_immediate_prepaid_plan_change,
+    resolve_prepaid_plan_change,
+)
 from app.services.service_status import build_service_status
 
 
@@ -52,8 +55,16 @@ def _debits(db, account):
 # --- Item 3 --------------------------------------------------------------
 
 
-def _prepare_upgrade(db, subscription, account, *, billing_mode: BillingMode):
+def _prepare_upgrade(
+    db,
+    subscription,
+    account,
+    *,
+    billing_mode: BillingMode,
+    status: SubscriptionStatus = SubscriptionStatus.active,
+):
     subscription.billing_mode = billing_mode
+    subscription.status = status
     subscription.next_billing_at = datetime.now(UTC) + timedelta(days=30)
     target = CatalogOffer(
         name="Plan Change Target",
@@ -88,16 +99,18 @@ def _prepare_upgrade(db, subscription, account, *, billing_mode: BillingMode):
             )
         )
     db.commit()
+    preview = resolve_prepaid_plan_change(db, subscription, str(target.id))
     return prepare_immediate_prepaid_plan_change(
         db,
         subscription,
         target,
         old_offer_name="Old Plan",
         operation_key=f"hardening-{billing_mode.value}-{subscription.id}",
+        expected_preview_fingerprint=preview.fingerprint,
     )
 
 
-def test_prepaid_upgrade_draws_down_wallet_not_invoice(
+def test_prepaid_upgrade_draws_down_funding_not_invoice(
     db_session, subscription, subscriber_account
 ):
     prepared = _prepare_upgrade(
@@ -108,7 +121,7 @@ def test_prepaid_upgrade_draws_down_wallet_not_invoice(
     )
     db_session.flush()
 
-    # No issued invoice / AR — the charge is a wallet drawdown instead.
+    # No issued invoice / AR — the charge is a prepaid-funding drawdown instead.
     assert _invoices(db_session, subscriber_account) == []
     debits = _debits(db_session, subscriber_account)
     assert len(debits) == 1
@@ -119,7 +132,7 @@ def test_prepaid_upgrade_draws_down_wallet_not_invoice(
 def test_prepaid_upgrade_makes_no_credit_note(
     db_session, subscription, subscriber_account
 ):
-    # An upgrade (net > 0) is a pure wallet drawdown — never a credit note.
+    # An upgrade (net > 0) is a prepaid-funding drawdown — never a credit note.
     _prepare_upgrade(
         db_session,
         subscription,
@@ -150,6 +163,23 @@ def test_postpaid_plan_change_generates_nothing_here(
     assert _invoices(db_session, subscriber_account) == []
     assert _debits(db_session, subscriber_account) == []
     assert prepared.ledger_entry is None
+
+
+def test_nonactive_prepaid_plan_change_has_no_financial_effect(
+    db_session, subscription, subscriber_account
+):
+    prepared = _prepare_upgrade(
+        db_session,
+        subscription,
+        subscriber_account,
+        billing_mode=BillingMode.prepaid,
+        status=SubscriptionStatus.pending,
+    )
+    db_session.flush()
+
+    assert prepared.decision.has_financial_effect is False
+    assert prepared.ledger_entry is None
+    assert _debits(db_session, subscriber_account) == []
 
 
 # --- Item 4 --------------------------------------------------------------

@@ -224,6 +224,7 @@ class TestInvoiceWriteOffVoid:
             subtotal=Decimal("100.00"),
             total=Decimal("100.00"),
             balance_due=Decimal("100.00"),
+            status=InvoiceStatus.issued,
         )
         result = billing_service.invoices.write_off(db_session, str(invoice.id))
         assert result.balance_due == Decimal("0.00")
@@ -236,10 +237,11 @@ class TestInvoiceWriteOffVoid:
             subscriber.id,
             total=Decimal("0.00"),
             balance_due=Decimal("0.00"),
+            status=InvoiceStatus.issued,
         )
         with pytest.raises(HTTPException) as exc:
             billing_service.invoices.write_off(db_session, str(invoice.id))
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 409
 
     def test_void_invoice(self, db_session, subscriber):
         invoice = _make_invoice(
@@ -264,12 +266,15 @@ class TestInvoiceWriteOffVoid:
             subscriber.id,
             subtotal=Decimal("50.00"),
             total=Decimal("50.00"),
-            balance_due=Decimal("0.00"),
-            status=InvoiceStatus.paid,
+            balance_due=Decimal("50.00"),
+            status=InvoiceStatus.issued,
         )
+        invoice.status = InvoiceStatus.paid
+        invoice.balance_due = Decimal("0.00")
+        db_session.commit()
         with pytest.raises(HTTPException) as exc:
             billing_service.invoices.void(db_session, str(invoice.id))
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 409
         refreshed = db_session.get(Invoice, invoice.id)
         assert refreshed.status == InvoiceStatus.paid
 
@@ -284,7 +289,7 @@ class TestInvoiceWriteOffVoid:
         billing_service.invoices.void(db_session, str(invoice.id))
         with pytest.raises(HTTPException) as exc:
             billing_service.invoices.void(db_session, str(invoice.id))
-        assert exc.value.status_code == 400
+        assert exc.value.status_code == 409
 
     def test_bulk_write_off(self, db_session, subscriber):
         inv1 = _make_invoice(
@@ -293,6 +298,7 @@ class TestInvoiceWriteOffVoid:
             subtotal=Decimal("10.00"),
             total=Decimal("10.00"),
             balance_due=Decimal("10.00"),
+            status=InvoiceStatus.issued,
         )
         inv2 = _make_invoice(
             db_session,
@@ -300,6 +306,7 @@ class TestInvoiceWriteOffVoid:
             subtotal=Decimal("20.00"),
             total=Decimal("20.00"),
             balance_due=Decimal("20.00"),
+            status=InvoiceStatus.issued,
         )
         payload = InvoiceBulkWriteOffRequest(
             invoice_ids=[inv1.id, inv2.id], memo="Bulk write-off"
@@ -1499,9 +1506,12 @@ class TestPaymentCRUD:
             currency="NGN",
             subtotal=Decimal("37625.00"),
             total=Decimal("37625.00"),
-            balance_due=Decimal("0.00"),
-            status=InvoiceStatus.paid,
+            balance_due=Decimal("37625.00"),
+            status=InvoiceStatus.issued,
         )
+        paid_invoice.status = InvoiceStatus.paid
+        paid_invoice.balance_due = Decimal("0.00")
+        db_session.commit()
         paid_invoice.billing_period_start = period_start
         paid_invoice.billing_period_end = period_end
         db_session.add(paid_invoice)
@@ -1798,7 +1808,7 @@ class TestPaymentAllocationCRUD:
         )
         assert len(allocations) >= 1
 
-    def test_delete_allocation(self, db_session, subscriber):
+    def test_evidence_backed_allocation_cannot_be_deleted(self, db_session, subscriber):
         invoice = _make_invoice(
             db_session,
             subscriber.id,
@@ -1833,10 +1843,11 @@ class TestPaymentAllocationCRUD:
         )
         assert len(allocations) >= 1
         alloc = allocations[0]
-        billing_service.payment_allocations.delete(db_session, str(alloc.id))
-        # After deleting allocation, invoice should have balance restored
+        with pytest.raises(HTTPException) as blocked:
+            billing_service.payment_allocations.delete(db_session, str(alloc.id))
+        assert blocked.value.status_code == 409
         db_session.refresh(invoice)
-        assert invoice.balance_due > Decimal("0.00")
+        assert invoice.balance_due == Decimal("0.00")
 
     def test_delete_allocation_not_found(self, db_session):
         with pytest.raises(HTTPException) as exc:
@@ -2038,14 +2049,17 @@ class TestReportingHelpers:
 
     def test_overview_stats_with_invoices(self, db_session, subscriber):
         """Test overview stats correctly sums paid invoices."""
-        _make_invoice(
+        paid_invoice = _make_invoice(
             db_session,
             subscriber.id,
             subtotal=Decimal("100.00"),
             total=Decimal("100.00"),
-            balance_due=Decimal("0.00"),
-            status=InvoiceStatus.paid,
+            balance_due=Decimal("100.00"),
+            status=InvoiceStatus.issued,
         )
+        paid_invoice.status = InvoiceStatus.paid
+        paid_invoice.balance_due = Decimal("0.00")
+        db_session.commit()
         _make_invoice(
             db_session,
             subscriber.id,

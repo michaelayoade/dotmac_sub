@@ -18,13 +18,14 @@ from app.models.billing import (
     Invoice,
     Payment,
     PaymentAllocation,
-    PaymentStatus,
+    PaymentSettlementOrigin,
     TopupIntent,
 )
 from app.models.subscriber import Reseller, Subscriber
-from app.schemas.billing import PaymentCreate
+from app.schemas.billing import BillingAccountPaymentPreviewRequest
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
+from app.services.billing.consolidated_payments import consolidated_settlement_key
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.customer_portal_flow_payments import (
     _provider_uuid,
@@ -280,18 +281,24 @@ def verify_and_record_consolidated_payment(
             "already_recorded": True,
         }
 
-    payment_create = PaymentCreate(
-        billing_account_id=ba.id,
+    payment_request = BillingAccountPaymentPreviewRequest(
         amount=amount,
         currency=tx.currency,
-        status=PaymentStatus.succeeded,
         provider_id=provider_id,
         external_id=external_id,
         memo=f"Reseller consolidated payment ref: {reference}",
         paid_at=datetime.now(UTC),
         allocations=None,
+        auto_allocate=False,
     )
-    payment = billing_service.payments.create(db, payment_create, auto_allocate=False)
+    payment = billing_service.consolidated_payment_settlements.settle_verified(
+        db,
+        str(ba.id),
+        payment_request,
+        idempotency_key=consolidated_settlement_key("topup-intent", str(intent.id)),
+        origin=PaymentSettlementOrigin.provider_event,
+        commit=False,
+    ).payment
 
     intent.completed_payment_id = payment.id
     intent.completed_at = datetime.now(UTC)

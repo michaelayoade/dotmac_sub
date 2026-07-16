@@ -37,7 +37,6 @@ a per-cluster appendix of every finding (`file:line` + recommend/defer).
 | Integrations & webhooks | `INTEGRATIONS_WEBHOOKS_UX_POLISH_AUDIT.md` |
 | App integrations (connector lifecycle + API keys) | `APP_INTEGRATIONS_UX_POLISH_AUDIT.md` |
 | System / config / legal / GIS | `SYSTEM_CONFIG_UX_POLISH_AUDIT.md` |
-| VAS / wallet / bill-payments | `VAS_WALLET_UX_POLISH_AUDIT.md` |
 | Auth / sessions / MFA | `AUTH_SESSIONS_UX_POLISH_AUDIT.md` |
 
 (Networking/billing/catalog landed first (#511); the next ten in #512; app
@@ -59,7 +58,7 @@ These are worth tackling as cross-cutting initiatives rather than per-domain:
 2. **Duplicated load-bearing constants that drift** ("keep in sync" comments).
    Examples: networking suspend/block address-list name (3+ copies, 2 literals);
    billing billable-status set (4+ copies incl. raw SQL); catalog FUP `0.8`; ONT
-   `-25 dBm` (networking + reports); VAS top-up limits + dedupe windows; auth
+   `-25 dBm` (networking + reports); auth
    lockout/password constants. → **A single source of truth for status/policy
    constants.**
 
@@ -96,7 +95,6 @@ Surfaced by the polish pass but they're real bugs, not cosmetics:
   real; header-only technician CSV.
 - CRM: two schedulers can double-run the same pull; webhook overwrites identity with
   no audit.
-- Reseller: VAS page **500s on render** (`'%,.2f'|format`).
 - App integrations: **admin-issued API keys can't authenticate** (bcrypt-hashed on
   create vs sha256 on verify); a **disabled job still runs** on manual trigger.
 

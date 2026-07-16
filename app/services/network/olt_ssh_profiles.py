@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from paramiko.ssh_exception import SSHException
 
 from app.models.network import OLTDevice
+from app.services.network.huawei_cli_response import is_huawei_cli_unsupported
 
 logger = logging.getLogger(__name__)
 
@@ -697,9 +698,8 @@ def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntr
             output = _run_huawei_paged_cmd(channel, command, prompt=prompt)
         else:
             output = _run_huawei_cmd(channel, command, prompt=prompt)
-        if (
-            command == "display traffic table ip all"
-            and "unknown command" in output.lower()
+        if command == "display traffic table ip all" and is_huawei_cli_unsupported(
+            output
         ):
             command = "display traffic table ip from-index 0"
             output = _run_huawei_paged_cmd(channel, command, prompt=prompt)

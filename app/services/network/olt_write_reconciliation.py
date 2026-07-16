@@ -9,6 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.models.network import OLTDevice
+from app.services.network.huawei_cli_response import (
+    HuaweiCliErrorCode,
+    classify_huawei_cli_response,
+)
 from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
@@ -22,6 +26,22 @@ class OltWriteVerification:
     success: bool
     message: str
     details: dict[str, object] | None = None
+
+
+def _with_cli_evidence(
+    details: dict[str, object] | None,
+    *responses: str | None,
+) -> dict[str, object] | None:
+    """Attach the first classified device response without retaining raw CLI."""
+    payload = dict(details or {})
+    for response_text in responses:
+        response = classify_huawei_cli_response(response_text)
+        if response.error_code == HuaweiCliErrorCode.NONE:
+            continue
+        payload.setdefault("error_code", response.error_code.value)
+        payload.setdefault("huawei_cli_response", response.to_evidence())
+        break
+    return payload or None
 
 
 def _normalize_serial(value: str | None) -> str:
@@ -72,7 +92,11 @@ def verify_ont_authorized(
             return OltWriteVerification(
                 False,
                 f"OLT accepted the authorization write, but serial readback failed after {reason}: {detail}",
-                {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
+                _with_cli_evidence(
+                    {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
+                    msg,
+                    serial_lookup_failure,
+                ),
             )
 
         for registered_entry in entries:
@@ -141,7 +165,10 @@ def verify_ont_authorized(
             return OltWriteVerification(
                 False,
                 f"OLT accepted the authorization write, but readback failed: {msg}",
-                {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
+                _with_cli_evidence(
+                    {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
+                    msg,
+                ),
             )
         if status_entry is None or not _serial_matches(
             status_entry.serial_number, serial_number
@@ -195,6 +222,7 @@ def verify_ont_absent(
             return OltWriteVerification(
                 False,
                 f"OLT accepted the delete write, but readback failed: {msg}",
+                _with_cli_evidence(None, msg),
             )
 
         for entry in entries:
@@ -241,6 +269,7 @@ def verify_service_port_present(
         return OltWriteVerification(
             False,
             f"OLT accepted the service-port write, but readback failed: {msg}",
+            _with_cli_evidence(None, msg),
         )
 
     for port in ports:
@@ -282,6 +311,7 @@ def verify_service_port_absent(
         return OltWriteVerification(
             False,
             f"OLT accepted the service-port delete, but readback failed: {msg}",
+            _with_cli_evidence(None, msg),
         )
 
     for port in ports:
@@ -319,6 +349,7 @@ def verify_service_port_index_absent(
         return OltWriteVerification(
             False,
             f"OLT accepted the service-port delete, but readback failed: {msg}",
+            _with_cli_evidence(None, msg),
         )
     if port is not None:
         return OltWriteVerification(
@@ -356,6 +387,7 @@ def verify_iphost_config(
         return OltWriteVerification(
             False,
             f"OLT accepted the IPHOST write, but readback failed: {msg}",
+            _with_cli_evidence(None, msg),
         )
 
     normalized = {

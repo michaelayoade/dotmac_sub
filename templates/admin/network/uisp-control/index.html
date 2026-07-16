@@ -9,13 +9,20 @@
             <h1 class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">UISP Control</h1>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Desired state, observed state, and device confirmation.</p>
         </div>
-        <form method="get">
+        <form method="get" class="flex flex-wrap gap-2">
             <label for="status" class="sr-only">Status</label>
             <select id="status" name="status" onchange="this.form.submit()" class="border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                 <option value="">All statuses</option>
                 {% for value in ['applying', 'pending_readback', 'verified', 'drifted', 'manual_required', 'pending_observation', 'staged', 'failed'] %}
                 <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ value | replace('_', ' ') | title }}</option>
                 {% endfor %}
+            </select>
+            <label for="health" class="sr-only">Attention</label>
+            <select id="health" name="health" onchange="this.form.submit()" class="border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                <option value="">All readiness</option>
+                <option value="unmapped" {% if health_filter == 'unmapped' %}selected{% endif %}>Unmapped / write blocked</option>
+                <option value="stale" {% if health_filter == 'stale' %}selected{% endif %}>Stale observation</option>
+                <option value="drift" {% if health_filter == 'drift' %}selected{% endif %}>Configuration drift</option>
             </select>
             <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
         </form>
@@ -63,7 +70,7 @@
             pagination.total,
             pagination.per_page,
             "/admin/network/uisp-control",
-            extra_params="&status=" ~ (status_filter or ""),
+            extra_params="&status=" ~ (status_filter or "") ~ "&health=" ~ (health_filter or ""),
             item_label="intents"
         ) }}
     </section>

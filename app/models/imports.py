@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -110,6 +111,16 @@ class ImportRun(Base):
         back_populates="source_run",
         uselist=False,
     )
+    created_payments = relationship(
+        "Payment",
+        back_populates="import_run",
+        foreign_keys="Payment.import_run_id",
+    )
+    payment_batch_reversal = relationship(
+        "PaymentImportBatchReversal",
+        back_populates="import_run",
+        uselist=False,
+    )
 
 
 class ImportRunRow(Base):
@@ -138,8 +149,162 @@ class ImportRunRow(Base):
     )
     error_message: Mapped[str | None] = mapped_column(Text)
     result: Mapped[dict | None] = mapped_column(JSON)
+    # Payment imports need durable provenance before a later rollback may move
+    # money. NULL means historical/unverified; False means the row idempotently
+    # reused a payment created elsewhere; True means this run created it.
+    payment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    record_created: Mapped[bool | None] = mapped_column(Boolean)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
     run = relationship("ImportRun", back_populates="rows")
+    payment = relationship("Payment", foreign_keys=[payment_id])
+    payment_batch_reversal_item = relationship(
+        "PaymentImportBatchReversalItem",
+        back_populates="import_run_row",
+        uselist=False,
+    )
+
+
+class PaymentImportBatchReversal(Base):
+    """Confirmed reversal of payments provably created by one import run."""
+
+    __tablename__ = "payment_import_batch_reversals"
+    __table_args__ = (
+        Index(
+            "uq_payment_import_batch_reversals_run_id",
+            "import_run_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_import_batch_reversals_idempotency_key",
+            "idempotency_key",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    import_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("import_runs.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    preview_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    reversed_payment_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    skipped_reused_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    confirmed_by: Mapped[str | None] = mapped_column(String(120))
+    confirmed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    import_run = relationship("ImportRun", back_populates="payment_batch_reversal")
+    items = relationship(
+        "PaymentImportBatchReversalItem",
+        back_populates="batch_reversal",
+        order_by="PaymentImportBatchReversalItem.created_at",
+    )
+
+
+class PaymentImportBatchReversalItem(Base):
+    """Exact source settlement and resulting reversal evidence for one row."""
+
+    __tablename__ = "payment_import_batch_reversal_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "batch_reversal_id",
+            "payment_id",
+            name="uq_payment_import_batch_reversal_item_payment",
+        ),
+        Index(
+            "uq_payment_import_batch_reversal_items_run_row_id",
+            "import_run_row_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_import_batch_reversal_items_reversal_id",
+            "payment_reversal_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_import_batch_reversal_items_ledger_entry_id",
+            "ledger_entry_id",
+            unique=True,
+        ),
+        Index(
+            "uq_payment_import_batch_reversal_items_consumption_entry_id",
+            "credit_consumption_ledger_entry_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    batch_reversal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_import_batch_reversals.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    import_run_row_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("import_run_rows.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    payment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    payment_settlement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_settlements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    payment_reversal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_reversals.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    credit_consumption_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+    )
+    source_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    result_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    batch_reversal = relationship("PaymentImportBatchReversal", back_populates="items")
+    import_run_row = relationship(
+        "ImportRunRow", back_populates="payment_batch_reversal_item"
+    )
+    payment = relationship("Payment", foreign_keys=[payment_id])
+    payment_settlement = relationship("PaymentSettlement")
+    payment_reversal = relationship("PaymentReversal")
+    ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    credit_consumption_ledger_entry = relationship(
+        "LedgerEntry", foreign_keys=[credit_consumption_ledger_entry_id]
+    )

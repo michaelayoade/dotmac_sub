@@ -55,7 +55,7 @@ def _subscription_object(
 def test_radius_projection_planner_parent_block_overrides_active_subscription():
     subscription = _subscription_object(subscriber_status=SubscriberStatus.disabled)
 
-    plan = plan_radius_projection(subscription, captive_redirect_enabled=False)
+    plan = plan_radius_projection(subscription)
 
     assert plan.mode == "reject"
     assert plan.access_state == AccessState.suspended

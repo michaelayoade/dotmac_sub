@@ -17,9 +17,8 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import selectinload
 
 from app.models.billing import Invoice, InvoiceStatus, PaymentAllocation
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Reseller, Subscriber, UserType
-from app.services import settings_spec
+from app.services import display_format
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
 from app.services.list_query import (
@@ -34,25 +33,8 @@ from app.services.status_presentation import invoice_status_presentation
 logger = logging.getLogger(__name__)
 
 
-def _currency_code(value: object | None) -> str:
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
-
-
-def _format_currency_amount(amount: object, currency: object | None) -> str:
-    return f"{_currency_code(currency)} {Decimal(str(amount or 0)):,.2f}"
-
-
-def _format_currency_groups(amounts: dict[str, Decimal]) -> str:
-    if not amounts:
-        return _format_currency_amount(0, "NGN")
-    return ", ".join(
-        _format_currency_amount(amounts[currency], currency)
-        for currency in sorted(amounts)
-    )
-
-
-def _empty_invoice_total() -> dict[str, object]:
+def _empty_invoice_total(currency: str) -> dict[str, object]:
+    empty_display = display_format.format_currency_groups({}, empty_currency=currency)
     return {
         "count": 0,
         "amount": 0.0,
@@ -61,16 +43,25 @@ def _empty_invoice_total() -> dict[str, object]:
         "amounts": {},
         "due_amounts": {},
         "received_amounts": {},
-        "display": "NGN 0.00",
-        "due_display": "NGN 0.00",
-        "received_display": "NGN 0.00",
+        "display": empty_display,
+        "due_display": empty_display,
+        "received_display": empty_display,
     }
 
 
-def _finalize_invoice_total(item: dict[str, object]) -> None:
-    item["display"] = _format_currency_groups(item["amounts"])  # type: ignore[arg-type]
-    item["due_display"] = _format_currency_groups(item["due_amounts"])  # type: ignore[arg-type]
-    item["received_display"] = _format_currency_groups(item["received_amounts"])  # type: ignore[arg-type]
+def _finalize_invoice_total(item: dict[str, object], *, currency: str) -> None:
+    item["display"] = display_format.format_currency_groups(
+        item["amounts"],  # type: ignore[arg-type]
+        empty_currency=currency,
+    )
+    item["due_display"] = display_format.format_currency_groups(
+        item["due_amounts"],  # type: ignore[arg-type]
+        empty_currency=currency,
+    )
+    item["received_display"] = display_format.format_currency_groups(
+        item["received_amounts"],  # type: ignore[arg-type]
+        empty_currency=currency,
+    )
 
 
 _BUCKET_SEQUENCE = ("current", "1_30", "31_60", "61_90", "90_plus")
@@ -294,19 +285,17 @@ def build_overview_data(
         _store_cached_overview(cache_key, result)
     result["selected_partner_id"] = cache_key[0]
     result["selected_location"] = (location or "").strip() or None
-    default_currency = _currency_code(
-        settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-    )
+    default_currency = display_format.default_currency(db)
     result["default_currency"] = default_currency
     stats = result.get("stats")
     if isinstance(stats, dict):
-        stats["payments_amount_display"] = _format_currency_amount(
+        stats["payments_amount_display"] = display_format.format_currency_amount(
             stats.get("payments_amount", 0), default_currency
         )
-        stats["total_revenue_display"] = _format_currency_amount(
+        stats["total_revenue_display"] = display_format.format_currency_amount(
             stats.get("total_revenue", 0), default_currency
         )
-        stats["unpaid_invoices_amount_display"] = _format_currency_amount(
+        stats["unpaid_invoices_amount_display"] = display_format.format_currency_amount(
             stats.get("unpaid_invoices_amount", 0), default_currency
         )
 
@@ -420,9 +409,11 @@ def _apply_invoice_list_sort(query, list_query: ListQuery):  # type: ignore[no-u
     return query.order_by(ordered, Invoice.id.asc())
 
 
-def _invoice_status_summary(status_rows) -> dict[str, dict[str, object]]:
+def _invoice_status_summary(
+    status_rows, *, default_currency: str
+) -> dict[str, dict[str, object]]:
     summary: dict[str, dict[str, object]] = {
-        key: _empty_invoice_total()
+        key: _empty_invoice_total(default_currency)
         for key in ("draft", "issued", "partially_paid", "paid", "overdue", "void")
     }
     all_count = 0
@@ -436,8 +427,8 @@ def _invoice_status_summary(status_rows) -> dict[str, dict[str, object]]:
             else str(status_val)
         )
         if key not in summary:
-            summary[key] = _empty_invoice_total()
-        currency = _currency_code(currency_value)
+            summary[key] = _empty_invoice_total(default_currency)
+        currency = display_format.currency_code(currency_value)
         amount_decimal = Decimal(str(amount or 0))
         due_decimal = Decimal(str(due or 0))
         received_decimal = max(amount_decimal - due_decimal, Decimal("0"))
@@ -471,7 +462,7 @@ def _invoice_status_summary(status_rows) -> dict[str, dict[str, object]]:
         )
         all_count += int(count or 0)
     for item in summary.values():
-        _finalize_invoice_total(item)
+        _finalize_invoice_total(item, currency=default_currency)
     summary["all"] = {
         "count": all_count,
         "amount": sum(float(amount) for amount in all_amounts.values()),
@@ -482,9 +473,15 @@ def _invoice_status_summary(status_rows) -> dict[str, dict[str, object]]:
         "amounts": all_amounts,
         "due_amounts": all_due_amounts,
         "received_amounts": all_received_amounts,
-        "display": _format_currency_groups(all_amounts),
-        "due_display": _format_currency_groups(all_due_amounts),
-        "received_display": _format_currency_groups(all_received_amounts),
+        "display": display_format.format_currency_groups(
+            all_amounts, empty_currency=default_currency
+        ),
+        "due_display": display_format.format_currency_groups(
+            all_due_amounts, empty_currency=default_currency
+        ),
+        "received_display": display_format.format_currency_groups(
+            all_received_amounts, empty_currency=default_currency
+        ),
     }
     return summary
 
@@ -523,6 +520,7 @@ def build_invoices_list_data(
     per_page: int | str | None = 25,
 ) -> dict[str, object]:
     """Build the canonical invoice-list projection and compatibility context."""
+    default_currency = display_format.default_currency(db)
 
     if list_query is None:
         list_query = build_invoice_list_query(
@@ -576,7 +574,9 @@ def build_invoices_list_data(
         .group_by(Invoice.status, Invoice.currency)
         .all()
     )
-    status_totals = _invoice_status_summary(status_rows)
+    status_totals = _invoice_status_summary(
+        status_rows, default_currency=default_currency
+    )
     proforma_count = (
         _apply_invoice_list_filters(
             db.query(func.count(Invoice.id)),
@@ -657,7 +657,7 @@ def _invoice_csv_row(invoice: Invoice) -> list[str]:
         f"{total:.2f}",
         f"{due:.2f}",
         f"{received:.2f}",
-        invoice.currency or "NGN",
+        display_format.currency_code(invoice.currency),
         invoice.issued_at.isoformat() if invoice.issued_at else "",
         invoice.due_at.isoformat() if invoice.due_at else "",
         invoice.created_at.isoformat() if invoice.created_at else "",
@@ -784,6 +784,7 @@ def build_ar_aging_data(
     location: str | None = None,
     debtor_period: str | None = None,
 ) -> dict[str, object]:
+    default_currency = display_format.default_currency(db)
     selected_period = period if period in {"all", "this_year"} else "all"
     selected_bucket = bucket if bucket in _BUCKET_SEQUENCE else None
     selected_partner_id = (partner_id or "").strip() or None
@@ -881,7 +882,7 @@ def build_ar_aging_data(
     for key, items in buckets.items():
         amounts: dict[str, Decimal] = {}
         for invoice in items:
-            currency = _currency_code(getattr(invoice, "currency", None))
+            currency = display_format.currency_code(getattr(invoice, "currency", None))
             amount = Decimal(str(getattr(invoice, "balance_due", 0) or 0))
             amounts[currency] = amounts.get(currency, Decimal("0")) + amount
         totals_by_currency[key] = amounts
@@ -934,7 +935,7 @@ def build_ar_aging_data(
             continue
         account_id = invoice.account_id
         amount = Decimal(str(invoice.balance_due or 0))
-        currency = _currency_code(getattr(invoice, "currency", None))
+        currency = display_format.currency_code(getattr(invoice, "currency", None))
         debtor_totals[account_id] = debtor_totals.get(account_id, 0.0) + float(amount)
         account_amounts = debtor_amounts.setdefault(account_id, {})
         account_amounts[currency] = account_amounts.get(currency, Decimal("0")) + amount
@@ -946,7 +947,10 @@ def build_ar_aging_data(
             "account_label": debtor_names.get(account_id, "Account"),
             "amount": amount,
             "amounts": debtor_amounts.get(account_id, {}),
-            "display": _format_currency_groups(debtor_amounts.get(account_id, {})),
+            "display": display_format.format_currency_groups(
+                debtor_amounts.get(account_id, {}),
+                empty_currency=default_currency,
+            ),
         }
         for account_id, amount in sorted(
             debtor_totals.items(), key=lambda item: item[1], reverse=True
@@ -959,7 +963,10 @@ def build_ar_aging_data(
             "label": _BUCKET_LABELS[key],
             "amount": totals[key],
             "amounts": totals_by_currency[key],
-            "display": _format_currency_groups(totals_by_currency[key]),
+            "display": display_format.format_currency_groups(
+                totals_by_currency[key],
+                empty_currency=default_currency,
+            ),
             "count": counts[key],
             "is_selected": selected_bucket == key,
         }

@@ -15,7 +15,7 @@ billing date.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import and_, or_
@@ -26,7 +26,6 @@ from app.models.billing import (
     InvoiceStatus,
 )
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
-from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.subscriber import Subscriber
 from app.schemas.service_status import (
@@ -35,16 +34,17 @@ from app.schemas.service_status import (
     ServiceStatusItem,
     ServiceStatusResponse,
 )
-from app.services import settings_spec
 from app.services.access_resolution import (
     resolve_customer_access,
     resolve_prepaid_funding,
 )
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.collections import has_overdue_balance
+from app.services.collections.grace_policy import resolve_grace_decision
 from app.services.common import coerce_uuid
 from app.services.service_entitlements import current_prepaid_entitlement_end
 from app.services.status_presentation import subscription_status_presentation
+from app.services.walled_garden_policy import resolve_subscription_restriction
 
 # Statuses the customer still has an operational relationship with (mirrors the
 # mobile `currentStatuses`); terminal/historical ones are excluded entirely.
@@ -149,18 +149,6 @@ def _prepaid_threshold(
     return resolve_prepaid_threshold(db, account, now=now)
 
 
-def _grace_days(db: Session, account: Subscriber) -> int:
-    if account.grace_period_days is not None:
-        return int(account.grace_period_days)
-    raw = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_grace_days"
-    )
-    try:
-        return int(str(raw)) if raw is not None else 0
-    except (TypeError, ValueError):
-        return 0
-
-
 def _overdue_summary(
     db: Session, account_id: str, now: datetime
 ) -> tuple[Decimal, datetime | None]:
@@ -229,11 +217,14 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
         resp.low_balance = low
         resp.deactivation_at = deactivation_at
         if low:
-            grace_days = _grace_days(db, account)
             low_at = account.prepaid_low_balance_at or now
-            grace_until = (
-                low_at + timedelta(days=grace_days) if grace_days > 0 else low_at
+            grace_decision = resolve_grace_decision(
+                db,
+                account,
+                starts_at=low_at,
+                as_of=now,
             )
+            grace_until = grace_decision.ends_at
             resp.grace_until = grace_until
     else:
         resp.in_dunning = has_overdue_balance(db, subscriber_id)
@@ -253,8 +244,15 @@ def build_service_status(db: Session, subscriber_id: str) -> ServiceStatusRespon
 
     for s in subs:
         usable = s.status == SubscriptionStatus.active
+        restriction = resolve_subscription_restriction(db, s, account=account)
         access_block_reason = (
-            resolve_customer_access(s, subscriber=account).access_block_reason
+            resolve_customer_access(
+                s,
+                subscriber=account,
+                access_restriction_mode=(
+                    restriction.effective_mode if restriction else None
+                ),
+            ).access_block_reason
             if s.status in _UNAVAILABLE_STATUSES
             else None
         )

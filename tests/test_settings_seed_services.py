@@ -188,8 +188,7 @@ class TestSeedImportsSettings:
 class TestSeedGisSettings:
     """Tests for seed_gis_settings function."""
 
-    def test_seeds_sync_enabled(self, db_session):
-        """Test GIS sync enabled setting is seeded."""
+    def test_does_not_recreate_retired_sync_enabled_alias(self, db_session):
         settings_seed.seed_gis_settings(db_session)
 
         setting = (
@@ -200,8 +199,7 @@ class TestSeedGisSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_json is True
+        assert setting is None
 
     def test_seeds_sync_interval(self, db_session):
         """Test GIS sync interval setting is seeded."""
@@ -329,8 +327,7 @@ class TestSeedNotificationTemplates:
 class TestSeedCollectionsSettings:
     """Tests for seed_collections_settings function."""
 
-    def test_seeds_dunning_enabled(self, db_session, monkeypatch):
-        """Test dunning enabled setting is seeded."""
+    def test_does_not_recreate_retired_dunning_alias(self, db_session, monkeypatch):
         monkeypatch.setenv("DUNNING_ENABLED", "false")
 
         settings_seed.seed_collections_settings(db_session)
@@ -343,8 +340,7 @@ class TestSeedCollectionsSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_json is False
+        assert setting is None
 
     def test_seeds_prepaid_skip_holidays(self, db_session, monkeypatch):
         """Test prepaid skip holidays setting is seeded."""
@@ -389,13 +385,9 @@ class TestSeedBillingNotificationSettings:
                 DomainSetting.domain == SettingDomain.billing,
                 DomainSetting.key.in_(
                     [
-                        "suspension_grace_hours",
                         "expiry_reminder_days",
                         "invoice_reminder_days",
-                        "dunning_escalation_days",
                         "autopay_max_consecutive_failures",
-                        "blocking_period_days",
-                        "deactivation_period_days",
                         "minimum_balance",
                         "arrangement_min_installments",
                         "arrangement_max_installments",
@@ -415,13 +407,9 @@ class TestSeedBillingNotificationSettings:
             .all()
         }
 
-        assert settings["suspension_grace_hours"] == "48"
         assert settings["expiry_reminder_days"] == "7"
         assert settings["invoice_reminder_days"] == "7,1"
-        assert settings["dunning_escalation_days"] == "3,7,14,30"
         assert settings["autopay_max_consecutive_failures"] == "3"
-        assert settings["blocking_period_days"] == "0"
-        assert settings["deactivation_period_days"] == "0"
         assert settings["minimum_balance"] == "0"
         assert settings["arrangement_min_installments"] == "2"
         assert settings["arrangement_max_installments"] == "24"
@@ -631,22 +619,23 @@ class TestSeedBillingSettings:
         assert setting is not None
         assert setting.value_text == "INVOICE-"
 
-    def test_seeds_auto_suspend_on_overdue(self, db_session, monkeypatch):
-        """Test overdue auto-suspension setting is seeded."""
-        monkeypatch.setenv("BILLING_AUTO_SUSPEND_ON_OVERDUE", "false")
-
+    def test_does_not_seed_retired_access_controls(self, db_session):
         settings_seed.seed_billing_settings(db_session)
 
-        setting = (
-            db_session.query(DomainSetting)
-            .filter(
-                DomainSetting.domain == SettingDomain.billing,
-                DomainSetting.key == "auto_suspend_on_overdue",
-            )
-            .first()
-        )
-        assert setting is not None
-        assert setting.value_text == "false"
+        retired = {
+            "auto_suspend_on_overdue",
+            "suspension_grace_hours",
+            "dunning_escalation_days",
+            "blocking_period_days",
+            "deactivation_period_days",
+        }
+        seeded = {
+            row.key
+            for row in db_session.query(DomainSetting)
+            .filter(DomainSetting.domain == SettingDomain.billing)
+            .all()
+        }
+        assert retired.isdisjoint(seeded)
 
     def test_seeds_plan_change_runtime_settings(self, db_session, monkeypatch):
         """Test runtime plan-change settings are seeded in billing domain."""
@@ -706,27 +695,6 @@ class TestSeedCatalogSettings:
 # =============================================================================
 # Subscriber Settings Tests
 # =============================================================================
-
-
-class TestSeedSubscriberSettings:
-    """Tests for seed_subscriber_settings function."""
-
-    def test_seeds_default_account_status(self, db_session, monkeypatch):
-        """Test default account status is seeded."""
-        monkeypatch.setenv("SUBSCRIBER_DEFAULT_ACCOUNT_STATUS", "pending")
-
-        settings_seed.seed_subscriber_settings(db_session)
-
-        setting = (
-            db_session.query(DomainSetting)
-            .filter(
-                DomainSetting.domain == SettingDomain.subscriber,
-                DomainSetting.key == "default_account_status",
-            )
-            .first()
-        )
-        assert setting is not None
-        assert setting.value_text == "pending"
 
 
 # =============================================================================
@@ -881,10 +849,9 @@ class TestSeedNetworkPolicySettings:
         )
         assert setting is not None
 
-    def test_seeds_mikrotik_api_session_kick_enabled_by_default(
+    def test_does_not_recreate_retired_api_session_kick_alias(
         self, db_session, monkeypatch
     ):
-        """RouterOS API session kicking is enabled for reliable forced reauth."""
         monkeypatch.delenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", raising=False)
 
         settings_seed.seed_network_policy_settings(db_session)
@@ -897,14 +864,11 @@ class TestSeedNetworkPolicySettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_text == "true"
-        assert setting.value_json is True
+        assert setting is None
 
-    def test_updates_mikrotik_api_session_kick_existing_false(
+    def test_does_not_mutate_retired_api_session_kick_alias(
         self, db_session, monkeypatch
     ):
-        """Existing old defaults are moved to the reliable force-reauth path."""
         monkeypatch.delenv("NETWORK_MIKROTIK_API_SESSION_KICK_ENABLED", raising=False)
         network_settings.ensure_by_key(
             db_session,
@@ -923,8 +887,8 @@ class TestSeedNetworkPolicySettings:
             .first()
         )
         assert setting is not None
-        assert setting.value_text == "true"
-        assert setting.value_json is True
+        assert setting.value_text == "false"
+        assert setting.value_json is False
 
 
 # =============================================================================
@@ -956,26 +920,6 @@ class TestSeedRadiusPolicySettings:
 # =============================================================================
 # Inventory Settings Tests
 # =============================================================================
-
-
-class TestSeedInventorySettings:
-    """Tests for seed_inventory_settings function."""
-
-    def test_seeds_default_reservation_status(self, db_session, monkeypatch):
-        """Test default reservation status is seeded."""
-        monkeypatch.setenv("INVENTORY_DEFAULT_RESERVATION_STATUS", "pending")
-
-        settings_seed.seed_inventory_settings(db_session)
-
-        setting = (
-            db_session.query(DomainSetting)
-            .filter(
-                DomainSetting.domain == SettingDomain.inventory,
-                DomainSetting.key == "default_reservation_status",
-            )
-            .first()
-        )
-        assert setting is not None
 
 
 # =============================================================================

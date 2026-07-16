@@ -21,7 +21,6 @@ from app.services.invoice_collectibility import (
     overdue_status_count_for_accounts,
 )
 from app.services.notification_template_conditions import conditions_match
-from app.services.vas_wallet import _open_invoice_balance
 from app.services.web_customer_actions import _billing_template_variables
 
 
@@ -205,7 +204,9 @@ def test_wired_consumers_use_shared_due_and_overdue_rules(db_session):
     _invoice(db_session, subscriber, status=InvoiceStatus.issued, balance="20.00")
     _invoice(db_session, subscriber, status=InvoiceStatus.overdue, balance="30.00")
 
-    assert _open_invoice_balance(db_session, subscriber.id) == Decimal("30.00")
+    assert get_customer_financial_position(
+        db_session, subscriber.id
+    ).due_invoice_balance == Decimal("30.00")
     assert conditions_match(
         db_session,
         subscriber_id=subscriber.id,

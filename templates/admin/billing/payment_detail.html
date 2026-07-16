@@ -26,12 +26,41 @@
         back_label="Payments",
         status=status_html
     ) %}
+        {% if edit_capability.allowed %}
         {{ action_button("Edit Payment", href="/admin/billing/payments/" ~ payment.id ~ "/edit", icon=icon_edit("h-4 w-4"), variant="secondary", color="emerald") }}
-        {% if status_val == 'succeeded' %}
-        <form method="post" action="/admin/billing/payments/{{ payment.id }}/refund" class="inline-block" onsubmit="return confirm('Refund this payment? The linked invoice will revert to unpaid.');">
+        {% endif %}
+        {% if status_val in ['pending', 'failed'] %}
+        <form method="post" action="/admin/billing/payments/{{ payment.id }}/settlement/preview" class="inline-flex">
             {% include "components/forms/csrf_input.html" %}
+            <button type="submit" class="inline-flex items-center rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800/60 dark:bg-slate-800 dark:text-emerald-300">Review settlement</button>
+        </form>
+        {% endif %}
+        {% if allocation_invoices %}
+        <form method="post" action="/admin/billing/payments/{{ payment.id }}/allocation/preview" class="inline-flex items-center gap-2">
+            {% include "components/forms/csrf_input.html" %}
+            <select name="invoice_id" required class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+                <option value="">Invoice…</option>
+                {% for invoice in allocation_invoices %}<option value="{{ invoice.id }}">{{ invoice.invoice_number or invoice.id }} — {{ payment_currency }} {{ '{:,.2f}'.format(invoice.balance_due) }}</option>{% endfor %}
+            </select>
+            <input type="number" name="amount" required min="0.01" max="{{ allocation_available }}" step="0.01" placeholder="Up to {{ allocation_available }}" class="w-40 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+            <button type="submit" class="inline-flex items-center rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-800/60 dark:bg-slate-800 dark:text-blue-300">Review allocation</button>
+        </form>
+        {% endif %}
+        {% if refund_capability.allowed %}
+        <form method="post" action="/admin/billing/payments/{{ payment.id }}/refund/preview" class="inline-flex items-center gap-2">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="number" name="amount" min="0.01" step="0.01" placeholder="Full refundable amount" class="w-44 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
             <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 dark:border-rose-800/60 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20">
-                Refund
+                Review confirmed refund
+            </button>
+        </form>
+        {% endif %}
+        {% if reversal_capability.allowed %}
+        <form method="post" action="/admin/billing/payments/{{ payment.id }}/reversal/preview" class="inline-flex items-center gap-2">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="text" name="reason" required minlength="3" maxlength="500" placeholder="Chargeback or bank-reversal reason" class="w-64 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
+            <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-800/60 dark:bg-slate-800 dark:text-amber-300 dark:hover:bg-amber-900/20">
+                Review payment reversal
             </button>
         </form>
         {% endif %}

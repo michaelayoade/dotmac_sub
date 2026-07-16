@@ -72,7 +72,7 @@
                 <div>
                     <label for="account_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber Account <span class="text-red-500">*</span></label>
                     <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscribers" data-typeahead-min="2" data-typeahead-limit="10">
-                        <input type="text" id="account_search" name="account_search" autocomplete="off"
+                        <input type="text" id="account_search" autocomplete="off"
                             data-typeahead-input
                             value="{{ form.account_label if form else '' }}"
                             placeholder="Search by name, email, or account number..."
@@ -86,7 +86,7 @@
                 <div>
                     <label for="subscription_search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Subscription</label>
                     <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscriptions" data-typeahead-min="2" data-typeahead-limit="10">
-                        <input type="text" id="subscription_search" name="subscription_search" autocomplete="off"
+                        <input type="text" id="subscription_search" autocomplete="off"
                             data-typeahead-input value="{{ form.subscription_label if form else '' }}"
                             class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <input type="hidden" name="subscription_id" data-typeahead-hidden value="{{ form.subscription_id if form else '' }}">

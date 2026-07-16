@@ -15,10 +15,12 @@ commits in chunks so progress is durable and a crash doesn't lose work.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.billing import Payment
 from app.models.imports import (
     ImportRowStatus,
     ImportRun,
@@ -156,6 +158,8 @@ def _record_row(
     *,
     error: str | None = None,
     result: dict | None = None,
+    payment_id=None,
+    record_created: bool | None = None,
 ) -> None:
     db.add(
         ImportRunRow(
@@ -165,6 +169,8 @@ def _record_row(
             status=status,
             error_message=error,
             result=result,
+            payment_id=payment_id,
+            record_created=record_created,
         )
     )
 
@@ -229,12 +235,35 @@ def process_import_run(db: Session, run_id) -> ImportRun:
                 else:
                     nested = db.begin_nested()
                     try:
-                        obj = wiz._persist_row(
+                        persisted = wiz._persist_row(
                             db,
                             run.module,
                             parsed_row,
                             source_name=run.source_name or "import",
+                            with_provenance=run.module == "payments",
                         )
+                        if run.module == "payments":
+                            from app.services.financial_imports import (
+                                FinancialImportPersistence,
+                            )
+
+                            if not isinstance(persisted, FinancialImportPersistence):
+                                raise RuntimeError(
+                                    "Payment import did not return provenance"
+                                )
+                            obj = cast(Payment, persisted.record)
+                            record_created = persisted.created_new
+                            if record_created:
+                                if obj.import_run_id not in {None, run.id}:
+                                    raise ValueError(
+                                        "Payment is already owned by another import run"
+                                    )
+                                obj.import_run_id = run.id
+                            payment_id = obj.id
+                        else:
+                            obj = persisted
+                            record_created = None
+                            payment_id = None
                         db.flush()
                         obj_id = getattr(obj, "id", None)
                         nested.commit()
@@ -251,7 +280,20 @@ def process_import_run(db: Session, run_id) -> ImportRun:
                             idx,
                             raw,
                             ImportRowStatus.ok,
-                            result={"id": str(obj_id)} if obj_id is not None else None,
+                            result=(
+                                {
+                                    "id": str(obj_id),
+                                    **(
+                                        {"created": record_created}
+                                        if run.module == "payments"
+                                        else {}
+                                    ),
+                                }
+                                if obj_id is not None
+                                else None
+                            ),
+                            payment_id=payment_id,
+                            record_created=record_created,
                         )
                         ok += 1
             if idx % _CHUNK_COMMIT == 0:

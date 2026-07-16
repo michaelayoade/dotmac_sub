@@ -16,8 +16,8 @@ Deltas from the CRM source (Phase 3 §1.6/§2.1):
   (``app/services/events/handlers/referral.py``). It only flushes — event
   handlers must never commit the caller's open transaction.
 * ``issue_reward``'s ``selfcare.create_account_credit`` HTTP hop becomes a
-  direct in-process call to the wallet credit service behind sub's
-  ``POST /crm/credits`` handler (``crm_api.credit_referral_reward_to_wallet``),
+  direct in-process call to the account-credit owner behind sub's
+  ``POST /crm/credits`` handler (``crm_api.create_account_credit``),
   with the SAME idempotency key ``external_ref="referral:{id}"`` — a reward the
   CRM already paid pre-cutover can never be paid twice, and the
   ``with_for_update`` row lock is kept.
@@ -517,10 +517,10 @@ class Referrals:
 
     @staticmethod
     def issue_reward(db: Session, referral_id: str) -> Referral:
-        """Apply the referrer's reward as a wallet credit and mark the referral
+        """Apply the referrer's reward as account credit and mark the referral
         rewarded.
 
-        The credit goes through ``crm_api.credit_referral_reward_to_wallet`` —
+        The credit goes through ``crm_api.create_account_credit`` —
         the same service behind ``POST /crm/credits`` the CRM used remotely —
         with the SAME idempotency key ``external_ref="referral:{id}"``, so a
         reward the CRM already paid pre-cutover is returned, never re-credited.
@@ -564,7 +564,7 @@ class Referrals:
         currency = (referral.reward_currency or "NGN").strip() or "NGN"
         external_ref = f"referral:{referral.id}"
         try:
-            entry = crm_api.credit_referral_reward_to_wallet(
+            entry = crm_api.create_account_credit(
                 db,
                 subscriber_id=str(referral.referrer_subscriber_id),
                 amount=amount,
@@ -603,7 +603,7 @@ class Referrals:
                 db,
                 str(referral.referrer_subscriber_id),
                 title="You earned a referral reward!",
-                body=f"{currency} {amount} has been added to your wallet.",
+                body=f"{currency} {amount} has been added to your account credit.",
                 data={"type": "referral_reward", "referral_id": str(referral.id)},
             )
         except Exception as exc:  # noqa: BLE001 - notification is advisory

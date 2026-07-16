@@ -94,9 +94,7 @@ class DashboardScreen extends ConsumerWidget {
     // missing-data sentinel and must never be replaced with the loaded-session
     // page, retention-limited chart series, or today's different window.
     final dataPeriod = cycleSummary?.authoritativeTotalBytes;
-    // Wallet (account credit) balance for its own at-a-glance card. Uses the
-    // always-available credit balance (/me/balance), not the feature-gated VAS
-    // wallet (/me/wallet 404s when vas.enabled is off → card never reads).
+    // Server-owned account credit balance for the at-a-glance card.
     final balance = ref.watch(balanceProvider).asData?.value;
     // Peak throughput for the "Peak" tile — shown per direction (↓ download,
     // ↑ upload), subscriber perspective. Prefer the exact billing-cycle peak
@@ -359,22 +357,6 @@ class DashboardScreen extends ConsumerWidget {
                 ),
               );
             }),
-            Consumer(builder: (context, ref, _) {
-              final wallet = ref.watch(walletProvider).asData?.value;
-              if (wallet == null) return const SizedBox.shrink();
-              return Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.wallet_outlined),
-                    title: Text(Fmt.money(wallet.balance, wallet.currency)),
-                    subtitle: const Text('Wallet — fund once, pay bills'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => context.push('/wallet'),
-                  ),
-                ),
-              );
-            }),
             const SizedBox(height: 16),
 
             // --- At-a-glance summary (rows of 3; grid pads the last row) ---
@@ -382,12 +364,12 @@ class DashboardScreen extends ConsumerWidget {
               tiles: [
                 _StatCard(
                   icon: Icons.account_balance_wallet_outlined,
-                  label: 'Wallet',
+                  label: 'Account credit',
                   value: balance == null
                       ? null
                       : Fmt.moneyCompact(
                           balance.creditBalance, balance.currency),
-                  onTap: () => context.push('/wallet'),
+                  onTap: () => context.go('/billing'),
                 ),
                 _StatCard(
                   icon: Icons.receipt_long_outlined,

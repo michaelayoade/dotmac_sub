@@ -27,10 +27,7 @@ import '../models/quote.dart';
 import '../models/service_location.dart';
 import '../repositories/location_repository.dart';
 import '../repositories/quotes_repository.dart';
-import '../models/vas.dart';
-import '../models/wallet.dart';
 import '../repositories/notification_repository.dart';
-import '../repositories/wallet_repository.dart';
 import '../repositories/reseller_repository.dart';
 import '../repositories/support_repository.dart';
 import '../repositories/usage_repository.dart';
@@ -70,10 +67,6 @@ final locationRepositoryProvider = Provider<LocationRepository>(
 final quotesRepositoryProvider = Provider<QuotesRepository>(
   (ref) => QuotesRepository(ref.watch(apiClientProvider).dio),
 );
-final walletRepositoryProvider = Provider<WalletRepository>(
-  (ref) => WalletRepository(ref.watch(apiClientProvider).dio),
-);
-
 final notificationRepositoryProvider = Provider<NotificationRepository>(
   (ref) => NotificationRepository(ref.watch(apiClientProvider).dio),
 );
@@ -555,26 +548,6 @@ final serviceLocationProvider = FutureProvider.autoDispose<ServiceLocation>((
 ) async {
   cacheFor(ref);
   return ref.watch(locationRepositoryProvider).location();
-});
-
-final vasCatalogProvider = FutureProvider.autoDispose<List<VasCategory>>((
-  ref,
-) async {
-  cacheFor(ref);
-  return ref.watch(walletRepositoryProvider).catalog();
-});
-
-final vasPurchasesProvider = FutureProvider.autoDispose<List<VasTransaction>>((
-  ref,
-) async {
-  cacheFor(ref);
-  return ref.watch(walletRepositoryProvider).purchases();
-});
-
-/// Null when the wallet feature is disabled server-side (404) — UI hides.
-final walletProvider = FutureProvider.autoDispose<WalletOverview?>((ref) async {
-  cacheFor(ref);
-  return ref.watch(walletRepositoryProvider).overviewOrNull();
 });
 
 /// The subscriber's additional contacts. Invalidate after create/update/delete.

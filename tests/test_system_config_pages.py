@@ -239,9 +239,8 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
         {
             "billing_enabled": "true",
             "payment_period": "Monthly",  # normaliser lower-cases
-            "suspension_grace_hours": "72",
+            "payment_due_days": "72",
             "minimum_balance": "10.50",
-            "auto_suspend_on_overdue": "false",
         },
     )
 
@@ -249,11 +248,9 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
     # Spec-backed boolean gets coerced + typed.
     assert rows["billing_enabled"].value_text == "true"
     assert rows["billing_enabled"].value_type == SettingValueType.boolean
-    assert rows["auto_suspend_on_overdue"].value_text == "false"
-    assert rows["auto_suspend_on_overdue"].value_type == SettingValueType.boolean
     # Spec-backed integer keeps its whole-number text and integer type.
-    assert rows["suspension_grace_hours"].value_text == "72"
-    assert rows["suspension_grace_hours"].value_type == SettingValueType.integer
+    assert rows["payment_due_days"].value_text == "72"
+    assert rows["payment_due_days"].value_type == SettingValueType.integer
     # Decimal-ish value stays a string spec (byte-identical formatting).
     assert rows["minimum_balance"].value_text == "10.50"
     assert rows["minimum_balance"].value_type == SettingValueType.string
@@ -266,19 +263,18 @@ def test_billing_config_save_rejects_non_numeric_integer(db_session):
     with pytest.raises(ValueError):
         web_system_config_service.save_billing_config(
             db_session,
-            {"billing_enabled": "true", "suspension_grace_hours": "abc"},
+            {"billing_enabled": "true", "payment_due_days": "abc"},
         )
 
     # Nothing is committed when validation fails.
     assert "billing_enabled" not in _billing_rows(db_session)
 
 
-# --- 8.12 Direct bank transfer: newly spec-backed save ---
-def test_direct_bank_transfer_save_coerces_boolean_and_preserves_json(db_session):
+# --- 8.12 Direct bank transfer: config owns accounts, not enablement ---
+def test_direct_bank_transfer_save_preserves_json_without_alias_toggle(db_session):
     web_system_config_service.save_direct_bank_transfer_config(
         db_session,
         {
-            # No bespoke normaliser here: spec coercion turns "on" -> "true".
             "direct_bank_transfer_enabled": "on",
             "direct_bank_transfer_instructions": "Pay to the account below.",
             "account_id": "acc-1",
@@ -290,8 +286,7 @@ def test_direct_bank_transfer_save_coerces_boolean_and_preserves_json(db_session
     )
 
     rows = _billing_rows(db_session)
-    assert rows["direct_bank_transfer_enabled"].value_text == "true"
-    assert rows["direct_bank_transfer_enabled"].value_type == SettingValueType.boolean
+    assert "direct_bank_transfer_enabled" not in rows
     assert rows["direct_bank_transfer_bank_name"].value_text == "GTBank"
     # The accounts blob is a JSON *string* held in value_text (not value_json)
     # so the customer-portal readers keep working.
@@ -301,12 +296,11 @@ def test_direct_bank_transfer_save_coerces_boolean_and_preserves_json(db_session
     assert '"bank_name": "GTBank"' in accounts_row.value_text
 
 
-def test_direct_bank_transfer_save_rejects_invalid_boolean(db_session):
-    with pytest.raises(ValueError):
-        web_system_config_service.save_direct_bank_transfer_config(
-            db_session,
-            {"direct_bank_transfer_enabled": "maybe"},
-        )
+def test_direct_bank_transfer_save_ignores_retired_alias_field(db_session):
+    web_system_config_service.save_direct_bank_transfer_config(
+        db_session,
+        {"direct_bank_transfer_enabled": "maybe"},
+    )
 
     assert "direct_bank_transfer_enabled" not in _billing_rows(db_session)
 
@@ -421,3 +415,39 @@ def test_modules_template_renders_provider_toggle_section():
     assert "Payment Providers" in template
     assert "provider__{{ provider.id }}" in template
     assert "{% if payment_providers %}" in template
+
+
+def test_modules_template_renders_canonical_tristate_controls():
+    template = Path("templates/admin/system/modules.html").read_text()
+
+    assert 'name="control__{{ feature.key }}"' in template
+    assert '<option value="inherit"' in template
+    assert "environment override wins now" not in template
+    assert "retired environment variables" in template
+
+
+def test_modules_save_writes_canonical_feature_and_audit(db_session, monkeypatch):
+    audit_calls = []
+    request = SimpleNamespace(state=SimpleNamespace())
+    monkeypatch.setattr(
+        admin_system,
+        "parse_form_data_sync",
+        lambda _request: {"control__billing.autopay": "off"},
+    )
+    monkeypatch.setattr(
+        admin_system,
+        "log_audit_event",
+        lambda **kwargs: audit_calls.append(kwargs),
+    )
+
+    response = admin_system.modules_manager_save(request, db_session)
+
+    row = (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.modules)
+        .filter(DomainSetting.key == "billing_autopay")
+        .one()
+    )
+    assert response.status_code == 303
+    assert row.value_text == "false"
+    assert audit_calls[0]["action"] == "feature_controls.update"

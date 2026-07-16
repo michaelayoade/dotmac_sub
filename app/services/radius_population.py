@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Iterable
 from typing import cast
 
 import psycopg
@@ -50,31 +51,13 @@ SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
 
 
 def _captive_redirect_allowed(subscriber: object | None) -> bool:
-    """Return whether a blocked subscriber may enter captive quarantine.
-
-    Captive sessions expose Dotmac customer/payment portal paths. Keep reseller,
-    business/enterprise, system, uncategorized, and non-house accounts on the
-    safer hard-reject path.
-    """
+    """Compatibility adapter to the canonical captive eligibility owner."""
     if subscriber is None:
         return False
+    from app.models.subscriber import Subscriber
+    from app.services.walled_garden_policy import captive_account_eligible
 
-    from app.models.subscriber import SubscriberCategory, UserType
-
-    if getattr(subscriber, "user_type", None) != UserType.customer:
-        return False
-
-    metadata = getattr(subscriber, "metadata_", None) or {}
-    raw_category = metadata.get("subscriber_category")
-    if isinstance(raw_category, SubscriberCategory):
-        category = raw_category.value
-    else:
-        category = str(raw_category or "").strip().lower()
-    if category != SubscriberCategory.residential.value:
-        return False
-
-    reseller = getattr(subscriber, "reseller", None)
-    return bool(reseller is not None and getattr(reseller, "is_house", False))
+    return captive_account_eligible(cast(Subscriber, subscriber))
 
 
 def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | None:
@@ -206,9 +189,53 @@ def _radreply_attrs(
     return attrs
 
 
-def populate(dry_run: bool = True) -> dict[str, int]:
+def _write_radius_projection(cur, work, delete_usernames) -> None:
+    """Idempotent radcheck/radreply write for a bounded set of usernames.
+
+    The single reusable write primitive of `access.radius_projection`. Deletes
+    `delete_usernames` from radcheck/radreply, then reinserts rows from `work`:
+    non-rejected users authenticate with their Cleartext-Password (active
+    normally, opted-in-blocked into the captive walled-garden via radreply);
+    hard-rejected users get a single `Auth-Type := Reject` row so FreeRADIUS
+    refuses them — no password, fully offline — and no radreply (they never
+    authenticate).
+
+    `delete_usernames` is passed explicitly (rather than derived from `work`) so
+    a scoped reconcile can remove a now-inactive username that has no `work` row.
+    For the full sweep it is exactly the `work` usernames. `work` items are the
+    ``(login, cleartext, attrs, blocked, status, mode)`` tuples built by the
+    projection loop.
+    """
+    delete_list = list(delete_usernames)
+    cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (delete_list,))
+    password_rows = [(w[0], w[1]) for w in work if w[5] != "reject"]
+    reject_rows = [(w[0],) for w in work if w[5] == "reject"]
+    if password_rows:
+        cur.executemany(
+            "INSERT INTO radcheck (username, attribute, op, value) "
+            "VALUES (%s, 'Cleartext-Password', ':=', %s)",
+            password_rows,
+        )
+    if reject_rows:
+        cur.executemany(
+            "INSERT INTO radcheck (username, attribute, op, value) "
+            "VALUES (%s, 'Auth-Type', ':=', 'Reject')",
+            reject_rows,
+        )
+    cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (delete_list,))
+    cur.executemany(
+        "INSERT INTO radreply (username, attribute, op, value) VALUES (%s, %s, %s, %s)",
+        [(w[0], a, o, v) for w in work if w[5] != "reject" for (a, o, v) in w[2]],
+    )
+
+
+def populate(
+    dry_run: bool = True, only_usernames: set[str] | None = None
+) -> dict[str, int]:
     # Single authority (shared with radius.py's event-time sync) so both writers
-    # target the same radius DB and cannot split-brain.
+    # target the same radius DB and cannot split-brain. `only_usernames` narrows
+    # the WRITE set to a scoped reconcile (see reconcile_usernames); the
+    # projection is still computed fleet-wide so service-count/dedup are stable.
     radius_dsn = radius_dsn_libpq()
     if not radius_dsn:
         raise RuntimeError("RADIUS database DSN not configured")
@@ -387,15 +414,28 @@ def populate(dry_run: bool = True) -> dict[str, int]:
                 stats["skipped_no_password"] += 1
                 continue
 
-            requested_captive = bool(
-                getattr(sub.subscriber, "captive_redirect_enabled", False)
+            from app.models.enforcement_lock import AccessRestrictionMode
+            from app.services.walled_garden_policy import (
+                resolve_subscription_restriction,
             )
-            captive = requested_captive and _captive_redirect_allowed(sub.subscriber)
-            if requested_captive and not captive:
+
+            restriction = resolve_subscription_restriction(
+                db,
+                sub,
+                account=sub.subscriber,
+            )
+            captive = bool(
+                restriction
+                and restriction.effective_mode == AccessRestrictionMode.captive
+            )
+            if (
+                getattr(sub.subscriber, "captive_redirect_enabled", False)
+                and not captive
+            ):
                 stats["captive_ineligible_optins"] += 1
             projection = plan_radius_projection(
                 sub,
-                captive_redirect_enabled=captive,
+                restriction_mode=(restriction.effective_mode if restriction else None),
             )
             sub_blocked = projection.blocked
             eff_ipv4 = sub.ipv4_address
@@ -461,6 +501,15 @@ def populate(dry_run: bool = True) -> dict[str, int]:
         db.close()
 
     work = list(by_login.values())
+    # A scoped reconcile writes only the requested usernames. The projection is
+    # still computed fleet-wide above, so the subscriber service-count and
+    # duplicate-login dedup stay identical to the full sweep; only the write set
+    # narrows. A requested username absent from `work` has no active/blocked
+    # subscription and is deleted (removal), never reinserted.
+    scoped = only_usernames is not None
+    if only_usernames is not None:
+        work = [w for w in work if w[0] in only_usernames]
+        stats["scoped_targets"] = len(only_usernames)
     stats["radcheck_upserts"] = len(work)
     stats["radreply_upserts"] = sum(len(w[2]) for w in work)
     stats["blocked_users_written"] = sum(1 for w in work if w[3])
@@ -476,72 +525,50 @@ def populate(dry_run: bool = True) -> dict[str, int]:
     rconn.autocommit = False
     try:
         with rconn.cursor() as cur:
-            usernames = [w[0] for w in work]
-            cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (usernames,))
-            # Non-rejected users authenticate with their Cleartext-Password
-            # (active normally, opted-in-blocked into the captive walled-garden
-            # via radreply). Hard-rejected users get a single Auth-Type := Reject
-            # row so FreeRADIUS refuses them — no password, fully offline.
-            password_rows = [(w[0], w[1]) for w in work if w[5] != "reject"]
-            reject_rows = [(w[0],) for w in work if w[5] == "reject"]
-            if password_rows:
-                cur.executemany(
-                    "INSERT INTO radcheck (username, attribute, op, value) "
-                    "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-                    password_rows,
-                )
-            if reject_rows:
-                cur.executemany(
-                    "INSERT INTO radcheck (username, attribute, op, value) "
-                    "VALUES (%s, 'Auth-Type', ':=', 'Reject')",
-                    reject_rows,
-                )
-            cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (usernames,))
-            # Hard-rejected users get no radreply (they never authenticate).
-            cur.executemany(
-                "INSERT INTO radreply (username, attribute, op, value) "
-                "VALUES (%s, %s, %s, %s)",
-                [
-                    (w[0], a, o, v)
-                    for w in work
-                    if w[5] != "reject"
-                    for (a, o, v) in w[2]
-                ],
-            )
+            if scoped:
+                # Delete exactly the requested usernames (removes a now-inactive
+                # one) and reinsert only those still present in `work`. No global
+                # orphan reap and no probe sync — a scoped call must not touch
+                # any other user's rows.
+                _write_radius_projection(cur, work, only_usernames)
+            else:
+                usernames = [w[0] for w in work]
+                _write_radius_projection(cur, work, usernames)
 
-            # --- orphan cleanup: drop radcheck/radreply rows whose username ---
-            # is not in the active+blocked set (e.g. subs that have since been
-            # cancelled/disabled). Keeps the radius DB lean and prevents stale
-            # auth surface from accumulating.
-            if active_usernames:
-                from app.services.radius_probe import probe_username
+                # --- orphan cleanup: drop radcheck/radreply rows whose ---
+                # username is not in the active+blocked set (e.g. subs that
+                # have since been cancelled/disabled). Keeps the radius DB lean
+                # and prevents stale auth surface from accumulating.
+                if active_usernames:
+                    from app.services.radius_probe import probe_username
 
-                cur.execute("SELECT DISTINCT username FROM radcheck")
-                radcheck_users = {r[0] for r in cur.fetchall()}
-                # The synthetic health-probe credential is app-owned but not a
-                # subscription — never reap it.
-                protected = {probe_username()}
-                orphans = list(radcheck_users - active_usernames - protected)
-                if orphans:
-                    cur.execute(
-                        "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
-                    )
-                    stats["radcheck_orphans_deleted"] = cur.rowcount
-                    cur.execute(
-                        "DELETE FROM radreply WHERE username = ANY(%s)", (orphans,)
-                    )
-                    stats["radreply_orphans_deleted"] = cur.rowcount
-                    logger.info(
-                        "orphan cleanup: %d radcheck + %d radreply rows",
-                        stats["radcheck_orphans_deleted"],
-                        stats["radreply_orphans_deleted"],
-                    )
+                    cur.execute("SELECT DISTINCT username FROM radcheck")
+                    radcheck_users = {r[0] for r in cur.fetchall()}
+                    # The synthetic health-probe credential is app-owned but not
+                    # a subscription — never reap it.
+                    protected = {probe_username()}
+                    orphans = list(radcheck_users - active_usernames - protected)
+                    if orphans:
+                        cur.execute(
+                            "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
+                        )
+                        stats["radcheck_orphans_deleted"] = cur.rowcount
+                        cur.execute(
+                            "DELETE FROM radreply WHERE username = ANY(%s)", (orphans,)
+                        )
+                        stats["radreply_orphans_deleted"] = cur.rowcount
+                        logger.info(
+                            "orphan cleanup: %d radcheck + %d radreply rows",
+                            stats["radcheck_orphans_deleted"],
+                            stats["radreply_orphans_deleted"],
+                        )
 
-            # --- synthetic health-probe identity -----------------------------
-            # App-owned, not a subscription: ensure the probe user (radcheck)
-            # and client (nas) exist so the RADIUS auth probe can authenticate.
-            # Idempotent, only when configured; protected from orphan cleanup.
-            stats["probe_identity_synced"] = _ensure_probe_identity(cur)
+                # --- synthetic health-probe identity ---------------------------
+                # App-owned, not a subscription: ensure the probe user (radcheck)
+                # and client (nas) exist so the RADIUS auth probe can
+                # authenticate. Idempotent, only when configured; protected from
+                # orphan cleanup.
+                stats["probe_identity_synced"] = _ensure_probe_identity(cur)
 
         rconn.commit()
         logger.info("committed RADIUS DB writes")
@@ -550,6 +577,28 @@ def populate(dry_run: bool = True) -> dict[str, int]:
 
     logger.info("done: %s", stats)
     return stats
+
+
+def reconcile_usernames(
+    usernames: Iterable[str], dry_run: bool = True
+) -> dict[str, int]:
+    """Scoped `access.radius_projection` reconcile for a bounded username set.
+
+    Computes the same fleet-wide projection as the full sweep — so the
+    subscriber service-count and duplicate-login dedup stay identical — then
+    writes only the requested usernames. A requested username with no active/
+    blocked/suspended subscription is deleted (removal); one still present is
+    rewritten. No global orphan reap and no probe sync.
+
+    This is the entry point per-user callers (event-time enforcement, credential
+    add/remove/block) request instead of writing radcheck/radreply directly.
+    The full-fleet ``refresh_radius_from_subs`` remains the sweep. Thin wrapper
+    over ``populate(only_usernames=...)`` so both share one write path and DSN.
+    """
+    targets = {u for u in usernames if u}
+    if not targets:
+        return {"scoped_targets": 0, "radcheck_upserts": 0, "radreply_upserts": 0}
+    return populate(dry_run=dry_run, only_usernames=targets)
 
 
 def _ensure_probe_identity(cur) -> int:

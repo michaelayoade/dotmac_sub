@@ -96,7 +96,7 @@ This document provides a comprehensive overview of the DotMac Sub system archite
 │   │   ├── radius.py           # RADIUS servers, clients, users
 │   │   ├── auth.py             # UserCredential, MFAMethod, Session, ApiKey
 │   │   ├── usage.py            # QuotaBucket, RadiusAccountingSession, UsageRecord
-│   │   ├── collections.py      # DunningCase, DunningActionLog
+│   │   ├── collections.py      # Dunning cases/actions and access-consequence evidence
 │   │   ├── domain_settings.py  # Multi-tenant configuration
 │   │   ├── event_store.py      # Event store for event sourcing
 │   │   ├── rbac.py             # Roles, Permissions, SubscriberRole
@@ -335,9 +335,9 @@ Subscription (Active Service)
 PolicySet (Subscription Policies)
 ├── proration_policy, downgrade_policy, refund_policy
 ├── trial_days, grace_days, refund_window_days
-├── suspension_action (none, throttle, suspend, reject)
+├── suspension_action (legacy compatibility data; not an execution input)
 └── dunning_steps → PolicyDunningStep[]
-    ├── day_offset (days after invoice due)
+    ├── day_offset (days after effective grace ends)
     └── action (notify, throttle, suspend, reject)
 ```
 
@@ -347,7 +347,7 @@ PolicySet (Subscription Policies)
 Invoice
 ├── account_id → Subscriber
 ├── invoice_number, currency (NGN, USD, etc)
-├── status (draft, issued, partially_paid, paid, void, overdue)
+├── status (draft, issued, partially_paid, paid, void, overdue, written_off)
 ├── subtotal, tax_total, total, balance_due
 ├── billing_period_start, billing_period_end
 ├── issued_at, due_at, paid_at
@@ -567,18 +567,24 @@ AuditEvent (Operation-level audit log)
 ```
 DunningCase (Overdue account workflow)
 ├── account_id → Subscriber
-├── invoice_id → Invoice
-├── opened_at, closed_at
-├── status (open, resolved, paused, abandoned)
+├── started_at, resolved_at
+├── status (open, paused, resolved, closed)
 ├── policy_set_id → PolicySet
 └── current_step
 
 DunningActionLog
 ├── case_id → DunningCase
 ├── invoice_id → Invoice
-├── action_type (notify, throttle, suspend, reject)
-├── scheduled_at, executed_at
-└── result (success, failed)
+├── action (notify, throttle, suspend, reject)
+├── outcome, executed_at
+└── access_consequence_id → FinancialAccessConsequence (access actions only)
+
+FinancialAccessConsequence (confirmed financial access decision)
+├── account_id → Subscriber
+├── action, requested_reason, origin, outcome
+├── preview_fingerprint, idempotency_key
+├── separated decision_inputs and exact result
+└── evidence[] → exact EnforcementLock / AccessCredential / DunningCase changes
 ```
 
 ---
@@ -711,11 +717,13 @@ Dunning Collection Workflow
 ├── Get PolicySet.dunning_steps
 ├── For each step (day_offset):
 │   ├── Wait until day_offset elapsed
-│   ├── Execute action (notify, throttle, suspend, reject)
-│   ├── Log action in DunningActionLog
+│   ├── Preview action from canonical receivable/profile/shield/health facts
+│   ├── Lock + recompute + confirm with idempotency
+│   ├── Link exact access consequence evidence in DunningActionLog
 │   └── Event: dunning.action_executed
 ├── When payment received:
-│   ├── Close DunningCase
+│   ├── Ask the financial access owner to reconcile
+│   ├── Resolve only eligible overdue/prepaid locks, cases, and throttle
 │   └── Event: dunning.resolved
 ```
 
@@ -925,10 +933,15 @@ API Key Flow
 
 ```
 1. Creation → Draft/Issued
-2. Issued → Partially Paid (partial payment)
-3. Partially Paid → Paid (full payment)
-4. Issued → Overdue (past due_at)
-5. Any → Void/Written-off (admin action)
+2. Issued → Partially Paid (confirmed payment/credit settlement)
+3. Partially Paid → Paid (confirmed full settlement)
+4. Issued → Overdue (collections resolver after `due_at`)
+5. Draft/Issued/Overdue → Void (owner preview/confirmation; no effective settlement)
+6. Issued/Partially Paid/Overdue → Written-off (owner preview/confirmation of remaining collectible debt)
+
+Paid, void, and written-off state cannot be set through generic invoice CRUD.
+`financial.payments`, `financial.credit_notes`, and `financial.invoices` own the
+corresponding transition and exact evidence contract.
 ```
 
 ### Payment Processing
@@ -973,9 +986,10 @@ For each PolicySet.dunning_step:
 ├── day_offset 14: throttle
 ├── day_offset 21: suspend
 ├── day_offset 30: reject
-└── Log in DunningActionLog
+└── Confirm owner preview and link exact consequence in DunningActionLog
 
-On Payment: Close DunningCase, restore service
+On Payment: request reconciliation; restoration occurs only if every named
+financial gate for the affected lock reason passes.
 ```
 
 ---
@@ -1167,7 +1181,7 @@ def task_name(arg1, arg2):
 |--------|--------|
 | Subscriber | Created → Active → Suspended/Canceled → Archived |
 | Subscription | Pending → Active → Suspended/Canceled → Expired |
-| Invoice | Draft → Issued → Partially Paid/Paid → Overdue → Void |
+| Invoice | Draft → Issued/Overdue → Partially Paid/Paid, or owner-confirmed Void/Written-off |
 | ServiceOrder | Draft → Submitted → Scheduled → Provisioning → Active |
 
 ### Database Conventions

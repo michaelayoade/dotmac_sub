@@ -76,11 +76,9 @@ def _effective_bool(
     db, domain: SettingDomain, key: str, env_key: str, default: bool
 ) -> bool:
     # Single control plane: if this (domain, key) is a registered control, the
-    # ONE resolver decides — composing env override, the canonical row a
-    # registry-driven admin page writes, the legacy alias, and the owning
-    # module. Behavior-neutral for registered keys until a module is disabled or
-    # a canonical row is set, because each control's on_missing == the legacy
-    # default here (asserted by the parity test).
+    # ONE resolver decides from the canonical row/default and owning module.
+    # ``domain``/``key`` are caller-routing metadata only; ``env_key`` and the
+    # retired domain-setting row are never consulted for registered controls.
     from app.services import control_registry
 
     canonical = control_registry.control_for_legacy(domain, key)
@@ -521,34 +519,6 @@ def build_beat_schedule() -> dict:
                 "task": "app.tasks.gis.sync_gis_sources",
                 "schedule": timedelta(minutes=max(interval_minutes, 1)),
             }
-        vas_enabled = _effective_bool(
-            session, SettingDomain.vas, "enabled", "VAS_ENABLED", False
-        )
-        if vas_enabled:
-            # Daily sweep; pay_bill settlement is idempotent so re-runs are safe.
-            schedule["vas_wallet_auto_deduct"] = {
-                "task": "app.tasks.vas.run_wallet_auto_deduct",
-                "schedule": timedelta(hours=24),
-            }
-            schedule["vas_requery"] = {
-                "task": "app.tasks.vas.run_vas_requery",
-                "schedule": timedelta(minutes=5),
-            }
-            schedule["vas_catalog_sync"] = {
-                "task": "app.tasks.vas.sync_vas_catalog",
-                "schedule": timedelta(hours=12),
-            }
-            schedule["vas_review_requery"] = {
-                "task": "app.tasks.vas.run_vas_review_requery",
-                "schedule": timedelta(hours=24),
-            }
-        # In-flight refunds remain money-moving obligations even when new VAS
-        # activity is disabled, so their backstop must never share the feature
-        # gate used by catalog and purchase work.
-        schedule["vas_refund_reconcile"] = {
-            "task": "app.tasks.vas.reconcile_refund_requests",
-            "schedule": timedelta(minutes=5),
-        }
         credential_rotation_enabled = _effective_bool(
             session,
             SettingDomain.auth,
@@ -1697,7 +1667,7 @@ def build_beat_schedule() -> dict:
             session,
             name="ont_reconcile_sweep",
             task_name="app.tasks.ont_reconcile.run_ont_reconcile_sweep",
-            enabled=True,
+            enabled=control_registry.is_enabled(session, "network.ont_reconcile"),
             interval_seconds=max(ont_reconcile_seconds, 300),
         )
         ont_status_seconds = _resolve_int(

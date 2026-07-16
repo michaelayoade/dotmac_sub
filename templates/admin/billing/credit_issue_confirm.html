@@ -1,0 +1,49 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Confirm Credit Issue - Admin{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/billing/credits" class="hover:text-primary-600">Credits</a>
+            <span>/</span>
+            <span class="text-slate-900 dark:text-white">Confirm issue</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Confirm credit issue</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This preview was calculated by the credit-note owner. Confirming posts the exact ledger transaction shown below.</p>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <dl class="grid gap-4 sm:grid-cols-2">
+            <div><dt class="text-xs uppercase tracking-wide text-slate-500">Credit amount</dt><dd class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ preview.currency }} {{ preview.credit_total }}</dd></div>
+            <div><dt class="text-xs uppercase tracking-wide text-slate-500">Account</dt><dd class="mt-1 break-all text-sm text-slate-900 dark:text-white">{{ preview.account_id }}</dd></div>
+            <div><dt class="text-xs uppercase tracking-wide text-slate-500">Prepaid funding before</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ preview.currency }} {{ preview.prepaid_funding_before }}</dd></div>
+            <div><dt class="text-xs uppercase tracking-wide text-slate-500">Prepaid funding after</dt><dd class="mt-1 text-sm font-medium text-slate-900 dark:text-white">{{ preview.currency }} {{ preview.prepaid_funding_after }}</dd></div>
+        </dl>
+
+        <div class="mt-6 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Exact ledger result</h2>
+            <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ preview.ledger_entry_type.value|title }} · {{ preview.ledger_source.value|replace('_', ' ')|title }} · {{ preview.currency }} {{ preview.ledger_amount }}</p>
+        </div>
+
+        <div class="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-200">
+            <strong>Service access:</strong> no direct change. Access remains a separate owner decision.
+        </div>
+
+        {% if payload.memo %}<p class="mt-4 text-sm text-slate-600 dark:text-slate-300"><strong>Memo:</strong> {{ payload.memo }}</p>{% endif %}
+
+        <form method="post" action="/admin/billing/credits" class="mt-6 flex justify-end gap-3">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="account_id" value="{{ payload.account_id }}">
+            <input type="hidden" name="amount" value="{{ payload.total }}">
+            <input type="hidden" name="currency" value="{{ payload.currency }}">
+            <input type="hidden" name="memo" value="{{ payload.memo or '' }}">
+            <input type="hidden" name="preview_fingerprint" value="{{ preview.fingerprint }}">
+            <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+            <a href="/admin/billing/credits/new?account_id={{ payload.account_id }}" class="inline-flex items-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200">Back</a>
+            <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">Confirm and issue</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

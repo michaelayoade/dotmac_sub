@@ -373,8 +373,12 @@ def submit_payment_arrangement(
     start_date: str,
     invoice_id: str | None = None,
     notes: str | None = None,
+    terms_accepted: bool = False,
 ) -> dict:
     """Submit a payment arrangement request."""
+    if not terms_accepted:
+        raise ValueError("You must agree to the payment arrangement terms")
+
     from app.services import payment_arrangements as arrangement_service
 
     account_id_str = optional_customer_account_id(db, customer)

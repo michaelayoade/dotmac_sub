@@ -1,0 +1,96 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Confirm Imported Payment Reversal - System{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-6xl space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/system/import-runs/{{ preview.import_run_id }}" class="hover:underline">Import Run</a>
+            <span>/</span>
+            <span class="text-slate-700 dark:text-slate-200">Payment reversal preview</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Confirm append-only payment reversal</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">This reverses only payments structurally proven to have been created by import run {{ preview.import_run_id }}. Imported rows that reused existing payments remain unchanged.</p>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-3">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase text-slate-500">Created payments</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ preview.items | length }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase text-slate-500">Reused payments skipped</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ preview.skipped_reused_count }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase text-slate-500">Access consequence</p>
+            <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">Reconcile after confirmation; no restoration or suspension is predicted here.</p>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Exact ledger result</h2>
+        <div class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {% for total in preview.totals_by_currency %}
+            <div class="rounded-lg bg-slate-50 p-3 dark:bg-slate-900/40">
+                <p class="text-xs text-slate-500">{{ total.currency }}</p>
+                <p class="text-lg font-bold text-slate-900 dark:text-white">{{ total.reversal_amount }}</p>
+                <p class="text-xs text-slate-500">{{ total.ledger_entry_type }} · {{ total.ledger_source }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Financial position by account</h2>
+        <div class="mt-3 overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
+                <thead><tr><th class="px-2 py-2 text-left">Account</th><th class="px-2 py-2 text-right">Prepaid funding</th><th class="px-2 py-2 text-right">Unallocated credit</th><th class="px-2 py-2 text-right">Postpaid receivables</th><th class="px-2 py-2 text-right">Blocking balance before</th></tr></thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for account in preview.account_positions %}
+                    <tr><td class="px-2 py-2 font-mono">{{ account.account_id }} · {{ account.currency }}</td><td class="px-2 py-2 text-right">{{ account.prepaid_funding_before }} → {{ account.prepaid_funding_after }}</td><td class="px-2 py-2 text-right">{{ account.unallocated_account_credit_before }} → {{ account.unallocated_account_credit_after }}<br><span class="text-slate-500">consumes {{ account.unallocated_account_credit_consumed }}</span></td><td class="px-2 py-2 text-right">{{ account.postpaid_receivables_before }} → {{ account.postpaid_receivables_after }}<br><span class="text-slate-500">reopens {{ account.postpaid_receivables_reopened }}</span></td><td class="px-2 py-2 text-right">{{ account.collection_blocking_balance_before }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Exact payment and source evidence</h2>
+        <div class="mt-3 space-y-3">
+            {% for item in preview.items %}
+            <div class="rounded-lg border border-slate-200 p-3 text-xs dark:border-slate-700">
+                <p class="font-semibold text-slate-900 dark:text-white">Row {{ item.row_number }} · payment {{ item.payment_id }}</p>
+                <p class="mt-1 text-slate-600 dark:text-slate-300">Settlement {{ item.payment_settlement_id }} → {{ item.ledger_entry_type }} {{ item.ledger_amount }} {{ item.currency }} from {{ item.ledger_source }}</p>
+                <p class="mt-1 text-slate-500">Account-credit consumption: {{ item.account_credit_consumption }} · consequence: {{ item.access_consequence }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if preview.invoice_effects %}
+    <div class="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Receivables reopened</h2>
+        <div class="mt-3 space-y-2 text-sm">
+            {% for effect in preview.invoice_effects %}
+            <p>Invoice {{ effect.invoice_number or effect.invoice_id }}: {{ effect.receivable_before }} → {{ effect.receivable_after }} {{ effect.currency }} (reopens {{ effect.reopened_amount }})</p>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/admin/system/import-runs/{{ preview.import_run_id }}/payment-reversal-confirm" class="rounded-xl border border-amber-300 bg-amber-50 p-5 dark:border-amber-800 dark:bg-amber-900/20">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="reason" value="{{ preview.reason }}">
+        <input type="hidden" name="preview_fingerprint" value="{{ preview_fingerprint }}">
+        <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+        <p class="text-sm font-semibold text-amber-900 dark:text-amber-200">Reason: {{ preview.reason }}</p>
+        <p class="mt-1 font-mono text-xs text-amber-700 dark:text-amber-400">Preview fingerprint {{ preview_fingerprint }}</p>
+        <div class="mt-4 flex gap-3">
+            <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">Confirm exact reversal</button>
+            <a href="/admin/system/import-runs/{{ preview.import_run_id }}" class="rounded-lg border border-amber-300 px-4 py-2 text-sm font-semibold text-amber-800 dark:border-amber-700 dark:text-amber-200">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -14,7 +14,12 @@ from sqlalchemy.orm import Session
 from app.models.network import CPEDevice, OntUnit, VendorModelCapability
 from app.models.uisp_control import UispDeviceIntent, UispIntentTargetType
 from app.services.credential_crypto import decrypt_credential
-from app.services.network.vendor_capabilities import vendor_capabilities
+from app.services.device_adapter_binding import AdapterBinding, DeviceIdentity
+from app.services.network.vendor_capabilities import (
+    VendorCapabilityAmbiguous,
+    capability_revision,
+    vendor_capabilities,
+)
 from app.services.uisp import (
     UispApiError,
     UispClient,
@@ -33,6 +38,7 @@ _CANONICAL_FIELDS = {
     "lifecycle.state",
 }
 _SECRET_FIELDS = {"wifi.password_ref"}
+_UISP_WRITE_ADAPTER_REVISION = "1"
 
 
 class UispWriteAdapterError(RuntimeError):
@@ -64,6 +70,7 @@ class UispCapabilityProfile:
     writable_fields: tuple[str, ...]
     requested_fields: tuple[str, ...]
     unsupported_fields: tuple[str, ...]
+    binding: AdapterBinding | None = None
 
     @property
     def apply_ready(self) -> bool:
@@ -187,9 +194,12 @@ def _resolve_target(
 def _uisp_capability(
     db: Session, *, vendor: str, model: str, firmware: str | None
 ) -> tuple[VendorModelCapability, dict[str, Any]]:
-    capability = vendor_capabilities.resolve_capability(
-        db, vendor=vendor, model=model, firmware=firmware
-    )
+    try:
+        capability = vendor_capabilities.resolve_capability(
+            db, vendor=vendor, model=model, firmware=firmware
+        )
+    except VendorCapabilityAmbiguous as exc:
+        raise UispWriteUnsupported(str(exc)) from exc
     if capability is None:
         raise UispWriteUnsupported(
             f"No active UISP capability mapping for {vendor} {model}"
@@ -249,7 +259,7 @@ def capability_profile(
     """Resolve the exact writable/readable field contract for an intent target."""
     _target, vendor, model = _resolve_target(db, intent)
     firmware = str(getattr(_target, "firmware_version", "") or "") or None
-    _capability, config = _uisp_capability(
+    capability, config = _uisp_capability(
         db, vendor=vendor, model=model, firmware=firmware
     )
     raw_fields = config.get("fields")
@@ -268,6 +278,14 @@ def capability_profile(
     desired = desired_state if desired_state is not None else intent.desired_state
     requested = tuple(sorted(_desired_fields(desired or {})))
     writable = tuple(sorted(writable_fields))
+    identity = DeviceIdentity.from_device(_target, vendor=vendor, model=model)
+    binding = AdapterBinding(
+        adapter_name=f"uisp-{config['transport']}",
+        adapter_revision=_UISP_WRITE_ADAPTER_REVISION,
+        identity=identity,
+        capability_id=str(capability.id),
+        capability_revision=capability_revision(capability),
+    )
     return UispCapabilityProfile(
         vendor=vendor,
         model=model,
@@ -275,6 +293,7 @@ def capability_profile(
         writable_fields=writable,
         requested_fields=requested,
         unsupported_fields=tuple(sorted(set(requested) - set(writable))),
+        binding=binding,
     )
 
 

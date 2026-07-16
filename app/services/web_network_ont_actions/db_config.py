@@ -271,9 +271,18 @@ def update_ont_config(
                     "actions_applied": [
                         action.field for action in reconciled.actions_applied
                     ],
+                    "action_evidence": [
+                        {
+                            "field": action.field,
+                            "evidence": getattr(action, "evidence", None),
+                        }
+                        for action in reconciled.actions_applied
+                        if getattr(action, "evidence", None) is not None
+                    ],
                     "failure_reason": (
                         reconciled.failure.reason if reconciled.failure else None
                     ),
+                    "failure_evidence": getattr(reconciled.failure, "evidence", None),
                     "delivery_pending": bool(
                         reconciled.failure
                         and reconciled.failure.reason == "acs_cr_failed"

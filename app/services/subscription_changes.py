@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 from typing import cast
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -35,6 +36,11 @@ class SubscriptionChangeRequests(ListResponseMixin):
         effective_date: date,
         requested_by_person_id: str | None = None,
         notes: str | None = None,
+        confirmation_preview_fingerprint: str | None = None,
+        confirmation_idempotency_key: str | None = None,
+        confirmation_origin: str | None = None,
+        confirmation_snapshot: dict[str, object] | None = None,
+        commit: bool = True,
     ) -> SubscriptionChangeRequest:
         """Create a new subscription change request.
 
@@ -68,20 +74,54 @@ class SubscriptionChangeRequests(ListResponseMixin):
         if not new_offer.is_active:
             raise HTTPException(status_code=400, detail="Requested offer is not active")
 
-        # Check for existing pending request
+        normalized_key = (confirmation_idempotency_key or "").strip() or None
+        if normalized_key:
+            replay = (
+                db.query(SubscriptionChangeRequest)
+                .filter(
+                    SubscriptionChangeRequest.confirmation_idempotency_key
+                    == normalized_key
+                )
+                .first()
+            )
+            if replay is not None:
+                if (
+                    str(replay.subscription_id) != str(subscription.id)
+                    or str(replay.requested_offer_id) != str(new_offer.id)
+                    or replay.confirmation_preview_fingerprint
+                    != confirmation_preview_fingerprint
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Plan-change idempotency key belongs to another "
+                            "confirmation"
+                        ),
+                    )
+                return replay
+
+        # Keep one unresolved intent per subscription. An immediate confirmation
+        # must not silently overtake an approved next-cycle schedule, and a new
+        # review request must not queue behind one without an explicit cancel.
         existing = (
             db.query(SubscriptionChangeRequest)
             .filter(SubscriptionChangeRequest.subscription_id == subscription.id)
             .filter(
-                SubscriptionChangeRequest.status == SubscriptionChangeStatus.pending
+                SubscriptionChangeRequest.status.in_(
+                    (
+                        SubscriptionChangeStatus.pending,
+                        SubscriptionChangeStatus.approved,
+                    )
+                )
             )
+            .filter(SubscriptionChangeRequest.applied_at.is_(None))
             .filter(SubscriptionChangeRequest.is_active.is_(True))
             .first()
         )
         if existing:
             raise HTTPException(
                 status_code=400,
-                detail="A pending change request already exists for this subscription",
+                detail="An outstanding plan change already exists for this subscription",
             )
 
         request = SubscriptionChangeRequest(
@@ -94,10 +134,17 @@ class SubscriptionChangeRequests(ListResponseMixin):
             else None,
             notes=notes,
             status=SubscriptionChangeStatus.pending,
+            confirmation_preview_fingerprint=confirmation_preview_fingerprint,
+            confirmation_idempotency_key=normalized_key,
+            confirmation_origin=confirmation_origin,
+            confirmation_snapshot=confirmation_snapshot,
         )
         db.add(request)
-        db.commit()
-        db.refresh(request)
+        if commit:
+            db.commit()
+            db.refresh(request)
+        else:
+            db.flush()
 
         logger.info(
             f"Created subscription change request {request.id} for subscription {subscription_id}"
@@ -296,6 +343,8 @@ class SubscriptionChangeRequests(ListResponseMixin):
         db: Session,
         request_id: str,
         reviewer_id: str | None = None,
+        *,
+        commit: bool = True,
     ) -> SubscriptionChangeRequest:
         """Approve a subscription change request.
 
@@ -323,8 +372,11 @@ class SubscriptionChangeRequests(ListResponseMixin):
         if reviewer_id:
             request.reviewed_by_subscriber_id = coerce_uuid(reviewer_id)
 
-        db.commit()
-        db.refresh(request)
+        if commit:
+            db.commit()
+            db.refresh(request)
+        else:
+            db.flush()
 
         logger.info(f"Approved subscription change request {request_id}")
         return request
@@ -377,6 +429,8 @@ class SubscriptionChangeRequests(ListResponseMixin):
         *,
         skip_proration_artifacts: bool = False,
         plan_change_operation_key: str | None = None,
+        plan_change_preview_fingerprint: str | None = None,
+        plan_change_actor_id: str | None = None,
     ) -> SubscriptionChangeRequest:
         """Apply an approved subscription change request.
 
@@ -393,6 +447,8 @@ class SubscriptionChangeRequests(ListResponseMixin):
         if not request:
             raise HTTPException(status_code=404, detail="Change request not found")
 
+        if request.status == SubscriptionChangeStatus.applied:
+            return request
         if request.status != SubscriptionChangeStatus.approved:
             raise HTTPException(
                 status_code=400,
@@ -427,6 +483,46 @@ class SubscriptionChangeRequests(ListResponseMixin):
         from app.schemas.catalog import SubscriptionUpdate
         from app.services import catalog as catalog_service
 
+        expected_fingerprint = (
+            plan_change_preview_fingerprint or request.confirmation_preview_fingerprint
+        )
+        if not skip_proration_artifacts and expected_fingerprint:
+            from app.services.prepaid_plan_changes import resolve_prepaid_plan_change
+
+            decision = resolve_prepaid_plan_change(
+                db,
+                subscription,
+                str(request.requested_offer_id),
+            )
+            if decision.fingerprint != expected_fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Financial state changed after preview; preview again",
+                )
+            # For postpaid and zero-money changes the catalog path has no nested
+            # financial owner to attach evidence. Preserve the confirmed owner
+            # decision here; prepaid monetary paths overwrite this after their
+            # locked recomputation and attach the exact transaction.
+            request.confirmation_snapshot = decision.as_evidence_dict()
+            request.confirmed_at = datetime.now(UTC)
+            if not decision.is_prepaid or decision.subscription_status != "active":
+                from app.models.audit import AuditActorType
+                from app.services.audit_adapter import stage_audit_event
+
+                stage_audit_event(
+                    db,
+                    action="confirm_immediate_plan_change",
+                    entity_type="subscription_change_request",
+                    entity_id=str(request.id),
+                    actor_type=(
+                        AuditActorType.user
+                        if plan_change_actor_id
+                        else AuditActorType.system
+                    ),
+                    actor_id=plan_change_actor_id,
+                    metadata=decision.as_evidence_dict(),
+                )
+
         # Stage the request state before the shared subscription update. That
         # update commits the request, subscription mutation, and any prepaid
         # financial adjustment together, so a crash cannot leave a charged
@@ -439,6 +535,9 @@ class SubscriptionChangeRequests(ListResponseMixin):
             SubscriptionUpdate(offer_id=request.requested_offer_id),
             skip_proration_artifacts=skip_proration_artifacts,
             plan_change_operation_key=plan_change_operation_key or str(request.id),
+            plan_change_preview_fingerprint=expected_fingerprint,
+            plan_change_request_id=(str(request.id) if expected_fingerprint else None),
+            plan_change_actor_id=plan_change_actor_id,
         )
         subscription = db.get(Subscription, request.subscription_id)
         if subscription is None:
@@ -477,6 +576,96 @@ class SubscriptionChangeRequests(ListResponseMixin):
             f"subscription {subscription.id} now on offer {request.requested_offer_id}"
         )
         return request
+
+    @classmethod
+    def confirm_immediate(
+        cls,
+        db: Session,
+        *,
+        subscription_id: str,
+        new_offer_id: str,
+        preview_fingerprint: str,
+        idempotency_key: str,
+        confirmation_origin: str,
+        confirmation_snapshot: dict[str, object],
+        requested_by_person_id: str | None = None,
+        actor_id: str | None = None,
+        notes: str | None = None,
+    ) -> SubscriptionChangeRequest:
+        """Confirm one human-previewed immediate change as one transaction.
+
+        The request, subscription mutation, nested adjustment/credit evidence,
+        and audit row commit together in :meth:`apply`. A stale preview rolls
+        the staged request back, while an idempotent replay returns the already
+        applied request and its exact evidence.
+        """
+        fingerprint = preview_fingerprint.strip()
+        key = idempotency_key.strip()
+        if not fingerprint:
+            raise HTTPException(
+                status_code=400, detail="Plan-change preview fingerprint is required"
+            )
+        if not key:
+            raise HTTPException(
+                status_code=400, detail="Plan-change idempotency key is required"
+            )
+        try:
+            request = cls.create(
+                db,
+                subscription_id=subscription_id,
+                new_offer_id=new_offer_id,
+                effective_date=date.today(),
+                requested_by_person_id=requested_by_person_id,
+                notes=notes,
+                confirmation_preview_fingerprint=fingerprint,
+                confirmation_idempotency_key=key,
+                confirmation_origin=confirmation_origin,
+                confirmation_snapshot=confirmation_snapshot,
+                commit=False,
+            )
+            if request.status == SubscriptionChangeStatus.applied:
+                return request
+            if request.status == SubscriptionChangeStatus.pending:
+                cls.approve(db, str(request.id), commit=False)
+            if request.status != SubscriptionChangeStatus.approved:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Plan-change idempotency key refers to a request that "
+                        "cannot be applied"
+                    ),
+                )
+            return cls.apply(
+                db,
+                str(request.id),
+                plan_change_operation_key=key,
+                plan_change_preview_fingerprint=fingerprint,
+                plan_change_actor_id=actor_id,
+            )
+        except IntegrityError:
+            db.rollback()
+            replay = (
+                db.query(SubscriptionChangeRequest)
+                .filter(SubscriptionChangeRequest.confirmation_idempotency_key == key)
+                .first()
+            )
+            if replay is None:
+                raise
+            return cls.confirm_immediate(
+                db,
+                subscription_id=subscription_id,
+                new_offer_id=new_offer_id,
+                preview_fingerprint=fingerprint,
+                idempotency_key=key,
+                confirmation_origin=confirmation_origin,
+                confirmation_snapshot=confirmation_snapshot,
+                requested_by_person_id=requested_by_person_id,
+                actor_id=actor_id,
+                notes=notes,
+            )
+        except Exception:
+            db.rollback()
+            raise
 
     @staticmethod
     def cancel(

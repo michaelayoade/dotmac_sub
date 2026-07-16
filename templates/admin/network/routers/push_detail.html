@@ -89,6 +89,7 @@
                 <tr class="border-b border-slate-200 dark:border-slate-700 text-left text-slate-500 dark:text-slate-400">
                     <th class="pb-3 pr-4 font-medium">Router</th>
                     <th class="pb-3 pr-4 font-medium">Status</th>
+                    <th class="pb-3 pr-4 font-medium">Adapter evidence</th>
                     <th class="pb-3 pr-4 font-medium">Duration</th>
                     <th class="pb-3 pr-4 font-medium">Snapshots</th>
                     <th class="pb-3 font-medium">Error</th>
@@ -97,6 +98,7 @@
             <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
                 {% for r in results %}
                 {% set r_map = {'success': 'active', 'failed': 'error', 'pending': 'warning', 'running': 'warning', 'pending_readback': 'warning', 'skipped': 'neutral'} %}
+                {% set identity = identity_views.get(r.id | string) %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                     <td class="py-3 pr-4">
                         <a href="/admin/network/routers/{{ r.router_id }}"
@@ -109,6 +111,13 @@
                     </td>
                     <td class="py-3 pr-4">
                         {{ status_badge(r.status.value | capitalize, r_map.get(r.status.value, 'neutral'), size="sm") }}
+                    </td>
+                    <td class="py-3 pr-4 text-xs">
+                        {% if identity %}
+                        <div class="flex items-center gap-2">{{ status_badge(identity.readiness_label, identity.readiness_tone, size="sm") }}</div>
+                        <p class="mt-1 font-mono text-slate-600 dark:text-slate-300">{{ identity.adapter_label }}</p>
+                        {% if identity.pinned_binding %}{% set planned_identity = identity.pinned_binding.get('identity', {}) %}<p class="mt-1 font-mono {{ 'text-amber-700 dark:text-amber-300' if identity.binding_changed else 'text-slate-500' }}">Planned: {{ identity.pinned_binding.get('adapter_name', 'Unknown') }}@{{ identity.pinned_binding.get('adapter_revision', 'unknown')[:12] }} · {{ planned_identity.get('firmware_version') or 'unknown version' }}</p>{% endif %}
+                        {% else %}—{% endif %}
                     </td>
                     <td class="py-3 pr-4 font-mono text-xs text-slate-600 dark:text-slate-300">{{ (r.duration_ms ~ ' ms') if r.duration_ms else '—' }}</td>
                     <td class="py-3 pr-4 text-xs text-slate-600 dark:text-slate-300">

@@ -96,7 +96,12 @@ def test_a_full_refund_moves_the_balance_by_exactly_the_refund(db_session):
 
     before = _balance(db_session, account)
 
-    Refunds.process_refund(db_session, str(payment.id), reason="test")
+    Refunds.process_refund(
+        db_session,
+        str(payment.id),
+        reason="test",
+        idempotency_key=f"refund-test-{uuid.uuid4().hex}",
+    )
     db_session.commit()
 
     after = _balance(db_session, account)
@@ -115,7 +120,11 @@ def test_a_partial_refund_moves_the_balance_by_exactly_the_refund(db_session):
     before = _balance(db_session, account)
 
     Refunds.process_refund(
-        db_session, str(payment.id), refund_amount=Decimal("2500.00"), reason="partial"
+        db_session,
+        str(payment.id),
+        refund_amount=Decimal("2500.00"),
+        reason="partial",
+        idempotency_key=f"refund-test-{uuid.uuid4().hex}",
     )
     db_session.commit()
 
@@ -134,17 +143,23 @@ def test_a_chargeback_moves_the_balance_by_exactly_the_payment(db_session):
 
     before = _balance(db_session, account)
 
-    Refunds.reverse_payment(db_session, str(payment.id), reason="chargeback")
+    Refunds.reverse_payment(
+        db_session,
+        str(payment.id),
+        reason="chargeback",
+        idempotency_key=f"reversal-test-{uuid.uuid4().hex}",
+    )
     db_session.commit()
 
     after = _balance(db_session, account)
     assert before - after == Decimal("10000.00"), (
         f"balance moved by {before - after}, expected 10000.00"
     )
+    db_session.refresh(payment)
+    assert payment.status == PaymentStatus.reversed
 
 
-def test_the_admin_refund_button_actually_refunds(db_session):
-    """mark_status(refunded) used to move NOTHING: cash left, credit stayed."""
+def test_direct_refund_status_is_rejected_and_owner_moves_exact_money(db_session):
     account = _account(db_session)
     invoice = _invoice(db_session, account, "10000.00")
     payment = _pay(db_session, account, invoice, "10000.00")
@@ -152,9 +167,15 @@ def test_the_admin_refund_button_actually_refunds(db_session):
 
     before = _balance(db_session, account)
 
-    # This is exactly what the admin Refund button calls.
-    billing_service.payments.mark_status(
-        db_session, str(payment.id), PaymentStatus.refunded
+    with pytest.raises(Exception):
+        billing_service.payments.mark_status(
+            db_session, str(payment.id), PaymentStatus.refunded
+        )
+    Refunds.process_refund(
+        db_session,
+        str(payment.id),
+        reason="confirmed outside Sub",
+        idempotency_key=f"refund-test-{uuid.uuid4().hex}",
     )
     db_session.commit()
     db_session.refresh(payment)
@@ -181,7 +202,12 @@ def test_a_full_refund_soft_deletes_the_allocation_with_its_ledger_credit(db_ses
     payment = _pay(db_session, account, invoice, "10000.00")
     db_session.commit()
 
-    Refunds.process_refund(db_session, str(payment.id), reason="test")
+    Refunds.process_refund(
+        db_session,
+        str(payment.id),
+        reason="test",
+        idempotency_key=f"refund-test-{uuid.uuid4().hex}",
+    )
     db_session.commit()
 
     allocations = (
@@ -212,7 +238,12 @@ def test_a_full_refund_reopens_the_invoice(db_session):
     db_session.refresh(invoice)
     assert invoice.status == InvoiceStatus.paid
 
-    Refunds.process_refund(db_session, str(payment.id), reason="test")
+    Refunds.process_refund(
+        db_session,
+        str(payment.id),
+        reason="test",
+        idempotency_key=f"refund-test-{uuid.uuid4().hex}",
+    )
     db_session.commit()
     db_session.refresh(invoice)
 
@@ -227,5 +258,8 @@ def test_refunding_more_than_the_payment_is_refused(db_session):
 
     with pytest.raises(Exception):
         Refunds.process_refund(
-            db_session, str(payment.id), refund_amount=Decimal("9000.00")
+            db_session,
+            str(payment.id),
+            refund_amount=Decimal("9000.00"),
+            idempotency_key=f"refund-test-{uuid.uuid4().hex}",
         )

@@ -99,21 +99,17 @@ def resolve_settings_domain(value: str | None) -> SettingDomain:
 def enforcement_specs() -> list[settings_spec.SettingSpec]:
     ordered_keys = {
         SettingDomain.radius: [
-            "coa_enabled",
             "coa_dictionary_path",
             "coa_timeout_sec",
             "coa_retries",
             "refresh_sessions_on_profile_change",
         ],
         SettingDomain.usage: [
-            "usage_warning_enabled",
             "usage_warning_thresholds",
             "fup_action",
             "fup_throttle_radius_profile_id",
         ],
         SettingDomain.network: [
-            "mikrotik_session_kill_enabled",
-            "address_list_block_enabled",
             "default_mikrotik_address_list",
         ],
     }

@@ -42,6 +42,7 @@ EVENT_TYPE_TO_WEBHOOK = {
     EventType.payment_received: WebhookEventType.payment_received,
     EventType.payment_failed: WebhookEventType.payment_failed,
     EventType.payment_refunded: WebhookEventType.payment_refunded,
+    EventType.payment_reversed: WebhookEventType.payment_reversed,
     # Usage events
     EventType.usage_recorded: WebhookEventType.usage_recorded,
     EventType.usage_warning: WebhookEventType.usage_warning,

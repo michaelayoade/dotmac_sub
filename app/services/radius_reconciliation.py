@@ -126,12 +126,13 @@ def mixed_status_subscriber_count(db: Session) -> int:
 def audit_suspension_enforcement(db: Session) -> dict[str, Any]:
     """Check every fully-blocked subscriber against the external RADIUS DB.
 
-    Enforcement model (captive-by-default): a blocked subscriber is
+    Enforcement model (hard-reject by default): an eligible, explicitly opted-in
+    blocked subscriber is
     INTENTIONALLY still able to authenticate when they carry a walled-garden
     marker — a ``Mikrotik-Address-List = suspended`` radreply row (today's
-    per-user mechanism) or membership in ``dotmac-captive`` /
-    ``dotmac-suspended`` groups (group routing). Hard reject = an
-    ``Auth-Type`` radcheck override or the ``dotmac-suspended`` group.
+    per-user mechanism) or membership in ``dotmac-captive`` (group routing).
+    Hard reject = an ``Auth-Type`` radcheck override or the
+    ``dotmac-suspended`` group.
 
     Leak classes (lists capped at SAMPLE_LIMIT in the payload; counts exact):
 
@@ -216,6 +217,13 @@ def audit_suspension_enforcement(db: Session) -> dict[str, Any]:
                             .where(radcheck.c.username.in_(chunk))
                             .where(radcheck.c.attribute == "Auth-Type")
                         ).scalars()
+                    ) | set(
+                        conn.execute(
+                            select(radusergroup.c.username)
+                            .distinct()
+                            .where(radusergroup.c.username.in_(chunk))
+                            .where(radusergroup.c.groupname == "dotmac-suspended")
+                        ).scalars()
                     )
                     walled_users = set(
                         conn.execute(
@@ -230,11 +238,7 @@ def audit_suspension_enforcement(db: Session) -> dict[str, Any]:
                             select(radusergroup.c.username)
                             .distinct()
                             .where(radusergroup.c.username.in_(chunk))
-                            .where(
-                                radusergroup.c.groupname.in_(
-                                    ["dotmac-captive", "dotmac-suspended"]
-                                )
-                            )
+                            .where(radusergroup.c.groupname == "dotmac-captive")
                         ).scalars()
                     )
                     open_access |= password_users - rejected_users - walled_users

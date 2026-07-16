@@ -233,10 +233,9 @@ def _evaluate_fup_rules_locked(
         # {subscriber_id, kind, rule_name, threshold_gb, used_gb}.
         pending_notifs: list[dict] = []
 
-        # "Approaching" warnings reuse the configurable usage-warning settings
-        # (usage_warning_enabled / usage_warning_thresholds, e.g. "0.8,0.9") so
-        # the percentage is operator-controlled, not hardcoded. We warn at the
-        # lowest configured threshold.
+        # "Approaching" warnings use the canonical ``usage.warnings`` control
+        # plus configurable thresholds (e.g. "0.8,0.9"). We warn at the lowest
+        # configured threshold.
         warn_enabled = control_registry.is_enabled(session, "usage.warnings")
         _thr_raw = settings_spec.resolve_value(
             session, SettingDomain.usage, "usage_warning_thresholds"

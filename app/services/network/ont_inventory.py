@@ -22,6 +22,10 @@ from app.services import network as network_service
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.cpe import ensure_cpe_for_ont
+from app.services.network.huawei_cli_response import (
+    HuaweiCliResource,
+    is_huawei_resource_absent,
+)
 from app.services.network.ont_actions import ActionResult
 from app.services.network.ont_desired_config import clear_desired_config
 from app.services.network.ont_status import (
@@ -60,23 +64,11 @@ def _parse_ont_id_on_olt(external_id: str | None) -> int | None:
 
 
 def _is_ont_already_absent(message: str | None) -> bool:
-    normalized = (message or "").casefold()
-    return (
-        "ont does not exist" in normalized
-        or "the ont does not exist" in normalized
-        or "ont not found" in normalized
-    )
+    return is_huawei_resource_absent(message, HuaweiCliResource.ONT)
 
 
 def _is_service_port_already_absent(message: str | None) -> bool:
-    normalized = (message or "").casefold()
-    return (
-        "service virtual port does not exist" in normalized
-        or "service-port does not exist" in normalized
-        or "service port does not exist" in normalized
-        or "service-port not found" in normalized
-        or "service port not found" in normalized
-    )
+    return is_huawei_resource_absent(message, HuaweiCliResource.SERVICE_PORT)
 
 
 def _verify_service_port_absent_on_olt(

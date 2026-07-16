@@ -103,13 +103,19 @@ def test_wht_lifecycle_has_one_owner_and_advances_payment_feed() -> None:
     assert "/tax-accounting/shadow-control" not in route_source
 
 
-def test_all_direct_issued_credit_note_writers_persist_tax_point() -> None:
+def test_credit_note_owner_persists_tax_point_for_issuance_adapters() -> None:
+    owner = _read("app/services/billing/credit_notes.py")
+    assert "issued_at=datetime.now(UTC)" in owner
+
     for relative in (
         "app/services/billing_automation.py",
         "app/services/prepaid_plan_changes.py",
-        "app/services/billing/payments.py",
     ):
-        assert "issued_at=" in _read(relative), relative
+        source = _read(relative)
+        assert "CreditNotes.issue_system(" in source, relative
+        assert "CreditNote(" not in source, relative
+
+    assert "CreditNote(" not in _read("app/services/billing/payments.py")
 
 
 def test_wht_and_credit_note_migrations_preserve_evidence() -> None:

@@ -232,6 +232,29 @@
     color: var(--status-foreground);
 }
 
+.action-form-submit {
+    border-color: var(--status-indicator);
+    background: var(--status-indicator);
+    color: #fff;
+    --tw-ring-color: var(--status-indicator);
+}
+
+.action-form-submit:hover:not(:disabled) {
+    filter: brightness(0.92);
+}
+
+.action-form-field-error {
+    border-color: var(--color-semantic-negative-600);
+}
+
+.action-form-error {
+    color: var(--color-semantic-negative-700);
+}
+
+.dark .action-form-error {
+    color: var(--color-semantic-negative-300);
+}
+
 .dark {
     --surface-primary: #0f172a;
     --surface-secondary: #1e293b;

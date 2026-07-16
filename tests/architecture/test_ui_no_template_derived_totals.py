@@ -48,7 +48,6 @@ BACKLOG = {
     "templates/customer/usage/_content.html",  # customer-facing: "Total Usage" over the page
     "templates/customer/billing/index.html",  # customer-facing
     "templates/customer/services/change_plan.html",  # customer-facing
-    "templates/admin/billing/invoice_detail.html",  # single-invoice line-item sum (lower risk)
     "templates/admin/design_system/index.html",  # design-system demo
     "templates/components/data/data_grid.html",  # shared component helper
     "templates/components/ui/macros.html",  # shared component helper

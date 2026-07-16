@@ -15,6 +15,7 @@ from app.models.catalog import SubscriptionStatus
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
+from app.models.vendor_routes import VendorPurchaseInvoiceStatus
 from app.schemas.status_presentation import (
     StatusIcon,
     StatusPresentation,
@@ -270,6 +271,11 @@ _PAYMENT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
         StatusTone.warning,
         StatusIcon.clock,
     ),
+    PaymentStatus.reversed.value: (
+        "Reversed",
+        StatusTone.negative,
+        StatusIcon.alert,
+    ),
     PaymentStatus.canceled.value: (
         "Canceled",
         StatusTone.neutral,
@@ -491,3 +497,93 @@ def withholding_tax_status_presentation(
 ) -> StatusPresentation:
     """Project the official WHT receivable lifecycle without re-deriving it."""
     return _presentation(_status_value(status), _WITHHOLDING_TAX_PRESENTATIONS)
+
+
+_VENDOR_PURCHASE_INVOICE_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    VendorPurchaseInvoiceStatus.draft.value: (
+        "Draft",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
+    VendorPurchaseInvoiceStatus.submitted.value: (
+        "Submitted",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    VendorPurchaseInvoiceStatus.under_review.value: (
+        "Under review",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    VendorPurchaseInvoiceStatus.approved.value: (
+        "Approved",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    VendorPurchaseInvoiceStatus.rejected.value: (
+        "Rejected",
+        StatusTone.negative,
+        StatusIcon.x,
+    ),
+    VendorPurchaseInvoiceStatus.revision_requested.value: (
+        "Revision requested",
+        StatusTone.warning,
+        StatusIcon.alert,
+    ),
+}
+
+
+def vendor_purchase_invoice_status_presentation(
+    status: VendorPurchaseInvoiceStatus | str | None,
+) -> StatusPresentation:
+    """Project vendor purchase-invoice approval status without re-deriving it."""
+    return _presentation(_status_value(status), _VENDOR_PURCHASE_INVOICE_PRESENTATIONS)
+
+
+_FIELD_EXPENSE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "draft": ("Draft", StatusTone.neutral, StatusIcon.archive),
+    "submitted": ("Submitted", StatusTone.info, StatusIcon.clock),
+    "approved": ("Approved", StatusTone.positive, StatusIcon.check),
+    "rejected": ("Rejected", StatusTone.negative, StatusIcon.x),
+    "paid": ("Paid", StatusTone.positive, StatusIcon.check),
+}
+
+
+def field_expense_status_presentation(status: str | None) -> StatusPresentation:
+    """Project field-expense claim status without re-deriving the workflow."""
+    return _presentation(_status_value(status), _FIELD_EXPENSE_PRESENTATIONS)
+
+
+_FIELD_MATERIAL_REQUEST_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "draft": ("Draft", StatusTone.neutral, StatusIcon.archive),
+    "submitted": ("Submitted", StatusTone.info, StatusIcon.clock),
+    "approved": ("Approved", StatusTone.positive, StatusIcon.check),
+    "rejected": ("Rejected", StatusTone.negative, StatusIcon.x),
+    "issued": ("Issued", StatusTone.info, StatusIcon.info),
+    "fulfilled": ("Fulfilled", StatusTone.positive, StatusIcon.check),
+    "canceled": ("Canceled", StatusTone.negative, StatusIcon.x),
+}
+
+
+def field_material_request_status_presentation(
+    status: str | None,
+) -> StatusPresentation:
+    """Project field material-request status without re-deriving the workflow."""
+    return _presentation(_status_value(status), _FIELD_MATERIAL_REQUEST_PRESENTATIONS)
+
+
+_SYSTEM_JOB_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "queued": ("Queued", StatusTone.info, StatusIcon.clock),
+    "running": ("Running", StatusTone.info, StatusIcon.clock),
+    "completed": ("Completed", StatusTone.positive, StatusIcon.check),
+    "failed": ("Failed", StatusTone.negative, StatusIcon.x),
+    "canceled": ("Canceled", StatusTone.neutral, StatusIcon.minus),
+    "cancelled": ("Canceled", StatusTone.neutral, StatusIcon.minus),
+}
+
+
+def system_job_status_presentation(status: str | None) -> StatusPresentation:
+    """Project a system/background job run status without re-deriving it."""
+    return _presentation(_status_value(status), _SYSTEM_JOB_PRESENTATIONS)

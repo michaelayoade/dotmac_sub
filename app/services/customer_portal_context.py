@@ -29,7 +29,6 @@ from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services.bandwidth import bandwidth_samples
-from app.services.billing.invoice_classification import collectible_ar_invoice_filter
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.customer_context import (
@@ -41,6 +40,7 @@ from app.services.customer_context import (
     resolve_customer_account_ids,
 )
 from app.services.customer_support_links import ticket_customer_link_filter
+from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.network.radius_sessions import live_framed_ips_by_subscription
 from app.services.status_presentation import account_status_presentation
 

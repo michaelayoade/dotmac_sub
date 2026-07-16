@@ -47,6 +47,7 @@
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">From</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">To</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Exact Result</th>
                         <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Effective</th>
                     </tr>
                 </thead>
@@ -59,6 +60,18 @@
                                 #{{ req.id | string | truncate(8, True, '') }}
                             </span>
                             <p class="text-xs text-slate-500 dark:text-slate-400">{{ req.created_at | portal_datetime('%b %d, %Y') }}</p>
+                        </td>
+                        <td class="px-6 py-4 text-xs text-slate-500 dark:text-slate-400">
+                            {% set evidence = req.confirmation_snapshot or {} %}
+                            {% if evidence and evidence.ledger_entry_type %}
+                            <p class="font-medium text-slate-800 dark:text-slate-200">{{ evidence.ledger_entry_type | capitalize }} {{ evidence.currency }} {{ evidence.ledger_amount }}</p>
+                            <p>{{ evidence.ledger_source | replace('_', ' ') | title }}</p>
+                            <p class="font-mono" title="{{ req.ledger_entry_id }}">Ledger #{{ req.ledger_entry_id | string | truncate(8, True, '') }}</p>
+                            {% elif evidence %}
+                            <p class="font-medium text-slate-700 dark:text-slate-300">No immediate ledger transaction</p>
+                            {% else %}
+                            <p>Historical or scheduled request; confirmation evidence unavailable.</p>
+                            {% endif %}
                         </td>
                         <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                             {{ req.current_offer.name if req.current_offer else 'N/A' }}
@@ -85,7 +98,7 @@
                     {% endfor %}
                     {% else %}
                     <tr>
-                        <td colspan="5" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                        <td colspan="6" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                             <div class="flex flex-col items-center gap-2">
                                 <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>

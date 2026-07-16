@@ -133,3 +133,9 @@ def reset_password_submit(
 def logout(request: Request, db: Session = Depends(get_db)):
     """Log out the current user."""
     return web_auth_service.logout(request, db)
+
+
+@router.post("/logout")
+def logout_submit(request: Request, db: Session = Depends(get_db)):
+    """Log out from forms without relying on a state-changing GET."""
+    return web_auth_service.logout(request, db)

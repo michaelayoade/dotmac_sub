@@ -5,7 +5,7 @@
 **Date:** 2026-06-29
 **Method:** 2-agent parallel read-only review: (a) admin reseller management
 (list/detail/form/user-linking/impersonation), (b) the partner-facing reseller
-portal (dashboard/billing/VAS/reports/contacts/profile).
+portal (dashboard/billing/reports/contacts/profile).
 **Status:** implementation branch in progress. `codex/reseller-ux-polish-audit`
 addresses the concrete P0/P1/P2 findings that already had backing fields or
 clear UI/service behavior. Structural product/data-model decisions remain
@@ -28,7 +28,7 @@ the UI** — today it's "policy by absence."
    one-way trap.
 2. Money shown to a partner carries its currency and isn't summed across
    currencies; dates carry a timezone.
-3. Financial/impersonation actions (allocate credit, sell-from-float, view-as) are
+3. Financial/impersonation actions (allocate credit and view-as) are
    confirmed and (for allocation) amount-controllable.
 4. No partner-facing page render-crashes; capabilities aren't hidden from nav.
 5. Reseller economics are explicit and configurable, not implied by missing rows.
@@ -38,9 +38,6 @@ the UI** — today it's "policy by absence."
 ### POLISH
 
 **P-A. Render crash / broken / dead controls.**
-- ⚠️ **VAS page 500s on render** — `'%,.2f'|format(x)` is printf-style; the `,`
-  flag is invalid in Python `%`-formatting → `ValueError` whenever VAS is enabled
-  (`templates/reseller/vas/index.html:15,19,109`)
 - Deactivating a reseller makes it **vanish** (list hardcodes `is_active=True`,
   no status filter, no reactivate path); the "Inactive" badge branch is dead code
   (`app/services/web_admin_resellers.py:98,102`, `templates/admin/resellers/index.html:37`)
@@ -55,7 +52,6 @@ the UI** — today it's "policy by absence."
   → mixed-currency mislabeled as naira (`templates/admin/resellers/detail.html:44`)
 - Portal revenue totals rendered with no currency symbol/code at all
   (`templates/reseller/reports/revenue.html:33,50,147`)
-- VAS hardcodes `₦` + `'NGN'` (`templates/reseller/vas/index.html`)
 - Admin + portal datetimes are raw UTC `strftime`, no tz label (WAT off by ~1h)
 
 **P-C. Partial-success / error surfacing.**
@@ -67,7 +63,6 @@ the UI** — today it's "policy by absence."
 **P-D. Confirms on financial / sensitive actions.**
 - **Allocate** (portal) dumps the *entire* unallocated credit onto one subscriber,
   no amount picker, no confirm (`templates/reseller/billing/index.html:215-223`)
-- "Sell from float" submits real money, no confirm, no balance check (`vas/index.html:75`)
 - "View as reseller" impersonation is one-click, no confirm, mints a real session
   (`templates/admin/resellers/detail.html:13-22`)
 
@@ -95,25 +90,22 @@ assigned offers" flag + global `RESELLER_DEFAULT_CATALOG_OPEN` default.
 override) exists on the model but appears in no form/detail (`app/models/subscriber.py:145`).
 → add a policy-set selector.
 
-**C-4. VAS / misc hardcodes.** VAS `min_topup=100` + currency hardcoded
-(`web_reseller_routes.py:737`); detail user-create assigns no role / omits the role
+**C-4. Role assignment.** Detail user-create assigns no role / omits the role
 selector the new-reseller form has (`app/web/admin/resellers.py:283-310`).
 
 ## Priority
 
 | Tier | Items |
 |------|-------|
-| **P0** | VAS page render-500 when VAS enabled (`vas/index.html:15`); deactivated reseller vanishes + can't reactivate (`web_admin_resellers.py:98`); Allocate dumps entire credit, no amount/confirm (`billing/index.html:215`) |
-| **P1** | Reseller economics surface + decision (C-1); confirms on allocate / sell-float / view-as (P-D); money+tz display (P-B); invite-failure + status-update error surfacing (P-C); Contacts in nav + name fields (P-E); catalog-visibility default flag (C-2) |
-| **P2** | per_page consistency, dashboard pager, dual-provider VAS checkout, `policy_set_id` selector (C-3), role selector on detail user-create (C-4), detail not-found notice |
+| **P0** | Deactivated reseller vanishes + can't reactivate (`web_admin_resellers.py:98`); Allocate dumps entire credit, no amount/confirm (`billing/index.html:215`) |
+| **P1** | Reseller economics surface + decision (C-1); confirms on allocate / view-as (P-D); money+tz display (P-B); invite-failure + status-update error surfacing (P-C); Contacts in nav + name fields (P-E); catalog-visibility default flag (C-2) |
+| **P2** | per_page consistency, dashboard pager, `policy_set_id` selector (C-3), role selector on detail user-create (C-4), detail not-found notice |
 
 ## Implementation update — 2026-07-01
 
 ### Resolved in `codex/reseller-ux-polish-audit`
 
 **P0 required**
-- Fixed VAS render crash by replacing invalid `'% ,.2f'`/`'%,.2f'`-style
-  formatting with Python format strings in `templates/reseller/vas/index.html`.
 - Stopped inactive resellers from becoming unreachable: admin list now supports
   `active` / `inactive` / `all` filters and explicit deactivate/reactivate
   actions.
@@ -122,7 +114,7 @@ selector the new-reseller form has (`app/web/admin/resellers.py:283-310`).
   `allocate_consolidated_balance_to_subscriber`.
 
 **P1 concrete**
-- Added confirmations for allocate, sell-from-float, and view-as-reseller.
+- Added confirmations for allocate and view-as-reseller.
 - Surfaced reseller account status `ValueError` messages instead of replacing
   every validation failure with a generic unsupported-action message.
 - Added Contacts and Profile to the reseller desktop/mobile navigation.
@@ -152,9 +144,6 @@ selector the new-reseller form has (`app/web/admin/resellers.py:283-310`).
 - **C-2 catalog visibility default flag** remains pending. There is still no
   per-reseller "restrict to assigned offers" flag or global
   `RESELLER_DEFAULT_CATALOG_OPEN` setting to wire into offer visibility.
-- **Dual-provider VAS checkout** remains pending because the VAS flow is still
-  Paystack-specific while consolidated billing already has the reusable
-  multi-provider checkout path.
 - **Full timezone conversion helper** remains pending. This branch labels the
   audited raw timestamps as `UTC`, but does not introduce a shared app-timezone
   conversion helper for all admin/portal timestamps.
@@ -176,16 +165,12 @@ selector the new-reseller form has (`app/web/admin/resellers.py:283-310`).
 - [CONTROL] (Low) `templates/admin/resellers/detail.html:298-321` + `app/web/admin/resellers.py:283-310` — detail user-create omits Role selector, assigns none → add role select (default configurable) [defer]
 
 ### Reseller portal (partner-facing)
-- [POLISH] (High) `templates/reseller/vas/index.html:15,19,109` (+ `web_reseller_routes.py:731`) — `'%,.2f'|format(x)` invalid `,` in `%`-format → page 500s when VAS enabled → use `"{:,.2f}".format(x)` [recommend]
 - [POLISH] (Med) `templates/reseller/reports/revenue.html:33,50,147` — totals no currency symbol/code → prefix account currency [recommend]
 - [CONTROL] (Med) `templates/reseller/billing/index.html:215-223` + `reseller_portal_billing.py:294` — "Allocate" dumps entire unallocated credit on one subscriber, no amount/confirm → amount field / per-invoice + confirm [recommend]
-- [CONTROL] (Med) `web_reseller_routes.py:737` + `vas/index.html:15,72,87,169` — VAS hardcodes `min_topup=100`, `₦`, `'NGN'` → drive from settings/billing account [defer]
-- [POLISH] (Med) `vas/index.html:162-166` — float top-up Paystack-only though Flutterwave exists in billing → reuse dual-provider checkout [defer]
-- [POLISH] (Med) `billing/index.html:255,288` + `dashboard/index.html:176` + `vas/index.html:106` — datetimes raw UTC, no tz → convert/label consistently [defer]
+- [POLISH] (Med) `billing/index.html:255,288` + `dashboard/index.html:176` — datetimes raw UTC, no tz → convert/label consistently [defer]
 - [POLISH] (Med) `templates/layouts/reseller.html:43-86,172-197` — Contacts not in nav (desktop or mobile) → add Contacts + Profile to nav incl. mobile [recommend]
 - [POLISH] (Med) `app/services/web_reseller_contacts.py:61` vs `templates/reseller/contacts/index.html` — `notice` set for reseller_user w/o subscriber but template doesn't render it → render notice banner [recommend]
 - [CONTROL] (Low) `templates/reseller/contacts/index.html:149,94` vs `routes.py:383,438` — create/edit omit `full_name`/`relationship` though route accepts → add inputs [recommend]
 - [POLISH] (Low) `app/web/reseller/routes.py:32-39` + dashboard — `page`/`per_page`/`offset` threaded but no pager → add pager or drop params + label "recent" [defer]
 - [POLISH] (Low) `app/services/web_reseller_routes.py:279-289` — status-update maps every ValueError to generic message, discards real reason → surface `str(exc)` [defer]
-- [POLISH] (Low) `vas/index.html:75` — "Sell from float" real money, no confirm/balance check → confirm + disable when float insufficient [defer]
 - Notes: login/MFA/account danger-zone well done (spinner/confirm/modal/CSRF); commission display-only — rate not visible/configurable (ties to C-1).

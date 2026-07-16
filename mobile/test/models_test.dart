@@ -417,22 +417,54 @@ void main() {
       final q = PlanChangeQuote.fromJson({
         'charge_amount': 5000.0,
         'net_amount': 2900.0,
-        'current_balance': 2100.0,
+        'prepaid_funding_before': 5000.0,
+        'prepaid_funding_after': 2100.0,
+        'postpaid_receivables': 750.0,
+        'collection_blocking_balance': 125.0,
         'shortfall': 0.0,
         'days_remaining': 12,
         'can_apply_immediately': true,
         'is_upgrade': true,
         'is_downgrade': false,
+        'preview_fingerprint': List.filled(64, 'p').join(),
+        'has_financial_effect': true,
+        'ledger_entry_type': 'debit',
+        'ledger_source': 'adjustment',
+        'ledger_amount': 2900.0,
+        'access_consequence': 'none_plan_change_only',
       });
       expect(q.hasProration, isTrue);
       expect(q.isUpgrade, isTrue);
       expect(q.needsTopUp, isFalse);
       expect(q.netAmount, 2900.0);
+      expect(q.prepaidFundingAfter, 2100.0);
+      expect(q.postpaidReceivables, 750.0);
+      expect(q.collectionBlockingBalance, 125.0);
+      expect(q.previewFingerprint, hasLength(64));
+      expect(q.ledgerEntryType, 'debit');
+      expect(q.ledgerSource, 'adjustment');
+      expect(q.ledgerAmount, 2900.0);
+      expect(q.accessConsequence, 'none_plan_change_only');
     });
 
     test('empty quote => no proration (postpaid)', () {
       final q = PlanChangeQuote.fromJson(const {});
       expect(q.hasProration, isFalse);
+    });
+
+    test('postpaid quote still carries a confirmable no-ledger fingerprint',
+        () {
+      final q = PlanChangeQuote.fromJson({
+        'preview_fingerprint': List.filled(64, 'n').join(),
+        'has_financial_effect': false,
+        'postpaid_receivables': 750.0,
+        'collection_blocking_balance': 0.0,
+        'access_consequence': 'none_plan_change_only',
+      });
+      expect(q.hasProration, isFalse);
+      expect(q.hasFinancialEffect, isFalse);
+      expect(q.previewFingerprint, hasLength(64));
+      expect(q.postpaidReceivables, 750.0);
     });
 
     test('flags a shortfall as needing top-up', () {
@@ -485,7 +517,7 @@ void main() {
   });
 
   group('Add-ons', () {
-    test('AddonsAvailable parses options + wallet (Decimal-as-string)', () {
+    test('AddonsAvailable parses options without deriving a balance', () {
       final d = AddonsAvailable.fromJson({
         'available': [
           {
@@ -501,18 +533,33 @@ void main() {
         'active': [
           {'id': 's1', 'add_on_id': 'a1', 'name': 'Static IP', 'quantity': 2}
         ],
-        'wallet_balance': '2071.49',
-        'currency': 'NGN',
       });
       expect(d.available.single.maxQuantity, 3);
       expect(d.active.single.quantity, 2);
-      expect(d.walletBalance, 2071.49);
     });
 
-    test('AddonPurchaseResult flags insufficient balance', () {
+    test('AddonQuote keeps funding and receivables visibly distinct', () {
+      final q = AddonQuote.fromJson({
+        'charge': '2000.00',
+        'currency': 'NGN',
+        'prepaid_funding_before': '5000.00',
+        'prepaid_funding_after': '3000.00',
+        'postpaid_receivables': '750.00',
+        'shortfall': '0.00',
+        'can_afford': true,
+        'allowed': true,
+        'preview_fingerprint': List.filled(64, 'a').join(),
+      });
+      expect(q.prepaidFundingBefore, 5000.0);
+      expect(q.prepaidFundingAfter, 3000.0);
+      expect(q.postpaidReceivables, 750.0);
+      expect(q.previewFingerprint, hasLength(64));
+    });
+
+    test('AddonPurchaseResult flags insufficient prepaid funding', () {
       final r = AddonPurchaseResult.fromJson({
         'success': false,
-        'reason': 'insufficient_balance',
+        'reason': 'insufficient_prepaid_funding',
         'charge': '4000.00',
         'shortfall': '2000.00',
         'currency': 'NGN',

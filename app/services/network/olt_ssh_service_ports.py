@@ -10,6 +10,7 @@ from collections import Counter
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice
+from app.services.network.huawei_cli_response import is_huawei_idempotent_conflict
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_ssh import ServicePortEntry
 
@@ -344,12 +345,8 @@ def create_single_service_port(
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         if core.is_error_output(output):
-            normalized = output.casefold()
             conflict_match = _CONFLICTED_SERVICE_PORT_RE.search(output)
-            if (
-                "service virtual port has existed already" in normalized
-                and conflict_match
-            ):
+            if is_huawei_idempotent_conflict(output) and conflict_match:
                 conflicted_index = int(conflict_match.group(1))
                 read_ok, read_msg, existing_port = _verify_conflicted_service_port(
                     olt,

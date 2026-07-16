@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from decimal import Decimal
 from uuid import UUID
 
 from app.models.billing import CreditNote, CreditNoteStatus
-from app.schemas.billing import CreditNoteCreate
+from app.schemas.billing import (
+    CreditNoteIssuePreviewRequest,
+    CreditNoteIssueRequest,
+)
 from app.services import billing as billing_service
 from app.services import display_format
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services.audit_helpers import log_audit_event
 from app.validators.forms import parse_decimal, parse_uuid
 
 logger = logging.getLogger(__name__)
@@ -114,7 +119,7 @@ def credit_form_context(db, *, account_id: str | None, error: str | None = None)
     selected_account = resolve_selected_account(db, account_id)
     context = {
         "accounts": None,
-        "action_url": "/admin/billing/credits",
+        "action_url": "/admin/billing/credits/preview",
         "form_title": "Issue Credit",
         "submit_label": "Issue Credit",
         "account_locked": bool(selected_account),
@@ -130,7 +135,7 @@ def credit_form_context(db, *, account_id: str | None, error: str | None = None)
     return context
 
 
-def create_credit_from_form(
+def preview_credit_from_form(
     db,
     *,
     account_id: str,
@@ -141,13 +146,59 @@ def create_credit_from_form(
     credit_amount = parse_decimal(amount, "amount")
     if credit_amount <= 0:
         raise ValueError("Amount must be greater than 0")
-    payload = CreditNoteCreate(
+    payload = CreditNoteIssuePreviewRequest(
         account_id=parse_uuid(account_id, "account_id"),
-        status=CreditNoteStatus.issued,
         currency=currency.strip().upper(),
         subtotal=credit_amount,
         tax_total=Decimal("0.00"),
         total=credit_amount,
         memo=memo.strip() if memo else None,
+        line_description="Manual account credit",
     )
-    return billing_service.credit_notes.create(db, payload)
+    return {
+        "preview": billing_service.credit_notes.preview_issue(db, payload),
+        "payload": payload,
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
+
+
+def issue_credit_from_form(
+    db,
+    *,
+    request,
+    actor_id: str | None,
+    account_id: str,
+    amount: str,
+    currency: str,
+    memo: str | None,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    credit_amount = parse_decimal(amount, "amount")
+    result = billing_service.credit_notes.issue_with_evidence(
+        db,
+        CreditNoteIssueRequest(
+            account_id=parse_uuid(account_id, "account_id"),
+            currency=currency.strip().upper(),
+            subtotal=credit_amount,
+            tax_total=Decimal("0.00"),
+            total=credit_amount,
+            memo=memo.strip() if memo else None,
+            line_description="Manual account credit",
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        ),
+        stage_audit=False,
+    )
+    if not result.idempotent_replay:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="issue",
+            entity_type="credit_note",
+            entity_id=str(result.credit_note.id),
+            actor_id=actor_id,
+            metadata=result.audit_metadata(),
+            status_code=201,
+        )
+    return result

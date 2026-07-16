@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from urllib.parse import urlencode
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -25,6 +26,18 @@ _CONSOLIDATED_PAYMENT_SUCCESS = "Consolidated payment recorded and distributed."
 
 def _default_currency(db: Session) -> str:
     return display_format.default_currency(db)
+
+
+def _actor_id(request: Request) -> str | None:
+    from app.web.admin import get_current_user
+
+    if request is None:
+        return None
+    current_user = get_current_user(request)
+    if not current_user:
+        return None
+    value = current_user.get("actor_id") or current_user.get("subscriber_id")
+    return str(value) if value else None
 
 
 def _consolidated_detail_url(
@@ -112,6 +125,54 @@ def consolidated_account_detail(
 
 
 @router.post(
+    "/consolidated-accounts/{billing_account_id}/record-payment/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing_account:distribute"))],
+)
+def consolidated_preview_payment(
+    request: Request,
+    billing_account_id: str,
+    amount: str = Form(...),
+    currency: str | None = Form(None),
+    memo: str | None = Form(None),
+    collection_account_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        normalized_currency = (currency or _default_currency(db)).strip().upper()
+        preview = web_consolidated_billing_service.preview_bulk_payment(
+            db,
+            billing_account_id=billing_account_id,
+            amount=amount,
+            currency=normalized_currency,
+            memo=memo,
+            collection_account_id=collection_account_id or None,
+        )
+    except Exception:
+        db.rollback()
+        return RedirectResponse(
+            url=_consolidated_detail_url(
+                billing_account_id,
+                payment_error=_CONSOLIDATED_PAYMENT_ERROR,
+            ),
+            status_code=303,
+        )
+    return templates.TemplateResponse(
+        "admin/billing/consolidated/payment_confirm.html",
+        {
+            "request": request,
+            "billing_account_id": billing_account_id,
+            "preview": preview,
+            "amount": amount,
+            "currency": normalized_currency,
+            "memo": memo or "",
+            "collection_account_id": collection_account_id or "",
+            "idempotency_key": f"admin-consolidated-{uuid4()}",
+        },
+    )
+
+
+@router.post(
     "/consolidated-accounts/{billing_account_id}/record-payment",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing_account:distribute"))],
@@ -123,6 +184,8 @@ def consolidated_record_payment(
     currency: str | None = Form(None),
     memo: str | None = Form(None),
     collection_account_id: str | None = Form(None),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
     db: Session = Depends(get_db),
 ):
     try:
@@ -133,6 +196,9 @@ def consolidated_record_payment(
             currency=(currency or _default_currency(db)).strip().upper(),
             memo=memo,
             collection_account_id=collection_account_id or None,
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            actor_id=_actor_id(request),
         )
     except Exception:
         db.rollback()

@@ -12,7 +12,7 @@ from app.schemas.settings import DomainSettingUpdate
 from app.services.control_relationships import (
     ControlRelationshipError,
     audit_event_relationships,
-    audit_setting_relationships,
+    audit_feature_control_relationships,
     event_execution_plan,
     event_policies,
     event_topology,
@@ -20,6 +20,7 @@ from app.services.control_relationships import (
     relationship_manifest,
     validate_and_order_handlers,
     validate_event_execution_policy,
+    validate_feature_control_changes,
     validate_setting_change,
 )
 from app.services.domain_settings import billing_settings
@@ -85,12 +86,19 @@ def test_domain_setting_mutation_enforces_relationship_registry(db_session):
 
 
 def test_quote_migration_chain_flags_unsafe_order(db_session):
-    findings = audit_setting_relationships(
+    findings = audit_feature_control_relationships(
         db_session,
-        pending=(SettingDomain.projects, "quotes_native_write_enabled", True),
+        pending={"quotes.native_write": True},
     )
 
     assert {item.code for item in findings} == {"quote_write_before_read_flip"}
+
+
+def test_canonical_feature_writer_enforces_quote_migration_chain(db_session):
+    with pytest.raises(ControlRelationshipError, match="require the native read"):
+        validate_feature_control_changes(
+            db_session, {"quotes.native_write": True, "quotes.native_read": False}
+        )
 
 
 def test_control_manifest_covers_all_relationship_modes():

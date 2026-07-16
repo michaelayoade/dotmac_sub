@@ -45,6 +45,9 @@ def _make_router(db_session, name: str) -> Router:
         management_ip="10.0.0.1",
         rest_api_username="admin",
         rest_api_password="enc:test",
+        routeros_version="7.16.2 (stable)",
+        board_name="CCR2004-1G-12S+2XS",
+        architecture="arm64",
     )
     db_session.add(r)
     db_session.commit()
@@ -187,6 +190,68 @@ def test_create_push_record(db_session):
     assert push.results[0].router_id == router.id
     assert push.operation_id is not None
     assert push.results[0].operation_id is not None
+
+
+def test_create_push_pins_routeros_adapter_identity(db_session):
+    router = _make_router(db_session, "push-binding-test")
+
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+
+    binding = push.results[0].operation.input_payload["_adapter_binding"]
+    assert binding["adapter_name"] == "mikrotik-routeros-rest-v7"
+    assert binding["identity"]["model"] == "CCR2004-1G-12S+2XS"
+    assert binding["identity"]["firmware_version"] == "7.16.2 (stable)"
+
+
+def test_create_push_rejects_routeros_v6_write(db_session):
+    router = _make_router(db_session, "push-v6-test")
+    router.routeros_version = "6.49.18"
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="require a mapped v7 profile"):
+        RouterConfigService.create_push(
+            db_session,
+            desired_state=[_address_intent()],
+            router_ids=[router.id],
+            initiated_by=uuid.uuid4(),
+        )
+
+
+def test_execute_config_push_rejects_changed_router_identity(db_session, monkeypatch):
+    from app.tasks.router_sync import execute_config_push
+
+    router = _make_router(db_session, "push-stale-binding-test")
+    push = RouterConfigService.create_push(
+        db_session,
+        desired_state=[_address_intent()],
+        router_ids=[router.id],
+        initiated_by=uuid.uuid4(),
+    )
+    router.routeros_version = "7.17.0"
+    db_session.commit()
+    calls = []
+    monkeypatch.setattr(
+        "app.tasks.router_sync.db_session_adapter.create_session",
+        lambda: db_session,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(
+        "app.tasks.router_sync.RouterConnectionService.execute",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    outcome = execute_config_push.run(str(push.id))
+
+    db_session.refresh(push.results[0])
+    assert outcome["failed"] == 1
+    assert calls == []
+    assert push.results[0].status == RouterPushResultStatus.failed
+    assert "requires replanning" in push.results[0].error_message
 
 
 def test_create_push_rejects_unmanaged_resource(db_session):

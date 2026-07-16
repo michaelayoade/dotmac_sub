@@ -230,21 +230,14 @@ def enabled_direct_bank_transfer_accounts(db: Session) -> list[dict[str, str]]:
 def direct_bank_transfer_enabled(db: Session) -> bool:
     if not control_registry.is_enabled(db, "billing.direct_bank_transfer"):
         return False
-    # Resolve from a single settings read (the accounts list is already attached
-    # by direct_bank_transfer_settings) rather than calling
-    # enabled_direct_bank_transfer_accounts, which would re-query the same rows.
+    # The canonical feature control owns enablement. Billing settings own only
+    # the configured accounts and customer instructions.
     settings = direct_bank_transfer_settings(db)
-    enabled = settings.get("direct_bank_transfer_enabled", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
     has_account = any(
         account.get("enabled") == "true"
         for account in settings.get("direct_bank_transfer_accounts_list", [])
     )
-    return bool(enabled and has_account)
+    return bool(has_account)
 
 
 def _resolve_topup_limits(db: Session) -> tuple[int, int]:

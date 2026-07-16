@@ -203,13 +203,8 @@ BILLING_KEYS = [
     "use_creation_date",
     "payment_due_days",
     "customer_balance_notifications_enabled",
-    "auto_suspend_on_overdue",
-    "suspension_grace_hours",
     "expiry_reminder_days",
     "invoice_reminder_days",
-    "dunning_escalation_days",
-    "blocking_period_days",
-    "deactivation_period_days",
     "minimum_balance",
     "send_billing_notifications",
     "invoice_number_format",
@@ -233,7 +228,6 @@ BILLING_KEYS = [
 ]
 
 DIRECT_BANK_TRANSFER_KEYS = [
-    "direct_bank_transfer_enabled",
     "direct_bank_transfer_bank_name",
     "direct_bank_transfer_account_name",
     "direct_bank_transfer_account_number",
@@ -248,12 +242,8 @@ def get_billing_config_context(db: Session) -> dict:
     if not billing.get("payment_due_days"):
         billing["payment_due_days"] = str(resolve_payment_due_days(db))
     defaults = {
-        "suspension_grace_hours": "48",
         "expiry_reminder_days": "7",
         "invoice_reminder_days": "7,1",
-        "dunning_escalation_days": "3,7,14,30",
-        "blocking_period_days": "0",
-        "deactivation_period_days": "0",
         "minimum_balance": "0",
     }
     for key, value in defaults.items():
@@ -352,7 +342,6 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         ("billing_enabled", "Billing Enabled"),
         ("use_creation_date", "Use Customer Creation Date"),
         ("customer_balance_notifications_enabled", "Customer Balance Notifications"),
-        ("auto_suspend_on_overdue", "Auto-Suspend on Overdue"),
         ("send_billing_notifications", "Send Billing Notifications"),
         ("proforma_enabled", "Proforma Invoices"),
         ("zero_total_invoices", "Zero-Total Invoices"),
@@ -382,10 +371,7 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
 
     for key, label in (
         ("payment_due_days", "Payment Due Days"),
-        ("suspension_grace_hours", "Suspension Grace Period"),
         ("expiry_reminder_days", "Expiry Reminder Days"),
-        ("blocking_period_days", "Blocking Period"),
-        ("deactivation_period_days", "Deactivation Period"),
         ("proforma_generation_day", "Proforma Generation Day"),
         ("prepaid_default_payment_due_days", "Prepaid Default Payment Due Days"),
         ("prepaid_default_grace_period_days", "Prepaid Default Grace Period Days"),
@@ -402,9 +388,6 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
         _normalize_decimal_setting(normalized, key, label, minimum=Decimal("0"))
 
     _normalize_csv_days(normalized, "invoice_reminder_days", "Invoice Reminder Days")
-    _normalize_csv_days(
-        normalized, "dunning_escalation_days", "Dunning Escalation Days"
-    )
     return normalized
 
 
@@ -429,8 +412,6 @@ def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
 
 def get_direct_bank_transfer_context(db: Session) -> dict:
     settings = _read_settings(db, SettingDomain.billing, DIRECT_BANK_TRANSFER_KEYS)
-    if not settings.get("direct_bank_transfer_enabled"):
-        settings["direct_bank_transfer_enabled"] = "false"
     return {
         "direct_bank_transfer": settings,
         "direct_bank_transfer_accounts": _parse_direct_transfer_accounts(settings),
@@ -441,9 +422,6 @@ def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> No
     accounts = _direct_transfer_accounts_from_form(data)
     primary = accounts[0] if accounts else {}
     payload = {
-        "direct_bank_transfer_enabled": data.get(
-            "direct_bank_transfer_enabled", "false"
-        ),
         "direct_bank_transfer_instructions": data.get(
             "direct_bank_transfer_instructions", ""
         ),

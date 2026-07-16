@@ -70,14 +70,14 @@ class CatalogRepository {
     return PlanChangeQuote.fromJson((data as Map).cast<String, dynamic>());
   }
 
-  /// GET /me/subscriptions/{id}/add-ons — add-ons available + active + wallet.
+  /// GET /me/subscriptions/{id}/add-ons — available and active add-ons.
   Future<AddonsAvailable> addons(String subscriptionId) async {
     final data =
         await guard(() => dio.get('/me/subscriptions/$subscriptionId/add-ons'));
     return AddonsAvailable.fromJson(data as Map<String, dynamic>);
   }
 
-  /// GET …/add-ons/quote — cost of buying an add-on vs the wallet balance.
+  /// GET …/add-ons/quote — server-owned purchase and exact-debit preview.
   Future<AddonQuote> addonQuote(
       String subscriptionId, String addOnId, int quantity) async {
     final data = await guard(() => dio.get(
@@ -87,11 +87,11 @@ class CatalogRepository {
     return AddonQuote.fromJson(data as Map<String, dynamic>);
   }
 
-  /// POST …/add-ons — buy an add-on, charged from the wallet balance. A fresh
+  /// POST …/add-ons — confirm the exact previewed add-on debit. A fresh
   /// idempotency key is built into the request so a transport-level retry
-  /// (e.g. the 401-refresh replay) can't charge the wallet twice.
-  Future<AddonPurchaseResult> purchaseAddon(
-      String subscriptionId, String addOnId, int quantity) async {
+  /// (e.g. the 401-refresh replay) cannot post the prepaid debit twice.
+  Future<AddonPurchaseResult> purchaseAddon(String subscriptionId,
+      String addOnId, int quantity, String previewFingerprint) async {
     final key = 'addon-${DateTime.now().microsecondsSinceEpoch}-'
         '${Random().nextInt(1 << 32)}';
     final data = await guard(() => dio.post(
@@ -99,6 +99,7 @@ class CatalogRepository {
           data: {
             'add_on_id': addOnId,
             'quantity': quantity,
+            'preview_fingerprint': previewFingerprint,
             'idempotency_key': key,
           },
         ));
@@ -115,14 +116,17 @@ class CatalogRepository {
   Future<void> submitPlanChange(
     String subscriptionId, {
     required String offerId,
-    required String effectiveDate, // YYYY-MM-DD
+    required String previewFingerprint,
     String? notes,
   }) async {
+    final key = 'plan-${DateTime.now().microsecondsSinceEpoch}-'
+        '${Random().nextInt(1 << 32)}';
     await guard(() => dio.post(
           '/me/subscriptions/$subscriptionId/plan-change',
           data: {
             'offer_id': offerId,
-            'effective_date': effectiveDate,
+            'preview_fingerprint': previewFingerprint,
+            'idempotency_key': key,
             if (notes != null) 'notes': notes,
           },
         ));

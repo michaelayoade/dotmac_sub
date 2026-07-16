@@ -1,0 +1,134 @@
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+from app.models.audit import AuditEvent
+from app.models.billing import Invoice, InvoiceStatus, LedgerEntry
+from app.models.catalog import BillingMode
+from app.services.billing.invoices import Invoices
+
+
+def _invoice(db_session, subscriber, *, status: InvoiceStatus, due_at=None):
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number=f"LIFECYCLE-{uuid.uuid4().hex[:8]}",
+        status=status,
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        due_at=due_at,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    return invoice
+
+
+def test_invoice_owner_issues_draft_with_audited_no_money_result(
+    db_session, subscriber
+):
+    invoice = _invoice(db_session, subscriber, status=InvoiceStatus.draft)
+    now = datetime.now(UTC)
+
+    result = Invoices.issue_draft_system(
+        db_session,
+        str(invoice.id),
+        issued_at=now,
+        due_at=now + timedelta(days=7),
+        reason="test_system_issue",
+        commit=True,
+    )
+
+    assert result.changed is True
+    assert result.invoice.status == InvoiceStatus.issued
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "issue_invoice_system")
+        .filter(AuditEvent.entity_id == str(invoice.id))
+        .one()
+    )
+    assert audit.metadata_["from_status"] == "draft"
+    assert audit.metadata_["to_status"] == "issued"
+    assert audit.metadata_["ledger_transaction_id"] is None
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.invoice_id == invoice.id)
+        .count()
+        == 0
+    )
+
+
+def test_invoice_owner_marks_overdue_once_and_keeps_access_as_observation(
+    db_session, subscriber
+):
+    now = datetime.now(UTC)
+    invoice = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.issued,
+        due_at=now - timedelta(days=2),
+    )
+
+    first = Invoices.mark_overdue_system(
+        db_session,
+        str(invoice.id),
+        as_of=now,
+        reason="test_overdue",
+        commit=True,
+    )
+    replay = Invoices.mark_overdue_system(
+        db_session,
+        str(invoice.id),
+        as_of=now,
+        reason="test_overdue",
+        commit=True,
+    )
+
+    assert first.changed is True
+    assert first.event_emitted is True
+    assert replay.changed is False
+    assert replay.event_emitted is False
+    audits = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "mark_invoice_overdue_system")
+        .filter(AuditEvent.entity_id == str(invoice.id))
+        .all()
+    )
+    assert len(audits) == 1
+    assert audits[0].metadata_["service_access_consequence"] == "observation_only"
+
+
+def test_invoice_owner_returns_only_unfunded_prepaid_receivable_to_draft(
+    db_session, subscriber
+):
+    subscriber.billing_mode = BillingMode.prepaid
+    db_session.commit()
+    invoice = _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.overdue,
+        due_at=datetime.now(UTC) - timedelta(days=2),
+    )
+
+    result = Invoices.return_unfunded_prepaid_to_draft_system(
+        db_session,
+        str(invoice.id),
+        reason="test_prepaid_reclassification",
+        commit=True,
+    )
+
+    assert result.changed is True
+    assert result.invoice.status == InvoiceStatus.draft
+    assert result.invoice.issued_at is None
+    assert result.invoice.due_at is None
+    audit = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "return_unfunded_prepaid_invoice_to_draft")
+        .filter(AuditEvent.entity_id == str(invoice.id))
+        .one()
+    )
+    assert audit.metadata_["payments_applied"] == "0.00"
+    assert audit.metadata_["credits_applied"] == "0.00"
+    assert audit.metadata_["ledger_transaction_id"] is None

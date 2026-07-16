@@ -26,7 +26,10 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
-from app.services.web_consolidated_billing import record_bulk_payment
+from app.services.web_consolidated_billing import (
+    preview_bulk_payment,
+    record_bulk_payment,
+)
 
 
 def _billing_account(db) -> BillingAccount:
@@ -74,11 +77,28 @@ def _member_with_invoice(db, ba, total: str) -> Invoice:
     return inv
 
 
+def _record(db, *, billing_account_id: str, amount: str, memo: str):
+    preview = preview_bulk_payment(
+        db,
+        billing_account_id=billing_account_id,
+        amount=amount,
+        memo=memo,
+    )
+    return record_bulk_payment(
+        db,
+        billing_account_id=billing_account_id,
+        amount=amount,
+        memo=memo,
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=f"test-bulk-payment-{uuid.uuid4()}",
+    )
+
+
 def test_a_recorded_bulk_payment_is_succeeded_not_pending(db_session):
     """A bank transfer an admin has confirmed is cash, not a maybe."""
     ba = _billing_account(db_session)
 
-    payment_id = record_bulk_payment(
+    payment_id = _record(
         db_session,
         billing_account_id=str(ba.id),
         amount="100000.00",
@@ -98,7 +118,7 @@ def test_a_bulk_payment_settles_the_member_invoices(db_session):
     ba = _billing_account(db_session)
     invoice = _member_with_invoice(db_session, ba, "40000.00")
 
-    record_bulk_payment(
+    _record(
         db_session,
         billing_account_id=str(ba.id),
         amount="40000.00",

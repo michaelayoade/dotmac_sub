@@ -18,6 +18,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.services.adapters.base import AdapterResult
+from app.services.network.huawei_cli_response import (
+    HuaweiCliErrorCode,
+    HuaweiCliResource,
+    classify_huawei_cli_response,
+    is_huawei_resource_absent,
+)
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
@@ -43,6 +49,16 @@ class OltOperationResult(AdapterResult):
 
     # For create_service_port: the assigned service-port index
     service_port_index: int | None = None
+
+    def __post_init__(self) -> None:
+        """Attach sanitized Huawei response evidence before callers project it."""
+        response = classify_huawei_cli_response(self.message)
+        if response.error_code == HuaweiCliErrorCode.NONE:
+            return
+        self.data = dict(self.data or {})
+        self.data.setdefault("huawei_cli_response", response.to_evidence())
+        if self.error_code is None:
+            self.error_code = response.error_code.value
 
 
 @runtime_checkable
@@ -328,15 +344,9 @@ class OltProtocolAdapter:
                     ),
                     data={"verified_absent": False},
                 )
-            normalized = read_message.casefold()
-            absent = any(
-                marker in normalized
-                for marker in (
-                    "does not exist",
-                    "not exist",
-                    "not found",
-                    "unknown ont",
-                )
+            absent = is_huawei_resource_absent(
+                read_message,
+                HuaweiCliResource.ONT,
             )
             if not absent:
                 return OltOperationResult(
@@ -554,16 +564,11 @@ class OltProtocolAdapter:
             read_ok, read_message, entry = get_service_port_by_index(
                 self._olt, port_index
             )
-            normalized = read_message.casefold()
             absent = (read_ok and entry is None) or (
                 not read_ok
-                and any(
-                    marker in normalized
-                    for marker in (
-                        "does not exist",
-                        "not exist",
-                        "not found",
-                    )
+                and is_huawei_resource_absent(
+                    read_message,
+                    HuaweiCliResource.SERVICE_PORT,
                 )
             )
             if not absent:

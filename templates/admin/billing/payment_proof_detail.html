@@ -3,6 +3,7 @@
     ambient_background, detail_header, info_row, info_grid,
     status_badge, card, animation_styles
 %}
+{% from "components/forms/action_form.html" import action_form with context %}
 
 {% block title %}Payment Proof Detail - Admin{% endblock %}
 
@@ -119,65 +120,14 @@
 
     </div>
 
-    {# Review actions #}
-    {% if st == 'submitted' %}
+    {# Review actions are fully projected by ui.action_form_contracts. #}
+    {% if review_actions %}
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-
-        {% call card(title="Verify Transfer", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald") %}
-            <form method="post" action="/admin/billing/payment-proofs/{{ proof.id }}/verify" class="space-y-4">
-                {% include "components/forms/csrf_input.html" %}
-                <div>
-                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">
-                        Confirmed Amount ({{ proof.currency }})
-                    </label>
-                    <input type="number" name="amount" step="0.01" min="0.01" required
-                           value="{{ '%.2f' | format(proof.amount) }}"
-                           class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white" />
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        The amount actually received per the bank statement. The payment is created for this amount.
-                    </p>
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Allocation</label>
-                    <select name="auto_allocate"
-                            class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="yes" selected>Apply to oldest open invoices</option>
-                        <option value="no">Keep as account credit</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Notes (optional)</label>
-                    <textarea name="review_notes" rows="2" maxlength="2000"
-                              class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
-                </div>
-                <button type="submit" onclick="return confirm('Verify this transfer and record the payment?')"
-                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition-colors">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    Verify &amp; Record Payment
-                </button>
-            </form>
-        {% endcall %}
-
-        {% call card(title="Reject", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>', color="rose") %}
-            <form method="post" action="/admin/billing/payment-proofs/{{ proof.id }}/reject" class="space-y-4">
-                {% include "components/forms/csrf_input.html" %}
-                <div>
-                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Reason (required)</label>
-                    <textarea name="review_notes" rows="3" maxlength="2000" required
-                              placeholder="e.g. Amount does not match our bank statement"
-                              class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Sent to the customer with the rejection notice.</p>
-                </div>
-                <button type="submit" onclick="return confirm('Reject this transfer proof?')"
-                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-rose-300 bg-white px-4 py-2.5 text-sm font-medium text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20 transition-colors">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                    Reject Proof
-                </button>
-            </form>
-        {% endcall %}
-
+        {% for review_action in review_actions %}
+            {{ action_form(review_action) }}
+        {% endfor %}
     </div>
-    {% else %}
+    {% elif review_outcome %}
     {% call card(title="Review Outcome", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="emerald") %}
         {% call info_grid() %}
             {{ info_row("Outcome", st | title) }}

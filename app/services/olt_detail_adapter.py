@@ -60,6 +60,7 @@ class OltDetailAdapter:
             )
             activities = []
         available_firmware = olt_action_adapter.get_olt_firmware_images(db, olt_id)
+        from app.services.control_plane_identity_view import olt_identity_view
 
         page_data.update(
             {
@@ -77,6 +78,7 @@ class OltDetailAdapter:
                 "firmware_context": self._build_firmware_context(
                     olt, available_firmware, operations
                 ),
+                "identity_view": olt_identity_view(olt),
                 "config_context": self._build_config_context(page_data),
                 "ont_relationship_context": self._build_ont_relationship_context(
                     page_data

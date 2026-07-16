@@ -11,6 +11,7 @@ from starlette.requests import Request
 from app.models.network import OntUnit
 from app.services.genieacs_service import genieacs_service
 from app.services.network.effective_ont_config import resolve_effective_ont_config
+from app.services.network.huawei_cli_response import is_huawei_cli_unsupported
 from app.services.network.olt_config_pack import resolve_olt_config_pack
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_desired_config import set_access_flag
@@ -47,8 +48,10 @@ def _int_or_none(value: object) -> int | None:
 
 
 def _huawei_command_unsupported(message: object) -> bool:
-    text = str(message or "").lower()
-    return "unknown command" in text or "parameter error" in text
+    return is_huawei_cli_unsupported(
+        message,
+        parameter_error_is_unsupported=True,
+    )
 
 
 def _tr069_value(node: object, *path: str) -> object | None:
@@ -428,6 +431,14 @@ def _reconcile_to_action_result(result_obj, *, success_message: str) -> ActionRe
             data={
                 "sync_status": result_obj.sync_status,
                 "actions_applied": [a.field for a in result_obj.actions_applied],
+                "action_evidence": [
+                    {
+                        "field": action.field,
+                        "evidence": getattr(action, "evidence", None),
+                    }
+                    for action in result_obj.actions_applied
+                    if getattr(action, "evidence", None) is not None
+                ],
             },
         )
     failure = result_obj.failure
@@ -437,6 +448,7 @@ def _reconcile_to_action_result(result_obj, *, success_message: str) -> ActionRe
         data={
             "sync_status": result_obj.sync_status,
             "failure_reason": failure.reason if failure else None,
+            "failure_evidence": getattr(failure, "evidence", None),
             "actionable": (
                 failure is not None
                 and failure.reason == ReconcileFailureReason.ACS_CR_FAILED

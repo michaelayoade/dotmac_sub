@@ -99,11 +99,10 @@ class TestSetAccessStateWrites:
         "state,expected_aggregate,expected_group",
         [
             (AccessState.active, "active", "dotmac-active"),
-            # Captive redirect is opt-in: a suspended-status sub with NO opt-in
-            # aggregates to suspended (hard reject); only an opted-in sub →
-            # captive (the captive case sets captive_redirect_enabled below).
+            # Raw opt-in is not authority; captive requires persisted evidence
+            # and a ready network contract.
             (AccessState.suspended, "suspended", "dotmac-suspended"),
-            (AccessState.captive, "captive", "dotmac-captive"),
+            (AccessState.captive, "suspended", "dotmac-suspended"),
         ],
     )
     def test_state_inserts_correct_group_row(
@@ -116,8 +115,7 @@ class TestSetAccessStateWrites:
         subscriber,
         catalog_offer,
     ):
-        # The captive aggregate requires the per-customer opt-in; without it a
-        # suspended-status sub hard-rejects (dotmac-suspended).
+        # Even a stale raw opt-in fails closed without canonical evidence.
         if state == AccessState.captive:
             subscriber.captive_redirect_enabled = True
             db_session.commit()
@@ -388,7 +386,7 @@ class TestSubscriberAggregation:
         assert result["aggregate_state"] == "active"
         assert _read_radusergroup(radius_db, "agg-1") == [("agg-1", "dotmac-active", 0)]
 
-    def test_captive_plus_suspended_writes_captive(
+    def test_raw_captive_optin_without_evidence_writes_suspended(
         self, db_session, tmp_path, subscriber, catalog_offer
     ):
         subscriber.captive_redirect_enabled = True
@@ -415,13 +413,11 @@ class TestSubscriberAggregation:
             "app.services.radius_access_state._active_external_sync_configs",
             return_value=[config],
         ):
-            # Both subs are suspended, but captive_redirect_enabled
-            # promotes both to captive at the per-sub derive step. The
-            # aggregate is also captive.
+            # A stale opt-in cannot promote status alone to captive.
             set_subscription_access_state(db_session, str(sub1.id), AccessState.captive)
 
         assert _read_radusergroup(radius_db, "agg-2") == [
-            ("agg-2", "dotmac-captive", 0)
+            ("agg-2", "dotmac-suspended", 0)
         ]
 
     def test_all_terminated_writes_no_row(

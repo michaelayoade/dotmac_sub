@@ -19,6 +19,31 @@ def test_settings_hub_includes_branding_link(db_session):
     assert branding_link["name"] == "Branding & Assets"
 
 
+def test_settings_hub_includes_control_plane_link(db_session):
+    context = web_system_settings_hub.build_settings_hub_context(db_session)
+    system_category = next(
+        category for category in context["categories"] if category["id"] == "system"
+    )
+
+    link = next(
+        item
+        for item in system_category["links"]
+        if item["url"] == "/admin/system/control-plane"
+    )
+
+    assert link["name"] == "Control Plane"
+
+
+def test_system_router_registers_control_plane_read_route():
+    route = next(
+        route
+        for route in admin_system.router.routes
+        if isinstance(route, APIRoute) and route.path == "/system/control-plane"
+    )
+
+    assert route.methods == {"GET"}
+
+
 def test_settings_hub_includes_canonical_email_link(db_session):
     context = web_system_settings_hub.build_settings_hub_context(db_session)
 

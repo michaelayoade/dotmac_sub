@@ -17,8 +17,8 @@ def test_prepaid_monthly_flag_defaults_false(db_session):
 def test_prepaid_monthly_flag_reads_setting(db_session):
     db_session.add(
         DomainSetting(
-            domain=SettingDomain.billing,
-            key="prepaid_monthly_invoicing_enabled",
+            domain=SettingDomain.modules,
+            key="billing_prepaid_monthly_invoicing",
             value_text="true",
             value_type=SettingValueType.boolean,
         )

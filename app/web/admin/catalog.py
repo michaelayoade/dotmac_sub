@@ -864,6 +864,7 @@ def catalog_subscription_execute_lifecycle_command(
     target_offer_id: str | None = Form(None),
     reason: str | None = Form(None),
     expected_head: str = Form(...),
+    preview_fingerprint: str | None = Form(None),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -876,6 +877,7 @@ def catalog_subscription_execute_lifecycle_command(
             kind=kind,
             actor_id=_get_actor_id(request),
             expected_head=expected_head,
+            preview_fingerprint=preview_fingerprint,
             idempotency_key=idempotency_key,
             reason=reason,
             target_offer_id=target_offer_id,

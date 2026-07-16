@@ -206,7 +206,9 @@ def test_plan_change_submit_403_for_non_subscriber():
         me_api.my_plan_change_submit(
             subscription_id="s1",
             payload=PlanChangeSubmitRequest(
-                offer_id=uuid.uuid4(), effective_date="2030-01-01"
+                offer_id=uuid.uuid4(),
+                preview_fingerprint="x" * 64,
+                idempotency_key="test-plan-change",
             ),
             db=None,
             principal=_system_user_principal(),

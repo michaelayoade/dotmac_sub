@@ -84,6 +84,7 @@ def test_config_template_create():
         variables={"queue_type": {"type": "string", "default": "sfq"}},
     )
     assert schema.category == "queue"
+    assert schema.is_active is True
 
 
 def test_config_push_create():

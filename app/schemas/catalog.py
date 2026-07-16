@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from app.models.billing import LedgerEntryType, LedgerSource
 from app.models.catalog import (
     AccessType,
     AddOnType,
@@ -460,6 +461,9 @@ class SubscriptionBase(BaseModel):
     status: SubscriptionStatus = SubscriptionStatus.pending
     billing_mode: BillingMode = BillingMode.prepaid
     contract_term: ContractTerm = ContractTerm.month_to_month
+    # Contracted billing cadence (SOT: subscription owns effective cadence).
+    # None => inherit the offer price cadence at creation.
+    billing_cycle: BillingCycle | None = None
     start_at: datetime | None = None
     end_at: datetime | None = None
     next_billing_at: datetime | None = None
@@ -499,6 +503,7 @@ class SubscriptionUpdate(BaseModel):
     status: SubscriptionStatus | None = None
     billing_mode: BillingMode | None = None
     contract_term: ContractTerm | None = None
+    billing_cycle: BillingCycle | None = None
     start_at: datetime | None = None
     end_at: datetime | None = None
     next_billing_at: datetime | None = None
@@ -1159,14 +1164,19 @@ class PlanOfferSummary(BaseModel):
 class PlanChangePageResponse(BaseModel):
     current_offer: PlanOfferSummary | None = None
     available_offers: list[PlanOfferSummary] = Field(default_factory=list)
-    wallet_balance: Decimal | None = None
+    prepaid_funding: Decimal | None = None
+    postpaid_receivables: Decimal = Decimal("0.00")
+    collection_blocking_balance: Decimal = Decimal("0.00")
     next_billing_date: datetime | None = None
     billing_message: str | None = None
 
 
 class PlanChangeSubmitRequest(BaseModel):
     offer_id: UUID
-    effective_date: str  # YYYY-MM-DD
+    # Cross-family submissions create a non-financial migration ticket. These
+    # become mandatory at the owner boundary for same-family immediate changes.
+    preview_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=120)
     notes: str | None = None
 
 
@@ -1176,6 +1186,10 @@ class PlanChangeSubmitResponse(BaseModel):
     # when a cross-family change was queued as a support ticket.
     status: str = "applied"
     message: str | None = None
+    change_request_id: UUID | None = None
+    account_adjustment_id: UUID | None = None
+    credit_note_id: UUID | None = None
+    ledger_entry_id: UUID | None = None
 
 
 # --- Customer self-service add-on purchase (app/api/me.py) -----------------
@@ -1191,6 +1205,7 @@ class AddonOption(BaseModel):
     min_quantity: int = 1
     max_quantity: int | None = None
     is_required: bool = False
+    grant_gb: int | None = None
 
 
 class ActiveAddon(BaseModel):
@@ -1198,13 +1213,18 @@ class ActiveAddon(BaseModel):
     add_on_id: UUID
     name: str
     quantity: int = 1
+    addon_type: str | None = None
+    grant_gb: int | None = None
+    total_grant_gb: int | None = None
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
+    validity_days: int | None = None
+    is_expired: bool = False
 
 
 class AddonsAvailableResponse(BaseModel):
     available: list[AddonOption] = Field(default_factory=list)
     active: list[ActiveAddon] = Field(default_factory=list)
-    wallet_balance: Decimal | None = None
-    currency: str = "NGN"
 
 
 class AddonQuoteResponse(BaseModel):
@@ -1213,17 +1233,27 @@ class AddonQuoteResponse(BaseModel):
     unit_amount: Decimal
     charge: Decimal
     currency: str = "NGN"
-    current_balance: Decimal
+    subscription_status: str
+    prepaid_funding_before: Decimal
+    prepaid_funding_after: Decimal
+    postpaid_receivables: Decimal
+    collection_blocking_balance: Decimal
     shortfall: Decimal
     can_afford: bool
+    allowed: bool
+    rejection_reason: str | None = None
+    ledger_entry_type: LedgerEntryType | None = None
+    ledger_source: LedgerSource | None = None
+    ledger_amount: Decimal
+    access_consequence: str
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
 
 
 class AddonPurchaseRequest(BaseModel):
     add_on_id: UUID
     quantity: int = Field(default=1, ge=1)
-    # Client-supplied key (re-sent on retry) so a double-submit doesn't charge
-    # the wallet twice.
-    idempotency_key: str | None = Field(default=None, max_length=120)
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
 
 
 class AddonPurchaseResponse(BaseModel):
@@ -1236,6 +1266,12 @@ class AddonPurchaseResponse(BaseModel):
     quantity: int | None = None
     charge: Decimal | None = None
     currency: str = "NGN"
-    current_balance: Decimal | None = None
+    prepaid_funding_before: Decimal | None = None
+    prepaid_funding_after: Decimal | None = None
+    postpaid_receivables: Decimal | None = None
+    collection_blocking_balance: Decimal | None = None
     shortfall: Decimal | None = None
-    new_balance: Decimal | None = None
+    account_adjustment_id: UUID | None = None
+    ledger_entry_id: UUID | None = None
+    preview_fingerprint: str | None = None
+    access_consequence: str | None = None

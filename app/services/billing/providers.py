@@ -1,5 +1,6 @@
 """Payment provider and event management services."""
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -12,23 +13,26 @@ from sqlalchemy.orm import Session
 from app.models.billing import (
     Invoice,
     Payment,
-    PaymentAllocation,
     PaymentProvider,
     PaymentProviderEvent,
+    PaymentProviderEventFinancialEffect,
     PaymentProviderEventStatus,
     PaymentProviderType,
+    PaymentSettlementOrigin,
     PaymentStatus,
 )
 from app.schemas.billing import (
+    BillingAccountPaymentPreviewRequest,
     PaymentAllocationApply,
+    PaymentAllocationConfirm,
+    PaymentAllocationCreate,
+    PaymentAllocationPreviewRequest,
     PaymentCreate,
     PaymentProviderCreate,
     PaymentProviderEventIngest,
     PaymentProviderUpdate,
 )
 from app.services.billing._common import (
-    _resolve_collection_account,
-    _resolve_payment_channel,
     _validate_account,
     _validate_invoice_currency,
     _validate_payment_provider,
@@ -144,7 +148,15 @@ class PaymentProviderEvents(ListResponseMixin):
         "charge.failed": PaymentStatus.failed,
         "payment.refunded": PaymentStatus.refunded,
         "charge.refunded": PaymentStatus.refunded,
+        "payment.reversed": PaymentStatus.reversed,
+        "charge.reversed": PaymentStatus.reversed,
         "payment.canceled": PaymentStatus.canceled,
+    }
+    _event_financial_effect_map = {
+        "payment.refunded": PaymentProviderEventFinancialEffect.refund_confirmed,
+        "charge.refunded": PaymentProviderEventFinancialEffect.refund_confirmed,
+        "payment.reversed": PaymentProviderEventFinancialEffect.reversal_confirmed,
+        "charge.reversed": PaymentProviderEventFinancialEffect.reversal_confirmed,
     }
 
     @staticmethod
@@ -190,9 +202,23 @@ class PaymentProviderEvents(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def ingest(db: Session, payload: PaymentProviderEventIngest):
+    def ingest(
+        db: Session,
+        payload: PaymentProviderEventIngest,
+        *,
+        trusted_financial_effects: bool = False,
+    ):
         # Import Payments here to avoid circular dependency at module level
-        from app.services.billing.payments import Payments
+        from app.services.billing.consolidated_payments import (
+            ConsolidatedPaymentSettlements,
+            consolidated_settlement_key,
+        )
+        from app.services.billing.payments import (
+            PaymentAllocations,
+            PaymentReversals,
+            Payments,
+            Refunds,
+        )
 
         provider = _validate_payment_provider(db, str(payload.provider_id))
         existing_event: PaymentProviderEvent | None = None
@@ -222,6 +248,25 @@ class PaymentProviderEvents(ListResponseMixin):
         new_status = payload.status_hint or PaymentProviderEvents._event_status_map.get(
             payload.event_type
         )
+        mapped_financial_effect = PaymentProviderEvents._event_financial_effect_map.get(
+            payload.event_type
+        )
+        financial_effect = (
+            payload.financial_effect
+            or mapped_financial_effect
+            or PaymentProviderEventFinancialEffect.none
+        )
+        if (
+            financial_effect != PaymentProviderEventFinancialEffect.none
+            and not trusted_financial_effects
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Provider refund/reversal evidence must come through a "
+                    "signature-verified provider adapter"
+                ),
+            )
         if existing_event is not None and not (
             existing_event.payment_id is None
             and new_status == PaymentStatus.succeeded
@@ -281,74 +326,112 @@ class PaymentProviderEvents(ListResponseMixin):
                 # its balance (auto_allocate=False) rather than spreading across
                 # member invoices, matching the reseller manual-record flow.
                 is_consolidated = billing_account_id is not None and account_id is None
+                if is_consolidated:
+                    source_id = (
+                        payload.idempotency_key
+                        or payload.external_id
+                        or payload.model_dump_json()
+                    )
+                    payment = ConsolidatedPaymentSettlements.settle_verified(
+                        db,
+                        str(billing_account_id),
+                        BillingAccountPaymentPreviewRequest(
+                            provider_id=provider.id,
+                            amount=payload.amount,
+                            currency=currency,
+                            external_id=payload.external_id,
+                            memo=(
+                                f"{provider.name} webhook event: {payload.event_type}"
+                            ),
+                            allocations=None,
+                            auto_allocate=False,
+                        ),
+                        idempotency_key=consolidated_settlement_key(
+                            "provider-event", f"{provider.id}:{source_id}"
+                        ),
+                        origin=PaymentSettlementOrigin.provider_event,
+                    ).payment
+                else:
+                    payment = Payments.create(
+                        db,
+                        PaymentCreate(
+                            account_id=account_id,
+                            provider_id=provider.id,
+                            amount=payload.amount,
+                            currency=currency,
+                            status=PaymentStatus.succeeded,
+                            external_id=payload.external_id,
+                            memo=(
+                                f"{provider.name} webhook event: {payload.event_type}"
+                            ),
+                            allocations=allocations,
+                        ),
+                        origin=PaymentSettlementOrigin.provider_event,
+                    )
+                created_settled = True
+            else:
                 payment = Payments.create(
                     db,
                     PaymentCreate(
                         account_id=account_id,
                         billing_account_id=billing_account_id,
-                        provider_id=provider.id,
                         amount=payload.amount,
                         currency=currency,
-                        status=PaymentStatus.succeeded,
+                        provider_id=provider.id,
                         external_id=payload.external_id,
-                        memo=f"{provider.name} webhook event: {payload.event_type}",
-                        allocations=allocations,
+                        status=PaymentStatus.pending,
+                        memo=f"{provider.name} observation: {payload.event_type}",
                     ),
-                    auto_allocate=not is_consolidated,
+                    auto_allocate=False,
+                    commit=False,
+                    origin=PaymentSettlementOrigin.provider_event,
                 )
-                created_settled = True
-            else:
-                channel = _resolve_payment_channel(
-                    db,
-                    None,
-                    None,
-                    str(provider.id),
-                )
-                collection_account = _resolve_collection_account(
-                    db, channel, currency, None
-                )
-                payment = Payment(
-                    account_id=account_id,
-                    billing_account_id=billing_account_id,
-                    amount=payload.amount,
-                    currency=currency,
-                    provider_id=provider.id,
-                    external_id=payload.external_id,
-                    status=PaymentStatus.pending,
-                    payment_channel_id=channel.id if channel else None,
-                    collection_account_id=collection_account.id
-                    if collection_account
-                    else None,
-                )
-                db.add(payment)
-                db.flush()
-                if payload.invoice_id and invoice:
-                    allocation = PaymentAllocation(
-                        payment_id=payment.id,
-                        invoice_id=payload.invoice_id,
-                        amount=payment.amount,
-                    )
-                    db.add(allocation)
-                    db.flush()
-                    from app.services.billing.payments import (
-                        _create_payment_ledger_entry,
-                    )
-
-                    _create_payment_ledger_entry(db, payment, invoice, payment.amount)
         elif payment and payload.invoice_id and invoice and not payment.allocations:
             balance_due = round_money(to_decimal(invoice.balance_due or 0))
             alloc_amount = min(round_money(to_decimal(payment.amount)), balance_due)
             if alloc_amount > Decimal("0.00"):
-                allocation = PaymentAllocation(
-                    payment_id=payment.id,
-                    invoice_id=payload.invoice_id,
-                    amount=alloc_amount,
-                )
-                db.add(allocation)
-                db.flush()
-                from app.services.billing.payments import _create_payment_ledger_entry
-
-                _create_payment_ledger_entry(db, payment, invoice, alloc_amount)
+                if payment.status == PaymentStatus.succeeded:
+                    preview_request = PaymentAllocationPreviewRequest(
+                        payment_id=payment.id,
+                        invoice_id=invoice.id,
+                        amount=alloc_amount,
+                    )
+                    preview = PaymentAllocations.preview(db, preview_request)
+                    key_material = ":".join(
+                        [
+                            str(provider.id),
+                            payload.idempotency_key or "",
+                            payload.external_id or "",
+                            payload.event_type,
+                            str(invoice.id),
+                        ]
+                    )
+                    key = (
+                        "provider-allocation-"
+                        + hashlib.sha256(key_material.encode("utf-8")).hexdigest()
+                    )
+                    PaymentAllocations.confirm(
+                        db,
+                        PaymentAllocationConfirm(
+                            payment_id=payment.id,
+                            invoice_id=invoice.id,
+                            amount=alloc_amount,
+                            preview_fingerprint=preview.fingerprint,
+                            idempotency_key=key,
+                        ),
+                        commit=False,
+                    )
+                else:
+                    PaymentAllocations.record_intent(
+                        db,
+                        PaymentAllocationCreate(
+                            payment_id=payment.id,
+                            invoice_id=invoice.id,
+                            amount=alloc_amount,
+                            memo=f"{provider.name} invoice intent",
+                        ),
+                        commit=False,
+                    )
         allocation_invoice_id: UUID | None = payload.invoice_id
         if allocation_invoice_id is None and payment and payment.allocations:
             allocation_invoice_id = payment.allocations[0].invoice_id
@@ -363,6 +446,9 @@ class PaymentProviderEvents(ListResponseMixin):
             event.event_type = payload.event_type
             event.external_id = payload.external_id
             event.payload = payload.payload
+            event.amount = payload.amount
+            event.currency = payload.currency
+            event.financial_effect = financial_effect
             event.error = None
         else:
             event = PaymentProviderEvent(
@@ -372,6 +458,9 @@ class PaymentProviderEvents(ListResponseMixin):
                 event_type=payload.event_type,
                 external_id=payload.external_id,
                 idempotency_key=payload.idempotency_key,
+                amount=payload.amount,
+                currency=payload.currency,
+                financial_effect=financial_effect,
                 payload=payload.payload,
             )
             db.add(event)
@@ -382,7 +471,63 @@ class PaymentProviderEvents(ListResponseMixin):
             event.status = PaymentProviderEventStatus.processed
             event.processed_at = datetime.now(UTC)
         elif new_status and payment:
-            Payments.mark_status(db, str(payment.id), new_status)
+            if new_status == PaymentStatus.refunded:
+                Refunds.process_provider_event_refund(
+                    db,
+                    payment_id=str(payment.id),
+                    provider_event_id=event.id,
+                    commit=False,
+                )
+            elif new_status == PaymentStatus.reversed:
+                PaymentReversals.process_provider_event_reversal(
+                    db,
+                    payment_id=str(payment.id),
+                    provider_event_id=event.id,
+                    commit=False,
+                )
+            elif (
+                new_status == PaymentStatus.succeeded
+                and payment.billing_account_id is not None
+            ):
+                ConsolidatedPaymentSettlements.settle_verified(
+                    db,
+                    str(payment.billing_account_id),
+                    BillingAccountPaymentPreviewRequest(
+                        amount=payment.amount,
+                        currency=payment.currency,
+                        paid_at=payment.paid_at,
+                        memo=payment.memo,
+                        payment_method_id=payment.payment_method_id,
+                        payment_channel_id=payment.payment_channel_id,
+                        collection_account_id=payment.collection_account_id,
+                        provider_id=payment.provider_id,
+                        external_id=payment.external_id,
+                        allocations=[
+                            PaymentAllocationApply(
+                                invoice_id=allocation.invoice_id,
+                                amount=allocation.amount,
+                                memo=allocation.memo,
+                            )
+                            for allocation in payment.allocations
+                            if allocation.is_active
+                        ]
+                        or None,
+                        auto_allocate=payment.auto_allocate_on_settlement,
+                    ),
+                    idempotency_key=consolidated_settlement_key(
+                        "provider-event", str(event.id)
+                    ),
+                    origin=PaymentSettlementOrigin.provider_event,
+                    commit=False,
+                    existing_payment_id=str(payment.id),
+                )
+            else:
+                Payments.mark_status(
+                    db,
+                    str(payment.id),
+                    new_status,
+                    origin=PaymentSettlementOrigin.provider_event,
+                )
             event.status = PaymentProviderEventStatus.processed
             event.processed_at = datetime.now(UTC)
         elif new_status and not payment:

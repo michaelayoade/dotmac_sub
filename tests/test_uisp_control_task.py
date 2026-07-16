@@ -132,6 +132,31 @@ def test_task_does_not_apply_superseded_revision(
     assert operation.output_payload["current_revision"] == 2
 
 
+def test_task_does_not_apply_when_device_firmware_changed_after_planning(
+    db_session, subscriber, catalog_offer, monkeypatch
+):
+    intent, operation = _records(db_session, subscriber, catalog_offer)
+    _use_session(monkeypatch, db_session)
+    applied = []
+    cpe = db_session.get(CPEDevice, intent.target_id)
+    cpe.firmware_version = "8.7.20"
+    db_session.commit()
+
+    result = execute_uisp_apply(
+        str(operation.id),
+        str(intent.id),
+        adapter=SimpleNamespace(apply=lambda db, item: applied.append(item)),
+    )
+
+    db_session.refresh(intent)
+    db_session.refresh(operation)
+    assert result["outcome"] == "adapter_changed"
+    assert applied == []
+    assert intent.status == UispIntentStatus.manual_required
+    assert operation.status == NetworkOperationStatus.warning
+    assert "requires replanning" in operation.error
+
+
 def test_task_marks_readback_drift_failed(
     db_session, subscriber, catalog_offer, monkeypatch
 ):

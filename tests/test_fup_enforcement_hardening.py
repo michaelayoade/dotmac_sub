@@ -22,8 +22,6 @@ def _settings_side_effect(*, throttle_profile):
     def _resolve(session, domain, key):
         if key == "fup_throttle_radius_profile_id":
             return throttle_profile
-        if key == "usage_warning_enabled":
-            return None  # default-enabled
         if key == "usage_warning_thresholds":
             return "0.8"
         return None

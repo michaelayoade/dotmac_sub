@@ -5,7 +5,7 @@ to sub conventions (thin routes over ``web_referrals`` context builders, the
 service-requests queue idiom). Rides the ``crm:lead:*`` permissions like the
 staff API (``app/api/crm_referrals.py``) — referrals are part of the
 sales/lead funnel. Actions call the native ``Referrals`` service directly:
-qualify override, issue reward (idempotent wallet credit), reject.
+qualify override, issue reward (idempotent account credit), reject.
 """
 
 from __future__ import annotations
@@ -127,7 +127,9 @@ def referral_issue_reward(
         referrals_service.issue_reward(db, referral_id)
     except HTTPException as exc:
         return _redirect(referral_id, error=str(exc.detail))
-    return _redirect(referral_id, message="Reward credited to the referrer's wallet.")
+    return _redirect(
+        referral_id, message="Reward issued as an auditable account credit."
+    )
 
 
 @router.post(

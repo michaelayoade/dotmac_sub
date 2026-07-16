@@ -1,8 +1,6 @@
-from types import SimpleNamespace
-
 from fastapi import HTTPException
 
-from app.services import module_manager
+from app.services import control_registry, module_manager
 
 
 def test_load_module_states_defaults_true_when_settings_missing(monkeypatch):
@@ -68,31 +66,14 @@ def test_update_module_flags_upserts_and_invalidates(monkeypatch):
     assert ("modules", "feature_states") in invalidations
 
 
-def test_load_feature_states_reads_value_json(monkeypatch):
-    monkeypatch.setattr(
-        module_manager.SettingsCache,
-        "get",
-        staticmethod(lambda *_args, **_kwargs: None),
-    )
-    monkeypatch.setattr(
-        module_manager.SettingsCache,
-        "set",
-        staticmethod(lambda *_args, **_kwargs: True),
+def test_load_feature_states_projects_only_live_customer_control(db_session):
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"customer.services_view": False}
     )
 
-    def _get_by_key(_db, key):
-        if key == "module_billing_invoices_enabled":
-            return SimpleNamespace(value_json=False, value_text="true")
-        raise HTTPException(status_code=404, detail="missing")
+    states = module_manager.load_feature_states(db_session, force_refresh=True)
 
-    monkeypatch.setattr(
-        module_manager.domain_settings_service.modules_settings,
-        "get_by_key",
-        _get_by_key,
-    )
-    states = module_manager.load_feature_states(db=object(), force_refresh=True)
-    assert states["invoices"] is False
-    assert states["payments"] is True
+    assert states == {"services_view": False}
 
 
 def _make_provider(db_session, name, provider_type, *, is_active=True):
@@ -155,3 +136,13 @@ def test_module_manager_page_state_includes_providers(db_session):
 
     assert "payment_providers" in state
     assert any(p["name"] == "Paystack" for p in state["payment_providers"])
+
+
+def test_module_manager_page_state_uses_canonical_registry_controls(db_session):
+    state = module_manager.module_manager_page_state(db_session)
+
+    billing = next(card for card in state["module_cards"] if card["name"] == "billing")
+    controls = {feature["key"]: feature for feature in billing["features"]}
+    assert controls["billing.autopay"]["stored"] == "inherit"
+    assert controls["billing.autopay"]["effective"] is True
+    assert "module_billing_invoices_enabled" not in controls

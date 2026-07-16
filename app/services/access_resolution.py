@@ -15,6 +15,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from app.models.catalog import AccessState
+from app.models.enforcement_lock import AccessRestrictionMode
 from app.services.customer_service_state import (
     CustomerBillingAccessState,
     active_customer_subscription_filters,
@@ -138,14 +139,14 @@ def resolve_customer_access(
     subscription,
     *,
     subscriber=None,
-    captive_redirect_enabled: bool | None = None,
+    access_restriction_mode: AccessRestrictionMode | None = None,
 ) -> CustomerAccessDecision:
     """Resolve one subscription's customer-facing access/billing decision."""
     return CustomerAccessDecision(
         resolve_customer_billing_access_state(
             subscription,
             subscriber=subscriber,
-            captive_redirect_enabled=captive_redirect_enabled,
+            access_restriction_mode=access_restriction_mode,
         )
     )
 

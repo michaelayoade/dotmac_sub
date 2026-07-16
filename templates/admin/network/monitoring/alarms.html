@@ -106,20 +106,6 @@
                             </p>
                         </div>
                     </div>
-                    <div class="flex items-center gap-2">
-                        {% if alarm.status.value == 'open' %}
-                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/acknowledge" data-confirm="Acknowledge this alarm?" data-confirm-variant="info" data-confirm-label="Acknowledge">
-                            {% include "components/forms/csrf_input.html" %}
-                            <button type="submit" class="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400">Acknowledge</button>
-                        </form>
-                        {% endif %}
-                        {% if alarm.status.value != 'resolved' %}
-                        <form method="POST" action="/admin/network/alarms/{{ alarm.id }}/resolve" data-confirm="Resolve this alarm? This marks the condition as cleared." data-confirm-variant="warning" data-confirm-label="Resolve">
-                            {% include "components/forms/csrf_input.html" %}
-                            <button type="submit" class="text-sm text-green-600 hover:text-green-700 dark:text-green-400">Resolve</button>
-                        </form>
-                        {% endif %}
-                    </div>
                 </div>
             </div>
             {% endfor %}

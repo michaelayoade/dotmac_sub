@@ -19,7 +19,6 @@ from fastapi import (
     Depends,
     File,
     Form,
-    Header,
     HTTPException,
     Query,
     Request,
@@ -116,21 +115,6 @@ from app.schemas.usage import (
     RadiusAccountingSessionRead,
     UsageSummaryResponse,
 )
-from app.schemas.vas import (
-    VasAutoDeductUpdate,
-    VasCategoryRead,
-    VasPayBillRequest,
-    VasPayBillResponse,
-    VasPurchaseRequest,
-    VasTopupInitiateRequest,
-    VasTopupInitiateResponse,
-    VasTopupVerifyRequest,
-    VasTopupVerifyResponse,
-    VasTransactionRead,
-    VasVerifyRequest,
-    VasVerifyResponse,
-    VasWalletOverviewResponse,
-)
 from app.services import account_deletion as account_deletion_service
 from app.services import autopay as autopay_service
 from app.services import billing as billing_service
@@ -161,8 +145,6 @@ from app.services import status_presentation as status_presentation_service
 from app.services import support as support_service
 from app.services import usage as usage_service
 from app.services import usage_summary as usage_summary_service
-from app.services import vas_purchases as vas_purchases_service
-from app.services import vas_wallet as vas_wallet_service
 from app.services.auth_dependencies import require_user_auth
 from app.services.bandwidth import (
     add_directions_to_series,
@@ -456,7 +438,11 @@ def my_plan_change_options(
             ctx.get("current_offer"), ctx.get("current_offer_summary")
         ),
         available_offers=[o for o in available if o is not None],
-        wallet_balance=ctx.get("current_wallet_balance"),
+        prepaid_funding=ctx.get("prepaid_funding"),
+        postpaid_receivables=ctx.get("postpaid_receivables", Decimal("0.00")),
+        collection_blocking_balance=ctx.get(
+            "collection_blocking_balance", Decimal("0.00")
+        ),
         next_billing_date=ctx.get("next_billing_date"),
         billing_message=ctx.get("billing_message"),
     )
@@ -551,6 +537,9 @@ def my_plan_change_submit(
             subscription_id=subscription_id,
             offer_id=str(payload.offer_id),
             notes=payload.notes,
+            preview_fingerprint=payload.preview_fingerprint or "",
+            idempotency_key=payload.idempotency_key or "",
+            confirmation_origin="customer_api",
         )
     except ValueError as exc:
         message = str(exc)
@@ -582,19 +571,25 @@ def my_plan_change_submit(
         raise HTTPException(status_code=400, detail=message) from exc
 
     if not result.get("success", False):
-        # Insufficient prepaid balance for the prorated upgrade.
+        # Insufficient prepaid funding for the prorated upgrade.
         shortfall = result.get("shortfall")
         raise HTTPException(
             status_code=402,
             detail=(
-                f"Insufficient wallet balance — top up {shortfall} to apply this "
+                f"Insufficient prepaid funding — top up {shortfall} to apply this "
                 "upgrade."
                 if shortfall is not None
-                else "Insufficient wallet balance to apply this upgrade."
+                else "Insufficient prepaid funding to apply this upgrade."
             ),
         )
     return PlanChangeSubmitResponse(
-        success=True, status="applied", message="Your plan has been changed."
+        success=True,
+        status="applied",
+        message="Your plan has been changed.",
+        change_request_id=result.get("change_request_id"),
+        account_adjustment_id=result.get("account_adjustment_id"),
+        credit_note_id=result.get("credit_note_id"),
+        ledger_entry_id=result.get("ledger_entry_id"),
     )
 
 
@@ -627,7 +622,7 @@ def my_addon_quote(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Cost of buying an add-on, against the wallet balance."""
+    """Preview an add-on, distinct funding/receivables, and exact debit."""
     try:
         quote = customer_addons.get_addon_quote(
             db, _customer(db, principal), subscription_id, add_on_id, quantity
@@ -649,7 +644,7 @@ def my_addon_purchase(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Buy an add-on, charged from the caller's wallet balance."""
+    """Confirm a previewed add-on and its exact account adjustment."""
     try:
         return customer_addons.purchase_addon(
             db,
@@ -657,6 +652,7 @@ def my_addon_purchase(
             subscription_id,
             str(payload.add_on_id),
             payload.quantity,
+            preview_fingerprint=payload.preview_fingerprint,
             idempotency_key=payload.idempotency_key,
         )
     except ValueError as exc:
@@ -1631,177 +1627,3 @@ def my_delete_contact(
         contacts_service.delete_contact(db, customer, contact_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Contact not found") from exc
-
-
-# --- VAS wallet (feature-flagged: 404 when vas.enabled is off) -------------------
-
-
-@router.get("/wallet", response_model=VasWalletOverviewResponse)
-def my_wallet(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Wallet balance, settings, and recent activity."""
-    subscriber_id = _subscriber_id(principal)
-    overview = vas_wallet_service.wallet_overview(db, subscriber_id)
-    return VasWalletOverviewResponse(**overview)
-
-
-@router.post("/wallet/topup/initiate", response_model=VasTopupInitiateResponse)
-def my_wallet_topup_initiate(
-    payload: VasTopupInitiateRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    result = vas_wallet_service.initiate_topup(
-        db, subscriber_id, payload.amount, provider=payload.provider
-    )
-    customer = _customer(db, principal)
-    return VasTopupInitiateResponse(
-        **result, customer_email=customer.get("username") or None
-    )
-
-
-@router.post("/wallet/topup/verify", response_model=VasTopupVerifyResponse)
-def my_wallet_topup_verify(
-    payload: VasTopupVerifyRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    try:
-        result = vas_wallet_service.verify_topup(
-            db, subscriber_id, payload.reference, provider=payload.provider
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return VasTopupVerifyResponse(**result)
-
-
-@router.post("/wallet/pay-bill", response_model=VasPayBillResponse)
-def my_wallet_pay_bill(
-    payload: VasPayBillRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-):
-    """Pay the caller's DotMac bill from their wallet (the only wallet→billing
-    bridge; allocation matches an ordinary gateway payment).
-
-    Pass an ``Idempotency-Key`` header to make the debit safe against
-    double-submit: a replay returns the original payment, never a second
-    wallet debit."""
-    subscriber_id = _subscriber_id(principal)
-    result = vas_wallet_service.pay_bill(
-        db, subscriber_id, payload.amount, idempotency_key=idempotency_key
-    )
-    return VasPayBillResponse(**result)
-
-
-@router.patch("/wallet/auto-deduct", response_model=VasWalletOverviewResponse)
-def my_wallet_auto_deduct(
-    payload: VasAutoDeductUpdate,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    vas_wallet_service.set_auto_deduct(db, subscriber_id, payload.enabled)
-    overview = vas_wallet_service.wallet_overview(db, subscriber_id)
-    return VasWalletOverviewResponse(**overview)
-
-
-# --- VAS bill payments (Phase 2, same vas.enabled flag) --------------------------
-
-
-def _txn_read(txn) -> VasTransactionRead:
-    return VasTransactionRead(
-        id=txn.id,
-        status=txn.status,
-        service_name=txn.service.name if txn.service else None,
-        identifier=txn.identifier,
-        variation_code=txn.variation_code,
-        amount=txn.amount,
-        token=vas_purchases_service.transaction_token(txn),
-        error=txn.error,
-        created_at=txn.created_at,
-        delivered_at=txn.delivered_at,
-        refunded_at=txn.refunded_at,
-    )
-
-
-@router.get("/vas/catalog", response_model=list[VasCategoryRead])
-def my_vas_catalog(
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Enabled bill-payment categories/services/plans."""
-    _subscriber_id(principal)
-    return vas_purchases_service.customer_catalog(db)
-
-
-@router.post("/vas/verify", response_model=VasVerifyResponse)
-def my_vas_verify(
-    payload: VasVerifyRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Resolve a meter/smartcard/account number to the customer name before
-    any money moves."""
-    _subscriber_id(principal)
-    result = vas_purchases_service.verify_identifier(
-        db,
-        service_id=payload.service_id,
-        identifier=payload.identifier,
-        variation_type=payload.variation_type,
-    )
-    return VasVerifyResponse(
-        customer_name=result.get("customer_name"), address=result.get("address")
-    )
-
-
-@router.post("/vas/purchases", response_model=VasTransactionRead, status_code=201)
-def my_vas_purchase(
-    payload: VasPurchaseRequest,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    """Buy airtime/data/bills from the wallet (immediate debit, requery-backed
-    delivery, auto-refund to wallet on definitive failure)."""
-    subscriber_id = _subscriber_id(principal)
-    txn = vas_purchases_service.purchase(
-        db,
-        subscriber_id=subscriber_id,
-        service_id=payload.service_id,
-        identifier=payload.identifier,
-        variation_code=payload.variation_code,
-        amount=payload.amount,
-        phone=payload.phone,
-        confirm_duplicate=payload.confirm_duplicate,
-    )
-    return _txn_read(txn)
-
-
-@router.get("/vas/purchases", response_model=list[VasTransactionRead])
-def my_vas_purchases(
-    limit: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    return [
-        _txn_read(txn)
-        for txn in vas_purchases_service.list_transactions(
-            db, subscriber_id, limit=limit
-        )
-    ]
-
-
-@router.get("/vas/purchases/{txn_id}", response_model=VasTransactionRead)
-def my_vas_purchase_detail(
-    txn_id: str,
-    db: Session = Depends(get_db),
-    principal: dict = Depends(require_user_auth),
-):
-    subscriber_id = _subscriber_id(principal)
-    return _txn_read(vas_purchases_service.get_transaction(db, subscriber_id, txn_id))

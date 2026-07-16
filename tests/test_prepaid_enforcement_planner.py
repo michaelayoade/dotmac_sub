@@ -37,8 +37,8 @@ def _enable(db) -> None:
     db.add_all(
         [
             DomainSetting(
-                domain=SettingDomain.collections,
-                key="prepaid_balance_enforcement_enabled",
+                domain=SettingDomain.modules,
+                key="collections_prepaid_balance_enforcement",
                 value_type=SettingValueType.boolean,
                 value_text="true",
                 value_json=True,
@@ -73,7 +73,7 @@ def test_disabled_control_still_reports_warn_without_writes(
     )
 
     assert plan.control_enabled is False
-    assert plan.policy.deactivation_days == 3
+    assert "deactivation_days" not in plan.policy.report_values()
     assert plan.policy.activation_error == (
         "prepaid_enforcement_activation_at_not_configured"
     )

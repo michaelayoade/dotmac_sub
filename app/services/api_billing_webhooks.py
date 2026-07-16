@@ -464,7 +464,11 @@ def _process_webhook(
     #    Honest status codes drive the provider's retry behaviour.
     nested = db.begin_nested()
     try:
-        event = billing_service.payment_provider_events.ingest(db, ingest_payload)
+        event = billing_service.payment_provider_events.ingest(
+            db,
+            ingest_payload,
+            trusted_financial_effects=True,
+        )
     except HTTPException as exc:
         # Deterministic rejection (e.g. invoice/account mismatch). Retrying the
         # same payload won't help — surface the 4xx and park for human review.
@@ -633,7 +637,11 @@ def replay_payment_webhook_dead_letter(
             idempotency_key=row.idempotency_key,
             payload=payload,
         )
-        event = billing_service.payment_provider_events.ingest(db, ingest_payload)
+        event = billing_service.payment_provider_events.ingest(
+            db,
+            ingest_payload,
+            trusted_financial_effects=True,
+        )
     except HTTPException as exc:
         if nested.is_active:
             nested.rollback()

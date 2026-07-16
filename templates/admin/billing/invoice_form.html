@@ -63,11 +63,9 @@
                                         class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                     <option value="draft" {% if invoice_status == 'draft' %}selected{% endif %}>Draft</option>
                                     <option value="issued" {% if invoice_status == 'issued' %}selected{% endif %}>Issued</option>
-                                    <option value="partially_paid" {% if invoice_status == 'partially_paid' %}selected{% endif %}>Partially Paid</option>
-                                    <option value="paid" {% if invoice_status == 'paid' %}selected{% endif %}>Paid</option>
                                     <option value="overdue" {% if invoice_status == 'overdue' %}selected{% endif %}>Overdue</option>
-                                    <option value="void" {% if invoice_status == 'void' %}selected{% endif %}>Void</option>
                                 </select>
+                                <p class="mt-1 text-xs text-slate-500">Paid, partially paid, void, and written-off states are managed by their exact owner evidence workflows.</p>
                             </div>
                         </div>
 

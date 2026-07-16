@@ -1,0 +1,149 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, animation_styles %}
+
+{% block title %}Control Plane - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("slate", "indigo") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Control Plane",
+        subtitle="Effective operational state from each canonical owner",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>',
+        color="slate",
+        color2="indigo"
+    ) %}{% endcall %}
+
+    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        {% for label, value, color in [
+            ('Domains', stats.sections, 'slate'),
+            ('Decisions', stats.controls, 'indigo'),
+            ('Healthy', stats.healthy, 'emerald'),
+            ('Needs attention', stats.attention, 'rose'),
+            ('Unknown', stats.unknown, 'amber')
+        ] %}
+        <div class="rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/80">
+            <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ label }}</p>
+            <p class="mt-1 text-2xl font-semibold text-{{ color }}-700 dark:text-{{ color }}-300">{{ value }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="sticky top-2 z-20 rounded-xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <div class="relative flex-1">
+                <svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <input id="control-plane-search" type="search" placeholder="Filter by decision, source, scope, or value…" class="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm dark:border-slate-700 dark:bg-slate-800 dark:text-white">
+            </div>
+            <nav class="flex flex-wrap gap-1" aria-label="Control-plane domains">
+                {% for section in sections %}
+                <a href="#{{ section.id }}" class="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300">{{ section.name }}</a>
+                {% endfor %}
+            </nav>
+        </div>
+    </div>
+
+    {% for section in sections %}
+    <section id="{{ section.id }}" class="control-plane-section scroll-mt-24 rounded-2xl border border-slate-200 bg-white/95 shadow-sm dark:border-slate-700 dark:bg-slate-900/90">
+        <div class="flex flex-col gap-3 border-b border-slate-200 p-5 dark:border-slate-700 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">{{ section.name }}</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ section.description }}</p>
+            </div>
+            <div class="flex flex-wrap gap-1.5 text-xs">
+                {% if section.health_counts.critical %}<span class="rounded-full bg-rose-100 px-2 py-1 font-medium text-rose-700 dark:bg-rose-950 dark:text-rose-300">{{ section.health_counts.critical }} critical</span>{% endif %}
+                {% if section.health_counts.degraded %}<span class="rounded-full bg-amber-100 px-2 py-1 font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">{{ section.health_counts.degraded }} degraded</span>{% endif %}
+                {% if section.health_counts.unknown %}<span class="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">{{ section.health_counts.unknown }} unknown</span>{% endif %}
+                <span class="rounded-full bg-emerald-100 px-2 py-1 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">{{ section.health_counts.healthy }} healthy</span>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 text-left text-xs dark:divide-slate-700">
+                <thead class="bg-slate-50 text-slate-500 dark:bg-slate-800/80 dark:text-slate-400">
+                    <tr>
+                        <th scope="col" class="px-4 py-3 font-medium">Decision</th>
+                        <th scope="col" class="px-4 py-3 font-medium">Effective value</th>
+                        <th scope="col" class="px-4 py-3 font-medium">Source</th>
+                        <th scope="col" class="px-4 py-3 font-medium">Precedence</th>
+                        <th scope="col" class="px-4 py-3 font-medium">Affected scope</th>
+                        <th scope="col" class="px-4 py-3 font-medium">Health</th>
+                        <th scope="col" class="px-4 py-3 font-medium">Last change</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
+                    {% for entry in section.entries %}
+                    {% set search_blob = entry.key ~ ' ' ~ entry.label ~ ' ' ~ entry.effective_value ~ ' ' ~ entry.source ~ ' ' ~ entry.scope %}
+                    <tr class="control-plane-row align-top" data-control-search="{{ search_blob | lower | e }}">
+                        <td class="min-w-56 px-4 py-3">
+                            {% if entry.detail_url %}<a href="{{ entry.detail_url }}" class="font-medium text-indigo-700 hover:underline dark:text-indigo-300">{{ entry.label }}</a>{% else %}<span class="font-medium text-slate-900 dark:text-white">{{ entry.label }}</span>{% endif %}
+                            <code class="mt-1 block break-all text-[10px] text-slate-400">{{ entry.key }}</code>
+                        </td>
+                        <td class="min-w-48 break-words px-4 py-3 text-slate-800 dark:text-slate-200">{{ entry.effective_value }}</td>
+                        <td class="min-w-48 px-4 py-3 text-slate-600 dark:text-slate-300">{{ entry.source }}</td>
+                        <td class="min-w-64 px-4 py-3 text-slate-600 dark:text-slate-300">{{ entry.precedence }}</td>
+                        <td class="min-w-48 px-4 py-3 text-slate-600 dark:text-slate-300">{{ entry.scope }}</td>
+                        <td class="px-4 py-3">
+                            {% if entry.health == 'healthy' %}<span class="rounded-full bg-emerald-100 px-2 py-1 font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">Healthy</span>
+                            {% elif entry.health == 'critical' %}<span class="rounded-full bg-rose-100 px-2 py-1 font-medium text-rose-700 dark:bg-rose-950 dark:text-rose-300">Critical</span>
+                            {% elif entry.health == 'degraded' %}<span class="rounded-full bg-amber-100 px-2 py-1 font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">Degraded</span>
+                            {% elif entry.health == 'disabled' %}<span class="rounded-full bg-slate-200 px-2 py-1 font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Disabled</span>
+                            {% else %}<span class="rounded-full bg-blue-100 px-2 py-1 font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">Unknown</span>{% endif %}
+                        </td>
+                        <td class="min-w-40 px-4 py-3 text-slate-500 dark:text-slate-400">
+                            {% if entry.last_change %}{{ entry.last_change.strftime('%Y-%m-%d %H:%M') if entry.last_change.strftime is defined else entry.last_change }}{% else %}Registry default{% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7" class="px-4 py-8 text-center text-slate-500">No registered decisions in this domain.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="border-t border-slate-200 bg-slate-50/70 p-5 dark:border-slate-700 dark:bg-slate-800/40">
+            <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Recent audit history</h3>
+                <a href="/admin/system/audit" class="text-xs font-medium text-indigo-700 hover:underline dark:text-indigo-300">Open full audit log</a>
+            </div>
+            <div class="mt-3 grid gap-2 lg:grid-cols-2">
+                {% for event in section.history %}
+                <div class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900">
+                    <div class="flex items-center justify-between gap-3">
+                        <span class="font-medium text-slate-800 dark:text-slate-200">{{ event.action }}</span>
+                        <span class="text-slate-400">{{ event.occurred_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                    </div>
+                    <p class="mt-1 text-slate-500">{{ event.entity_type }} · {{ event.actor }} · {{ 'success' if event.success else 'failed' }}</p>
+                </div>
+                {% else %}
+                <p class="text-xs text-slate-500">No matching audit events in the latest 250 records.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+    {% endfor %}
+
+    <p class="text-right text-xs text-slate-400">Snapshot generated {{ generated_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}</p>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const input = document.getElementById('control-plane-search');
+    if (!input) return;
+    input.addEventListener('input', () => {
+        const query = input.value.trim().toLowerCase();
+        document.querySelectorAll('.control-plane-section').forEach((section) => {
+            let visible = 0;
+            section.querySelectorAll('.control-plane-row').forEach((row) => {
+                const match = !query || (row.dataset.controlSearch || '').includes(query);
+                row.style.display = match ? '' : 'none';
+                if (match) visible += 1;
+            });
+            section.style.display = visible || !query ? '' : 'none';
+        });
+    });
+});
+</script>
+{{ animation_styles() }}
+{% endblock %}

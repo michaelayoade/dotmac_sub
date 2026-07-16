@@ -587,10 +587,9 @@ def check_profile_bundle_drift(
 
 
 def _profile_sync_worker_enabled(db: Session) -> bool:
-    raw = os.getenv("OLT_PROFILE_SYNC_WORKER_ENABLED", "")
-    if not raw:
-        raw = _domain_setting_text(db, "olt_profile_sync_worker_enabled") or ""
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    from app.services import control_registry
+
+    return control_registry.is_enabled(db, "network.olt_profile_sync")
 
 
 def _profile_sync_worker_interval_seconds(db: Session) -> int:

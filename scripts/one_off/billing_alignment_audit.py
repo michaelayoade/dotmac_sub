@@ -18,7 +18,7 @@ Classes reported
   D5  misallocated payments      F3   ledger invoice_id != allocation invoice_id
   D6  succeeded, no paid_at      F15  blinds the enforcement health gate
   D7  reconstructed drift        F4   persisted outputs vs independent expected position
-  D8  unapplied credit notes     F4   spendable per documents, invisible to the ledger
+  D8  unfunded credit remainder F4   issued remainder has no reviewed ledger funding
   D9  pending money              F18  pending payment already holding allocation/ledger
   D10 void with live debits      F6   void bypassed the ledger reversal
   D11 opening debits             --   cutover seed cohort, split by deposit sign
@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 import traceback
 from collections import defaultdict
@@ -133,6 +134,87 @@ class Finding:
         return len(self.rows)
 
 
+# This is the trust-boundary contract for portable audit evidence. The audit
+# runs beside the isolated restore on the explicitly approved trusted host;
+# only these reviewed, minimal fields may be written outside that boundary.
+# A detector that adds a field must update this allowlist deliberately or the
+# export fails closed. In particular, external references, invoice numbers,
+# memos, JSON, contact data and other free text are not portable evidence.
+EVIDENCE_SCHEMAS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "D1": (
+        (
+            "account_id",
+            "original_id",
+            "reversal_id",
+            "entry_type",
+            "amount",
+            "currency",
+            "balance_affecting",
+            "overswing",
+        ),
+    ),
+    "D2": (
+        (
+            "account_id",
+            "entry_id",
+            "amount",
+            "currency",
+            "effective_date",
+            "created_at",
+            "source",
+            "cutoff_coverage",
+            "cutoff_deposit",
+            "mirror_rows",
+            "mirror_net",
+            "verdict",
+        ),
+    ),
+    "D3": (("account_id", "invoice_id", "total", "balance_due", "currency"),),
+    "D4": (("account_id", "payment_id", "amount", "currency", "paid_at"),),
+    "D5": (
+        (
+            "account_id",
+            "payment_id",
+            "amount",
+            "ledger_invoice_id",
+            "allocation_invoice_id",
+        ),
+    ),
+    "D6": (("account_id", "payment_id", "amount", "created_at"),),
+    "D7": (
+        ("account_id", "ledger_credit", "document_position", "gap", "risk"),
+        (
+            "account_id",
+            "expected_position",
+            "current_deposit",
+            "local_document_position",
+            "ledger_credit",
+            "deposit_drift",
+            "document_drift",
+            "ledger_drift",
+            "post_legacy_credits",
+            "derived_service_charges",
+        ),
+    ),
+    "D8": (
+        (
+            "account_id",
+            "credit_note_id",
+            "status",
+            "total",
+            "applied_total",
+            "unapplied",
+        ),
+    ),
+    "D9": (("account_id", "payment_id", "amount", "currency"),),
+    "D10": (("account_id", "invoice_id", "live_debit_rows", "live_debit_total"),),
+    "D11": (
+        ("account_id", "entry_id", "amount", "deposit", "deposit_sign", "verdict"),
+    ),
+    "D12": (("account_id", "available", "threshold", "locked", "served", "verdict"),),
+}
+
+
 def _money(v: object) -> Decimal:
     if v is None:
         return ZERO
@@ -196,15 +278,15 @@ def _batch_customer_positions(
     balance owner. Tests compare it with the canonical per-account function.
     """
     from app.models.splynx_transaction import SplynxBillingTransaction
-    from app.services.billing.invoice_classification import (
-        collectible_ar_invoice_filter,
-    )
     from app.services.customer_financial_ledger import (
         INTERNAL_MEMO_EXACT,
         INTERNAL_MEMO_PREFIXES,
         LEGACY_LEDGER_CUTOVER,
         PAYMENT_ACTIVITY_AT,
         SERVICE_ACTIVITY_AT,
+    )
+    from app.services.invoice_classification import (
+        collectible_ar_invoice_filter,
     )
 
     # account_ids=None means "every account" (one whole-table aggregate). Only an
@@ -417,10 +499,12 @@ def _batch_customer_positions(
                 LedgerEntry.source == LedgerSource.payment,
                 LedgerEntry.payment_id.is_(None),
             ),
-            and_(
-                LedgerEntry.source == LedgerSource.credit_note,
-                LedgerEntry.payment_id.is_(None),
-            ),
+            # CreditNote is the canonical customer-position fact. Funding,
+            # application-transfer and void-reversal ledger rows are the
+            # operational spendability/evidence projection and must not be
+            # counted again here. Keep this in lockstep with
+            # customer_financial_ledger.list_customer_financial_events() and
+            # customer_financial_balances_by_currency().
         ),
     )
     if currency is not None:
@@ -1098,7 +1182,6 @@ def d3_paid_with_balance(db: Session) -> Finding:
             {
                 "account_id": str(inv.account_id),
                 "invoice_id": str(inv.id),
-                "invoice_number": inv.invoice_number or "",
                 "total": f"{_money(inv.total):.2f}",
                 "balance_due": f"{amt:.2f}",
                 "currency": inv.currency,
@@ -1121,7 +1204,6 @@ def d10_void_with_live_debits(db: Session) -> Finding:
         select(
             Invoice.id,
             Invoice.account_id,
-            Invoice.invoice_number,
             func.sum(LedgerEntry.amount).label("debit_total"),
             func.count(LedgerEntry.id).label("debit_rows"),
         )
@@ -1132,7 +1214,7 @@ def d10_void_with_live_debits(db: Session) -> Finding:
             LedgerEntry.is_active.is_(True),
             LedgerEntry.entry_type == LedgerEntryType.debit,
         )
-        .group_by(Invoice.id, Invoice.account_id, Invoice.invoice_number)
+        .group_by(Invoice.id, Invoice.account_id)
     ).all()
     for r in rows:
         amt = _money(r.debit_total)
@@ -1140,7 +1222,6 @@ def d10_void_with_live_debits(db: Session) -> Finding:
             {
                 "account_id": str(r.account_id),
                 "invoice_id": str(r.id),
-                "invoice_number": r.invoice_number or "",
                 "live_debit_rows": r.debit_rows,
                 "live_debit_total": f"{amt:.2f}",
             }
@@ -1199,7 +1280,6 @@ def d4_orphan_payments(db: Session) -> Finding:
                 "payment_id": str(p.id),
                 "amount": f"{amt:.2f}",
                 "currency": p.currency,
-                "external_id": p.external_id or "",
                 "paid_at": p.paid_at.isoformat() if p.paid_at else "",
             }
         )
@@ -1282,7 +1362,6 @@ def d6_succeeded_without_paid_at(db: Session) -> Finding:
                 "payment_id": str(p.id),
                 "amount": f"{amt:.2f}",
                 "created_at": p.created_at.isoformat() if p.created_at else "",
-                "external_id": p.external_id or "",
             }
         )
         f.amount += amt
@@ -1540,16 +1619,19 @@ def d7_balance_definition_split(
 
 
 def d8_unapplied_credit_notes(db: Session) -> Finding:
-    """Issued credit notes with an unapplied remainder (F4 mechanism).
+    """Issued credit-note remainders without reviewed funding evidence.
 
-    An issued credit note raises the document balance immediately but posts no
-    ledger entry until applied — so it is spendable to the portal and invisible
-    to settlement.
+    The current owner atomically links every new issuance to its exact funding
+    entry. An unapplied remainder is therefore normal and must not be reported
+    merely because it is still available. Historical issued notes remain a
+    finding only while ``funding_ledger_entry_id`` is NULL; reconciliation must
+    review or create that exact evidence rather than infer it from memo/amount.
     """
-    f = Finding("D8", "Issued credit note not yet applied to the ledger", "F4")
+    f = Finding("D8", "Issued credit note has no funding evidence", "F4")
     rows = db.scalars(
         select(CreditNote).where(
             CreditNote.is_active.is_(True),
+            CreditNote.funding_ledger_entry_id.is_(None),
             CreditNote.status.in_(
                 [CreditNoteStatus.issued, CreditNoteStatus.partially_applied]
             ),
@@ -1570,7 +1652,10 @@ def d8_unapplied_credit_notes(db: Session) -> Finding:
             }
         )
         f.amount += remainder
-    f.note = "visible to the portal/enforcement balance, invisible to the credit ledger"
+    f.note = (
+        "issued remainder has no reviewed funding link; funded unapplied credit "
+        "is normal and excluded"
+    )
     return f
 
 
@@ -1823,13 +1908,38 @@ def d12_enforcement_mismatch(
 def _write_csv(out_dir: Path, finding: Finding) -> Path | None:
     if not finding.rows:
         return None
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{finding.code}_{finding.title[:40].replace(' ', '_')}.csv"
-    fields = list(finding.rows[0].keys())
-    with path.open("w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(finding.rows)
+    allowed_schemas = EVIDENCE_SCHEMAS.get(finding.code)
+    if allowed_schemas is None:
+        raise ValueError(
+            f"no portable-evidence schema is registered for {finding.code}"
+        )
+    fields = tuple(finding.rows[0])
+    if fields not in allowed_schemas:
+        raise ValueError(
+            f"{finding.code} evidence fields are not allowlisted: {fields!r}"
+        )
+    for row in finding.rows:
+        if tuple(row) != fields:
+            raise ValueError(f"{finding.code} evidence rows do not share one schema")
+
+    out_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if out_dir.is_symlink() or not out_dir.is_dir():
+        raise ValueError(f"refusing unsafe evidence directory: {out_dir}")
+    path = out_dir / f"{finding.code}.csv"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(finding.rows)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        path.unlink(missing_ok=True)
+        raise
     return path
 
 

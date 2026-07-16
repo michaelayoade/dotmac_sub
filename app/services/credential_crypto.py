@@ -39,7 +39,6 @@ ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
         "snmp_priv_secret",
     ),
     "AccessCredential": ("secret_hash",),
-    "VasTransaction": ("token_encrypted",),
     "OLTDevice": (
         "ssh_password",
         "snmp_ro_community",

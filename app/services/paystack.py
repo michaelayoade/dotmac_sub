@@ -267,9 +267,9 @@ def refund_transaction(
 ) -> dict[str, Any]:
     """Refund a settled transaction back to its source card.
 
-    Refund-to-source is the only customer-initiated money-out path for the
-    VAS wallet (docs/designs/VTU_BILL_PAYMENTS.md) — never an arbitrary
-    bank account. Partial refunds pass an amount; omit for full refund.
+    This is a provider transport primitive. The owning financial service must
+    decide eligibility and amount before calling it. Partial refunds pass an
+    amount; omit for a full refund.
     """
     secret_key = _get_secret_key(db)
     if not secret_key:

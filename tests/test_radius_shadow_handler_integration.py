@@ -87,7 +87,7 @@ class TestShadowWriteFeatureFlagGate:
         # derives to suspended (hard reject), not captive.
         mock_set.assert_called_once_with(db, str(sub.id), AccessState.suspended)
 
-    def test_flag_on_captive_subscriber_routes_to_captive(self):
+    def test_raw_captive_flag_without_evidence_routes_to_suspended(self):
         handler = EnforcementHandler()
         db = MagicMock()
         sub = _stub_subscription(status=SubscriptionStatus.suspended)
@@ -110,7 +110,7 @@ class TestShadowWriteFeatureFlagGate:
         ):
             handler._shadow_write_access_state(db, str(sub.id))
 
-        mock_set.assert_called_once_with(db, str(sub.id), AccessState.captive)
+        mock_set.assert_called_once_with(db, str(sub.id), AccessState.suspended)
 
     def test_set_failure_is_swallowed_not_raised(self):
         """A failing shadow write must not break the caller — the legacy

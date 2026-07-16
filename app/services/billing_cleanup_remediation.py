@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import logging
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -37,6 +36,7 @@ from app.services.account_lifecycle import (
     restore_subscription,
 )
 from app.services.billing._common import _recalculate_invoice_totals
+from app.services.billing.invoices import Invoices
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.collections import has_overdue_balance
 from app.services.common import coerce_uuid
@@ -946,8 +946,13 @@ def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
             .count()
         )
         if active_lines == 0:
-            invoice.status = InvoiceStatus.void
-            invoice.balance_due = Decimal("0.00")
+            Invoices.void_system(
+                db,
+                str(invoice.id),
+                reason=f"Invoice void after {marker}",
+                idempotency_key=f"billing-cleanup-empty-invoice-{invoice.id}",
+                commit=False,
+            )
         db.flush()
         return {
             "invoice_status": invoice.status.value,
@@ -979,8 +984,11 @@ def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         invoice = db.get(Invoice, coerce_uuid(item["invoice_id"]))
         if invoice is None:
             raise ValueError(f"invoice missing: {item['invoice_id']}")
-        invoice.status = InvoiceStatus.draft
-        invoice.due_at = None
+        Invoices.return_unfunded_prepaid_to_draft_system(
+            db,
+            str(invoice.id),
+            reason="billing_cleanup_retire_unfunded_prepaid_ar",
+        )
         invoice.metadata_ = _metadata_with_cleanup_marker(
             invoice.metadata_,
             "prepaid_phantom_ar_cleanup",
@@ -996,8 +1004,13 @@ def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         invoice = db.get(Invoice, coerce_uuid(item["invoice_id"]))
         if invoice is None:
             raise ValueError(f"invoice missing: {item['invoice_id']}")
-        invoice.status = InvoiceStatus.void
-        invoice.balance_due = Decimal("0.00")
+        Invoices.void_system(
+            db,
+            str(invoice.id),
+            reason="Voided by prepaid overlap cleanup",
+            idempotency_key=f"billing-cleanup-overlap-void-{invoice.id}",
+            commit=False,
+        )
         invoice.due_at = None
         invoice.metadata_ = _metadata_with_cleanup_marker(
             invoice.metadata_,

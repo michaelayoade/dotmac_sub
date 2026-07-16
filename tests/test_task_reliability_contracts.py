@@ -57,7 +57,6 @@ def test_money_moving_tasks_do_not_use_blind_celery_autoretry():
         "app.tasks.payment_reconciliation.reconcile_topups",
         "app.tasks.usage.meter_usage_into_quota",
         "app.tasks.usage.run_usage_rating",
-        "app.tasks.vas.run_wallet_auto_deduct",
     }
 
     for task_name in money_moving_tasks:

@@ -72,7 +72,7 @@ def _spec(name: str, kind: str, value, clock: FakeClock) -> dict:
 def _prod_like_specs() -> tuple[dict, dict]:
     """~60 entries mimicking prod: stable head + DB-row tail.
 
-    head: entries built before the ScheduledTask row query (gis/vas/crm style)
+    head: entries built before the ScheduledTask row query (GIS/CRM style)
     tail: the scheduled_task_* rows appended last by build_beat_schedule —
           the ones a mid-build failure drops wholesale.
     """

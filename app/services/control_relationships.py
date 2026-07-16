@@ -120,9 +120,9 @@ CONTROL_RELATIONSHIPS: tuple[ControlRelationship, ...] = (
         name="phase3_quote_migration",
         mode=RelationshipMode.chain,
         members=(
-            "projects.crm_phase3_native_sync_enabled",
-            "projects.quotes_native_read_enabled",
-            "projects.quotes_native_write_enabled",
+            "crm.phase3_native_sync",
+            "quotes.native_read",
+            "quotes.native_write",
         ),
         rule="Sync precedes native reads; native reads precede the write flip.",
     ),
@@ -206,9 +206,6 @@ RELATIONSHIP_SETTING_KEYS = {
     (SettingDomain.billing, "payment_gateway_failover_enabled"),
     (SettingDomain.billing, "payment_gateway_primary_provider"),
     (SettingDomain.billing, "payment_gateway_secondary_provider"),
-    (SettingDomain.projects, "crm_phase3_native_sync_enabled"),
-    (SettingDomain.projects, "quotes_native_read_enabled"),
-    (SettingDomain.projects, "quotes_native_write_enabled"),
 }
 
 CHAINED_EVENT_TYPES = {
@@ -570,34 +567,39 @@ def audit_setting_relationships(
             )
         )
 
-    sync_enabled = _enabled(
-        _value(
-            db,
-            SettingRef(SettingDomain.projects, "crm_phase3_native_sync_enabled"),
-            pending,
-        )
-    )
-    read_enabled = _enabled(
-        _value(
-            db,
-            SettingRef(SettingDomain.projects, "quotes_native_read_enabled"),
-            pending,
-        )
-    )
-    write_enabled = _enabled(
-        _value(
-            db,
-            SettingRef(SettingDomain.projects, "quotes_native_write_enabled"),
-            pending,
-        )
-    )
+    return findings
+
+
+def audit_feature_control_relationships(
+    db: Session,
+    *,
+    pending: dict[str, bool | None] | None = None,
+) -> list[ControlFinding]:
+    """Audit relationships owned by the canonical feature-control writer."""
+    from app.services import control_registry
+
+    requested = pending or {}
+    controls = {control.key: control for control in control_registry.all_controls()}
+
+    def enabled(key: str) -> bool:
+        if key not in requested:
+            return control_registry.resolve_control(db, key).own_enabled
+        value = requested[key]
+        if value is not None:
+            return value
+        return controls[key].on_missing
+
+    findings: list[ControlFinding] = []
+    sync_enabled = enabled("crm.phase3_native_sync")
+    read_enabled = enabled("quotes.native_read")
+    write_enabled = enabled("quotes.native_write")
     if write_enabled and not read_enabled:
         findings.append(
             ControlFinding(
                 code="quote_write_before_read_flip",
                 severity="error",
                 message="Native quote writes require the native read path.",
-                members=("quotes_native_write_enabled", "quotes_native_read_enabled"),
+                members=("quotes.native_write", "quotes.native_read"),
             )
         )
     if read_enabled and not (sync_enabled or write_enabled):
@@ -607,9 +609,9 @@ def audit_setting_relationships(
                 severity="warning",
                 message="Native quote reads have neither CRM delta sync nor native writes.",
                 members=(
-                    "crm_phase3_native_sync_enabled",
-                    "quotes_native_read_enabled",
-                    "quotes_native_write_enabled",
+                    "crm.phase3_native_sync",
+                    "quotes.native_read",
+                    "quotes.native_write",
                 ),
             )
         )
@@ -624,6 +626,18 @@ def validate_setting_change(
     errors = [
         finding
         for finding in audit_setting_relationships(db, pending=(domain, key, value))
+        if finding.severity == "error"
+    ]
+    if errors:
+        raise ControlRelationshipError("; ".join(item.message for item in errors))
+
+
+def validate_feature_control_changes(
+    db: Session, pending: dict[str, bool | None]
+) -> None:
+    errors = [
+        finding
+        for finding in audit_feature_control_relationships(db, pending=pending)
         if finding.severity == "error"
     ]
     if errors:

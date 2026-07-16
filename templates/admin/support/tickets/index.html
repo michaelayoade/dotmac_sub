@@ -3,7 +3,39 @@
 {% block title %}Support Tickets{% endblock %}
 
 {% block content %}
-<div class="space-y-4">
+<div class="space-y-4"
+     x-data='supportTicketBulkActions({{ support_ticket_bulk_action_contract | tojson }})'
+     x-init="init()">
+    {% if support_ticket_bulk_action_contract.selection_enabled %}
+    <div x-show="selectedIds.length > 0" x-cloak
+         class="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-5xl"
+         role="region"
+         aria-label="Selected support ticket actions">
+        <div class="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-2xl dark:border-slate-700 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between">
+            <p class="shrink-0 text-sm font-semibold text-slate-900 dark:text-white"
+               role="status" aria-live="polite" aria-atomic="true">
+                <span x-text="selectedIds.length"></span> tickets selected on this page
+            </p>
+            <div class="flex flex-wrap items-center gap-2">
+                {% for action in support_ticket_bulk_action_contract.actions %}
+                <button type="button"
+                        id="support-ticket-bulk-{{ action.key }}"
+                        @click="openUpdateModal()"
+                        :disabled="!actionState('{{ action.key }}').enabled || busy"
+                        :title="actionState('{{ action.key }}').reason || '{{ action.description | e }}'"
+                        class="status-tone status-tone-{{ action.tone }} inline-flex items-center rounded-lg px-3 py-2 text-sm font-semibold transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        data-support-ticket-bulk-action="{{ action.key }}">
+                    {{ action.label }}
+                </button>
+                {% endfor %}
+                <button type="button" @click="clearSelection(true)"
+                        class="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800">
+                    Clear
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
     <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
             <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Support Tickets</h1>
@@ -20,232 +52,99 @@
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 11-3-3m-9 3a3 3 0 10-3-3"/></svg>
             Assignment Rules
             </a>
-            {{ action_button('New Ticket', '/admin/support/tickets/new', icon_plus(), 'primary', 'amber', 'orange', 'sm') }}
+            {{ action_button('New Ticket', '/admin/support/tickets/new', icon_plus(), 'primary', 'primary', 'accent', 'sm') }}
         </div>
     </div>
 
-    <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="flex min-w-max items-center gap-1 md:min-w-0">
-            {% for card in status_summary_cards %}
-            {% set is_current_status = status == card.value %}
-            <a href="{{ card.href }}"
-               class="flex min-w-36 flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition {% if is_current_status %}bg-amber-500 text-white shadow-sm{% else %}text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700/60{% endif %}">
-                <span>{{ card.label }}</span>
-                <span class="rounded-full px-2 py-0.5 text-xs tabular-nums {% if is_current_status %}bg-white/20 text-white{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300{% endif %}">{{ card.count }}</span>
-            </a>
-            {% endfor %}
-        </div>
+    <div id="ticket-list" class="space-y-4">
+        {% include "admin/support/tickets/_list.html" %}
     </div>
 
-    <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-    <form method="get"
-          action="/admin/support/tickets"
-          id="ticket-filter-form"
-          hx-get="/admin/support/tickets"
-          hx-target="#tickets-table"
-          hx-swap="innerHTML"
-          hx-push-url="true"
-          class="space-y-3"
-          x-data="ticketColumnPicker()">
-        <div class="grid gap-2 lg:grid-cols-12">
-            <div class="lg:col-span-3">
-                <label class="sr-only" for="ticket-search">Search</label>
-                <div class="relative">
-                    <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                        </svg>
-                    </div>
-                    <input id="ticket-search"
-                           type="text"
-                           name="search"
-                           value="{{ search }}"
-                           placeholder="Search tickets..."
-                           class="block w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-400 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
-                           hx-trigger="keyup changed delay:250ms" />
+    {% if support_ticket_bulk_action_contract.selection_enabled %}
+    <div x-show="updateModal" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4"
+         @keydown.escape.window="closeUpdateModal()">
+        <section role="dialog" aria-modal="true" aria-labelledby="support-ticket-bulk-title"
+                 x-trap.inert.noscroll="updateModal"
+                 @click.outside="closeUpdateModal()"
+                 class="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl dark:bg-slate-900">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h2 id="support-ticket-bulk-title" class="text-lg font-semibold text-slate-950 dark:text-white">Update selected tickets</h2>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Choose one or more changes, preview the exact impact, then confirm.</p>
                 </div>
-            </div>
-            <div class="lg:col-span-2">
-                <label class="sr-only">Status</label>
-                <select name="status" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                    <option value="">All Statuses</option>
-                    {% for s in all_statuses %}
-                    <option value="{{ s }}" {% if status == s %}selected{% endif %}>{{ s|replace('_', ' ')|title }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="lg:col-span-2">
-                <label class="sr-only">Ticket Type</label>
-                <select name="ticket_type" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                    <option value="">All Types</option>
-                    {% for t in ticket_type_options %}
-                    <option value="{{ t }}" {% if ticket_type == t %}selected{% endif %}>{{ t }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="lg:col-span-2">
-                <label class="sr-only">Assignee Scope</label>
-                <select name="assigned_to_me" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                    <option value="0" {% if not assigned_to_me %}selected{% endif %}>All Assignees</option>
-                    <option value="1" {% if assigned_to_me %}selected{% endif %}>Assigned To Me</option>
-                </select>
-            </div>
-            <div class="flex gap-2 lg:col-span-1">
-                <button type="submit" class="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm shadow-amber-500/20 transition hover:shadow-md">
-                    {{ icon_filter('h-4 w-4') }}
-                    <span class="hidden xl:inline">Apply</span>
+                <button type="button" @click="closeUpdateModal()" aria-label="Close ticket update dialog"
+                        class="rounded-lg p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">
+                    <span aria-hidden="true">×</span>
                 </button>
             </div>
-            <div class="lg:col-span-1">
-                <div class="relative">
-                    <button type="button" @click="open = !open" class="inline-flex h-full w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                        Columns
-                    </button>
-                    <div x-show="open" @click.outside="open = false" x-cloak class="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-600 dark:bg-slate-800">
-                        {% for col in ticket_columns %}
-                        <label class="flex items-center gap-2 py-1 text-xs text-slate-700 dark:text-slate-300">
-                            <input type="checkbox" class="ticket-col-toggle rounded border-slate-300 text-amber-600" data-column-key="{{ col.key }}" {% if col.key in visible_columns %}checked{% endif %}>
-                            <span>{{ col.label }}</span>
-                        </label>
+
+            <div class="mt-5 grid gap-4 sm:grid-cols-3">
+                <label class="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                    <span>Status</span>
+                    <select x-ref="bulkStatus" x-model="form.status" @change="invalidatePreview()"
+                            class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800">
+                        <option value="">Keep unchanged</option>
+                        {% for value in all_statuses %}
+                        {% if value != 'merged' %}<option value="{{ value }}">{{ value|replace('_', ' ')|title }}</option>{% endif %}
                         {% endfor %}
-                    </div>
-                </div>
-            </div>
-            <div class="lg:col-span-1">
-                <a href="/admin/support/tickets/export.csv{% if request.query_params %}?{{ request.query_params }}{% endif %}"
-                   class="inline-flex h-full w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                    Export
-                </a>
-            </div>
-        </div>
-
-        <details class="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 dark:border-slate-600/70 dark:bg-slate-700/30" {% if filters %}open{% endif %}>
-            <summary class="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-200">Advanced Filters</summary>
-            <div class="mt-3 grid gap-2 md:grid-cols-3">
-                <div>
-                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Project Manager</label>
-                    <select name="project_manager_person_id" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
-                        <option value="">All</option>
-                        {% for p in staff_options %}<option value="{{ p.id }}" {% if project_manager_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
                     </select>
-                </div>
-                <div>
-                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Site Coordinator</label>
-                    <select name="site_coordinator_person_id" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
-                        <option value="">All</option>
-                        {% for p in staff_options %}<option value="{{ p.id }}" {% if site_coordinator_person_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+                </label>
+                <label class="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                    <span>Priority</span>
+                    <select x-model="form.priority" @change="invalidatePreview()"
+                            class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800">
+                        <option value="">Keep unchanged</option>
+                        {% for value in all_priorities %}<option value="{{ value }}">{{ value|replace('_', ' ')|title }}</option>{% endfor %}
                     </select>
-                </div>
-                <div>
-                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber / Customer</label>
-                    <select name="subscriber_id" hx-trigger="change" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700">
-                        <option value="">All</option>
-                        {% for p in subscriber_options %}<option value="{{ p.id }}" {% if subscriber_id == p.id %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+                </label>
+                <label class="space-y-1 text-sm font-medium text-slate-700 dark:text-slate-200">
+                    <span>Primary assignee</span>
+                    <select x-model="form.assigned_to_person_id" @change="invalidatePreview()"
+                            class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800">
+                        <option value="">Keep unchanged</option>
+                        {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
                     </select>
-                </div>
+                </label>
             </div>
 
-            {# ── Condition builder: field/operator/value rows with AND/OR grouping, serialized into the `filters` param ── #}
-            <div class="mt-4 space-y-3 border-t border-slate-200/80 pt-3 dark:border-slate-600/70"
-                 x-data="ticketFilterBuilder()"
-                 data-filter-schema='{{ ticket_filter_schema | tojson | e }}'
-                 data-initial-filters='{{ filters | tojson | e }}'
-                 data-doctype="Ticket">
-                <input type="hidden" name="filters" x-bind:value="filtersJson">
-                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Filter Conditions</p>
-                <template x-for="(row, index) in rows" :key="row.id">
-                    <div class="grid grid-cols-1 gap-2 md:grid-cols-12">
-                        <div class="md:col-span-3">
-                            <select x-model="row.field"
-                                    x-on:change="onFieldChange(index)"
-                                    class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                                <template x-for="field in schema" :key="field.field">
-                                    <option :value="field.field" x-text="field.label"></option>
-                                </template>
-                            </select>
-                        </div>
-                        <div class="md:col-span-2">
-                            <select x-model="row.operator"
-                                    x-on:change="onOperatorChange(index)"
-                                    class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                                <template x-for="operator in operatorOptions(row.field)" :key="operator.value">
-                                    <option :value="operator.value" x-text="operator.label"></option>
-                                </template>
-                            </select>
-                        </div>
-                        <div class="md:col-span-4">
-                            <template x-if="row.operator === 'between'">
-                                <div class="grid grid-cols-2 gap-2">
-                                    <input :type="inputType(row.field)"
-                                           x-model="row.value[0]"
-                                           x-on:change="syncFilters()"
-                                           class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                                    <input :type="inputType(row.field)"
-                                           x-model="row.value[1]"
-                                           x-on:change="syncFilters()"
-                                           class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                                </div>
-                            </template>
-                            <template x-if="row.operator !== 'between'">
-                                <div>
-                                    <template x-if="selectOptions(row.field).length > 0">
-                                        <select x-model="row.value"
-                                                x-on:change="syncFilters()"
-                                                class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                                            <option value="">Select value</option>
-                                            <template x-for="option in selectOptions(row.field)" :key="option.value">
-                                                <option :value="option.value" x-text="option.label"></option>
-                                            </template>
-                                        </select>
-                                    </template>
-                                    <template x-if="selectOptions(row.field).length === 0">
-                                        <input :type="inputType(row.field)"
-                                               x-model="row.value"
-                                               x-on:input="syncFilters()"
-                                               placeholder="Value"
-                                               class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder-slate-400 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500">
-                                    </template>
-                                </div>
-                            </template>
-                        </div>
-                        <div class="md:col-span-2">
-                            <select x-model="row.group"
-                                    x-on:change="syncFilters()"
-                                    class="w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
-                                <option value="and">AND</option>
-                                <option value="or">OR</option>
-                            </select>
-                        </div>
-                        <div class="md:col-span-1">
-                            <button type="button"
-                                    x-on:click="removeRow(index)"
-                                    class="w-full rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
-                                Remove
-                            </button>
-                        </div>
-                    </div>
-                </template>
-                <div class="flex flex-wrap items-center gap-2">
-                    <button type="button"
-                            x-on:click="addRow()"
-                            class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                        Add Condition
-                    </button>
-                    <button type="button"
-                            x-on:click="clearRows()"
-                            class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                        Clear
-                    </button>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">AND conditions must all match; OR conditions match any. Use Apply to run.</p>
-                </div>
+            <p x-show="error" x-text="error" role="alert"
+               class="status-foreground status-tone-negative mt-4 rounded-lg border border-current/20 p-3 text-sm"></p>
+
+            <div x-show="preview" class="mt-5 rounded-xl border border-slate-200 p-4 dark:border-slate-700"
+                 aria-live="polite" aria-atomic="true">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Impact preview</h3>
+                <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                    <span class="font-semibold" x-text="preview?.eligible_count || 0"></span> tickets will be updated;
+                    <span class="font-semibold" x-text="preview?.skipped_count || 0"></span> will be skipped.
+                </p>
+                <ul x-show="preview?.skipped_count > 0" class="mt-3 space-y-1 text-xs text-slate-500 dark:text-slate-400">
+                    <template x-for="item in (preview?.skipped || []).slice(0, 5)" :key="item.id">
+                        <li><span class="font-mono" x-text="item.id"></span>: <span x-text="item.reason"></span></li>
+                    </template>
+                    <li x-show="preview?.skipped_count > 5" x-text="`And ${preview.skipped_count - 5} more skipped ticket(s).`"></li>
+                </ul>
             </div>
-        </details>
-    </form>
+
+            <div class="mt-6 flex flex-wrap justify-end gap-2">
+                <button type="button" @click="closeUpdateModal()"
+                        class="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
+                    Cancel
+                </button>
+                <button type="button" x-show="!preview" @click="previewUpdate()"
+                        :disabled="busy || !hasChanges()"
+                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50">
+                    <span x-text="busy ? 'Previewing…' : 'Preview impact'"></span>
+                </button>
+                <button type="button" x-show="preview" @click="confirmUpdate()"
+                        :disabled="busy || !preview || preview.eligible_count === 0"
+                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50">
+                    <span x-text="busy ? 'Updating…' : `Confirm update ${preview?.eligible_count || 0} tickets`"></span>
+                </button>
+            </div>
+        </section>
     </div>
-
-    <div id="tickets-table" class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        {% include "admin/support/tickets/_table.html" %}
-    </div>
+    {% endif %}
 </div>
 
 <script>
@@ -463,12 +362,170 @@ function ticketColumnPicker() {
                 el.addEventListener('change', apply);
             });
             apply();
-            document.body.addEventListener('htmx:afterSwap', (ev) => {
-                if (ev.target && ev.target.id === 'tickets-table') {
-                    apply();
-                }
-            });
         }
+    };
+}
+
+function supportTicketBulkActions(initialContract) {
+    return {
+        contract: initialContract || { actions: [] },
+        selectedIds: [],
+        ticketIds: [],
+        updateModal: false,
+        busy: false,
+        error: '',
+        preview: null,
+        form: { status: '', priority: '', assigned_to_person_id: '' },
+
+        init() {
+            this.syncTicketPage();
+            document.body.addEventListener('htmx:afterSwap', (event) => {
+                if (event.detail?.target?.id !== 'ticket-list') return;
+                this.clearSelection();
+                this.$nextTick(() => this.syncTicketPage());
+            });
+        },
+
+        syncTicketPage() {
+            const page = document.querySelector('#tickets-table [data-ticket-page]');
+            this.ticketIds = (page?.dataset.ticketIds || '').split(',').map((value) => value.trim()).filter(Boolean);
+            if (page?.dataset.bulkContract) {
+                try {
+                    this.contract = JSON.parse(page.dataset.bulkContract);
+                } catch (parseError) {
+                    console.error('Invalid support ticket bulk-action contract', parseError);
+                }
+            }
+        },
+
+        actionDefinition(actionKey) {
+            return (this.contract.actions || []).find((action) => action.key === actionKey);
+        },
+
+        actionState(actionKey) {
+            const action = this.actionDefinition(actionKey);
+            if (!action || this.selectedIds.length === 0) {
+                return { enabled: false, reason: 'Select at least one ticket' };
+            }
+            const eligible = new Set(action.eligible_ids || []);
+            const eligibleCount = this.selectedIds.filter((id) => eligible.has(id)).length;
+            if (eligibleCount === 0) {
+                const reason = this.selectedIds.map((id) => action.ineligible_reasons?.[id]).find(Boolean);
+                return { enabled: false, reason: reason || 'Selected tickets cannot be updated' };
+            }
+            const skippedCount = this.selectedIds.length - eligibleCount;
+            return {
+                enabled: true,
+                reason: skippedCount > 0 ? `${skippedCount} selected ticket(s) will be skipped` : '',
+            };
+        },
+
+        toggleSelection(id) {
+            const index = this.selectedIds.indexOf(id);
+            if (index === -1) this.selectedIds.push(id);
+            else this.selectedIds.splice(index, 1);
+        },
+
+        toggleAll(checked) {
+            this.selectedIds = checked ? [...this.ticketIds] : [];
+        },
+
+        clearSelection(restoreFocus = false) {
+            this.selectedIds = [];
+            if (restoreFocus) {
+                this.$nextTick(() => document.querySelector('#tickets-table input[aria-label="Select all tickets on this page"]')?.focus());
+            }
+        },
+
+        openUpdateModal() {
+            if (!this.actionState('update').enabled) return;
+            this.form = { status: '', priority: '', assigned_to_person_id: '' };
+            this.error = '';
+            this.preview = null;
+            this.updateModal = true;
+            this.$nextTick(() => this.$refs.bulkStatus?.focus());
+        },
+
+        closeUpdateModal() {
+            this.updateModal = false;
+            this.error = '';
+            this.preview = null;
+            this.$nextTick(() => document.querySelector('#support-ticket-bulk-update')?.focus());
+        },
+
+        changes() {
+            return Object.fromEntries(Object.entries(this.form).filter(([, value]) => value !== ''));
+        },
+
+        hasChanges() {
+            return Object.keys(this.changes()).length > 0;
+        },
+
+        invalidatePreview() {
+            this.preview = null;
+            this.error = '';
+        },
+
+        csrfToken() {
+            return document.querySelector('meta[name="csrf-token"]')?.content ||
+                   document.querySelector('[name="_csrf_token"]')?.value || '';
+        },
+
+        async postJson(url, payload) {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': this.csrfToken(),
+                },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.detail || result.message || 'Ticket update failed');
+            return result;
+        },
+
+        basePayload() {
+            return {
+                selection: { mode: 'selected', ids: [...this.selectedIds] },
+                updates: this.changes(),
+            };
+        },
+
+        async previewUpdate() {
+            if (this.busy || !this.hasChanges()) return;
+            this.busy = true;
+            this.error = '';
+            try {
+                this.preview = await this.postJson('/admin/support/tickets/bulk/preview', this.basePayload());
+            } catch (requestError) {
+                this.error = requestError.message || 'Unable to preview ticket update';
+            } finally {
+                this.busy = false;
+            }
+        },
+
+        async confirmUpdate() {
+            if (this.busy || !this.preview || this.preview.eligible_count === 0) return;
+            this.busy = true;
+            this.error = '';
+            try {
+                const payload = this.basePayload();
+                payload.selection.expected_count = this.preview.matched_count;
+                payload.selection.expected_scope_token = this.preview.scope_token;
+                payload.confirmed = true;
+                const result = await this.postJson('/admin/support/tickets/bulk/update', payload);
+                window.dispatchEvent(new CustomEvent('show-toast', {
+                    detail: { message: result.message || 'Tickets updated', type: 'success' },
+                }));
+                window.location.reload();
+            } catch (requestError) {
+                this.error = requestError.message || 'Ticket update failed';
+                this.preview = null;
+            } finally {
+                this.busy = false;
+            }
+        },
     };
 }
 </script>

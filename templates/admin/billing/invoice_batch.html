@@ -56,18 +56,11 @@
                             </div>
                         </div>
 
-                        <div class="grid gap-4 sm:grid-cols-2">
+                        <div>
                             <div>
                                 <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Date (Up To)</label>
                                 <input type="date" name="billing_date" id="billing_date" value="{{ today }}" class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 <p class="mt-1 text-xs text-slate-500">Only bill subscriptions with next_billing_at before this date</p>
-                            </div>
-                            <div>
-                                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Status</label>
-                                <select name="invoice_status" id="invoice_status" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    <option value="issued" selected>Issued (ready to send)</option>
-                                    <option value="draft">Draft (review first)</option>
-                                </select>
                             </div>
                         </div>
                     </div>
@@ -78,13 +71,6 @@
                         <h2 class="font-semibold text-slate-900 dark:text-white">Options</h2>
                     </div>
                     <div class="space-y-4 p-6">
-                        <label class="flex cursor-pointer items-start gap-3">
-                            <input type="checkbox" name="send_notifications" value="1" class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
-                            <div>
-                                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Send email notifications</span>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">Email invoices to customers after generation</p>
-                            </div>
-                        </label>
                         <label class="flex cursor-pointer items-start gap-3">
                             <input type="checkbox" name="confirmed" value="1" id="confirmed" x-ref="confirmed" class="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             <div>

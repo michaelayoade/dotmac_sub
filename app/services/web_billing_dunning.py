@@ -6,8 +6,14 @@ import logging
 from dataclasses import dataclass, field
 
 from fastapi import HTTPException
+from sqlalchemy.orm import selectinload
 
-from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
+from app.models.collections import (
+    DunningActionLog,
+    DunningCase,
+    DunningCaseStatus,
+    FinancialAccessConsequence,
+)
 from app.services import collections as collections_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import log_audit_event
@@ -152,6 +158,11 @@ def build_detail_data(db, *, case_id: str) -> dict[str, object]:
     actions = (
         db.query(DunningActionLog)
         .filter(DunningActionLog.case_id == case.id)
+        .options(
+            selectinload(DunningActionLog.access_consequence).selectinload(
+                FinancialAccessConsequence.evidence
+            )
+        )
         .order_by(DunningActionLog.executed_at.desc())
         .limit(100)
         .all()

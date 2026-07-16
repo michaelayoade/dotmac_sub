@@ -261,6 +261,15 @@ def _serial(device: dict) -> str | None:
     return None
 
 
+def _firmware_version(device: dict) -> str | None:
+    ident = _ident(device)
+    for key in ("firmwareVersion", "firmware", "version"):
+        value = str(ident.get(key) or "").strip()
+        if value:
+            return value[:120]
+    return None
+
+
 def _onu_pon_port(device: dict) -> int | None:
     """OLT-side PON port number from a per-OLT ONU listing entry; None if absent.
 
@@ -748,6 +757,10 @@ def _upsert_station(
     changed |= _fill(cpe, "model", ident.get("model"))
     changed |= _fill(cpe, "serial_number", _serial(station))
     changed |= _fill(cpe, "vendor", "ubiquiti")
+    firmware_version = _firmware_version(station)
+    if firmware_version and cpe.firmware_version != firmware_version:
+        cpe.firmware_version = firmware_version
+        changed = True
     # Upgrade only the placeholder type; a human-chosen type is never stomped.
     if not created and cpe.device_type in (None, DeviceType.other):
         cpe.device_type = DeviceType.wireless_radio

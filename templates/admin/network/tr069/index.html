@@ -294,7 +294,7 @@
                                 <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/link" class="flex items-center gap-2">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
-                                    <input type="text" name="cpe_device_search" list="tr069-cpe-typeahead" value="" placeholder="Type customer / serial / MAC" class="max-w-[280px] rounded-lg border border-slate-300 px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <input type="text" list="tr069-cpe-typeahead" value="" placeholder="Type customer / serial / MAC" class="max-w-[280px] rounded-lg border border-slate-300 px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                     <input type="hidden" name="cpe_device_id" value="">
                                     <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:border-slate-400 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1">Save</button>
                                 </form>
@@ -451,7 +451,7 @@
                                 <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/link" class="flex items-center gap-2">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
-                                    <input type="text" name="cpe_device_search" list="tr069-cpe-typeahead" value="{{ cpe_search_by_id.get(device.cpe_device_id|string, '') if device.cpe_device_id else '' }}" placeholder="Type customer / serial / MAC" class="max-w-[280px] rounded-lg border border-slate-300 px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <input type="text" list="tr069-cpe-typeahead" value="{{ cpe_search_by_id.get(device.cpe_device_id|string, '') if device.cpe_device_id else '' }}" placeholder="Type customer / serial / MAC" class="max-w-[280px] rounded-lg border border-slate-300 px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                     <input type="hidden" name="cpe_device_id" value="{{ device.cpe_device_id or '' }}">
                                     <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:border-slate-400 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1">Save</button>
                                 </form>

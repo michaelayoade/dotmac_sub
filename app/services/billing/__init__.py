@@ -26,7 +26,9 @@ from app.services.billing._common import (
     _validate_payment_linkages,
     _validate_payment_provider,
 )
+from app.services.billing.adjustments import AccountAdjustments
 from app.services.billing.billing_accounts import BillingAccounts
+from app.services.billing.consolidated_payments import ConsolidatedPaymentSettlements
 from app.services.billing.credit_notes import (
     CreditNoteApplications,
     CreditNoteLines,
@@ -41,7 +43,9 @@ from app.services.billing.payments import (
     PaymentChannelAccounts,
     PaymentChannels,
     PaymentMethods,
+    PaymentReversals,
     Payments,
+    Refunds,
 )
 from app.services.billing.providers import PaymentProviderEvents, PaymentProviders
 from app.services.billing.reporting import BillingReporting, billing_reporting
@@ -57,6 +61,8 @@ credit_note_applications = CreditNoteApplications()
 payment_methods = PaymentMethods()
 bank_accounts = BankAccounts()
 payments = Payments()
+refunds = Refunds()
+reversals = PaymentReversals()
 payment_allocations = PaymentAllocations()
 payment_channels = PaymentChannels()
 collection_accounts = CollectionAccounts()
@@ -67,16 +73,22 @@ billing_runs = BillingRuns()
 payment_providers = PaymentProviders()
 payment_provider_events = PaymentProviderEvents()
 billing_accounts = BillingAccounts()
+consolidated_payment_settlements = ConsolidatedPaymentSettlements()
+account_adjustments = AccountAdjustments()
 
 __all__ = [
     # Classes
     "BillingAccounts",
+    "ConsolidatedPaymentSettlements",
+    "AccountAdjustments",
     "Invoices",
     "InvoiceLines",
     "CreditNotes",
     "CreditNoteLines",
     "CreditNoteApplications",
     "Payments",
+    "PaymentReversals",
+    "Refunds",
     "PaymentMethods",
     "BankAccounts",
     "PaymentAllocations",
@@ -98,6 +110,8 @@ __all__ = [
     "payment_methods",
     "bank_accounts",
     "payments",
+    "refunds",
+    "reversals",
     "payment_allocations",
     "payment_channels",
     "collection_accounts",
@@ -108,6 +122,8 @@ __all__ = [
     "payment_providers",
     "payment_provider_events",
     "billing_accounts",
+    "consolidated_payment_settlements",
+    "account_adjustments",
     "billing_reporting",
     # Helper functions (for billing_automation compatibility)
     "_validate_account",

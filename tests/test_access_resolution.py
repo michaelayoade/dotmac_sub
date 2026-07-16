@@ -77,7 +77,7 @@ def test_access_resolution_parent_hard_block_overrides_subscription():
     assert decision.access_block_reason == "subscriber_status_disabled"
 
 
-def test_access_resolution_captive_redirect_is_explicit():
+def test_access_resolution_raw_captive_flag_is_not_authority():
     _subscriber, subscription = _resolver_objects(
         subscription_status=SubscriptionStatus.suspended,
         captive_redirect_enabled=True,
@@ -85,7 +85,25 @@ def test_access_resolution_captive_redirect_is_explicit():
 
     decision = resolve_customer_access(subscription)
 
+    assert decision.radius_access_state == AccessState.suspended
+    assert decision.radius_allowed is False
+    assert decision.radius_blocked is True
+    assert decision.radius_mode == "reject"
+
+
+def test_access_resolution_accepts_canonical_captive_mode():
+    from app.models.enforcement_lock import AccessRestrictionMode
+
+    _subscriber, subscription = _resolver_objects(
+        subscription_status=SubscriptionStatus.suspended,
+        captive_redirect_enabled=False,
+    )
+
+    decision = resolve_customer_access(
+        subscription,
+        access_restriction_mode=AccessRestrictionMode.captive,
+    )
+
     assert decision.radius_access_state == AccessState.captive
     assert decision.radius_allowed is True
-    assert decision.radius_blocked is True
     assert decision.radius_mode == "captive"

@@ -10,7 +10,6 @@ from uuid import UUID
 import pytest
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import expect, sync_playwright
-from starlette.requests import Request
 
 from app.db import SessionLocal
 from app.models.catalog import (
@@ -23,7 +22,6 @@ from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
 from app.schemas.catalog import SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import customer_portal, reseller_portal
-from app.services.auth_flow import AuthFlow, issue_web_session_token
 from tests.playwright.helpers.api import api_post_form, bearer_headers
 from tests.playwright.helpers.auth import (
     ensure_person,
@@ -411,26 +409,41 @@ def _write_storage_state(
 
 
 @pytest.fixture(scope="session")
-def admin_storage_state(playwright_instance, settings: E2ESettings) -> Path:
+def admin_storage_state(browser, settings: E2ESettings) -> Path:
     username, password = _require_admin_credentials(settings)
-    db = SessionLocal()
+    path = _storage_state_path("admin")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    context = browser.new_context()
+    context.set_default_timeout(settings.action_timeout_ms)
+    context.set_default_navigation_timeout(settings.navigation_timeout_ms)
+    page = context.new_page()
     try:
-        request = Request(
-            {
-                "type": "http",
-                "method": "POST",
-                "path": "/auth/login",
-                "headers": [(b"user-agent", b"playwright-local-auth")],
-                "client": ("127.0.0.1", 0),
-                "scheme": "http",
-                "server": ("127.0.0.1", 8001),
-            }
+        page.goto(f"{settings.base_url}/auth/login", wait_until="domcontentloaded")
+        page.get_by_label("Email or Username").fill(username)
+        page.get_by_label("Password").fill(password)
+        with page.expect_response(
+            lambda response: (
+                response.url.endswith("/auth/login")
+                and response.request.method == "POST"
+            ),
+            timeout=min(settings.navigation_timeout_ms, 60_000),
+        ) as login_response:
+            page.get_by_role("button", name="Sign in").click(no_wait_after=True)
+        response = login_response.value
+        if response.status != 303:
+            page.wait_for_load_state("domcontentloaded")
+            error = page.locator("div.bg-red-50 p").first
+            detail = error.inner_text() if error.count() else "no rendered error"
+            pytest.fail(f"Admin web login returned HTTP {response.status}: {detail}")
+        page.wait_for_url(
+            "**/admin/dashboard**",
+            wait_until="commit",
+            timeout=min(settings.navigation_timeout_ms, 60_000),
         )
-        result = AuthFlow.login(db, username, password, request, provider=None)
-        token = issue_web_session_token(db, str(result.get("access_token", "")))
-        return _write_storage_state(None, settings, token, "admin")
+        context.storage_state(path=path)
+        return path
     finally:
-        db.close()
+        context.close()
 
 
 @pytest.fixture(scope="session")

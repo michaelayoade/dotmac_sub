@@ -21,6 +21,11 @@ SETTINGS_CATEGORIES: list[dict] = [
         "description": "Core system configuration and security",
         "links": [
             {
+                "name": "Control Plane",
+                "url": "/admin/system/control-plane",
+                "description": "Effective state, provenance, health, scope, and audit",
+            },
+            {
                 "name": "Preferences & Security",
                 "url": "/admin/system/config/preferences",
                 "description": "Landing page, 2FA, portal title",
