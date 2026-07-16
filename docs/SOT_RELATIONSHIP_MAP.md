@@ -1341,8 +1341,11 @@ in forms, or rotate key material directly.
    `*_committed` entrypoints, never the ORM); `team_inbox_outbound` and
    `team_outbound` own sends; `team_inbox_routing` owns conversation routing
    and auto-assignment; `team_inbox_assignment`/`team_inbox_operations`
-   decide lifecycle and are invoked through the command boundary. Inbox ORM
-   rows have no writer outside the `team_inbox_*` family.
+   decide lifecycle and are invoked through the command boundary;
+   `communications.team_inbox_campaigns` owns campaign-sourced conversation
+   and outbound-message materialization. Inbox ORM rows have no writer
+   outside the `team_inbox_*` family — campaigns and other domains request
+   materialization from it rather than constructing inbox rows themselves.
 9. Campaign services own marketing audience, sequence, and content decisions.
    They request a canonical sender key; email delivery alone resolves that key
    to SMTP identity and credentials.
