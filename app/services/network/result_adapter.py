@@ -100,11 +100,14 @@ class OperationResult:
             AdapterStatus.queued: ResultStatus.queued,
             AdapterStatus.skipped: ResultStatus.warning,
         }
+        data = dict(result.data or {})
+        if result.error_code:
+            data.setdefault("error_code", result.error_code)
         return cls(
             status=status_map.get(result.status, ResultStatus.error),
             message=result.message,
             title=title,
-            data=result.data,
+            data=data,
             redirect_url=redirect_url,
         )
 
