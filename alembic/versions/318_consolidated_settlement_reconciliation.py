@@ -1,7 +1,7 @@
 """Add reviewed consolidated settlement reconciliation provenance.
 
-Revision ID: 316_consolidated_settlement_reconciliation
-Revises: 315_consolidated_payment_returns
+Revision ID: 318_consolidated_settlement_reconciliation
+Revises: 317_consolidated_payment_returns
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "316_consolidated_settlement_reconciliation"
-down_revision = "315_consolidated_payment_returns"
+revision = "318_consolidated_settlement_reconciliation"
+down_revision = "317_consolidated_payment_returns"
 branch_labels = None
 depends_on = None
 

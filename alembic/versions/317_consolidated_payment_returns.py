@@ -1,7 +1,7 @@
 """Add exact consolidated payment refund and reversal evidence.
 
-Revision ID: 315_consolidated_payment_returns
-Revises: 314_consolidated_credit_allocation
+Revision ID: 317_consolidated_payment_returns
+Revises: 316_consolidated_credit_allocation
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "315_consolidated_payment_returns"
-down_revision = "314_consolidated_credit_allocation"
+revision = "317_consolidated_payment_returns"
+down_revision = "316_consolidated_credit_allocation"
 branch_labels = None
 depends_on = None
 
