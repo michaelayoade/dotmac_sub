@@ -838,23 +838,23 @@ def bandwidth_usage_by_plan(db: Session, usage_subquery) -> list:
     window's usage subquery, heaviest usage first."""
     return list(
         db.execute(
-        select(
-            CatalogOffer.name.label("name"),
-            func.coalesce(func.sum(usage_subquery.c.avg_total), 0).label("avg_bps"),
-            func.coalesce(func.sum(usage_subquery.c.usage_bytes), 0).label(
-                "usage_bytes"
-            ),
-            func.count(usage_subquery.c.subscription_id).label("sub_count"),
-        )
-        .select_from(usage_subquery)
-        .join(
-            Subscription,
-            Subscription.id == usage_subquery.c.subscription_id,
-            isouter=True,
-        )
-        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
-        .group_by(CatalogOffer.name)
-        .order_by(func.coalesce(func.sum(usage_subquery.c.usage_bytes), 0).desc())
+            select(
+                CatalogOffer.name.label("name"),
+                func.coalesce(func.sum(usage_subquery.c.avg_total), 0).label("avg_bps"),
+                func.coalesce(func.sum(usage_subquery.c.usage_bytes), 0).label(
+                    "usage_bytes"
+                ),
+                func.count(usage_subquery.c.subscription_id).label("sub_count"),
+            )
+            .select_from(usage_subquery)
+            .join(
+                Subscription,
+                Subscription.id == usage_subquery.c.subscription_id,
+                isouter=True,
+            )
+            .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
+            .group_by(CatalogOffer.name)
+            .order_by(func.coalesce(func.sum(usage_subquery.c.usage_bytes), 0).desc())
         ).all()
     )
 
@@ -872,15 +872,15 @@ def period_usage_by_subscriber(
     usage = subscription_bandwidth_usage_subquery(start, end, span_seconds)
     return list(
         db.execute(
-        select(
-            Subscription.subscriber_id,
-            func.coalesce(func.sum(usage.c.usage_bytes), 0).label("usage_bytes"),
-            func.coalesce(func.sum(usage.c.avg_total), 0).label("avg_bps"),
-            func.count(usage.c.subscription_id).label("active_services"),
-        )
-        .select_from(usage)
-        .join(Subscription, Subscription.id == usage.c.subscription_id)
-        .where(Subscription.subscriber_id.in_(subscriber_ids))
-        .group_by(Subscription.subscriber_id)
+            select(
+                Subscription.subscriber_id,
+                func.coalesce(func.sum(usage.c.usage_bytes), 0).label("usage_bytes"),
+                func.coalesce(func.sum(usage.c.avg_total), 0).label("avg_bps"),
+                func.count(usage.c.subscription_id).label("active_services"),
+            )
+            .select_from(usage)
+            .join(Subscription, Subscription.id == usage.c.subscription_id)
+            .where(Subscription.subscriber_id.in_(subscriber_ids))
+            .group_by(Subscription.subscriber_id)
         ).all()
     )

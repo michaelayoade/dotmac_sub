@@ -10,10 +10,9 @@ displayed numbers do not change.
 
 from __future__ import annotations
 
-from typing import Any
-
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session

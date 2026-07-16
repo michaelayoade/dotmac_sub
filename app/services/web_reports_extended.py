@@ -263,7 +263,6 @@ def get_mrr_data(
     (get_subscription_movement); this function windows the months to the
     requested date range and presents them.
     """
-    from app.models.catalog import Subscription, SubscriptionStatus
     from app.services.billing import reporting as billing_reporting
 
     parsed_from = _parse_date(date_from)
