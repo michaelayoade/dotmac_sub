@@ -784,6 +784,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
+        key="prepaid_balance_sweep_interval_seconds",
+        env_var="PREPAID_BALANCE_SWEEP_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=3600,
+        min_value=300,
+        max_value=3600,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
         key="prepaid_blocking_time",
         env_var="PREPAID_BLOCKING_TIME",
         value_type=SettingValueType.string,
