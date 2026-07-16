@@ -16,8 +16,8 @@ from app.web.admin import inbox as admin_inbox
 from app.web.admin import integrations as admin_integrations
 from app.web.admin import legal as admin_legal
 from app.web.admin import network_device_groups as admin_network_device_groups
-from app.web.admin import notifications as admin_notifications
 from app.web.admin import network_olts_profiles as admin_network_olts_profiles
+from app.web.admin import notifications as admin_notifications
 from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
 from app.web.admin import support_assignment_rules as admin_support_assignment_rules
