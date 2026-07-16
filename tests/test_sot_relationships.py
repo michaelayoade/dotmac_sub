@@ -57,7 +57,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("network.ont_status_refresh") == (
         "network.device_state",
-        "network.operation_dispatch",
+        "network.ont_runtime_status",
+    )
+    assert sot_relationships.dependencies_for("network.ont_runtime_status") == (
+        "runtime.infrastructure_polling",
     )
     assert sot_relationships.dependencies_for("financial.dunning") == (
         "financial.access_resolution",

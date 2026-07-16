@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
+    DeviceStatus,
     OLTDevice,
     OntUnit,
     OnuOfflineReason,
@@ -17,6 +19,9 @@ from app.models.network import (
 )
 from app.services.network.ont_status import apply_olt_status_observation
 from app.services.network.serial_utils import canonical, parse_ont_id_on_olt
+from app.services.queue_adapter import QueueDispatchResult, enqueue_task
+
+HUAWEI_OLT_STATUS_TASK = "app.tasks.ont_runtime_status.refresh_huawei_olt_status"
 
 
 @dataclass(frozen=True)
@@ -27,6 +32,42 @@ class OltStatusRefreshStats:
     offline: int
     unmatched: int
     invalid: int
+
+
+def huawei_olt_status_pollable(olt: OLTDevice | object) -> bool:
+    """Return whether the native Huawei bulk status collector owns this OLT."""
+    vendor = str(getattr(olt, "vendor", "") or "").strip().lower()
+    return (
+        bool(getattr(olt, "is_active", False))
+        and getattr(olt, "status", DeviceStatus.active) == DeviceStatus.active
+        and getattr(olt, "uisp_device_id", None) is None
+        and vendor == "huawei"
+    )
+
+
+def huawei_olt_status_pollable_criteria() -> tuple[Any, ...]:
+    """SQL criteria equivalent to :func:`huawei_olt_status_pollable`."""
+    return (
+        OLTDevice.is_active.is_(True),
+        OLTDevice.status == DeviceStatus.active,
+        OLTDevice.uisp_device_id.is_(None),
+        func.lower(OLTDevice.vendor) == "huawei",
+    )
+
+
+def queue_huawei_olt_status_poll(
+    olt_id: str,
+    *,
+    source: str = "network.ont_runtime_status",
+) -> QueueDispatchResult:
+    """Publish one retry-safe infrastructure observation poll."""
+    return enqueue_task(
+        HUAWEI_OLT_STATUS_TASK,
+        args=[str(olt_id)],
+        queue="ingestion",
+        correlation_id=f"ont-status-refresh:{olt_id}",
+        source=source,
+    )
 
 
 def record_olt_poll_failure(

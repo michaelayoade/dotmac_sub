@@ -137,7 +137,6 @@ app.services.network.ont_inventory
 app.services.network.ont_management_ipam
 app.services.network.ont_provision_steps
 app.services.network.ont_reconcile_queue
-app.services.network.ont_runtime_status
 app.services.network.ont_status
 app.services.network.ont_topology_reconcile
 app.services.network.ont_tr069
