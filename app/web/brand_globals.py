@@ -59,7 +59,14 @@ def _app_datetime_filter(value: object) -> str:
 def _attach_globals(templates: Jinja2Templates) -> None:
     from app.config import settings
     from app.services.display_format import currency_symbol
+    from app.services.status_presentation import (
+        infrastructure_service_status_presentation,
+    )
 
+    templates.env.globals.setdefault(
+        "infra_service_status_presentation",
+        infrastructure_service_status_presentation,
+    )
     templates.env.globals.setdefault("brand", get_brand())
     templates.env.globals.setdefault("current_year", _current_year)
     templates.env.globals.setdefault("app_version", get_app_version)
