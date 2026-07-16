@@ -29,8 +29,16 @@ depends_on = None
 
 # (new granular permission, description, source permission whose holders inherit it)
 GRANTS = [
-    ("notification:read", "View notification templates, queue, and history", "system:read"),
-    ("notification:write", "Manage notification templates and delivery", "system:write"),
+    (
+        "notification:read",
+        "View notification templates, queue, and history",
+        "system:read",
+    ),
+    (
+        "notification:write",
+        "Manage notification templates and delivery",
+        "system:write",
+    ),
 ]
 
 

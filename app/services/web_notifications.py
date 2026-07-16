@@ -18,15 +18,15 @@ from app.schemas.notification import (
 )
 from app.services import email as email_service
 from app.services import notification as notification_service
+from app.services import notification_template_conditions as condition_service
+from app.services import notification_template_renderer as template_renderer
+from app.services import sms as sms_service
+from app.services.integrations.connectors import whatsapp as whatsapp_connector
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
     ListQuery,
 )
-from app.services import notification_template_conditions as condition_service
-from app.services import notification_template_renderer as template_renderer
-from app.services import sms as sms_service
-from app.services.integrations.connectors import whatsapp as whatsapp_connector
 from app.services.whatsapp_notification_templates import (
     provider_template_from_template,
     sync_whatsapp_registry_templates,
