@@ -2149,6 +2149,55 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "vpn_cache is a rebuildable projection, never a source of truth."
         ),
     ),
+    DomainSOT(
+        domain="sales_referrals",
+        services=(
+            SOTService(
+                name="sales.orders",
+                module="app.services.sales_orders",
+                owns=("sales order lifecycle",),
+            ),
+            SOTService(
+                name="sales.selfserve",
+                module="app.services.sales.selfserve",
+                owns=("self-serve quote and signup flow",),
+            ),
+            SOTService(
+                name="sales.service",
+                module="app.services.sales.service",
+                owns=("sales service operations",),
+            ),
+            SOTService(
+                name="referrals.data",
+                module="app.services.referrals_mirror",
+                owns=(
+                    "referral DB and CRM data access",
+                    "Refer & Earn data mirror",
+                ),
+            ),
+            SOTService(
+                name="referrals.program",
+                module="app.services.referrals",
+                owns=("Refer & Earn referral program logic",),
+                depends_on=("referrals.data",),
+            ),
+        ),
+        entrypoints=(
+            "app.api.me",
+            "app.api.crm_webhooks",
+            "app.web.customer.referrals",
+            "app.tasks.referrals",
+            "app.services.web_sales",
+            "app.services.web_referrals",
+        ),
+        rule=(
+            "Sales order, self-serve quote/signup, sales service, and Refer & "
+            "Earn referral logic resolve through these owners. web_sales/"
+            "web_referrals adapters and API/task callers request an outcome; the "
+            "referral mirror is the sole DB and CRM data-access path for Refer & "
+            "Earn, treated as a cache of CRM data, never a parallel authority."
+        ),
+    ),
 )
 
 
