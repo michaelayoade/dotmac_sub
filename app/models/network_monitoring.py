@@ -1054,3 +1054,68 @@ class AvailabilitySnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class DeviceProjection(Base):
+    """Materialized, unified projection of every network device type.
+
+    A derived-state projection: one row per device across the OLT, core
+    ``NetworkDevice``, ONT and CPE tables, with the operational status
+    pre-derived, so the admin device list can search, filter, sort and
+    paginate in SQL instead of loading every device and deriving status in
+    memory on each request.
+
+    ``network.device_projection`` (the reconciler) is the sole canonical
+    writer. It rebuilds this table idempotently from the authoritative device
+    tables, so a row here is a rebuildable cache — never the only copy of
+    truth. ``refreshed_at`` carries the freshness of each row; stale rows are
+    repaired and orphans pruned on the next reconcile.
+    """
+
+    __tablename__ = "device_projections"
+    __table_args__ = (
+        UniqueConstraint(
+            "device_type", "source_id", name="uq_device_projection_source"
+        ),
+        Index("ix_device_projection_type_status", "device_type", "operational_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # Source identity — (device_type, source_id) is the natural key the
+    # reconciler upserts on. device_type is one of olt/core/ont/cpe.
+    device_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    source_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Display / search columns, denormalised from the source row.
+    name: Mapped[str | None] = mapped_column(String(255), index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(120), index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), index=True)
+    vendor: Mapped[str | None] = mapped_column(String(120), index=True)
+    model: Mapped[str | None] = mapped_column(String(120))
+
+    # Pre-derived operational status (the whole point of materialising).
+    operational_status: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="unknown", index=True
+    )
+    operational_reason: Mapped[str | None] = mapped_column(String(160))
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Linked subscriber, when the device is customer-premises equipment.
+    subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), index=True
+    )
+
+    # Freshness of this projected row (set on every reconcile pass).
+    refreshed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
