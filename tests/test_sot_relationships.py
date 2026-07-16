@@ -30,6 +30,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "ui_display_formatting",
         "ui_action_forms",
         "ui_semantic_presentation",
+        "vpn_remote_access",
     ]
 
 
@@ -462,6 +463,11 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
 
     assert control_service is not None
     assert control_service.name == "control.feature_registry"
+
+    cadence_owner = sot_relationships.owning_service_for("subscription billing cadence")
+    assert cadence_owner is not None
+    assert cadence_owner.name == "service_intent.subscription_billing_cadence"
+    assert cadence_owner.module == "app.services.catalog.subscriptions"
 
     project_service = sot_relationships.owning_service_for(
         "native project field and status mutations"

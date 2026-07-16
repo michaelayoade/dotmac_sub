@@ -1611,6 +1611,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("service_intent.catalog_policy",),
             ),
             SOTService(
+                name="service_intent.subscription_billing_cadence",
+                module="app.services.catalog.subscriptions",
+                owns=(
+                    "subscription billing cadence",
+                    "subscription cadence resolution "
+                    "(subscription -> offer price -> monthly)",
+                    "next-billing anchor computation",
+                ),
+                depends_on=("service_intent.catalog_policy",),
+                notes=(
+                    "The subscription is the source of truth for a customer's "
+                    "contracted billing cadence, captured from the sales-order "
+                    "line and read by billing_automation. The offer/version "
+                    "price cadence is fallback-only when the subscription's is "
+                    "unset. Catalog offer-cadence immutability stays with "
+                    "service_intent.catalog_billing_governance."
+                ),
+            ),
+            SOTService(
                 name="service_intent.subscription_lifecycle",
                 module="app.services.subscription_lifecycle",
                 owns=(
@@ -2076,6 +2095,58 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "projections add one StatusPresentation label/tone/icon contract. "
             "Templates and mobile clients render that contract and do not map "
             "the same domain values independently."
+        ),
+    ),
+    DomainSOT(
+        domain="vpn_remote_access",
+        services=(
+            SOTService(
+                name="vpn.key_material",
+                module="app.services.wireguard_crypto",
+                owns=(
+                    "WireGuard keypair generation",
+                    "private-key at-rest encryption",
+                ),
+            ),
+            SOTService(
+                name="vpn.system_interface",
+                module="app.services.wireguard_system",
+                owns=(
+                    "VPS-local WireGuard interface state",
+                    "system peer projection to the running interface",
+                ),
+                depends_on=("vpn.key_material",),
+            ),
+            SOTService(
+                name="vpn.wireguard",
+                module="app.services.wireguard",
+                owns=(
+                    "WireGuard server and peer lifecycle",
+                    "peer config and MikroTik RouterOS script generation",
+                ),
+                depends_on=("vpn.system_interface", "vpn.key_material"),
+            ),
+            SOTService(
+                name="vpn.routing_readiness",
+                module="app.services.vpn_routing",
+                owns=("VPN interface readiness for device access",),
+                depends_on=("vpn.system_interface",),
+            ),
+        ),
+        entrypoints=(
+            "app.api.wireguard",
+            "app.tasks.wireguard",
+            "app.services.web_vpn_servers",
+            "app.services.web_vpn_peers",
+            "app.services.web_vpn_management",
+        ),
+        rule=(
+            "Admin VPN routes and device-access callers resolve WireGuard "
+            "server/peer lifecycle, config and RouterOS script generation, key "
+            "material, and interface readiness through these owners. web_vpn_* "
+            "adapters and device-access code do not build WireGuard config, "
+            "mutate peers, or write the system interface directly. The Redis "
+            "vpn_cache is a rebuildable projection, never a source of truth."
         ),
     ),
 )

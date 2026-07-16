@@ -418,6 +418,20 @@ def _line_offer_ref(line: object) -> str | None:
     return None
 
 
+def _line_billing_cycle(line: object) -> str | None:
+    """The contracted billing cadence captured on a sales-order line at quote
+    time (metadata.billing_cycle). SOT: the contract line is the fact-of-record
+    for cadence; absent => the subscription inherits the offer price cadence."""
+    meta = getattr(line, "metadata_", None)
+    if not isinstance(meta, dict):
+        return None
+    for key in ("billing_cycle", "sub_billing_cycle", "billing_period"):
+        value = str(meta.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def _line_add_on_ref(line: object) -> str | None:
     meta = getattr(line, "metadata_", None)
     if not isinstance(meta, dict):
@@ -773,6 +787,7 @@ def _push_sales_order_subscriptions(db: Session, sales_order: SalesOrder) -> Non
                         external_ref=f"sales_order:{sales_order_id}:subscription:{line.id}",
                         unit_price=line.unit_price,
                         service_address_id=meta.get("service_address_id"),
+                        billing_cycle=_line_billing_cycle(line),
                     )
                 except LookupError:
                     logger.warning(

@@ -1906,6 +1906,7 @@ def create_subscription(
     unit_price: Any = None,
     start_at: datetime | None = None,
     service_address_id: Any = None,
+    billing_cycle: Any = None,
 ) -> dict:
     """Create a subscription for a subscriber from a CRM sale and generate its
     first (subscription-tagged) invoice, so the plan + its charge show in the
@@ -1916,10 +1917,24 @@ def create_subscription(
     from fastapi import HTTPException
     from sqlalchemy.exc import IntegrityError
 
-    from app.models.catalog import SubscriptionStatus
+    from app.models.catalog import BillingCycle, SubscriptionStatus
     from app.schemas.catalog import SubscriptionCreate
     from app.services.billing.invoices import Invoices
     from app.services.catalog.subscriptions import Subscriptions
+
+    # Contracted cadence captured on the sales-order line (SOT: the contract is
+    # the fact-of-record). Invalid/absent => None, so the subscription inherits
+    # the offer price cadence at creation.
+    contracted_cycle: BillingCycle | None = None
+    if billing_cycle is not None:
+        try:
+            contracted_cycle = (
+                billing_cycle
+                if isinstance(billing_cycle, BillingCycle)
+                else BillingCycle(str(billing_cycle))
+            )
+        except ValueError:
+            contracted_cycle = None
 
     subscriber = session.get(Subscriber, coerce_subscriber_id(str(subscriber_id)))
     if subscriber is None:
@@ -1951,6 +1966,7 @@ def create_subscription(
                 status=SubscriptionStatus.pending,
                 start_at=start_at or datetime.now(UTC),
                 unit_price=price_override,
+                billing_cycle=contracted_cycle,
             ),
         )
     except HTTPException:

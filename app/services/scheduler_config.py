@@ -1667,7 +1667,7 @@ def build_beat_schedule() -> dict:
             session,
             name="ont_reconcile_sweep",
             task_name="app.tasks.ont_reconcile.run_ont_reconcile_sweep",
-            enabled=True,
+            enabled=control_registry.is_enabled(session, "network.ont_reconcile"),
             interval_seconds=max(ont_reconcile_seconds, 300),
         )
         ont_status_seconds = _resolve_int(

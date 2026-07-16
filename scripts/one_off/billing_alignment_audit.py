@@ -18,7 +18,7 @@ Classes reported
   D5  misallocated payments      F3   ledger invoice_id != allocation invoice_id
   D6  succeeded, no paid_at      F15  blinds the enforcement health gate
   D7  reconstructed drift        F4   persisted outputs vs independent expected position
-  D8  unapplied credit notes     F4   spendable per documents, invisible to the ledger
+  D8  unfunded credit remainder F4   issued remainder has no reviewed ledger funding
   D9  pending money              F18  pending payment already holding allocation/ledger
   D10 void with live debits      F6   void bypassed the ledger reversal
   D11 opening debits             --   cutover seed cohort, split by deposit sign
@@ -499,10 +499,12 @@ def _batch_customer_positions(
                 LedgerEntry.source == LedgerSource.payment,
                 LedgerEntry.payment_id.is_(None),
             ),
-            and_(
-                LedgerEntry.source == LedgerSource.credit_note,
-                LedgerEntry.payment_id.is_(None),
-            ),
+            # CreditNote is the canonical customer-position fact. Funding,
+            # application-transfer and void-reversal ledger rows are the
+            # operational spendability/evidence projection and must not be
+            # counted again here. Keep this in lockstep with
+            # customer_financial_ledger.list_customer_financial_events() and
+            # customer_financial_balances_by_currency().
         ),
     )
     if currency is not None:
@@ -1617,16 +1619,19 @@ def d7_balance_definition_split(
 
 
 def d8_unapplied_credit_notes(db: Session) -> Finding:
-    """Issued credit notes with an unapplied remainder (F4 mechanism).
+    """Issued credit-note remainders without reviewed funding evidence.
 
-    An issued credit note raises the document balance immediately but posts no
-    ledger entry until applied — so it is spendable to the portal and invisible
-    to settlement.
+    The current owner atomically links every new issuance to its exact funding
+    entry. An unapplied remainder is therefore normal and must not be reported
+    merely because it is still available. Historical issued notes remain a
+    finding only while ``funding_ledger_entry_id`` is NULL; reconciliation must
+    review or create that exact evidence rather than infer it from memo/amount.
     """
-    f = Finding("D8", "Issued credit note not yet applied to the ledger", "F4")
+    f = Finding("D8", "Issued credit note has no funding evidence", "F4")
     rows = db.scalars(
         select(CreditNote).where(
             CreditNote.is_active.is_(True),
+            CreditNote.funding_ledger_entry_id.is_(None),
             CreditNote.status.in_(
                 [CreditNoteStatus.issued, CreditNoteStatus.partially_applied]
             ),
@@ -1647,7 +1652,10 @@ def d8_unapplied_credit_notes(db: Session) -> Finding:
             }
         )
         f.amount += remainder
-    f.note = "visible to the portal/enforcement balance, invisible to the credit ledger"
+    f.note = (
+        "issued remainder has no reviewed funding link; funded unapplied credit "
+        "is normal and excluded"
+    )
     return f
 
 
