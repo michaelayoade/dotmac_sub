@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -12,6 +12,37 @@ from app.schemas.collections import (
 )
 from app.services import billing as billing_service
 from app.services import collections as collections_service
+from app.services.prepaid_funding_reconstruction import (
+    apply_prepaid_funding_reconstruction,
+    parse_reconstruction_manifest,
+)
+
+
+def _materialize_funding(db_session, account, amount: str = "0.00") -> datetime:
+    position_at = datetime.now(UTC) - timedelta(seconds=1)
+    payload = {
+        "source": "reviewed-test-reconstruction",
+        "captured_at": position_at.isoformat(),
+        "currency": "NGN",
+        "accounts": [
+            {
+                "account_id": str(account.id),
+                "available_balance": amount,
+            }
+        ],
+    }
+    digest = parse_reconstruction_manifest(payload).manifest_sha256
+    apply_prepaid_funding_reconstruction(
+        db_session,
+        payload,
+        expected_manifest_sha256=digest,
+        evidence_ref="finance-review:test",
+        approved_by="test-suite",
+        expected_account_ids={account.id},
+        now=datetime.now(UTC),
+    )
+    db_session.commit()
+    return position_at
 
 
 def test_dunning_case_and_action_log(db_session, subscriber_account):
@@ -54,7 +85,7 @@ def test_dunning_case_list_invalid_status(db_session):
     assert exc.value.status_code == 400
 
 
-def test_prepaid_balance_ignores_imported_deposit_and_uses_ledger(
+def test_prepaid_balance_ignores_imported_deposit_after_final_reconstruction(
     db_session, subscriber_account
 ):
     """Imported deposit is no longer an enforcement balance source."""
@@ -65,6 +96,7 @@ def test_prepaid_balance_ignores_imported_deposit_and_uses_ledger(
     subscriber_account.splynx_customer_id = 25313
     subscriber_account.deposit = D("31965.11")
     db_session.commit()
+    _materialize_funding(db_session, subscriber_account)
 
     billing_service.invoices.create(
         db_session,
@@ -92,11 +124,12 @@ def test_prepaid_balance_negative_imported_deposit_is_ignored(
     subscriber_account.splynx_customer_id = 9875
     subscriber_account.deposit = D("-2112500.00")
     db_session.commit()
+    _materialize_funding(db_session, subscriber_account)
     bal = _resolve_prepaid_available_balance(db_session, str(subscriber_account.id))
     assert bal == D("0.00")
 
 
-def test_prepaid_balance_native_account_uses_ledger_fallback(
+def test_prepaid_balance_native_event_projects_after_reconstruction(
     db_session, subscriber_account
 ):
     """Native account (no authoritative deposit) keeps the ledger model."""
@@ -106,6 +139,7 @@ def test_prepaid_balance_native_account_uses_ledger_fallback(
 
     subscriber_account.splynx_customer_id = None
     subscriber_account.deposit = None
+    _materialize_funding(db_session, subscriber_account)
     db_session.add(
         LedgerEntry(
             account_id=subscriber_account.id,

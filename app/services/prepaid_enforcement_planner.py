@@ -25,6 +25,7 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.access_resolution import (
     PrepaidFundingDecision,
+    resolve_prepaid_enforcement_currency,
     resolve_prepaid_funding,
 )
 from app.services.billing_communication_policy import (
@@ -36,13 +37,12 @@ from app.services.billing_enforcement_guards import (
 )
 from app.services.billing_profile import resolve_billing_profile
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
+from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.collections._core import _bulk_dunning_shield_reasons
 from app.services.collections.grace_policy import resolve_grace_decision
 from app.services.common import coerce_uuid
 
 PREPAID_BALANCE_ENFORCEMENT_CONTROL = "collections.prepaid_balance_enforcement"
-
-_RELEVANT_STATUSES = tuple(COLLECTIBLE_SERVICE_STATUSES)
 
 
 class PrepaidEnforcementAction(str, Enum):
@@ -94,6 +94,7 @@ class PrepaidEnforcementPlanItem:
     derived_account_status: str
     account_status_drift: bool
     billing_mode: str | None
+    currency: str
     available_balance: Decimal
     required_balance: Decimal
     active_subscription_count: int
@@ -161,12 +162,16 @@ class PrepaidFundingSnapshot:
 
     captured_at: datetime
     source: str
+    currency: str
     decisions: tuple[PrepaidFundingDecision, ...]
 
     def by_account(self) -> dict[str, PrepaidFundingDecision]:
         source = self.source.strip()
         if not source:
             raise ValueError("funding snapshot source must not be empty")
+        unit = self.currency.strip().upper()
+        if len(unit) != 3 or not unit.isalpha():
+            raise ValueError("funding snapshot currency must be a three-letter code")
         if not self.decisions:
             raise ValueError("funding snapshot decisions must not be empty")
         result: dict[str, PrepaidFundingDecision] = {}
@@ -174,6 +179,11 @@ class PrepaidFundingSnapshot:
             account_id = str(coerce_uuid(decision.account_id))
             if account_id in result:
                 raise ValueError(f"duplicate funding decision for account {account_id}")
+            if decision.currency.strip().upper() != unit:
+                raise ValueError(
+                    f"funding decision for account {account_id} uses "
+                    f"{decision.currency}, expected {unit}"
+                )
             result[account_id] = decision
         return result
 
@@ -233,19 +243,27 @@ def resolve_prepaid_enforcement_policy(db: Session) -> PrepaidEnforcementPolicy:
 
 
 def candidate_prepaid_account_ids(db: Session) -> set[Any]:
-    """Accounts with collectible prepaid service or stale prepaid timers."""
+    """Canonical enforcement, repair, and restoration cohort.
+
+    The shared access predicates own normal eligibility. Timers and active
+    prepaid locks are unconditional repair inputs so a later billing-mode or
+    status change cannot strand enforcement state outside the sweep.
+    """
     ids: set[Any] = {
         row[0]
         for row in (
             db.query(Subscriber.id)
             .join(Subscription, Subscription.subscriber_id == Subscriber.id)
+            .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+            .filter(Subscriber.status.in_(BILLABLE_SUBSCRIBER_STATUSES))
+            .filter(Subscriber.is_active.is_(True))
+            .filter(Subscriber.billing_enabled.is_(True))
             .filter(
                 or_(
                     Subscriber.billing_mode == BillingMode.prepaid,
                     Subscription.billing_mode == BillingMode.prepaid,
                 )
             )
-            .filter(Subscription.status.in_(_RELEVANT_STATUSES))
             .distinct()
             .all()
         )
@@ -254,7 +272,6 @@ def candidate_prepaid_account_ids(db: Session) -> set[Any]:
         row[0]
         for row in (
             db.query(Subscriber.id)
-            .filter(Subscriber.billing_mode == BillingMode.prepaid)
             .filter(
                 or_(
                     Subscriber.prepaid_low_balance_at.is_not(None),
@@ -263,6 +280,21 @@ def candidate_prepaid_account_ids(db: Session) -> set[Any]:
             )
             .all()
         )
+    )
+    ids.update(
+        row[0]
+        for row in db.execute(
+            select(Subscription.subscriber_id)
+            .join(
+                EnforcementLock,
+                EnforcementLock.subscription_id == Subscription.id,
+            )
+            .where(
+                EnforcementLock.reason == EnforcementReason.prepaid,
+                EnforcementLock.is_active.is_(True),
+            )
+            .distinct()
+        ).all()
     )
     return ids
 
@@ -411,24 +443,41 @@ def plan_prepaid_account(
         if account.prepaid_low_balance_at is not None
         else None
     )
-    grace_started_at = low_at
-    if policy.activation_at is not None and (
-        grace_started_at is None or grace_started_at < policy.activation_at
-    ):
-        grace_started_at = policy.activation_at
     grace = resolve_grace_decision(
         db,
         account,
-        starts_at=grace_started_at if low_at is not None else None,
+        starts_at=low_at,
         as_of=now,
     )
-    due_at = grace.ends_at
+    zero_grace = grace.policy.days == 0
+    due_at = (low_at or now) if zero_grace else grace.ends_at
 
     action = PrepaidEnforcementAction.ok
     reason = "funded_and_aligned"
-    if account.status == SubscriberStatus.canceled:
+    has_timers = (
+        account.prepaid_low_balance_at is not None
+        or account.prepaid_deactivation_at is not None
+    )
+    if (
+        has_timers
+        and (
+            account.status == SubscriberStatus.canceled
+            or not account.is_active
+            or not account.billing_enabled
+        )
+        and active_prepaid_lock_count == 0
+    ):
+        action = PrepaidEnforcementAction.clear_stale_timers
+        reason = "ineligible_account_has_prepaid_timers"
+    elif account.status == SubscriberStatus.canceled:
         action = PrepaidEnforcementAction.not_applicable
         reason = "account_canceled"
+    elif not account.is_active:
+        action = PrepaidEnforcementAction.not_applicable
+        reason = "account_inactive"
+    elif not account.billing_enabled:
+        action = PrepaidEnforcementAction.not_applicable
+        reason = "account_billing_disabled"
     elif not profile.automation_safe and profile.has_collectible_subscriptions:
         action = PrepaidEnforcementAction.billing_profile_invalid
         reason = profile.invalid_reason or "billing_profile_not_automation_safe"
@@ -462,10 +511,10 @@ def plan_prepaid_account(
     elif active_prepaid_lock_count > 0:
         action = PrepaidEnforcementAction.already_suspended
         reason = "prepaid_lock_and_deactivation_aligned"
-    elif account.prepaid_low_balance_at is None:
+    elif account.prepaid_low_balance_at is None and not zero_grace:
         action = PrepaidEnforcementAction.warn
         reason = "low_balance_timer_not_armed"
-    elif grace.phase != "actionable":
+    elif not zero_grace and grace.phase != "actionable":
         action = PrepaidEnforcementAction.waiting
         reason = "deactivation_grace_not_elapsed"
     elif window_reason := _window_block_reason(db, now=now, policy=policy):
@@ -504,6 +553,7 @@ def plan_prepaid_account(
         derived_account_status=derived_status.value,
         account_status_drift=current_status != derived_status,
         billing_mode=profile.effective_mode.value if profile.effective_mode else None,
+        currency=funding.currency,
         available_balance=balance,
         required_balance=threshold,
         active_subscription_count=active_count,
@@ -591,6 +641,13 @@ def plan_prepaid_enforcement(
         funding_snapshot_at = generated_at
     else:
         assert funding_snapshot is not None
+        configured_currency = resolve_prepaid_enforcement_currency(db)
+        if funding_snapshot.currency.strip().upper() != configured_currency:
+            raise ValueError(
+                "funding snapshot currency "
+                f"{funding_snapshot.currency.strip().upper()} does not match "
+                f"configured prepaid enforcement currency {configured_currency}"
+            )
         missing = [
             str(account.id)
             for account in accounts

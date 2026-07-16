@@ -454,6 +454,7 @@ def preview_financial_access_consequence(
             else:
                 funding = resolve_prepaid_funding(db, account)
                 prepaid_funding = {
+                    "currency": funding.currency,
                     "available_balance": f"{funding.available_balance:.2f}",
                     "required_balance": f"{funding.required_balance:.2f}",
                     "funded": funding.funded,
@@ -1046,6 +1047,7 @@ def preview_financial_access_restoration(
         if profile.automation_safe and profile.effective_mode == BillingMode.prepaid:
             funding = resolve_prepaid_funding(db, account)
             prepaid_funding = {
+                "currency": funding.currency,
                 "available_balance": f"{funding.available_balance:.2f}",
                 "required_balance": f"{funding.required_balance:.2f}",
                 "funded": funding.funded,

@@ -96,22 +96,44 @@ class PrepaidFundingDecision:
     account_id: str
     available_balance: Decimal
     required_balance: Decimal
+    currency: str
 
     @property
     def funded(self) -> bool:
         return self.available_balance >= self.required_balance
 
 
-def resolve_prepaid_available_balance(db: Session, account_id: object) -> Decimal:
+def resolve_prepaid_enforcement_currency(db: Session) -> str:
+    """Return the configured currency unit for prepaid access decisions."""
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    raw = settings_spec.resolve_value(
+        db, SettingDomain.billing, "prepaid_enforcement_currency"
+    )
+    currency = str(raw).strip().upper() if raw is not None else ""
+    if len(currency) != 3 or not currency.isalpha():
+        raise ValueError(
+            "billing.prepaid_enforcement_currency must be a three-letter currency"
+        )
+    return currency
+
+
+def resolve_prepaid_available_balance(
+    db: Session, account_id: object, *, currency: str | None = None
+) -> Decimal:
     """Resolve the customer financial position used by prepaid access policy.
 
-    Multi-currency accounts fail closed by using their least-funded currency.
-    This preserves the existing enforcement semantics while moving the decision
-    behind the declared ``financial.access_resolution`` boundary.
+    Amounts in different currencies are never compared. The configured prepaid
+    enforcement currency is the unit for both available and required balance.
     """
     from app.services.customer_financial_position import prepaid_available_balance
 
-    return prepaid_available_balance(db, account_id)
+    return prepaid_available_balance(
+        db,
+        account_id,
+        currency=currency or resolve_prepaid_enforcement_currency(db),
+    )
 
 
 def resolve_prepaid_funding(
@@ -128,10 +150,17 @@ def resolve_prepaid_funding(
     """
     from app.services.prepaid_threshold import resolve_prepaid_threshold
 
+    currency = resolve_prepaid_enforcement_currency(db)
+
     return PrepaidFundingDecision(
         account_id=str(account.id),
-        available_balance=resolve_prepaid_available_balance(db, account.id),
-        required_balance=resolve_prepaid_threshold(db, account, now=now),
+        available_balance=resolve_prepaid_available_balance(
+            db, account.id, currency=currency
+        ),
+        required_balance=resolve_prepaid_threshold(
+            db, account, now=now, currency=currency
+        ),
+        currency=currency,
     )
 
 

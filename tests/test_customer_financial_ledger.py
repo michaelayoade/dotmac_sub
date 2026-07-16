@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import pytest
+
 from app.models.billing import (
     CreditNote,
     CreditNoteStatus,
@@ -14,6 +16,7 @@ from app.models.billing import (
     Payment,
     PaymentStatus,
 )
+from app.models.prepaid_funding import PrepaidFundingReconstructionBatch
 from app.models.splynx_transaction import SplynxBillingTransaction
 from app.services.customer_financial_ledger import (
     calculate_customer_balance,
@@ -23,6 +26,9 @@ from app.services.customer_financial_ledger import (
 from app.services.customer_financial_position import (
     prepaid_available_balance,
     prepaid_available_balances,
+)
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
 )
 
 
@@ -191,7 +197,9 @@ def test_bulk_balance_matches_canonical_multi_currency_refund_rules(
             "USD": Decimal("55.00"),
         }
     }
-    assert prepaid_available_balance(db_session, subscriber.id) == Decimal("55.00")
-    assert prepaid_available_balances(db_session, [subscriber.id]) == {
-        subscriber.id: Decimal("55.00")
-    }
+    db_session.query(PrepaidFundingReconstructionBatch).delete()
+    db_session.commit()
+    with pytest.raises(PrepaidFundingBaselineMissingError, match="cutover"):
+        prepaid_available_balance(db_session, subscriber.id)
+    with pytest.raises(PrepaidFundingBaselineMissingError, match="cutover"):
+        prepaid_available_balances(db_session, [subscriber.id])

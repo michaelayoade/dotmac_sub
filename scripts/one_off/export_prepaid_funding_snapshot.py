@@ -38,6 +38,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
+from app.services import display_format
 from app.services.prepaid_enforcement_planner import candidate_prepaid_account_ids
 from app.services.prepaid_threshold import resolve_prepaid_thresholds
 from scripts.one_off.billing_alignment_audit import (
@@ -60,6 +61,7 @@ def _money(value: Decimal) -> str:
 class FundingSnapshotExport:
     captured_at: datetime
     source: str
+    currency: str
     candidate_ids: tuple[str, ...]
     positions: dict[str, Decimal]
     thresholds: dict[str, Decimal]
@@ -77,6 +79,7 @@ class FundingSnapshotExport:
         return {
             "source": self.source,
             "captured_at": self.captured_at.isoformat().replace("+00:00", "Z"),
+            "currency": self.currency,
             "accounts": [
                 {
                     "account_id": account_id,
@@ -94,6 +97,7 @@ class FundingSnapshotExport:
         return {
             "source": self.source,
             "captured_at": self.captured_at.isoformat().replace("+00:00", "Z"),
+            "currency": self.currency,
             "ready": self.ready,
             "candidate_accounts": len(self.candidate_ids),
             "reconstructed_accounts": len(self.positions),
@@ -160,6 +164,7 @@ def build_prepaid_funding_snapshot(
     return FundingSnapshotExport(
         captured_at=captured_at,
         source=source_label,
+        currency=display_format.default_currency(db),
         candidate_ids=candidate_ids,
         positions=positions,
         thresholds={

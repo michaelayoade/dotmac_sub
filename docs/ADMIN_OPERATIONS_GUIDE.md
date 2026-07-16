@@ -936,9 +936,16 @@ net = charge - credit
 | Prepaid Enforcement | false | Customer-impacting balance enforcement gate |
 | Prepaid Blocking Time | 08:00 | Time of day to block |
 | Prepaid Skip Weekends | false | Skip blocking on weekends |
-| Prepaid Grace Days | 0 | Grace before blocking |
-| Prepaid Deactivation Days | 0 | Days to full deactivation |
-| Prepaid Min Balance | ₦0.00 | Minimum balance threshold |
+| Prepaid Default Grace Period | 0 | Billing-mode fallback after account/policy overrides |
+| Prepaid Default Min Balance | ₦0.00 | Billing-owned fallback minimum threshold |
+| Prepaid Enforcement Currency | NGN | Currency unit for balance and threshold comparisons |
+| Prepaid Activation Time | unset | Reviewed ISO-8601 cutover time; required before adverse action |
+| Funding Readiness Max Age | 60 min | Maximum configured snapshot-to-activation interval |
+| Activation Max Grace | 0 days | Blocks cutover readiness if an underfunded account exceeds it |
+
+`Prepaid Grace Days` and `Prepaid Deactivation Days` are retired settings and
+must not be used. Grace precedence is account → active policy set → prepaid
+billing default.
 
 ### Dunning Actions
 
@@ -962,21 +969,45 @@ net = charge - credit
 Apply aggressive collections settings only after confirming payment posting latency. If payment imports or webhook confirmation are delayed, customers can be suspended incorrectly.
 
 Before enabling prepaid enforcement, generate the side-effect-free production
-plan and review every action bucket:
+plan from a complete independent funding snapshot and review every action bucket:
 
 ```bash
 docker compose exec -T -e PYTHONPATH=/app app \
   python scripts/one_off/plan_prepaid_balance_sweep.py \
+  --funding-snapshot /secure-local/prepaid-funding.json \
+  --activation-at 2026-07-20T08:00:00+01:00 \
   --out /tmp/prepaid-balance-sweep-plan.json
 ```
+
+Prepaid funding authority must first be materialized through the final reviewed
+cutover in `docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md`. This is not a
+feature toggle and has no Splynx fallback. Resolve every reconstruction blocker,
+using bank statements and Splynx exports only as reviewed migration evidence,
+then apply the exact full-cohort manifest before starting the enforcement
+release. Missing pre-cutover opening balances fail closed; never enter zero for
+an unknown balance.
 
 The report runs even while the control is disabled. It includes account IDs,
 available and required balances, lifecycle projection drift, safety shields,
 enforcement lock/timer drift, and infrastructure outage/ticket notice
 suppression. It never arms timers,
 queues notices, changes service state, or disconnects sessions. Enable the
-control only after reviewing the complete plan; the first low-balance pass
-warns and arms timers, while a later eligible pass performs suspension.
+control only after reviewing the complete plan and recording exact parity:
+
+```bash
+docker compose exec -T -e PYTHONPATH=/app app \
+  python scripts/one_off/plan_prepaid_balance_sweep.py \
+  --funding-snapshot /secure-local/prepaid-funding.json \
+  --activation-at 2026-07-20T08:00:00+01:00 \
+  --record-readiness \
+  --evidence-ref reconciliation-run:prepaid-cutover \
+  --verified-by billing-operations
+```
+
+The evidence reference must not contain bank credentials or statement data.
+With the configured prepaid grace default of zero, an eligible underfunded
+account is suspended on the first sweep; an explicit account or policy-set
+grace override remains authoritative and appears in the plan.
 
 ---
 

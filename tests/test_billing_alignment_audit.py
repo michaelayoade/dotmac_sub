@@ -528,6 +528,7 @@ def test_funding_export_uses_owner_cohort_replay_and_threshold(db_session, subsc
     payload = export.funding_payload()
     assert payload["source"] == "splynx-final-plus-native-events:test"
     assert payload["captured_at"] == "2026-07-12T00:00:00Z"
+    assert payload["currency"] == "NGN"
     assert payload["accounts"] == [
         {
             "account_id": str(subscriber.id),

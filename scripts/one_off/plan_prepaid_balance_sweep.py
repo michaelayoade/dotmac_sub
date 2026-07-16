@@ -15,6 +15,7 @@ Funding snapshot shape (amounts are decimal strings; timestamp needs a zone):
     {
       "source": "splynx-cutover-plus-native-events:prod-2026-07-14",
       "captured_at": "2026-07-14T12:08:25Z",
+      "currency": "NGN",
       "accounts": [{
         "account_id": "...",
         "available_balance": "123.45",
@@ -22,8 +23,9 @@ Funding snapshot shape (amounts are decimal strings; timestamp needs a zone):
       }]
     }
 
-This command has no execute mode. Enabling the production control remains a
-separate, explicit operator decision after the report is reviewed.
+The optional ``--record-readiness`` mode writes only cutover evidence after an
+exact full-cohort comparison. It does not enable enforcement or change money,
+timers, notices, service state, or sessions.
 """
 
 from __future__ import annotations
@@ -79,6 +81,9 @@ def _load_funding_snapshot(path: str) -> PrepaidFundingSnapshot:
     rows = payload.get("accounts")
     if not isinstance(rows, list) or not rows:
         raise ValueError("funding snapshot accounts must be a non-empty list")
+    currency = str(payload.get("currency") or "").strip().upper()
+    if len(currency) != 3 or not currency.isalpha():
+        raise ValueError("funding snapshot currency must be a three-letter code")
 
     decisions: list[PrepaidFundingDecision] = []
     for index, row in enumerate(rows):
@@ -98,12 +103,14 @@ def _load_funding_snapshot(path: str) -> PrepaidFundingSnapshot:
                     row.get("required_balance"),
                     field=f"accounts[{index}].required_balance",
                 ),
+                currency=currency,
             )
         )
 
     return PrepaidFundingSnapshot(
         captured_at=_parse_datetime(payload.get("captured_at"), field="captured_at"),
         source=str(payload.get("source") or ""),
+        currency=currency,
         decisions=tuple(decisions),
     )
 
@@ -150,6 +157,21 @@ def main() -> int:
             "the setting or enable enforcement."
         ),
     )
+    parser.add_argument(
+        "--record-readiness",
+        action="store_true",
+        help="Persist verified full-cohort cutover evidence; never enables the feature.",
+    )
+    parser.add_argument(
+        "--evidence-ref",
+        default=None,
+        help="Non-secret reference to the reconstruction/bank evidence package.",
+    )
+    parser.add_argument(
+        "--verified-by",
+        default=None,
+        help="Operator identity recorded with the readiness evidence.",
+    )
     args = parser.parse_args()
 
     funding_snapshot = (
@@ -160,6 +182,15 @@ def main() -> int:
         if args.activation_at
         else None
     )
+    if args.record_readiness:
+        if funding_snapshot is None or activation_at is None:
+            parser.error(
+                "--record-readiness requires --funding-snapshot and --activation-at"
+            )
+        if args.account_id or args.limit is not None:
+            parser.error("--record-readiness requires the complete candidate cohort")
+        if not args.evidence_ref or not args.verified_by:
+            parser.error("--record-readiness requires --evidence-ref and --verified-by")
 
     db = SessionLocal()
     try:
@@ -199,9 +230,33 @@ def main() -> int:
                 output.write("\n")
             print(f"\nFull plan written: {args.out} ({len(rows)} accounts)")
 
-        print(
-            "\nDRY RUN ONLY - no timers, notices, service states, or sessions changed."
-        )
+        if args.record_readiness:
+            from app.services.prepaid_enforcement_readiness import (
+                record_prepaid_enforcement_readiness,
+            )
+
+            assert funding_snapshot is not None
+            assert activation_at is not None
+            record = record_prepaid_enforcement_readiness(
+                db,
+                funding_snapshot,
+                activation_at=activation_at,
+                evidence_ref=args.evidence_ref,
+                verified_by=args.verified_by,
+            )
+            db.commit()
+            print(
+                "\nReadiness recorded: "
+                f"id={record.id} accounts={record.candidate_account_count} "
+                f"currency={record.currency}"
+            )
+
+        if args.record_readiness:
+            print("No financial or customer enforcement state was changed.")
+        else:
+            print(
+                "\nDRY RUN ONLY - no timers, notices, service states, or sessions changed."
+            )
         return 0
     finally:
         db.close()

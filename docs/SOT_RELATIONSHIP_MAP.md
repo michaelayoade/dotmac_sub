@@ -111,22 +111,49 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    the bounded bulk projection used by cohort monitoring. It exposes invoice
    receivables and prepaid service funding as separate values; it does not net
    them into a generic balance or absorb payment lifecycle or service-access
-   state. Bulk callers do not loop the single-customer ledger reader.
+   state. Prepaid funding delegates to
+   `financial.prepaid_funding_reconstruction`: one reviewed opening position at
+   the final authority-cutover timestamp plus canonical native events strictly
+   after that timestamp. There is no Splynx/legacy fallback or authority toggle.
+   A pre-cutover account without an approved opening balance fails closed; an
+   account created after cutover starts at zero and accumulates native events.
+   Bulk callers use the same owner instead of reconstructing another balance.
 8. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
-   financial position with the single `financial.prepaid_threshold`; the
-   existence or size of one payment is never itself permission to restore.
+   financial position with the single `financial.prepaid_threshold` in the
+   configured `billing.prepaid_enforcement_currency`; nominal amounts in
+   different currencies are never compared. The existence or size of one
+   payment is never itself permission to restore.
 9. `financial.prepaid_enforcement` owns the prepaid candidate cohort and the
    warn/suspend/restore plan consumed by both dry-run and execution. It consumes
    the funding decision from `financial.access_resolution`; it does not create
-   another balance or threshold rule. Audit reconstruction may supply a named,
-   timestamped funding snapshot (for example, Splynx cutover position plus
-   native post-cutover events), but the enforcement owner still applies billing
-   profile validity, grace, activation floor, shields, health, and lifecycle
-   policy, including selection of the candidate cohort. Supplied snapshots are
-   complete-or-error for that cohort and never fall back to a different local
-   balance for missing accounts.
-10. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
+   another balance or threshold rule. Migration first materializes a named,
+   timestamped, reviewed full-cohort opening position through
+   `financial.prepaid_funding_reconstruction` (for example, from the Splynx
+   cutover position plus proven native events). Splynx exports and bank
+   statements may close migration evidence, but their rows and narrations are
+   never runtime funding. The enforcement owner still applies billing
+   profile validity, configured grace, activation time, windows, shields,
+   health, and lifecycle policy, including selection of the candidate cohort.
+   Activation does not reset an older low-balance timer. A resolved zero-day
+   grace policy is actionable on the first eligible sweep; an explicit nonzero
+   account or policy-set grace remains authoritative. Supplied snapshots are
+   complete-or-error for that cohort and never fill missing accounts from a
+   different balance source.
+10. `financial.prepaid_enforcement_readiness` owns the cutover comparison and
+   activation prerequisite. It records parity between complete independent
+   funding evidence and Sub's live currency-bound funding decisions for the
+   exact owner-selected cohort. The feature-control writer and runtime adverse
+   path fail closed without current evidence bound to the configured activation
+   and currency. The readiness record is evidence, not money: after activation,
+   every suspend and restore resolves the live Sub ledger again. Bank statements
+   may close missing source evidence through normal reconciliation, but never
+   become a parallel runtime balance. Live enforcement consumes only the
+   reviewed opening balance plus native post-cutover events.
+   `collections.prepaid_activation_max_grace_days` is the activation-cohort
+   policy gate; it is configured as zero for this cutover, so readiness cannot
+   be recorded while an underfunded candidate resolves to a fresh grace period.
+11. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
    affordability decision, confirmation fingerprint, and idempotent financial
    adjustment. It binds the human preview to a durable change request, locks the
    account and recomputes at write time, then records the exact adjustment or
@@ -136,41 +163,41 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    `financial.credit_notes`. Immediate admin bulk changes are gated until a
    batch contract can preview and confirm every subscription separately;
    next-cycle bulk scheduling produces no immediate financial transaction.
-11. `financial.account_adjustments` owns debit eligibility, preview, locked
+12. `financial.account_adjustments` owns debit eligibility, preview, locked
    confirmation, idempotency, actor audit, exact ledger evidence, and previewed
    append-only reversal. It never issues customer credits and never decides
    service-access state.
-12. `financial.addon_purchases` owns customer add-on price, subscription-state,
+13. `financial.addon_purchases` owns customer add-on price, subscription-state,
    and entitlement confirmation. A paid add-on delegates one exact debit to
    `financial.account_adjustments` and stores the structural entitlement-to-
    adjustment link; a free add-on explicitly produces no ledger transaction.
-13. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+14. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
    Both submit owner-produced previews to `financial.dunning`'s shared
    financial-access consequence confirmation. It locks and rechecks billing
    profile validity, payment-arrangement/proof/extension shields, canonical
    receivables or prepaid funding, and billing enforcement health immediately
    before acting. `access.subscription_lifecycle` is the sole writer of
    enforcement locks and subscription/account access status.
-14. `financial.payment_arrangements` owns arrangement eligibility, lifecycle,
+15. `financial.payment_arrangements` owns arrangement eligibility, lifecycle,
    installment schedule, payment application, and active-arrangement shield
    state. Dunning consumes the shield; it does not reimplement arrangement
    eligibility, and an arrangement does not rewrite receivables or access.
-15. `financial.billing_health` owns monitoring snapshots and anomaly
+16. `financial.billing_health` owns monitoring snapshots and anomaly
     classification. Health signals are observations, not balances or direct
     suspension/restoration permission.
-16. Scheduled billing, collections, and payment-reconciliation services own DB
+17. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-17. `financial.payment_webhooks` owns signature-verified provider-payload
+18. `financial.payment_webhooks` owns signature-verified provider-payload
    projection and inbound dead-letter lifecycle. Replay rebuilds the same
    settlement command as live delivery; `financial.payment_provider_events`
    owns idempotent event processing, delegates the monetary write to the
    payment owner, and must resume an incomplete event rather than treating
    receipt identity as proof that money was posted.
-18. Referral rewards are account credits owned by `financial.credit_notes`;
+19. Referral rewards are account credits owned by `financial.credit_notes`;
    neither CRM nor referral services post a parallel wallet balance. Automated
    referral issuance uses the same owner-generated preview, locked confirmation,
    idempotency, audit, and exact funding-ledger evidence as other credit issuance.
-19. Every money-moving financial command is previewed by the same owner that executes it.
+20. Every money-moving financial command is previewed by the same owner that executes it.
    Execution locks and recomputes the preview, rejects stale confirmation,
    records idempotency and actor audit evidence, and structurally links the
    command result to its exact ledger transaction(s). Financial settlement may
@@ -640,7 +667,8 @@ evidenced owner contract:
   duration and provenance once: explicit account override, then active policy
   set, then billing-mode default. Postpaid dunning steps count from the end of
   that grace decision; prepaid planning, enforcement, and customer status use
-  the same low-balance deadline. The former collections settings
+  the same low-balance deadline. Zero configured days means no elapsed-time
+  grace and is actionable immediately. The former collections settings
   `prepaid_grace_days` and `prepaid_deactivation_days` are retired.
 - Consequence writer: `access.subscription_lifecycle` exclusively creates or
   resolves `EnforcementLock` rows, persists their `access_mode`, and derives
@@ -672,6 +700,13 @@ evidenced owner contract:
   throttle only after canonical overdue receivables are empty, and resolves
   prepaid locks/timers only after the canonical funding threshold is met.
   Other active lock reasons remain untouched.
+- Financial-position boundary: post-cutover account positions and reconstructed
+  prepaid funding share the same currency-typed signed native-event arithmetic.
+  Overdue decisions consume collectible receivables; prepaid decisions consume
+  the reviewed opening position plus native events and compare it with the
+  affordability threshold. The archived Splynx mirror is migration evidence,
+  never a runtime fallback. Reason-scoped repair follows the reason owner: an
+  ``overdue`` lock is never judged by the prepaid affordability resolver.
 - Transport boundary: `invoice.overdue` is observation only. Notifications,
   throttle, suspension, and rejection come from the configured dunning step.
   `payment.received` always asks the owner to reconcile and contains no local
