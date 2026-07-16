@@ -32,7 +32,7 @@ def _ctx(request: Request, db: Session) -> dict:
 @router.get(
     "/work-orders",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("operations:dispatch"))],
+    dependencies=[Depends(require_permission("operations:dispatch:read"))],
 )
 def dispatch_work_orders(
     request: Request,
@@ -60,7 +60,7 @@ def dispatch_work_orders(
 @router.post(
     "/work-orders",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("operations:dispatch"))],
+    dependencies=[Depends(require_permission("operations:dispatch:write"))],
 )
 def create_dispatch_work_order(
     request: Request,
@@ -78,7 +78,7 @@ def create_dispatch_work_order(
 @router.post(
     "/work-orders/{work_order_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("operations:dispatch"))],
+    dependencies=[Depends(require_permission("operations:dispatch:write"))],
 )
 def update_dispatch_work_order(
     request: Request,
@@ -97,7 +97,7 @@ def update_dispatch_work_order(
 @router.post(
     "/work-orders/{work_order_id}/queue",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("operations:dispatch"))],
+    dependencies=[Depends(require_permission("operations:dispatch:assign"))],
 )
 def queue_dispatch_work_order(
     work_order_id: str,

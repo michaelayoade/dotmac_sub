@@ -63,6 +63,7 @@ from app.services import support_ticket_settings as support_ticket_settings_serv
 from app.services.audit_helpers import build_audit_activities, log_audit_event
 from app.services.common import coerce_uuid
 from app.services.dynamic_filters import FilterValidationError
+from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,64 @@ PROJECT_EXPORT_COLUMNS = [
 ]
 
 _LIST_ORDER_COLUMNS = {"created_at", "name", "priority"}
+
+PROJECT_LIST_DEFINITION = ListDefinition(
+    key="projects",
+    fields=(
+        ListFieldDefinition("name", "Project", searchable=True, sortable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("project_type", "Type", filterable=True),
+        ListFieldDefinition("priority", "Priority", filterable=True, sortable=True),
+        ListFieldDefinition("region", "Region", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+
+
+def build_project_list_query(
+    *,
+    search: str | None = None,
+    status: str | None = None,
+    project_type: str | None = None,
+    priority: str | None = None,
+    region: str | None = None,
+    order_by: str | None = None,
+    order_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalize the admin project list through its declared capabilities.
+
+    ui.project_list_projection owns the searchable/filterable/sortable fields and
+    pagination; the route submits raw request values. The read is delegated to
+    projects_service.projects.list (operations.project_lifecycle).
+    """
+    sort_by = (
+        order_by
+        if order_by in PROJECT_LIST_DEFINITION.sortable_keys
+        else PROJECT_LIST_DEFINITION.default_sort
+    )
+    sort_dir = (order_dir or "").strip().lower()
+    if sort_dir not in {"asc", "desc"}:
+        sort_dir = PROJECT_LIST_DEFINITION.default_sort_dir
+    effective_per_page = per_page or PROJECT_LIST_DEFINITION.default_per_page
+    if effective_per_page not in PROJECT_LIST_DEFINITION.per_page_options:
+        effective_per_page = PROJECT_LIST_DEFINITION.default_per_page
+    return PROJECT_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "status": status,
+            "project_type": project_type,
+            "priority": priority,
+            "region": region,
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=max(1, page),
+        per_page=effective_per_page,
+    )
 
 
 # ── small parsers (web_support_tickets idiom) ────────────────────────────────
@@ -420,15 +479,26 @@ def build_projects_list_context(
     page: int,
     per_page: int,
 ) -> dict:
-    order_by, order_dir = normalize_order(order_by, order_dir)
+    list_query = build_project_list_query(
+        search=search,
+        status=status,
+        project_type=project_type,
+        priority=priority,
+        region=region,
+        order_by=order_by,
+        order_dir=order_dir,
+        page=page,
+        per_page=per_page,
+    )
+    order_by, order_dir = list_query.sort_by, list_query.sort_dir
+    page, per_page = list_query.page, list_query.per_page
     filter_clause = _build_project_filter_clause(filters)
-    offset = (page - 1) * per_page
     rows_plus_one = projects_service.projects.list(
         db,
         subscriber_id=None,
-        status=status or None,
-        project_type=project_type or None,
-        priority=priority or None,
+        status=list_query.filter_value("status"),
+        project_type=list_query.filter_value("project_type"),
+        priority=list_query.filter_value("priority"),
         owner_person_id=None,
         manager_person_id=None,
         project_manager_person_id=None,
@@ -437,10 +507,10 @@ def build_projects_list_context(
         order_by=order_by,
         order_dir=order_dir,
         limit=per_page + 1,
-        offset=offset,
-        search=search,
+        offset=list_query.offset,
+        search=list_query.search,
         filter_clause=filter_clause,
-        region=(region or "").strip() or None,
+        region=list_query.filter_value("region"),
     )
     has_next_page = len(rows_plus_one) > per_page
     rows = rows_plus_one[:per_page]

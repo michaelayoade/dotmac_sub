@@ -28,6 +28,7 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     "catalog:read",
     "catalog:write",
     "network:read",
+    "network:operation:redrive",
     "network:write",
     "provisioning:read",
     "provisioning:write",
@@ -78,6 +79,8 @@ DEFAULT_PERMISSIONS = [
     ("customer:impersonate", "Impersonate customer accounts"),
     ("customer:write", "Manage customers through compatibility endpoints"),
     ("reseller:impersonate", "Impersonate reseller portal principals"),
+    ("reseller:read", "View resellers"),
+    ("reseller:write", "Manage resellers"),
     # Billing - Invoices
     ("billing:invoice:read", "View invoices"),
     ("billing:invoice:create", "Create invoices"),
@@ -138,6 +141,10 @@ DEFAULT_PERMISSIONS = [
     ("network:map:read", "View the comprehensive network map"),
     ("network:device:read", "View network devices"),
     ("network:device:write", "Manage network devices"),
+    (
+        "network:operation:redrive",
+        "Retry eligible failed network operations",
+    ),
     ("network:olt:read", "View OLT devices and operations"),
     ("network:olt:write", "Manage OLT devices and operations"),
     ("network:cpe:read", "View CPE devices"),
@@ -201,7 +208,9 @@ DEFAULT_PERMISSIONS = [
     ("operations:expense_request:write", "Approve or reject field expense requests"),
     ("operations:asset_custody:read", "View asset custody records"),
     ("operations:asset_custody:write", "Manage asset custody records"),
-    ("operations:dispatch", "Dispatch operational work"),
+    ("operations:dispatch:read", "View dispatch work orders and maps"),
+    ("operations:dispatch:write", "Create and edit dispatch work orders"),
+    ("operations:dispatch:assign", "Queue and assign dispatch work orders"),
     ("operations:material_request:read", "View material requests"),
     ("operations:material_request:write", "Manage material requests"),
     # Support - Tickets
@@ -315,6 +324,7 @@ ROLE_PERMISSIONS = {
         "billing:batch:read",
         "billing_account:read",
         "customer:read",
+        "reseller:read",
         "reports:billing",
         "reports:subscribers",
     ],
@@ -366,6 +376,7 @@ ROLE_PERMISSIONS = {
         "provisioning:read",
         "provisioning:write",
         "customer:read",
+        "reseller:read",
         "subscription:read",
         "operations:work_order:read",
         "operations:work_order:update",
@@ -376,6 +387,7 @@ ROLE_PERMISSIONS = {
     ],
     "support": [
         "customer:read",
+        "reseller:read",
         "customer:update",
         "billing:invoice:read",
         "billing:payment:read",
@@ -433,6 +445,7 @@ ROLE_PERMISSIONS = {
         "billing_account:distribute",
         "reports:billing",
         "customer:read",
+        "reseller:read",
     ],
 }
 

@@ -15,7 +15,13 @@ The approved cross-Dotmac presentation contract is
 1. Domain read/context services own displayed facts, status meaning,
    provenance, freshness, and business action hints.
 2. Domain command/transition services own action eligibility and execution.
-3. RBAC owns authorization; event/timeline services own official history.
+3. RBAC owns authorization. Every UI surface is granularly permission-gated:
+   each list read, each bulk action, and each form/command action is gated by
+   its own `domain:resource:action` permission projected against the principal.
+   No coarse permission may span read and write (e.g. a single
+   `operations:dispatch` covering list, create, update, and assign is a
+   violation — split it into `:read`/`:write`/`:assign`). Event/timeline
+   services own official history.
 4. UI page contracts own relevance, ordering, progressive disclosure,
    responsive depth, and interaction shape.
 5. Routes, templates, HTMX handlers, and mobile clients render the contract and
@@ -778,6 +784,29 @@ will reject.
       estimate and silent export cap are removed. Legacy `order_by`/`order_dir`
       inputs remain only as canonicalizing compatibility aliases.
 
+14. `ui.reseller_list_projection` (`app.services.web_admin_resellers`) declares the
+    admin reseller list capabilities with `ui.list_contracts` — status filter, name
+    sort, pagination — so the route derives no pagination or filter rules;
+    `web_admin_resellers` owns the reseller read. The reseller admin surface is
+    granularly gated by `reseller:read` (list) and `reseller:write` (create/edit),
+    split off the shared `customer:read`/`customer:write`; migration preserves access
+    by granting the reseller permissions to current customer-permission holders.
+15. `ui.work_order_list_projection` (`app.services.web_dispatch_work_orders`)
+    declares the admin work-order list capabilities with `ui.list_contracts` and
+    delegates the read to `work_order_views.query_work_orders`
+    (`operations.work_orders`), which owns the canonical filtered/sorted query —
+    the projection issues no SQL. Read-only: work orders are a CRM mirror with no
+    Sub-owned admin bulk command, so no selection/bulk is declared. Each dispatch
+    route is granularly gated (`operations:dispatch:read`/`:write`/`:assign`).
+
+15. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
+    project list capabilities with `ui.list_contracts` — searchable name,
+    status/type/priority/region filters, name/priority/created sort, pagination —
+    and delegates the read to `projects_service.projects.list`
+    (`operations.project_lifecycle`), which owns the canonical filtered/sorted
+    query; the projection issues no query of its own. Gated by the existing
+    granular `project:read`.
+
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
 links, refresh, and browser history reproduce the same projection. A changed
@@ -1177,7 +1206,54 @@ Dependency order:
    visibility contract and is a *projection* of this owner, not a second
    authority. A contract may only claim operator redrive
    (`MANUAL_REDRIVE`/`ADMIN_REDRIVE`) once a redrive path exists in the ledger;
-   declaring an affordance that does not exist is drift, not policy.
+   declaring an affordance that does not exist is drift, not policy. Recovery
+   requests require a reviewed current-state head, scoped idempotency key,
+   operator reason, retry limit, and a typed handler. The failed operation is
+   immutable; each approved attempt is a separate `redrive_of` operation.
+   `app.services.network_operation_recovery` is the ledger's typed recovery
+   boundary. It cannot dispatch task names or payloads supplied by a route.
+   The initial handler covers observation-only ONT status refresh. Firmware,
+   configuration, lifecycle, and other device writes remain ineligible until
+   their owning service provides current-state validation and replay safety.
+13. `network.operation_dispatch`: owns transactional staging and transport for
+   operation-backed network commands. The operation and its exact versioned
+   command are committed together in `network_operation_dispatches`; request
+   handlers never commit an operation and then publish its device task. The
+   scheduled publisher is the only broker writer for registered commands, and
+   every broker message enters a typed envelope that atomically claims the row
+   before device code runs. Duplicate envelopes therefore do not duplicate a
+   device command. Broker acceptance, worker acknowledgement, completed
+   delivery, exhausted publication, and reconciliation-needed execution are
+   transport evidence, not substitutes for operation/device outcome. Unknown
+   execution fails closed and requires current-state review before redrive.
+   The cutover covers ONT status refresh, ONT authorization and baseline repair,
+   TR-069 bootstrap verification attempts, ONT and OLT firmware entry commands,
+   and OLT-triggered ONT desired-state reconciliation. Firmware verification/
+   readback continuations retain their own state machines and are not parallel
+   command-origination paths.
+14. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
+   for ONT authorization, baseline repair, and bootstrap verification commands.
+   It commits each operation and typed dispatch atomically. Admin, API, and bulk
+   callers receive operation/dispatch identifiers and never publish the device
+   task themselves.
+15. `network.ont_provisioning_execution`: owns the tracked authorization,
+   baseline-repair, DB-only baseline preview, bootstrap retry, parent rollup,
+   and bulk-item transitions.
+   Celery workers claim an existing dispatch and delegate execution here; they
+   do not create operations or decide a parallel retry policy. Delayed bootstrap
+   attempts are separate immutable dispatch rows on the same child operation,
+   while Inform-driven completion uses the same parent projection.
+
+Provisioning dispatch authority migration: the retired path published Celery
+tasks from admin/API/bulk callers and created the operation inside the worker.
+The new command owner creates the operation and typed dispatch atomically before
+publication. The cutover gate is: migration `294` applied, the dispatch
+publisher enabled, and workers running code that claims dispatch envelopes.
+For broker-retention safety, an old envelope without a dispatch identifier may
+only re-submit its intent to `network.ont_provisioning_commands`; it cannot enter
+device code. Remove this compatibility adapter after one maximum broker-retention
+window has elapsed after production cutover. The old direct-publish and
+worker-owned-operation paths have no fallback authority and must not return.
 
 Rule: pollers write observations; resolver services decide state; event services
 decide consequences. Customer-facing outage, SLA, expiry suppression, support

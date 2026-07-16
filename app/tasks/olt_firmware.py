@@ -6,12 +6,14 @@ import logging
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network_operation_dispatch import managed_network_operation_dispatch
 from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.olt_firmware.upgrade_with_verification")
+@managed_network_operation_dispatch("app.tasks.olt_firmware.upgrade_with_verification")
 @idempotent_task(
     key_func=lambda olt_id, image_id, **kw: (
         f"firmware_upgrade:{olt_id}:{image_id}:{kw.get('operation_id') or 'untracked'}"
@@ -26,6 +28,7 @@ def upgrade_firmware_task(
     poll_interval_sec: int = 15,
     initial_wait_sec: int = 60,
     operation_id: str | None = None,
+    _network_dispatch_id: str | None = None,
 ) -> dict[str, object]:
     """Run firmware upgrade with verification in background.
 

@@ -599,6 +599,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "stale-active operation reclamation",
                     "parent/child operation status rollup",
                     "device operation re-execution eligibility",
+                    "immutable redrive lineage and reviewed-head evidence",
+                    "typed recovery eligibility and retry limits",
                 ),
                 depends_on=("network.identity",),
                 notes=(
@@ -608,7 +610,72 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "retry eligibility. app.services.task_reliability declares "
                     "each task's contract and is a projection of this owner, not "
                     "a parallel authority — a task whose contract claims operator "
-                    "redrive requires a redrive path here first."
+                    "redrive requires a redrive path here first. Failed attempts "
+                    "remain immutable; approved retries create linked operations "
+                    "through app.services.network_operation_recovery. Unregistered "
+                    "device writes fail closed."
+                ),
+            ),
+            SOTService(
+                name="network.operation_dispatch",
+                module="app.services.network_operation_dispatch",
+                owns=(
+                    "transactional network command outbox",
+                    "typed operation-to-task command registry",
+                    "broker publication attempts and acknowledgement state",
+                    "single-admission worker execution claims",
+                    "unknown-delivery and interrupted-execution classification",
+                ),
+                depends_on=("network.operation_ledger",),
+                notes=(
+                    "Stages the exact registered command in the same transaction "
+                    "as its operation. A scheduled publisher is the only broker "
+                    "writer for managed commands, and a worker envelope claims the "
+                    "dispatch row before entering device code. Operation status "
+                    "remains the device/business outcome; transport uncertainty is "
+                    "preserved separately and fails closed for reviewed recovery."
+                ),
+            ),
+            SOTService(
+                name="network.ont_provisioning_commands",
+                module="app.services.network.ont_provisioning_commands",
+                owns=(
+                    "ONT authorization and baseline-repair command acceptance",
+                    "provisioning operation and dispatch atomicity",
+                    "bootstrap child-operation and delayed-attempt staging",
+                    "provisioning command duplicate responses",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "network.operation_ledger",
+                    "network.operation_dispatch",
+                ),
+                notes=(
+                    "Admin, API, and bulk adapters submit typed intent here. "
+                    "They never publish provisioning device tasks directly, and "
+                    "workers never create their own operation after broker delivery."
+                ),
+            ),
+            SOTService(
+                name="network.ont_provisioning_execution",
+                module="app.services.network.ont_provisioning_execution",
+                owns=(
+                    "tracked ONT authorization execution transitions",
+                    "tracked baseline-repair execution transitions",
+                    "DB-only ONT baseline preview execution",
+                    "TR-069 bootstrap verification and retry policy",
+                    "bootstrap parent and bulk-item outcome projection",
+                ),
+                depends_on=(
+                    "network.ont_provisioning_commands",
+                    "network.operation_ledger",
+                ),
+                notes=(
+                    "Celery tasks claim a durable dispatch and delegate here. "
+                    "Inform-driven confirmation and scheduled verification share "
+                    "the same parent/child completion projection. A pre-cutover "
+                    "broker envelope may only re-submit intent to the command "
+                    "owner and cannot enter device code."
                 ),
             ),
             SOTService(
@@ -1847,6 +1914,65 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "normalizes request state, and renders full-page and HTMX "
                     "reads through one partial. Exports consume the same complete "
                     "scope without a silent row cap."
+                ),
+            ),
+            SOTService(
+                name="ui.reseller_list_projection",
+                module="app.services.web_admin_resellers",
+                owns=(
+                    "admin reseller list filter and stable sort semantics",
+                    "admin reseller list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts",),
+                notes=(
+                    "web_admin_resellers owns the reseller read; this projection "
+                    "declares the list capabilities (status filter, name sort, "
+                    "pagination) so the route derives no pagination or filter rules. "
+                    "The admin reseller surface is granularly gated by reseller:read "
+                    "(list) and reseller:write (create/edit), split off the shared "
+                    "customer:read/write."
+                ),
+            ),
+            SOTService(
+                name="ui.work_order_list_projection",
+                module="app.services.web_dispatch_work_orders",
+                owns=(
+                    "admin work-order searchable fields",
+                    "admin work-order status filter and stable sort semantics",
+                    "admin work-order list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "operations.work_orders",
+                ),
+                notes=(
+                    "work_order_views.query_work_orders owns the canonical filtered "
+                    "and sorted work-order query; this projection declares list "
+                    "capabilities, normalizes request state, and delegates the read "
+                    "(it issues no SQL of its own). Read-only: work orders are a CRM "
+                    "mirror with no Sub-owned admin bulk command, so no selection or "
+                    "bulk is declared. Each dispatch route is granularly gated "
+                    "(operations:dispatch:read/write/assign)."
+                ),
+            ),
+            SOTService(
+                name="ui.project_list_projection",
+                module="app.services.web_projects",
+                owns=(
+                    "admin project searchable fields",
+                    "admin project filter and stable sort semantics",
+                    "admin project list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "operations.project_lifecycle",
+                ),
+                notes=(
+                    "projects_service.projects.list (operations.project_lifecycle) "
+                    "owns the canonical filtered/sorted project query; this "
+                    "projection declares the list capabilities and normalizes "
+                    "request state, then delegates the read. It issues no query of "
+                    "its own. Gated by the existing granular project:read."
                 ),
             ),
         ),

@@ -26,6 +26,7 @@ router = APIRouter(tags=["network-olt-operations"])
 @router.post(
     "/olt-devices/{olt_id}/authorize-ont",
     response_model=OltOperationResponse,
+    status_code=202,
     dependencies=[Depends(require_permission("network:olt:write"))],
 )
 def authorize_ont(

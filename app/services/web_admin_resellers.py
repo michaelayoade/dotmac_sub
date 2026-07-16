@@ -40,6 +40,7 @@ from app.services.invoice_collectibility import (
     open_invoice_filters_for_accounts,
     overdue_debt_filters_for_accounts,
 )
+from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
 from app.services.status_presentation import (
     invoice_status_presentation,
     payment_status_presentation,
@@ -114,6 +115,46 @@ def _policy_sets_for_form(db: Session) -> list:
     )
 
 
+RESELLER_LIST_DEFINITION = ListDefinition(
+    key="resellers",
+    fields=(
+        ListFieldDefinition("name", "Reseller", sortable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="name",
+    default_sort_dir="asc",
+    per_page_options=(10, 25, 50, 100, 200),
+)
+
+_RESELLER_STATUS_FILTERS = {"active", "inactive", "all"}
+
+
+def build_reseller_list_query(
+    *,
+    status: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalize the admin reseller list through its declared capabilities.
+
+    ui.reseller_list_projection owns the filterable/sortable fields and pagination;
+    the route submits raw request values and does not rebuild those rules.
+    """
+    normalized_status = (status or "active").strip().lower()
+    if normalized_status not in _RESELLER_STATUS_FILTERS:
+        normalized_status = "active"
+    effective_per_page = per_page or RESELLER_LIST_DEFINITION.default_per_page
+    if effective_per_page not in RESELLER_LIST_DEFINITION.per_page_options:
+        effective_per_page = RESELLER_LIST_DEFINITION.default_per_page
+    return RESELLER_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"status": normalized_status},
+        page=max(1, page),
+        per_page=effective_per_page,
+    )
+
+
 def list_page_context(
     db: Session,
     *,
@@ -121,9 +162,10 @@ def list_page_context(
     per_page: int,
     status_filter: str = "active",
 ) -> dict[str, object]:
-    normalized_status = (status_filter or "active").strip().lower()
-    if normalized_status not in {"active", "inactive", "all"}:
-        normalized_status = "active"
+    list_query = build_reseller_list_query(
+        status=status_filter, page=page, per_page=per_page
+    )
+    normalized_status = list_query.filter_value("status") or "active"
     active_filter = (
         True
         if normalized_status == "active"
@@ -131,12 +173,13 @@ def list_page_context(
         if normalized_status == "inactive"
         else None
     )
+    per_page = list_query.per_page
     query = db.query(Reseller)
     if active_filter is not None:
         query = query.filter(Reseller.is_active.is_(active_filter))
     total = int(query.with_entities(func.count(Reseller.id)).scalar() or 0)
     total_pages = max(1, (total + per_page - 1) // per_page)
-    safe_page = min(page, total_pages)
+    safe_page = min(list_query.page, total_pages)
     offset = (safe_page - 1) * per_page
     resellers = query.order_by(Reseller.name.asc()).limit(per_page).offset(offset).all()
     return {

@@ -117,7 +117,7 @@ def reseller_impersonate(
 @router.get(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[Depends(require_permission("reseller:read"))],
 )
 def resellers_list(
     request: Request,
@@ -156,7 +156,7 @@ def reseller_edit(
 @router.post(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_create(
     request: Request,
@@ -204,7 +204,7 @@ def reseller_create(
 @router.post(
     "/{reseller_id}",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_update(
     reseller_id: str,
@@ -235,7 +235,7 @@ def reseller_update(
 @router.post(
     "/{reseller_id}/status",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_status_update(
     reseller_id: str,
@@ -291,7 +291,7 @@ def reseller_detail(
 @router.post(
     "/{reseller_id}/users/link",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_user_link(
     reseller_id: str,
@@ -332,7 +332,7 @@ def reseller_user_link(
 @router.post(
     "/{reseller_id}/users/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("customer:write"))],
+    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_user_create(
     reseller_id: str,
