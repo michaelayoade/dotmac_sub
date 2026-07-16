@@ -100,7 +100,9 @@ def test_query_filters_sorts_and_paginates(db_session):
 def test_stats_and_freshness(db_session):
     early = datetime.now(UTC) - timedelta(minutes=5)
     _proj(db_session, "1", name="a", device_type="core", status="up")
-    _proj(db_session, "2", name="b", device_type="olt", status="down", refreshed_at=early)
+    _proj(
+        db_session, "2", name="b", device_type="olt", status="down", refreshed_at=early
+    )
     _proj(db_session, "3", name="c", device_type="ont", status="up")
 
     stats = device_projection_views.device_projection_stats(db_session)
@@ -135,8 +137,10 @@ def test_list_read_does_not_call_collect_devices(db_session, monkeypatch):
     _proj(db_session, "1", name="alpha")
 
     def _boom(*_a, **_k):
-        raise AssertionError("devices_list_page_data must read the projection, "
-                             "not derive via collect_devices")
+        raise AssertionError(
+            "devices_list_page_data must read the projection, "
+            "not derive via collect_devices"
+        )
 
     monkeypatch.setattr(inventory, "collect_devices", _boom)
     query = inventory.build_network_device_list_query()

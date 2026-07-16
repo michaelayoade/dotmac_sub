@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice
 from app.models.network_monitoring import DeviceInterface, NetworkDevice
+from app.services import device_projection_views
 from app.services import network as network_service
 from app.services.device_operational_status import (
     DEGRADED,
@@ -21,7 +22,6 @@ from app.services.device_operational_status import (
     derive_ont_operational_status,
     warmer_is_stale,
 )
-from app.services import device_projection_views
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
@@ -77,6 +77,7 @@ def build_network_device_list_query(
         page=page,
         per_page=per_page,
     )
+
 
 if TYPE_CHECKING:
     from app.models.network import Port

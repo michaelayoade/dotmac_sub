@@ -52,7 +52,8 @@ def _apply_filters(
         )
     if vendor:
         stmt = stmt.where(
-            func.lower(func.coalesce(DeviceProjection.vendor, "")) == vendor.strip().lower()
+            func.lower(func.coalesce(DeviceProjection.vendor, ""))
+            == vendor.strip().lower()
         )
     term = (search or "").strip().lower()
     if term:
@@ -104,9 +105,7 @@ def query_device_projections(
         vendor=vendor,
         search=search,
     )
-    total = (
-        db.scalar(select(func.count()).select_from(filtered.subquery())) or 0
-    )
+    total = db.scalar(select(func.count()).select_from(filtered.subquery())) or 0
     column = _SORT_COLUMNS.get(sort_by, DeviceProjection.name)
     ordering = column.desc() if sort_dir == "desc" else column.asc()
     rows = (
