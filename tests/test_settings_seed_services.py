@@ -391,6 +391,22 @@ class TestSeedCollectionsSettings:
         assert rows["enforcement_skip_weekends"].value_json is True
         assert rows["enforcement_skip_holidays"].value_json == ["2026-01-01"]
 
+    def test_seeds_prepaid_balance_sweep_interval(self, db_session, monkeypatch):
+        monkeypatch.setenv("PREPAID_BALANCE_SWEEP_INTERVAL_SECONDS", "1800")
+
+        settings_seed.seed_collections_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key == "prepaid_balance_sweep_interval_seconds",
+            )
+            .first()
+        )
+        assert setting is not None
+        assert setting.value_text == "1800"
+
     def test_seeds_suspension_notification_dedupe_hours(self, db_session):
         settings_seed.seed_collections_settings(db_session)
 

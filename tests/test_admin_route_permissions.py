@@ -393,11 +393,13 @@ def test_support_assignment_rule_routes_require_automation_permissions():
 
 
 def test_reseller_routes_require_customer_permissions():
+    # Granular reseller RBAC (#1334): reseller admin split off customer:read/
+    # write onto reseller:read (list) / reseller:write (create/edit).
     assert _route_has_permission(
-        admin_resellers.router, "/resellers", "GET", "customer:read"
+        admin_resellers.router, "/resellers", "GET", "reseller:read"
     )
     assert _route_has_permission(
-        admin_resellers.router, "/resellers", "POST", "customer:write"
+        admin_resellers.router, "/resellers", "POST", "reseller:write"
     )
 
 

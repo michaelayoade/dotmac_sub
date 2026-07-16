@@ -360,6 +360,13 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   customer financial position excludes that internal debit so the transfer
   does not double-change total funding. Provider adapters and APIs call the
   same owner.
+- Reconciliation boundary: native unallocated-credit reconciliation is an
+  orchestration adapter, not a money writer. For each payment/invoice transfer
+  it calls the same allocation preview and fingerprint-bound confirmation with
+  a stable idempotency key. It never constructs `PaymentAllocation` or
+  `LedgerEntry` rows. Only active succeeded payments with reviewed settlement
+  evidence are spendable; historical or imported credits without that evidence
+  remain visible as unbacked for explicit review.
 - Immutability boundary: evidence-backed payment amounts, currencies,
   settlements, and allocations are not edited, deleted, or re-pointed in
   place. Pending allocation intent has no money evidence and may be withdrawn.
@@ -411,11 +418,88 @@ Consolidated payment settlement has a separate scoped owner contract:
   proof approval treat their verified fact or human approval as confirmation
   but still bind it to the owner-produced fingerprint and stable idempotency
   key.
+- Historical boundary: revision
+  `318_consolidated_settlement_reconciliation` adds reviewed structural
+  provenance for historical consolidated settlements. Inspection lists exact
+  subscriber-ledger, billing-account-ledger, and original-cash candidates;
+  preview requires the complete payment partition plus exactly one matching
+  processed provider event, verified payment proof, or completed top-up intent.
+  Confirmation locks and rechecks those rows, links them to one settlement,
+  records actor audit and idempotency evidence, and posts no new money. Missing
+  or ambiguous cash provenance is refused, so a legacy synthesized succeeded
+  payment cannot become trusted merely because its allocations add up.
+- Drift boundary: recorded `BillingAccount.balance`, ledger-evidenced
+  consolidated credit, and their projection drift are shown separately in the
+  inspection and preview. Historical settlement reconciliation does not repair
+  that drift, change access, or infer any restoration amount, eligibility, or
+  billing date.
 - Cutover gate: read-only preview, exact dual-ledger evidence, stale-preview
   rejection, idempotent replay, pending/no-money behavior, generic-writer gate,
-  provider replay, admin/API boundary, and owner-registry tests remain green.
-  Historical succeeded consolidated payments are not guessed into evidence;
-  they require a later explicit reconciliation slice.
+  provider replay, historical provenance refusal, admin/API boundary, and
+  owner-registry tests remain green.
+
+Consolidated-credit allocation is a separate transfer owned by the same scoped
+financial service:
+
+- Old path: the reseller portal and API submitted a one-step allocation after
+  deriving the maximum from displayed invoice totals and
+  `BillingAccount.balance`. The payment service could synthesize a succeeded
+  payment when that projection lacked source evidence, then mutate the balance
+  directly. The result did not structurally identify which consolidated credit
+  was consumed.
+- Owner: `financial.consolidated_payments` produces the allocation capability,
+  exact FIFO source/invoice preview, locked fingerprint confirmation,
+  idempotency, actor audit, and access-reconciliation handoff. Web and API
+  adapters only render the owner preview and submit its confirmation command.
+- Position boundary: recorded consolidated credit, ledger-evidenced
+  consolidated credit, subscriber postpaid receivables, payment state, and
+  service-access consequence remain separate. Projection drift or historical
+  allocation without exact source-consumption evidence fails closed; no
+  synthetic payment repairs it.
+- Exact evidence: revision `316_consolidated_credit_allocation` records one
+  allocation decision linked to its billing-account debit and item rows linking
+  each source billing-account credit to the exact `PaymentAllocation` and
+  subscriber `LedgerEntry` it produced. `BillingAccount.balance` is updated only
+  alongside the canonical ledger transaction.
+- Cutover gate: the projection-only balance credit/debit helpers and legacy
+  one-step allocation command remain gated. Read-only preview, stale rejection,
+  cross-reseller scope, partial allocation, exact dual-ledger links, replay,
+  audit, UI/API preview-confirm, and sole-writer architecture tests must remain
+  green.
+
+Consolidated refunds and payment reversals remain under that scoped owner:
+
+- Old path: the subscriber payment refund/reversal owner rejected every
+  billing-account payment. Admin/API confirmation and normalized provider
+  refund or reversal events therefore stopped without an authoritative money
+  path, while ad hoc balance repair risked assigning reseller money to a fake
+  subscriber or leaving paid member receivables closed.
+- Owner: `financial.consolidated_payments` owns refund and reversal capability,
+  preview, locked fingerprint confirmation, idempotency, actor/provider audit,
+  payment state, and every resulting ledger link. Generic
+  `financial.payments` continues to own subscriber-scoped returns and refuses
+  consolidated scope.
+- Position boundary: reseller-held credit, member invoice receivables, payment
+  refund/reversal state, and service access remain separate in preview and
+  confirmation. A partial refund may consume only credit still evidenced for
+  that payment at billing-account scope. A partial request that would infer an
+  allocation clawback fails closed; a complete refund or reversal explicitly
+  reopens every remaining allocation.
+- Evidence boundary: consolidated credit consumption writes and links one exact
+  `BillingAccountLedgerEntry`. Each reopened member allocation writes an exact
+  invoice-linked subscriber debit and records its source `PaymentAllocation`
+  through `ConsolidatedPaymentReturnAllocationEvidence`. No fake subscriber,
+  UI-derived balance, mutable-only restoration amount, or unlinked ledger row
+  is permitted.
+- Access/provider boundary: member receivable reopening emits a reconciliation
+  request but does not decide suspension or restoration. Trusted normalized
+  provider events dispatch to the same consolidated owner; untrusted API
+  callers cannot claim provider evidence.
+- Cutover gate: revision `317_consolidated_payment_returns.py`, partial-surplus,
+  full-refund, reversal, stale-preview, replay, dual-ledger, provider dispatch,
+  admin/API dispatch, and sole-writer tests must remain green. Historical
+  consolidated refund/reversal rows without exact structural evidence remain a
+  separate explicit reconciliation task.
 
 Imported-payment batch reversal is a separate migrated wrapper owner:
 
@@ -457,16 +541,24 @@ Imported-payment batch reversal is a separate migrated wrapper owner:
 
 Nonterminal invoice lifecycle transitions are owned alongside terminal closure:
 
-- Old paths: scheduled billing constructed draft/issued invoices directly and
-  temporarily flipped prepaid drafts to issued; prepaid credit reconciliation
-  and cleanup moved invoices back to draft; overdue automation, dunning, and
-  admin bulk issue assigned status and timestamps themselves. The architecture
-  allowlist normalized these parallel writers instead of enforcing one owner.
+- Old paths: scheduled billing and usage posting constructed invoice documents
+  or lines directly, scheduled billing temporarily flipped prepaid drafts to
+  issued, prepaid credit reconciliation and cleanup moved invoices back to
+  draft, and overdue automation, dunning, and admin bulk issue assigned status
+  and timestamps themselves. The architecture allowlist normalized these
+  parallel writers instead of enforcing one owner.
 - Owner: `financial.invoices` now stages automation-created invoice documents,
-  owns draft issuance, rechecks whether an untouched prepaid receivable may
-  return to draft, and owns overdue eligibility, transition, one-time
-  observation event, and audit. Automation, reconciliation, cleanup, dunning,
-  and UI services select candidates and call the owner.
+  validates and stages automation/usage invoice lines, owns stable billing-line
+  replay, owns draft issuance, rechecks whether an untouched prepaid receivable
+  may return to draft, and owns overdue eligibility, transition, one-time
+  observation event, and audit. Automation, usage, reconciliation, cleanup,
+  dunning, and UI services select candidates and call the owner.
+- Construction boundary: only `app.services.billing.invoices` may construct
+  `Invoice` or `InvoiceLine` rows. System staging accepts only draft/issued
+  documents, records the source reason and exact document amount, and rejects a
+  billing-line key reused for different facts. Document staging posts no ledger
+  transaction; the invoice source document remains the canonical receivable
+  fact and its customer-ledger projection is derived from that exact row.
 - Derived-state boundary: payment and credit settlement still derive
   `paid`/`partially_paid`/reopened status inside the invoice owner package from
   canonical settlement facts. No adapter may assign those states. Draft,
@@ -475,10 +567,11 @@ Nonterminal invoice lifecycle transitions are owned alongside terminal closure:
 - Access boundary: `invoice.overdue` is an observation. It does not create a
   dunning consequence or decide service access. Returning an unfunded prepaid
   invoice to draft likewise changes no funding and grants no access.
-- Verification boundary: the invoice lifecycle writer allowlist contains only
-  `app.services.billing.invoices` and its derived-total helper. Direct status
-  assignments in automation, reconciliation, cleanup, collections, and web
-  adapters are rejected by architecture tests.
+- Verification boundary: invoice and invoice-line constructors are restricted
+  to `app.services.billing.invoices`; the lifecycle writer allowlist contains
+  only that owner and its derived-total helper. Direct construction or status
+  assignment in automation, usage, reconciliation, cleanup, collections, and
+  web adapters is rejected by architecture tests.
 
 Invoice void and write-off are distinct terminal owner contracts:
 
@@ -787,9 +880,10 @@ will reject.
 14. `ui.reseller_list_projection` (`app.services.web_admin_resellers`) declares the
     admin reseller list capabilities with `ui.list_contracts` — status filter, name
     sort, pagination — so the route derives no pagination or filter rules;
-    `web_admin_resellers` owns the reseller read. The reseller admin surface is still
-    gated by `customer:read`/`customer:write`; a `reseller:read`/`:write` split is a
-    tracked follow-up pending a reseller access-policy decision.
+    `web_admin_resellers` owns the reseller read. The reseller admin surface is
+    granularly gated by `reseller:read` (list) and `reseller:write` (create/edit),
+    split off the shared `customer:read`/`customer:write`; migration preserves access
+    by granting the reseller permissions to current customer-permission holders.
 15. `ui.work_order_list_projection` (`app.services.web_dispatch_work_orders`)
     declares the admin work-order list capabilities with `ui.list_contracts` and
     delegates the read to `work_order_views.query_work_orders`
@@ -797,6 +891,14 @@ will reject.
     the projection issues no SQL. Read-only: work orders are a CRM mirror with no
     Sub-owned admin bulk command, so no selection/bulk is declared. Each dispatch
     route is granularly gated (`operations:dispatch:read`/`:write`/`:assign`).
+
+15. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
+    project list capabilities with `ui.list_contracts` — searchable name,
+    status/type/priority/region filters, name/priority/created sort, pagination —
+    and delegates the read to `projects_service.projects.list`
+    (`operations.project_lifecycle`), which owns the canonical filtered/sorted
+    query; the projection issues no query of its own. Gated by the existing
+    granular `project:read`.
 
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
@@ -1368,6 +1470,34 @@ Feature controls:
    `app/services/web_control_plane.py`. It reports the decision and provenance
    from each owner; it is never a mutation path or a second policy resolver.
 
+Decision-input ownership:
+
+| Input class | Named owner / resolver | Canonical source |
+| --- | --- | --- |
+| Capability and module gates | `control.feature_registry` / `control.module_manager` | canonical module setting plus the registered default |
+| Global business and operational tuning | `control.settings_spec` | active database setting, otherwise the registered default |
+| Task cadence and task enablement | `scheduler.registry` | scheduler registry and `ScheduledTask` state |
+| Per-customer, subscriber, service, or device policy | the named domain owner | the owning domain model or policy record |
+| External integration targets | the named integration/configuration resolver | its configuration model; deployment-only endpoints may use a declared environment resolver |
+| Credentials and secret material | the named credential resolver | OpenBao reference or an approved local secret pointer |
+| Protocol constants and safety invariants | the named domain owner | code, schema, or database constraint |
+
+Settings are inputs to a decision owner; they are not decision owners. Every
+important decision has one named owner, and every variable input has one
+declared source or resolver. Business and operational tuning must not be
+hardcoded at callers. Protocol constants, mathematical constants, enum values,
+and safety invariants remain code or constraints unless operators genuinely
+need to tune them.
+
+Runtime settings are database-authoritative. `control.settings_spec` resolves
+Redis cache, then the active database row, then the registered default. A
+`SettingSpec.env_var` is bootstrap and migration metadata only: startup seeding
+or the explicit one-way settings-sync command may materialize it into the
+database, but runtime resolvers must not treat it as a live override. An
+emergency environment override is allowed only when it is registered as a
+separate control with visible provenance, an explicit safe failure direction,
+and an audited retirement plan.
+
 Rule: task and feature gates should call the feature registry. Callers should
 not separately read env vars, domain settings, module state, and legacy flags.
 The module manager is the canonical writer UX for registered feature controls:
@@ -1389,6 +1519,12 @@ options, prepaid monthly invoicing, RADIUS/session enforcement,
 usage/FUP emission gates, CRM/native transition flags, and GIS/network worker
 toggles. Numeric intervals, thresholds, profile IDs, account lists, and other
 tuning values remain in `settings_spec`.
+
+Decision-input migrations are domain slices, not global literal replacement.
+Each slice names the old source and new resolver, proves precedence and
+provenance, migrates the highest-risk callers, and removes or gates the old
+path. External projections follow the separate authority-MOVE procedure with
+shadow verification before cutover.
 
 Authorization:
 

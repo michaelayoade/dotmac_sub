@@ -381,6 +381,58 @@ def _setup_overdue_postpaid_account(
     return invoice
 
 
+def _add_settled_unallocated_credit(db_session, subscriber, amount, currency="NGN"):
+    """Create exact settlement evidence for credit awaiting allocation."""
+    from decimal import Decimal
+
+    from app.models.billing import (
+        LedgerEntry,
+        LedgerEntryType,
+        LedgerSource,
+        Payment,
+        PaymentSettlement,
+        PaymentSettlementOrigin,
+        PaymentStatus,
+    )
+
+    credit = Decimal(amount)
+    payment = Payment(
+        account_id=subscriber.id,
+        amount=credit,
+        currency=currency,
+        status=PaymentStatus.succeeded,
+        paid_at=datetime.now(UTC) - timedelta(hours=1),
+        is_active=True,
+    )
+    db_session.add(payment)
+    db_session.flush()
+    ledger_entry = LedgerEntry(
+        account_id=subscriber.id,
+        payment_id=payment.id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.payment,
+        amount=credit,
+        currency=currency,
+        memo="settled unallocated payment credit",
+    )
+    db_session.add(ledger_entry)
+    db_session.flush()
+    db_session.add(
+        PaymentSettlement(
+            payment_id=payment.id,
+            unallocated_ledger_entry_id=ledger_entry.id,
+            amount=credit,
+            unallocated_amount=credit,
+            prepaid_amount=Decimal("0.00"),
+            currency=currency,
+            origin=PaymentSettlementOrigin.system,
+            idempotency_key=f"test-dunning-credit-{payment.id}",
+        )
+    )
+    db_session.commit()
+    return payment
+
+
 def test_dunning_run_ignores_noncollectible_invoice_with_residual_balance(
     db_session, subscriber, subscription, catalog_offer
 ):
@@ -1166,44 +1218,15 @@ def test_billing_enforcement_settles_payment_credit_before_dunning(
     db_session, subscriber, subscription, catalog_offer
 ):
     """Payment-backed credit is applied before overdue cases are scanned."""
-    from datetime import timedelta
     from decimal import Decimal
 
-    from app.models.billing import (
-        InvoiceStatus,
-        LedgerEntry,
-        LedgerEntryType,
-        LedgerSource,
-        Payment,
-        PaymentStatus,
-    )
+    from app.models.billing import InvoiceStatus
     from app.schemas.collections import BillingEnforcementRunRequest
 
     invoice = _setup_overdue_postpaid_account(
         db_session, subscriber, subscription, catalog_offer
     )
-    payment = Payment(
-        account_id=subscriber.id,
-        amount=Decimal("100.00"),
-        currency="NGN",
-        status=PaymentStatus.succeeded,
-        paid_at=datetime.now(UTC) - timedelta(hours=1),
-        is_active=True,
-    )
-    db_session.add(payment)
-    db_session.flush()
-    db_session.add(
-        LedgerEntry(
-            account_id=subscriber.id,
-            payment_id=payment.id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.payment,
-            amount=Decimal("100.00"),
-            currency="NGN",
-            memo="test payment credit",
-        )
-    )
-    db_session.commit()
+    _add_settled_unallocated_credit(db_session, subscriber, "100.00")
 
     response = collections_service.billing_enforcement_reconciler.run(
         db_session, BillingEnforcementRunRequest()
@@ -1223,42 +1246,14 @@ def test_billing_enforcement_settles_non_ngn_credit_before_dunning(
     """The pre-dunning credit pass must not skip accounts with only USD credit."""
     from decimal import Decimal
 
-    from app.models.billing import (
-        InvoiceStatus,
-        LedgerEntry,
-        LedgerEntryType,
-        LedgerSource,
-        Payment,
-        PaymentStatus,
-    )
+    from app.models.billing import InvoiceStatus
     from app.schemas.collections import BillingEnforcementRunRequest
 
     invoice = _setup_overdue_postpaid_account(
         db_session, subscriber, subscription, catalog_offer
     )
     invoice.currency = "USD"
-    payment = Payment(
-        account_id=subscriber.id,
-        amount=Decimal("100.00"),
-        currency="USD",
-        status=PaymentStatus.succeeded,
-        paid_at=datetime.now(UTC) - timedelta(hours=1),
-        is_active=True,
-    )
-    db_session.add(payment)
-    db_session.flush()
-    db_session.add(
-        LedgerEntry(
-            account_id=subscriber.id,
-            payment_id=payment.id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.payment,
-            amount=Decimal("100.00"),
-            currency="USD",
-            memo="test USD payment credit",
-        )
-    )
-    db_session.commit()
+    _add_settled_unallocated_credit(db_session, subscriber, "100.00", "USD")
 
     response = collections_service.billing_enforcement_reconciler.run(
         db_session, BillingEnforcementRunRequest()
@@ -1282,14 +1277,7 @@ def test_billing_enforcement_settlement_restores_dunned_account(
     """Scheduled pre-dunning credit settlement must also lift overdue locks."""
     from decimal import Decimal
 
-    from app.models.billing import (
-        InvoiceStatus,
-        LedgerEntry,
-        LedgerEntryType,
-        LedgerSource,
-        Payment,
-        PaymentStatus,
-    )
+    from app.models.billing import InvoiceStatus
     from app.models.enforcement_lock import EnforcementReason
     from app.schemas.collections import BillingEnforcementRunRequest
     from app.services.account_lifecycle import get_active_locks
@@ -1315,28 +1303,7 @@ def test_billing_enforcement_settlement_restores_dunned_account(
     )
     assert get_active_locks(db_session, subscription_id=str(subscription.id))
 
-    payment = Payment(
-        account_id=subscriber.id,
-        amount=Decimal("100.00"),
-        currency="NGN",
-        status=PaymentStatus.succeeded,
-        paid_at=datetime.now(UTC) - timedelta(hours=1),
-        is_active=True,
-    )
-    db_session.add(payment)
-    db_session.flush()
-    db_session.add(
-        LedgerEntry(
-            account_id=subscriber.id,
-            payment_id=payment.id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.payment,
-            amount=Decimal("100.00"),
-            currency="NGN",
-            memo="test payment credit",
-        )
-    )
-    db_session.commit()
+    _add_settled_unallocated_credit(db_session, subscriber, "100.00")
 
     response = collections_service.billing_enforcement_reconciler.run(
         db_session, BillingEnforcementRunRequest()
@@ -1363,17 +1330,10 @@ def test_billing_enforcement_settlement_restores_dunned_account(
 def test_billing_enforcement_restore_failure_does_not_rollback_settlement(
     db_session, subscriber, subscription, catalog_offer, monkeypatch
 ):
-    """A service-restore failure must not undo a valid credit settlement."""
+    """A redundant enforcement restore failure must not undo settlement."""
     from decimal import Decimal
 
-    from app.models.billing import (
-        InvoiceStatus,
-        LedgerEntry,
-        LedgerEntryType,
-        LedgerSource,
-        Payment,
-        PaymentStatus,
-    )
+    from app.models.billing import InvoiceStatus
     from app.schemas.collections import BillingEnforcementRunRequest
     from app.services.collections import _core as collections_core
     from app.services.collections._core import _execute_dunning_action
@@ -1396,28 +1356,7 @@ def test_billing_enforcement_restore_failure_does_not_rollback_settlement(
         == "suspended"
     )
 
-    payment = Payment(
-        account_id=subscriber.id,
-        amount=Decimal("100.00"),
-        currency="NGN",
-        status=PaymentStatus.succeeded,
-        paid_at=datetime.now(UTC) - timedelta(hours=1),
-        is_active=True,
-    )
-    db_session.add(payment)
-    db_session.flush()
-    db_session.add(
-        LedgerEntry(
-            account_id=subscriber.id,
-            payment_id=payment.id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.payment,
-            amount=Decimal("100.00"),
-            currency="NGN",
-            memo="test payment credit",
-        )
-    )
-    db_session.commit()
+    _add_settled_unallocated_credit(db_session, subscriber, "100.00")
 
     def _raise_restore(*_args, **_kwargs):
         raise RuntimeError("restore failed")
@@ -1435,7 +1374,9 @@ def test_billing_enforcement_restore_failure_does_not_rollback_settlement(
     assert response.dunning_accounts_scanned == 0
     assert invoice.status == InvoiceStatus.paid
     assert invoice.balance_due == Decimal("0.00")
-    assert subscription.status == SubscriptionStatus.suspended
+    # The payment-allocation owner already requested the access consequence.
+    # The enforcement adapter's redundant restore failure must not reverse it.
+    assert subscription.status == SubscriptionStatus.active
 
 
 def test_billing_enforcement_health_keeps_notification_gate_optional(

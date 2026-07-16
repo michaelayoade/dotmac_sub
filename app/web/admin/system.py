@@ -3192,19 +3192,29 @@ def audit_log(
     actor_id: str | None = None,
     action: str | None = None,
     entity_type: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
     """View audit log."""
-    page_data = web_system_audit_service.get_audit_page_data(
-        db,
-        actor_id=actor_id,
-        action=action,
-        entity_type=entity_type,
-        page=page,
-        per_page=per_page,
-    )
+    try:
+        list_query = web_system_audit_service.build_audit_list_query(
+            actor_id=actor_id,
+            action=action,
+            entity_type=entity_type,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError:
+        # Out-of-contract sort/page params (e.g. hand-edited URL) fall back to
+        # the contract defaults rather than erroring the page.
+        list_query = web_system_audit_service.build_audit_list_query(page=page)
+
+    page_data = web_system_audit_service.get_audit_page_data(db, list_query)
 
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(

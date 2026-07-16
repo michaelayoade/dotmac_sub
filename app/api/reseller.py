@@ -18,6 +18,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.schemas.billing import (
+    BillingAccountCreditAllocationConfirm,
+    BillingAccountCreditAllocationPreviewRead,
+    BillingAccountCreditAllocationPreviewRequest,
+    BillingAccountCreditAllocationResultRead,
+)
 from app.schemas.chat import ChatSessionResponse
 from app.schemas.portal import (
     TechnicianLocation,
@@ -440,19 +446,50 @@ def my_reseller_pay_verify(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/billing/subscribers/{subscriber_id}/allocate")
-def my_reseller_allocate_subscriber(
+@router.post(
+    "/billing/subscribers/{subscriber_id}/allocation/preview",
+    response_model=BillingAccountCreditAllocationPreviewRead,
+)
+def my_reseller_allocate_subscriber_preview(
     subscriber_id: str,
+    payload: BillingAccountCreditAllocationPreviewRequest,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
-) -> dict:
-    """Allocate unallocated reseller funds to one managed subscriber."""
+) -> BillingAccountCreditAllocationPreviewRead:
+    """Preview exact consolidated-credit and subscriber-ledger effects."""
     from app.services import reseller_portal_billing
 
     reseller_id = _reseller_id(db, principal)
     try:
-        return reseller_portal_billing.allocate_unallocated_to_subscriber(
-            db, reseller_id, subscriber_id
+        return reseller_portal_billing.preview_unallocated_to_subscriber(
+            db, reseller_id, subscriber_id, amount=payload.amount
+        )["preview"]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/billing/subscribers/{subscriber_id}/allocation/confirm",
+    response_model=BillingAccountCreditAllocationResultRead,
+)
+def my_reseller_allocate_subscriber_confirm(
+    subscriber_id: str,
+    payload: BillingAccountCreditAllocationConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_user_auth),
+) -> BillingAccountCreditAllocationResultRead:
+    """Confirm a preview and return its exact resulting ledger evidence."""
+    from app.services import reseller_portal_billing
+
+    reseller_id = _reseller_id(db, principal)
+    actor_id = principal.get("principal_id") or principal.get("subscriber_id")
+    try:
+        return reseller_portal_billing.confirm_unallocated_to_subscriber(
+            db,
+            reseller_id,
+            subscriber_id,
+            payload,
+            actor_id=str(actor_id) if actor_id else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

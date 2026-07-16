@@ -79,6 +79,8 @@ DEFAULT_PERMISSIONS = [
     ("customer:impersonate", "Impersonate customer accounts"),
     ("customer:write", "Manage customers through compatibility endpoints"),
     ("reseller:impersonate", "Impersonate reseller portal principals"),
+    ("reseller:read", "View resellers"),
+    ("reseller:write", "Manage resellers"),
     # Billing - Invoices
     ("billing:invoice:read", "View invoices"),
     ("billing:invoice:create", "Create invoices"),
@@ -302,6 +304,7 @@ DEFAULT_ROLES = [
     ("auditor", "Audit read-only access"),
     ("operator", "Network and provisioning operations"),
     ("support", "Subscriber and billing support"),
+    ("technical_support", "Technical support service access"),
     ("finance_manager", "Full billing and finance access"),
 ]
 
@@ -322,6 +325,7 @@ ROLE_PERMISSIONS = {
         "billing:batch:read",
         "billing_account:read",
         "customer:read",
+        "reseller:read",
         "reports:billing",
         "reports:subscribers",
     ],
@@ -373,6 +377,7 @@ ROLE_PERMISSIONS = {
         "provisioning:read",
         "provisioning:write",
         "customer:read",
+        "reseller:read",
         "subscription:read",
         "operations:work_order:read",
         "operations:work_order:update",
@@ -383,6 +388,7 @@ ROLE_PERMISSIONS = {
     ],
     "support": [
         "customer:read",
+        "reseller:read",
         "customer:update",
         "billing:invoice:read",
         "billing:payment:read",
@@ -403,6 +409,11 @@ ROLE_PERMISSIONS = {
         "crm:conversation:read",
         "crm:conversation:write",
         "reports:subscribers",
+    ],
+    "technical_support": [
+        "customer:read",
+        "subscription:read",
+        "subscription:suspend",
     ],
     "finance_manager": [
         "billing:invoice:read",
@@ -440,6 +451,7 @@ ROLE_PERMISSIONS = {
         "billing_account:distribute",
         "reports:billing",
         "customer:read",
+        "reseller:read",
     ],
 }
 
