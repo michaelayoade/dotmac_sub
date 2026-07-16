@@ -649,6 +649,57 @@ def _radius_health_findings(db: Session) -> list[AlertFinding]:
             )
         )
 
+    if "writer_targets_equivalent" in result and not int(
+        result.get("writer_targets_equivalent") or 0
+    ):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}writer-target-split-brain",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS writers target different databases",
+                summary=(
+                    "The canonical projection DSN and an active external-sync "
+                    "target do not identify the same database. Writer cutover "
+                    "is blocked and customer auth projections may diverge."
+                ),
+                details=_json_safe(result.get("writer_equivalence_report") or result),
+            )
+        )
+    elif "writer_schema_contract_ok" in result and not int(
+        result.get("writer_schema_contract_ok") or 0
+    ):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}writer-schema-incompatible",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.critical,
+                title="RADIUS writer table contract is incompatible",
+                summary=(
+                    "At least one active RADIUS target is unreachable or lacks "
+                    "the required radcheck, radreply, or radusergroup columns."
+                ),
+                details=_json_safe(result.get("writer_equivalence_report") or result),
+            )
+        )
+    elif int(result.get("writer_group_semantics_required") or 0):
+        findings.append(
+            AlertFinding(
+                fingerprint=f"{prefix}writer-groups-require-owner",
+                category="infrastructure",
+                source="radius-health",
+                severity=AlertSeverity.warning,
+                title="RADIUS group projection still needs an owner",
+                summary=(
+                    "radusergroup is configured or populated. The physical writer "
+                    "move must preserve group projection before legacy writers are removed."
+                ),
+                details=_json_safe(result.get("writer_equivalence_report") or result),
+            )
+        )
+
     return findings
 
 
