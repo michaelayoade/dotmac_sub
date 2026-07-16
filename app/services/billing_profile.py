@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -80,15 +81,9 @@ class BillingModeWriteRejected(ValueError):
         super().__init__(reason.replace("_", " "))
 
 
-def resolve_billing_profile(db: Session, account: Subscriber) -> BillingProfile:
-    rows = (
-        db.query(Subscription.billing_mode)
-        .filter(Subscription.subscriber_id == account.id)
-        .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
-        .distinct()
-        .all()
-    )
-    modes = frozenset(row[0] for row in rows if row[0] is not None)
+def _profile_from_modes(
+    account: Subscriber, modes: frozenset[BillingMode]
+) -> BillingProfile:
     account_mode = account.billing_mode
 
     if len(modes) > 1:
@@ -123,6 +118,35 @@ def resolve_billing_profile(db: Session, account: Subscriber) -> BillingProfile:
         source="account",
         account_subscription_mismatch=False,
     )
+
+
+def resolve_billing_profiles(
+    db: Session, accounts: Iterable[Subscriber]
+) -> dict[UUID, BillingProfile]:
+    """Resolve billing-mode authority for a cohort with one subscription query."""
+    account_by_id = {account.id: account for account in accounts}
+    if not account_by_id:
+        return {}
+    rows = (
+        db.query(Subscription.subscriber_id, Subscription.billing_mode)
+        .filter(Subscription.subscriber_id.in_(account_by_id))
+        .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
+        .all()
+    )
+    modes_by_account: dict[UUID, set[BillingMode]] = {}
+    for account_id, mode in rows:
+        if mode is not None:
+            modes_by_account.setdefault(account_id, set()).add(mode)
+    return {
+        account_id: _profile_from_modes(
+            account, frozenset(modes_by_account.get(account_id, set()))
+        )
+        for account_id, account in account_by_id.items()
+    }
+
+
+def resolve_billing_profile(db: Session, account: Subscriber) -> BillingProfile:
+    return resolve_billing_profiles(db, [account])[account.id]
 
 
 def plan_billing_mode_transition(

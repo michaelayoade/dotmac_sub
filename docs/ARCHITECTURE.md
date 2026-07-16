@@ -1084,7 +1084,7 @@ celery_app = Celery("dotmac_sm")
 **Billing Tasks**
 - `run_monthly_billing` - Generate invoices (1st of month)
 - `process_scheduled_payments` - Process pending payments (daily)
-- `run_dunning_checks` - Execute dunning actions (daily)
+- `run_billing_enforcement` - Execute unified billing enforcement (daily)
 - `apply_usage_charges` - Rate usage at period end
 
 **Usage & Network Tasks**
