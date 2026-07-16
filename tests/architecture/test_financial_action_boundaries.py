@@ -349,6 +349,34 @@ def test_consolidated_return_reconciliation_is_an_evidence_only_adapter() -> Non
     assert '"none_historical_return_evidence_no_access_decision"' in owner
 
 
+def test_missing_consolidated_return_document_composes_the_evidence_owner() -> None:
+    api = _source("app/api/billing.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+
+    base = (
+        '"/consolidated-payments/{payment_id}/return-document-reconstruction/'
+        "{return_type}"
+    )
+    assert base in api
+    assert '/evidence"' in api
+    assert '/preview"' in api
+    assert '/reconstruct"' in api
+    assert "inspect_missing_document_evidence(" in api
+    assert "preview_document_reconstruction(" in api
+    assert "reconstruct_missing_document(" in api
+    assert "PaymentRefund(" not in api
+    assert "PaymentReversal(" not in api
+    assert "LedgerEntry(" not in api
+    assert "BillingAccountLedgerEntry(" not in api
+    assert "def reconstruct_missing_document(" in owner
+    assert "cls.reconcile_historical_evidence(" in owner
+    assert 'action="reconstruct_consolidated_return_document"' in owner
+    assert '"return_document_created": True' in owner
+    assert '"money_posted": False' in owner
+    assert '"billing_account_balance_changed": False' in owner
+    assert '"none_return_document_reconstruction_no_access_decision"' in owner
+
+
 def test_native_credit_reconciliation_composes_the_payment_allocation_owner() -> None:
     reconciliation = _source("app/services/billing/reconcile_unposted.py")
 

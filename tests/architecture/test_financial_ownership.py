@@ -336,6 +336,19 @@ def test_only_consolidated_owner_constructs_return_reconciliation_evidence() -> 
     )
 
 
+def test_only_consolidated_owner_constructs_return_document_reconstruction() -> None:
+    violations = _violations(
+        lambda path: _constructor_lines(
+            path, "ConsolidatedPaymentReturnDocumentReconstructionEvidence"
+        ),
+        APPROVED_CONSOLIDATED_RETURN_EVIDENCE_WRITERS,
+    )
+    assert not violations, (
+        "Consolidated return-document reconstruction evidence constructed "
+        "outside its owner:\n  " + "\n  ".join(violations)
+    )
+
+
 def test_only_consolidated_money_owner_writes_billing_account_balance() -> None:
     violations = _violations(
         _billing_account_balance_write_lines,

@@ -568,9 +568,28 @@ Consolidated refunds and payment reversals remain under that scoped owner:
 - Refusal boundary: recorded and ledger-evidenced consolidated credit must
   agree before return evidence is linked. Active allocations, incomplete or
   reused evidence, subscriber-wallet or generic return carriers, owner-confirmed
-  rows with missing evidence, and status-only history without a refund/reversal
-  document remain fail-closed rather than being reconstructed from a UI value,
-  memo, current eligibility, or inferred billing state.
+  rows with missing evidence, and ambiguous provenance remain fail-closed rather
+  than being reconstructed from a UI value, memo, current eligibility, or
+  inferred billing state.
+- Missing-document boundary: revision
+  `322_consolidated_return_document_reconstruction` covers the narrower case
+  where a historical consolidated payment already carries a return-compatible
+  status and exact unclaimed return debits exist, but the `PaymentRefund` or
+  `PaymentReversal` document is absent. The status is a consistency gate, not
+  financial evidence. Preview binds a proposed document ID, explicit reviewed
+  amount, external source reference, exact selected debit partition, and exact
+  processed provider event when provider-backed. Confirmation creates only the
+  missing return document and reconstruction provenance, then composes the
+  revision-321 evidence owner for every structural link and derived payment
+  field. It posts no money, changes no billing-account balance, invoice,
+  allocation consequence, or access state, and replays idempotently.
+- Reconstruction refusal: the selected evidence must derive the same
+  `refunded`, `partially_refunded`, or `reversed` state already recorded on the
+  historical payment. Succeeded/failed status, missing or synthetic settlement,
+  projection drift, an existing reversal, incomplete/reused evidence, or an
+  existing return document that has not completed revision-321 reconciliation
+  blocks reconstruction. No amount, type, or source reference is inferred from
+  the historical status.
 
 Imported-payment batch reversal is a separate migrated wrapper owner:
 
