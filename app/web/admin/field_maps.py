@@ -4,7 +4,7 @@ UI-only ports of the CRM ``operations/field-live-map`` and
 ``operations/field-movement-playback`` pages onto sub's native Phase-2 field
 tracking data (``field_tech_presence`` / ``field_work_order_movements``). The
 JSON feeds live under the same ``/dispatch`` prefix and share the
-``operations:dispatch`` guard with the dispatch work-orders page.
+``operations:dispatch:read`` guard, matching the dispatch work-orders page.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _parse_dt(value: str | None) -> datetime | None:
 @router.get(
     "/live-map",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("operations:dispatch"))],
+    dependencies=[Depends(require_permission("operations:dispatch:read"))],
 )
 def field_live_map(request: Request, db: Session = Depends(get_db)):
     context = _ctx(request, db, "field-live-map")
@@ -58,7 +58,7 @@ def field_live_map(request: Request, db: Session = Depends(get_db)):
 
 @router.get(
     "/live-map/feed",
-    dependencies=[Depends(require_permission("operations:dispatch"))],
+    dependencies=[Depends(require_permission("operations:dispatch:read"))],
 )
 def field_live_map_feed(
     stale_after_seconds: int = Query(120, ge=15, le=3600),
@@ -73,7 +73,7 @@ def field_live_map_feed(
 @router.get(
     "/movement-playback",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("operations:dispatch"))],
+    dependencies=[Depends(require_permission("operations:dispatch:read"))],
 )
 def field_movement_playback(
     request: Request,
@@ -92,7 +92,7 @@ def field_movement_playback(
 
 @router.get(
     "/movement-playback/feed",
-    dependencies=[Depends(require_permission("operations:dispatch"))],
+    dependencies=[Depends(require_permission("operations:dispatch:read"))],
 )
 def field_movement_playback_feed(
     work_order: str | None = Query(default=None),

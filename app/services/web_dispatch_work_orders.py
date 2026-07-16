@@ -7,7 +7,7 @@ from math import ceil
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.dispatch import (
@@ -23,8 +23,11 @@ from app.schemas.dispatch import (
     WorkOrderHeaderUpdate,
 )
 from app.services import dispatch as dispatch_service
+from app.services import work_order_views
 from app.services.common import coerce_uuid
 from app.services.field.work_order_status import WORK_ORDER_TERMINAL_VALUES
+from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
+from app.services.work_order_views import WorkOrderListFilters
 
 STATUS_OPTIONS = (
     "draft",
@@ -154,6 +157,48 @@ def _technician_options(db: Session) -> list[dict[str, str]]:
     return [{"id": str(row.id), "label": _technician_label(row)} for row in rows]
 
 
+WORK_ORDER_LIST_DEFINITION = ListDefinition(
+    key="work_orders",
+    fields=(
+        ListFieldDefinition("id", "Work order", searchable=True),
+        ListFieldDefinition("title", "Title", searchable=True),
+        ListFieldDefinition("address", "Address", searchable=True),
+        ListFieldDefinition("status", "Status", filterable=True, sortable=True),
+        ListFieldDefinition("work_type", "Type", filterable=True),
+        ListFieldDefinition("priority", "Priority", filterable=True, sortable=True),
+        ListFieldDefinition("scheduled_start", "Scheduled", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+
+
+def build_work_order_list_query(
+    *,
+    search: str | None = None,
+    status: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalize the admin work-order list through its declared capabilities.
+
+    The route submits raw request values; this owner (ui.work_order_list_projection)
+    resolves the searchable/filterable fields, sort, and pagination once so no route
+    reconstructs those rules. The read itself is delegated to work_order_views.
+    """
+    normalized_status = status if status in STATUS_OPTIONS else None
+    effective_per_page = per_page or WORK_ORDER_LIST_DEFINITION.default_per_page
+    if effective_per_page not in WORK_ORDER_LIST_DEFINITION.per_page_options:
+        effective_per_page = WORK_ORDER_LIST_DEFINITION.default_per_page
+    return WORK_ORDER_LIST_DEFINITION.build_query(
+        search=search,
+        filters={"status": normalized_status},
+        page=max(1, page),
+        per_page=effective_per_page,
+    )
+
+
 def list_page(
     db: Session,
     *,
@@ -162,38 +207,23 @@ def list_page(
     page: int = 1,
     per_page: int = 25,
 ) -> dict[str, Any]:
-    page = max(1, page)
-    per_page = max(10, min(100, per_page))
-    status_filter = status if status in STATUS_OPTIONS else None
-    query = db.query(WorkOrderMirror, Subscriber).join(
-        Subscriber, Subscriber.id == WorkOrderMirror.subscriber_id
+    list_query = build_work_order_list_query(
+        search=q, status=status, page=page, per_page=per_page
     )
-    if status_filter:
-        query = query.filter(WorkOrderMirror.status == status_filter)
-    search = (q or "").strip()
-    if search:
-        like = f"%{search}%"
-        query = query.filter(
-            or_(
-                WorkOrderMirror.crm_work_order_id.ilike(like),
-                WorkOrderMirror.title.ilike(like),
-                WorkOrderMirror.address.ilike(like),
-                Subscriber.first_name.ilike(like),
-                Subscriber.last_name.ilike(like),
-                Subscriber.email.ilike(like),
-                Subscriber.account_number.ilike(like),
-            )
-        )
-
-    total = query.count()
-    rows = (
-        query.order_by(WorkOrderMirror.created_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-        .all()
+    filters = WorkOrderListFilters(
+        status=list_query.filter_value("status"),
+        q=list_query.search,
+        is_active=None,
+        limit=list_query.per_page,
+        offset=list_query.offset,
     )
-    work_orders = [row for row, _subscriber in rows]
-    queue_status = _queue_status_by_work_order(db, work_orders)
+    rows, total = work_order_views.query_work_orders(
+        db,
+        filters,
+        sort_by=list_query.sort_by,
+        sort_dir=list_query.sort_dir,
+    )
+    queue_status = _queue_status_by_work_order(db, [row for row, _ in rows])
     items = [
         {
             "work_order": row,
@@ -206,12 +236,12 @@ def list_page(
     return {
         "items": items,
         "counts": _work_order_counts(db),
-        "status_filter": status_filter,
-        "q": search,
-        "page": page,
-        "per_page": per_page,
+        "status_filter": list_query.filter_value("status"),
+        "q": list_query.search or "",
+        "page": list_query.page,
+        "per_page": list_query.per_page,
         "total": total,
-        "total_pages": max(1, ceil(total / per_page)) if total else 1,
+        "total_pages": max(1, ceil(total / list_query.per_page)) if total else 1,
         "statuses": STATUS_OPTIONS,
         "priorities": PRIORITY_OPTIONS,
         "work_types": WORK_TYPE_OPTIONS,
