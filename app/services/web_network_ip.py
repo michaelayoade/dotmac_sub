@@ -34,6 +34,11 @@ from app.schemas.network import (
 from app.services import network as network_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid, validate_enum
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1565,6 +1570,46 @@ def assign_ipv4_address(
     }
 
 
+# UI page contract for the admin IP-management addresses list. The
+# projection-boundary owner: it declares the searchable/filterable/sortable
+# fields, default order and page sizes. build_ip_management_data remains the read
+# owner. NOTE: the addresses list paginates a union of IPv4Address + IPv6Address
+# with one combined counter; making that union pagination correct is a separate
+# follow-up (see ui.ip_address_list_projection notes). This contract only owns
+# request-state validation, ordering and page sizing.
+IP_ADDRESS_LIST_DEFINITION = ListDefinition(
+    key="ip_addresses",
+    fields=(
+        ListFieldDefinition("search", "Search", searchable=True),
+        ListFieldDefinition("pool_filter", "Pool", filterable=True),
+        ListFieldDefinition("address", "Address", sortable=True),
+    ),
+    default_sort="address",
+    default_sort_dir="asc",
+    default_per_page=50,
+)
+
+
+def build_ip_address_list_query(
+    *,
+    search: str | None = None,
+    pool_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise IP-address-list request params through the page contract."""
+    return IP_ADDRESS_LIST_DEFINITION.build_query(
+        search=search,
+        filters={"pool_filter": pool_filter},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
 def build_ip_management_data(
     db,
     *,
@@ -1572,6 +1617,7 @@ def build_ip_management_data(
     search: str | None = None,
     pool_filter: str | None = None,
     address_limit: int = 50,
+    sort_dir: str = "asc",
 ) -> dict[str, object]:
     from sqlalchemy import func, select
     from sqlalchemy.orm import selectinload
@@ -1666,7 +1712,11 @@ def build_ip_management_data(
             ),
             IPv4Address,
         )
-        .order_by(IPv4Address.address.asc())
+        .order_by(
+            IPv4Address.address.desc()
+            if sort_dir == "desc"
+            else IPv4Address.address.asc()
+        )
         .limit(address_limit)
         .offset(offset)
     )
@@ -1681,7 +1731,11 @@ def build_ip_management_data(
             ),
             IPv6Address,
         )
-        .order_by(IPv6Address.address.asc())
+        .order_by(
+            IPv6Address.address.desc()
+            if sort_dir == "desc"
+            else IPv6Address.address.asc()
+        )
         .limit(address_limit)
         .offset(offset)
     )

@@ -2089,6 +2089,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Read-only: delivery history is an immutable observation log."
                 ),
             ),
+            SOTService(
+                name="ui.ip_address_list_projection",
+                module="app.services.web_network_ip",
+                owns=(
+                    "admin IP-address list searchable/filterable fields",
+                    "admin IP-address list sort and default-order semantics",
+                    "admin IP-address list page-size normalization",
+                ),
+                depends_on=("ui.list_contracts",),
+                notes=(
+                    "IP_ADDRESS_LIST_DEFINITION declares the addresses-tab list "
+                    "capabilities (search, filter by pool, sort by address) and "
+                    "build_ip_address_list_query normalizes/validates request state; "
+                    "build_ip_management_data remains the read owner. Gated by the "
+                    "existing granular network:ip:read. KNOWN LIMITATION / follow-up: "
+                    "the addresses list paginates IPv4Address and IPv6Address with the "
+                    "same offset/limit independently and sums the counts, so combined "
+                    "pages do not align across the two address families; a correct "
+                    "merge/UNION pagination is a separate change this contract does "
+                    "not attempt. Read-only list: no bulk selection declared."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",
