@@ -37,6 +37,26 @@ class PrepaidFundingReconstructionBatch(Base):
             "length(manifest_sha256) = 64",
             name="ck_prepaid_funding_batch_manifest_hash",
         ),
+        CheckConstraint(
+            "length(manifest_payload_sha256) = 64",
+            name="ck_prepaid_funding_batch_payload_hash",
+        ),
+        CheckConstraint(
+            "length(attestation_sha256) = 64",
+            name="ck_prepaid_funding_batch_attestation_hash",
+        ),
+        CheckConstraint(
+            "length(attestation_key_fingerprint_sha256) = 64",
+            name="ck_prepaid_funding_batch_attestation_key_hash",
+        ),
+        CheckConstraint(
+            "length(blocker_manifest_sha256) = 64",
+            name="ck_prepaid_funding_batch_blocker_hash",
+        ),
+        CheckConstraint(
+            "length(candidate_cohort_sha256) = 64",
+            name="ck_prepaid_funding_batch_cohort_hash",
+        ),
         Index(
             "uq_prepaid_funding_authority_cutover",
             "is_authority_cutover",
@@ -52,6 +72,18 @@ class PrepaidFundingReconstructionBatch(Base):
     manifest_sha256: Mapped[str] = mapped_column(
         String(64), nullable=False, unique=True
     )
+    manifest_payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    attestation_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True
+    )
+    attestation_key_fingerprint_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    attestation_signed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    blocker_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_cohort_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(String(240), nullable=False)
     evidence_ref: Mapped[str] = mapped_column(Text, nullable=False)
     position_at: Mapped[datetime] = mapped_column(

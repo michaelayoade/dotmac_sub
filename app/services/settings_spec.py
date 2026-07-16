@@ -1543,6 +1543,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="prepaid_reconstruction_attestation_public_key_ref",
+        env_var="PREPAID_RECONSTRUCTION_ATTESTATION_PUBLIC_KEY_REF",
+        value_type=SettingValueType.string,
+        default=None,
+        required=True,
+        is_secret=True,
+        label="Prepaid reconstruction attestation public key reference",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="default_invoice_status",
         env_var="BILLING_DEFAULT_INVOICE_STATUS",
         value_type=SettingValueType.string,

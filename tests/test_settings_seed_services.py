@@ -618,6 +618,31 @@ class TestSeedBillingSettings:
         assert setting is not None
         assert setting.value_text == "EUR"
 
+    def test_seeds_prepaid_reconstruction_trust_anchor_as_openbao_ref(
+        self, db_session, monkeypatch
+    ):
+        reference = (
+            "bao://secret/billing/prepaid-reconstruction-attestation#public_key_pem"
+        )
+        monkeypatch.setenv(
+            "PREPAID_RECONSTRUCTION_ATTESTATION_PUBLIC_KEY_REF",
+            reference,
+        )
+
+        settings_seed.seed_billing_settings(db_session)
+
+        setting = (
+            db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.billing,
+                DomainSetting.key
+                == "prepaid_reconstruction_attestation_public_key_ref",
+            )
+            .one()
+        )
+        assert setting.is_secret is True
+        assert setting.value_text == reference
+
     def test_seeds_invoice_number_settings(self, db_session, monkeypatch):
         """Test invoice number settings are seeded."""
         monkeypatch.setenv("BILLING_INVOICE_NUMBER_PREFIX", "INVOICE-")

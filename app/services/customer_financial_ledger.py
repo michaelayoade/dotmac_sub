@@ -807,6 +807,25 @@ def customer_financial_balances_by_currency(
     return balances
 
 
+def native_customer_financial_balances_by_currency(
+    db: Session,
+    account_ids: Iterable[str | UUID],
+    *,
+    after: datetime,
+) -> dict[UUID, dict[str, Decimal]]:
+    """Aggregate native events strictly after a reviewed opening position.
+
+    This explicit post-baseline reader never queries the archived Splynx mirror
+    and never activates legacy cut-off heuristics because mirror rows exist.
+    """
+    return customer_financial_balances_by_currency(
+        db,
+        account_ids,
+        start=_event_date(after),
+        include_legacy_mirror=False,
+    )
+
+
 def calculate_customer_balance(
     db: Session, account_id: str | UUID, *, currency: str | None = "NGN"
 ) -> Decimal:
