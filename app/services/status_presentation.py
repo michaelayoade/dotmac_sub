@@ -11,9 +11,8 @@ from __future__ import annotations
 from enum import Enum
 
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
-from app.models.catalog import SubscriptionStatus
+from app.models.catalog import OfferStatus, SubscriptionStatus
 from app.models.payment_proof import WithholdingTaxStatus
-from app.models.catalog import OfferStatus
 from app.models.project import ProjectStatus, ProjectTaskStatus
 from app.models.provisioning import AppointmentStatus, ServiceOrderStatus, TaskStatus
 from app.models.sales import QuoteStatus, SalesOrderStatus
@@ -493,7 +492,11 @@ _PROJECT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
 }
 
 _PROJECT_TASK_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
-    ProjectTaskStatus.backlog.value: ("Backlog", StatusTone.neutral, StatusIcon.archive),
+    ProjectTaskStatus.backlog.value: (
+        "Backlog",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
     ProjectTaskStatus.todo.value: ("To do", StatusTone.info, StatusIcon.clock),
     ProjectTaskStatus.in_progress.value: (
         "In progress",
