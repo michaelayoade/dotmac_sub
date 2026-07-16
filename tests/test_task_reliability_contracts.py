@@ -53,7 +53,6 @@ def test_money_moving_tasks_do_not_use_blind_celery_autoretry():
         "app.tasks.autopay.charge_due_invoices",
         "app.tasks.billing.run_invoice_cycle",
         "app.tasks.collections.run_billing_enforcement",
-        "app.tasks.collections.run_dunning",
         "app.tasks.payment_reconciliation.reconcile_topups",
         "app.tasks.usage.meter_usage_into_quota",
         "app.tasks.usage.run_usage_rating",

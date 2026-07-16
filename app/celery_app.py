@@ -137,7 +137,6 @@ celery_app.conf.task_routes = {
     "app.tasks.arrangements.check_overdue_arrangements": {"queue": "billing"},
     "app.tasks.payment_reconciliation.reconcile_topups": {"queue": "billing"},
     "app.tasks.collections.run_billing_enforcement": {"queue": "billing"},
-    "app.tasks.collections.run_dunning": {"queue": "billing"},
     "app.tasks.collections.run_bundle_reconcile": {"queue": "billing"},
     "app.tasks.billing.check_billing_switch": {"queue": "billing"},
     "app.tasks.billing.refresh_billing_health_snapshot": {"queue": "billing"},

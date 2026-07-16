@@ -986,14 +986,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
-        key="prepaid_balance_enforcement_enabled",
-        env_var="PREPAID_BALANCE_ENFORCEMENT_ENABLED",
-        value_type=SettingValueType.boolean,
-        # SAFETY: default OFF. Arms the balance/expiry prepaid suspension sweep.
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.collections,
         key="prepaid_skip_weekends",
         env_var="PREPAID_SKIP_WEEKENDS",
         value_type=SettingValueType.boolean,
@@ -4075,7 +4067,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.usage, "fup_submonthly_rules_enabled"),
         (SettingDomain.collections, "dunning_enabled"),
         (SettingDomain.collections, "billing_notifications_hourly_enabled"),
-        (SettingDomain.collections, "prepaid_balance_enforcement_enabled"),
         (SettingDomain.scheduler, "crm_ticket_pull_enabled"),
         (SettingDomain.scheduler, "crm_work_order_pull_enabled"),
         (SettingDomain.radius, "coa_enabled"),

@@ -69,8 +69,7 @@ with deterministic scripts.
 
 - `app.tasks.collections.prepaid_balance_sweep` calls
   `run_prepaid_balance_sweep`.
-- The sweep is gated by `collections.prepaid_balance_enforcement`, with legacy
-  alias `collections.prepaid_balance_enforcement_enabled`.
+- The sweep is gated only by `collections.prepaid_balance_enforcement`.
 - The control is default-off because it can suspend customers.
 - When enabled, it:
   - calculates available balance from canonical customer financial events;
@@ -240,7 +239,7 @@ Complete or verify these before further balance cleanup:
    - verify prod values for:
      - `billing.billing_enabled`;
      - `collections.dunning_enabled`;
-     - `collections.prepaid_balance_enforcement_enabled`;
+     - `collections.prepaid_balance_enforcement`;
      - `billing.overdue_check_enabled`;
      - `collections.billing_notifications_hourly_enabled`;
      - `catalog.scheduled_plan_change_enabled`.

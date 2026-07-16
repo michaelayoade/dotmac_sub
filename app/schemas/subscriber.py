@@ -178,7 +178,6 @@ class SubscriberBase(BaseModel):
     # Payment settings
     billing_mode: BillingMode = BillingMode.prepaid
     payment_method: str | None = Field(default=None, max_length=80)
-    deposit: Decimal | None = None
     billing_day: int | None = None
     payment_due_days: int | None = None
     grace_period_days: int | None = None
@@ -279,7 +278,6 @@ class SubscriberUpdate(BaseModel):
     # Payment settings
     billing_mode: BillingMode | None = None
     payment_method: str | None = Field(default=None, max_length=80)
-    deposit: Decimal | None = None
     billing_day: int | None = None
     payment_due_days: int | None = None
     grace_period_days: int | None = None
