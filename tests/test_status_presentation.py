@@ -664,3 +664,46 @@ def test_appointment_status_presentation_covers_canonical_set():
         == StatusTone.negative
     )
     assert appointment_status_presentation(None).tone == StatusTone.neutral
+
+
+# --- Catalog / sales / project presentations (presentation completion) ---
+
+
+def test_new_catalog_sales_project_families_cover_canonical_sets():
+    from app.models.catalog import OfferStatus
+    from app.models.project import ProjectStatus, ProjectTaskStatus
+    from app.models.sales import QuoteStatus, SalesOrderStatus
+    from app.schemas.status_presentation import StatusTone
+    from app.services.status_presentation import (
+        offer_status_presentation,
+        project_status_presentation,
+        project_task_status_presentation,
+        quote_status_presentation,
+        sales_order_status_presentation,
+    )
+
+    cases = [
+        (OfferStatus, offer_status_presentation),
+        (QuoteStatus, quote_status_presentation),
+        (SalesOrderStatus, sales_order_status_presentation),
+        (ProjectStatus, project_status_presentation),
+        (ProjectTaskStatus, project_task_status_presentation),
+    ]
+    for enum_cls, pres in cases:
+        for status in enum_cls:
+            result = pres(status)
+            assert result.value == status.value
+            assert result.label
+        # Unknown values fail neutral, never silently positive.
+        assert pres("weird").tone == StatusTone.neutral
+        assert pres(None).tone == StatusTone.neutral
+
+    assert quote_status_presentation(QuoteStatus.rejected).tone == StatusTone.negative
+    assert (
+        sales_order_status_presentation(SalesOrderStatus.paid).tone
+        == StatusTone.positive
+    )
+    assert (
+        project_task_status_presentation(ProjectTaskStatus.blocked).tone
+        == StatusTone.warning
+    )
