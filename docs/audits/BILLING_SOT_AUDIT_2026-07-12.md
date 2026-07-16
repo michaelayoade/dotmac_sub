@@ -392,6 +392,14 @@ protected them.
 (`>= min_balance`) is suspending. It is CLI-only today — **that is the only thing preventing
 a permanent oscillation. Do not schedule it** until the thresholds are unified.
 
+> **Current disposition (2026-07-16):** the historical prepaid inconsistency
+> above is closed by the canonical funding decision named in the status overlay.
+> The stale-overdue repair now follows the lock reason rather than the account's
+> billing mode: it uses the currency-typed native signed receivable position,
+> fails closed on mixed currencies, and excludes the archived Splynx mirror.
+> Prepaid suspension/restoration independently consumes the reviewed opening
+> position plus native events through `resolve_prepaid_funding`.
+
 ---
 
 ## 5. High — the declared control plane does not run

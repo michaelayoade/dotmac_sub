@@ -191,6 +191,15 @@ def decide_grace(
     start = starts_at
     if start.tzinfo is None:
         start = start.replace(tzinfo=UTC)
+    if policy.days == 0:
+        return GraceDecision(
+            policy=policy,
+            starts_at=start,
+            ends_at=start,
+            as_of=now,
+            phase="actionable" if now >= start else "in_grace",
+            elapsed_days_after_grace=max((now.date() - start.date()).days, 0),
+        )
     raw_days = max((now.date() - start.date()).days, 0)
     elapsed = max(raw_days - policy.days, 0)
     ends_at = datetime.combine(

@@ -4,12 +4,13 @@ Clears the stale overdue lock; reactivates subs held by nothing else; leaves
 subs held by another lock suspended; ignores accounts that owe overdue debt.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from app.models.billing import InvoiceStatus, LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementReason
+from app.models.splynx_transaction import SplynxBillingTransaction
 from app.schemas.billing import InvoiceCreate
 from app.services import billing as billing_service
 from app.services.account_lifecycle import suspend_subscription
@@ -149,6 +150,47 @@ def test_ledger_covered_overdue_lock_can_be_restored(
     assert result.restored == 1
     db_session.refresh(sub)
     assert sub.status == SubscriptionStatus.active
+
+
+def test_archived_splynx_credit_cannot_restore_native_overdue_debt(
+    db_session, subscriber, catalog_offer
+):
+    sub = _postpaid_active(db_session, subscriber, catalog_offer)
+    suspend_subscription(
+        db_session,
+        str(sub.id),
+        reason=EnforcementReason.overdue,
+        source="invoice:not-covered-natively",
+    )
+    billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber.id,
+            status=InvoiceStatus.issued,
+            total=Decimal("5000.00"),
+            balance_due=Decimal("5000.00"),
+            issued_at=datetime.now(UTC) - timedelta(days=30),
+            due_at=datetime.now(UTC) - timedelta(days=10),
+        ),
+    )
+    db_session.add(
+        SplynxBillingTransaction(
+            splynx_transaction_id=991001,
+            splynx_customer_id=991001,
+            subscriber_id=subscriber.id,
+            entry_type="credit",
+            amount=Decimal("6000.00"),
+            transaction_date=date(2026, 3, 1),
+            description="Archived pre-cutover receipt",
+        )
+    )
+    db_session.commit()
+
+    result = reconcile(db_session, apply=False, restore_ledger_covered=True)
+
+    assert result.candidates == 0
+    db_session.refresh(sub)
+    assert sub.status == SubscriptionStatus.suspended
 
 
 def test_dry_run_writes_nothing(db_session, subscriber, catalog_offer):

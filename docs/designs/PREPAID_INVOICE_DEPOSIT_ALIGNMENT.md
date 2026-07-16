@@ -63,7 +63,9 @@ Drafting removes prepaid AR as an enforcement input. Prepaid is instead enforced
 on **balance/expiry** through `prepaid_balance_sweep`, which arms
 `prepaid_low_balance_at` / `prepaid_deactivation_at`, sends prepaid-native
 low-balance notices, and applies prepaid locks only when the local available
-balance is insufficient. This path is independent of postpaid dunning.
+balance is insufficient. That balance is owned by the final reviewed opening
+balance plus native post-cutover financial events; Splynx and subscriber deposit
+fields have no runtime fallback. This path is independent of postpaid dunning.
 
 ### Item 3 — admin/API prepaid plan-change should draw down, not invoice ✅ DONE (this PR)
 `catalog/subscriptions.py:1004-1075 _generate_proration_invoice` mints an issued
@@ -98,23 +100,32 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    funded.
 2. Keep `collections.prepaid_balance_enforcement` as the customer-impacting
    suspension gate; cleanup scripts must not be used as the suspension signal.
-   Enabling it is a two-part launch operation: set
+   Enabling it is a three-part launch operation: set
    `collections.prepaid_enforcement_activation_at` to the reviewed ISO-8601
-   launch time and then enable the control. Adverse actions fail closed when the
+   launch time, record a full-cohort independent-funding reconciliation, and
+   then enable the control. Adverse actions fail closed when readiness or the
    activation time is missing/invalid/not reached, while funded restoration
-   remains available. The deactivation warning window is never zero (three days
-   by default), and old `prepaid_low_balance_at` rows cannot become due before
-   `activation_at + prepaid_deactivation_days`.
+   remains available. Grace is configuration-owned (account, policy set, then
+   billing-mode default). The approved cutover policy is zero default prepaid
+   grace, so an unfunded account with no override is suspended on its first
+   eligible sweep. Activation does not reset an older low-balance timer.
 3. Run the phantom-AR cleanup in dry-run first, review the plan, then apply.
    Runtime guards exclude prepaid subscription invoices and imported/provenance
    line-less prepaid invoices from AR/dunning/balance enforcement; ambiguous
    line-less invoices remain visible and require cleanup review.
 4. For migrated-account readiness, reconstruct the financial position from the
    approved Splynx cutover baseline plus native post-cutover payments, credits,
-   debits, service extensions, and credit notes. Feed that named, timestamped
-   snapshot to `plan_prepaid_balance_sweep.py --funding-snapshot`; the planner
-   will use no local-money fallback and will still apply the production
-   enforcement owner rules. Review the full planned cohort before launch.
+   debits, service extensions, and credit notes. Resolve every blocker, then
+   materialize that named, timestamped full-cohort position through
+   `financial.prepaid_funding_reconstruction` using the reviewed content hash.
+   This is the final authority cutover: runtime has no Splynx fallback. Feed a
+   fresh independent snapshot to `plan_prepaid_balance_sweep.py` only to verify
+   the materialized native position and owner decision. Then record parity with
+   `--record-readiness --evidence-ref ... --verified-by ...`. Any missing or
+   mismatched account blocks the record and therefore blocks activation. Bank
+   statements and Splynx exports can reconcile missing historical evidence
+   through the one-time opening-balance owner; they are not runtime enforcement
+   inputs.
 5. **Post-change smoke test (top-up → draft settlement).** The #751 follow-ups
    (`settle_prepaid_draft_invoices_from_credit`, wired into portal top-up verify /
    webhook settlement / pending top-up reconciliation) are part of the go-live

@@ -1124,9 +1124,15 @@ def seed_collections_settings(db: Session) -> None:
     )
     collections_settings.ensure_by_key(
         db,
-        key="prepaid_default_min_balance",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("PREPAID_DEFAULT_MIN_BALANCE", "0.00"),
+        key="prepaid_readiness_max_age_minutes",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("PREPAID_READINESS_MAX_AGE_MINUTES", "60"),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="prepaid_activation_max_grace_days",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("PREPAID_ACTIVATION_MAX_GRACE_DAYS", "0"),
     )
     collections_settings.ensure_by_key(
         db,

@@ -9,6 +9,7 @@ from this ledger by design.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -283,9 +284,19 @@ def list_customer_financial_events(
     start: datetime | None = None,
     end: datetime | None = None,
     currency: str | None = "NGN",
+    include_legacy_mirror: bool = True,
 ) -> list[CustomerFinancialEvent]:
+    """List financial events, with legacy rows available only to audit callers.
+
+    Runtime owners that have an approved opening position must pass
+    ``include_legacy_mirror=False``. That skips both the Splynx query and the old
+    mirror-presence cut-off heuristics, so archived data cannot change a native
+    projection merely by existing.
+    """
     account_uuid = coerce_uuid(account_id)
-    has_legacy_mirror = _has_legacy_mirror(db, account_uuid)
+    has_legacy_mirror = (
+        _has_legacy_mirror(db, account_uuid) if include_legacy_mirror else False
+    )
     events: list[CustomerFinancialEvent] = []
 
     if has_legacy_mirror:
@@ -507,9 +518,17 @@ def list_customer_financial_events(
 
 def customer_financial_balances_by_currency(
     db: Session,
-    account_ids: list[str | UUID] | tuple[str | UUID, ...] | set[str | UUID],
+    account_ids: Iterable[str | UUID],
+    *,
+    start: datetime | None = None,
+    include_legacy_mirror: bool = True,
 ) -> dict[UUID, dict[str, Decimal]]:
-    """Aggregate canonical balances for a cohort without materializing events."""
+    """Aggregate balances without materializing events.
+
+    Runtime opening-balance projections pass ``include_legacy_mirror=False``
+    and a reviewed ``start`` timestamp. That mode performs no Splynx query and
+    applies no mirror-presence cutoff heuristic.
+    """
     account_uuids = sorted(
         {coerce_uuid(account_id) for account_id in account_ids}, key=str
     )
@@ -519,13 +538,17 @@ def customer_financial_balances_by_currency(
     balances: dict[UUID, dict[str, Decimal]] = {
         account_id: {} for account_id in account_uuids
     }
-    legacy_account_ids = set(
-        row[0]
-        for row in db.query(SplynxBillingTransaction.subscriber_id)
-        .filter(SplynxBillingTransaction.subscriber_id.in_(account_uuids))
-        .filter(SplynxBillingTransaction.deleted.is_(False))
-        .distinct()
-        .all()
+    legacy_account_ids = (
+        set(
+            row[0]
+            for row in db.query(SplynxBillingTransaction.subscriber_id)
+            .filter(SplynxBillingTransaction.subscriber_id.in_(account_uuids))
+            .filter(SplynxBillingTransaction.deleted.is_(False))
+            .distinct()
+            .all()
+        )
+        if include_legacy_mirror
+        else set()
     )
 
     def add(rows) -> None:  # noqa: ANN001
@@ -587,6 +610,10 @@ def customer_financial_balances_by_currency(
                 Payment.created_at >= PAYMENT_ACTIVITY_AT,
             )
         )
+    if start is not None:
+        payment_query = payment_query.filter(
+            func.coalesce(Payment.paid_at, Payment.created_at) > start
+        )
     add(payment_query.group_by(Payment.account_id, payment_currency).all())
 
     allocation_currency = func.coalesce(Payment.currency, Invoice.currency, "NGN")
@@ -621,6 +648,8 @@ def customer_financial_balances_by_currency(
                 Payment.created_at >= PAYMENT_ACTIVITY_AT,
             )
         )
+    if start is not None:
+        allocation_query = allocation_query.filter(PaymentAllocation.created_at > start)
     add(allocation_query.group_by(Invoice.account_id, allocation_currency).all())
 
     invoice_currency = func.coalesce(Invoice.currency, "NGN")
@@ -661,6 +690,10 @@ def customer_financial_balances_by_currency(
                 Invoice.created_at >= SERVICE_ACTIVITY_AT,
             )
         )
+    if start is not None:
+        invoice_query = invoice_query.filter(
+            func.coalesce(Invoice.issued_at, Invoice.created_at) > start
+        )
     add(invoice_query.group_by(Invoice.account_id, invoice_currency).all())
 
     writeoff_currency = func.coalesce(InvoiceClosure.currency, "NGN")
@@ -683,6 +716,8 @@ def customer_financial_balances_by_currency(
                 InvoiceClosure.created_at >= SERVICE_ACTIVITY_AT,
             )
         )
+    if start is not None:
+        writeoff_query = writeoff_query.filter(InvoiceClosure.created_at > start)
     add(writeoff_query.group_by(Invoice.account_id, writeoff_currency).all())
 
     note_currency = func.coalesce(CreditNote.currency, "NGN")
@@ -711,6 +746,8 @@ def customer_financial_balances_by_currency(
                 CreditNote.created_at >= SERVICE_ACTIVITY_AT,
             )
         )
+    if start is not None:
+        note_query = note_query.filter(CreditNote.created_at > start)
     add(note_query.group_by(CreditNote.account_id, note_currency).all())
 
     ledger_currency = func.coalesce(LedgerEntry.currency, "NGN")
@@ -760,6 +797,10 @@ def customer_financial_balances_by_currency(
                 LedgerEntry.account_id.notin_(legacy_account_ids),
                 ledger_event_date > LEGACY_LEDGER_CUTOVER,
             )
+        )
+    if start is not None:
+        ledger_query = ledger_query.filter(
+            func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at) > start
         )
     add(ledger_query.group_by(LedgerEntry.account_id, ledger_currency).all())
 

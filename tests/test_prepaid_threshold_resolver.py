@@ -38,6 +38,7 @@ from app.models.catalog import (
 )
 from app.models.subscriber import Subscriber
 from app.services.prepaid_threshold import (
+    PrepaidCurrencyMismatchError,
     resolve_prepaid_threshold,
     resolve_prepaid_thresholds,
 )
@@ -231,6 +232,18 @@ def test_unfunded_single_subscription_requires_its_price(db_session):
 
     scalar, batch = _both(db_session, account)
     assert scalar == batch == Decimal("17500.00")
+
+
+def test_price_currency_must_match_configured_enforcement_currency(db_session):
+    account = _account(db_session, min_balance="0.00")
+    offer = _offer(db_session, "100.00")
+    price = db_session.query(OfferPrice).filter(OfferPrice.offer_id == offer.id).one()
+    price.currency = "USD"
+    _subscription(db_session, account, offer)
+    db_session.commit()
+
+    with pytest.raises(PrepaidCurrencyMismatchError, match="does not match"):
+        resolve_prepaid_threshold(db_session, account, now=NOW)
 
 
 def test_unfunded_multiple_subscriptions_sum(db_session):

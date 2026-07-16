@@ -14,7 +14,7 @@ The threshold is::
     max(configured_minimum, unfunded_renewal_requirement)
 
 where ``configured_minimum`` is the account's ``min_balance`` override, falling
-back to the ``prepaid_default_min_balance`` setting, and
+back to the canonical ``billing.prepaid_default_min_balance`` setting, and
 ``unfunded_renewal_requirement`` is the summed effective price of every
 collectible prepaid subscription that has **no current paid coverage** — paid
 coverage being an active ``ServiceEntitlement`` spanning ``now``, or (legacy
@@ -60,6 +60,10 @@ from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 ZERO = Decimal("0.00")
 
 
+class PrepaidCurrencyMismatchError(ValueError):
+    """A price would require comparing amounts in different currencies."""
+
+
 def _newest(rows: Iterable[Any]) -> Any | None:
     """Pick the newest price row the way the scalar resolver's ORDER BY does.
 
@@ -82,22 +86,29 @@ def resolve_prepaid_thresholds(
     account_ids: Sequence[Any],
     *,
     now: datetime | None = None,
+    currency: str | None = None,
 ) -> dict[str, Decimal]:
     """Resolve the prepaid enforcement threshold for many accounts at once.
 
     This is the owner. Returns ``{account_id: threshold}`` for every id given;
     an account with no prepaid service resolves to its configured minimum.
     """
+    from app.services.access_resolution import resolve_prepaid_enforcement_currency
     from app.services.billing_automation import _effective_unit_price
 
     effective_now = now or datetime.now(UTC)
+    enforcement_currency = (
+        str(currency).strip().upper()
+        if currency is not None
+        else resolve_prepaid_enforcement_currency(db)
+    )
     ids = [str(a) for a in account_ids]
     if not ids:
         return {}
 
     # 1. configured minimum: per-account override, else the domain default.
     default_raw = settings_spec.resolve_value(
-        db, SettingDomain.collections, "prepaid_default_min_balance"
+        db, SettingDomain.billing, "prepaid_default_min_balance"
     )
     default_minimum = Decimal(str(default_raw)) if default_raw is not None else ZERO
     configured: dict[str, Decimal] = {}
@@ -196,18 +207,27 @@ def resolve_prepaid_thresholds(
     required: dict[str, Decimal] = defaultdict(lambda: ZERO)
     for subscription in unfunded:
         amount: Decimal | None = None
+        amount_currency = enforcement_currency
         if subscription.offer_version_id:
             newest = _newest(version_prices.get(str(subscription.offer_version_id), []))
             if newest is not None:
                 amount = newest.amount
+                amount_currency = str(newest.currency or "").strip().upper()
         if amount is None and subscription.offer_id:
             newest = _newest(offer_prices.get(str(subscription.offer_id), []))
             if newest is not None:
                 amount = newest.amount
+                amount_currency = str(newest.currency or "").strip().upper()
         if amount is None:
             amount = subscription.unit_price
         if amount is None:
             continue
+        if amount_currency != enforcement_currency:
+            raise PrepaidCurrencyMismatchError(
+                "prepaid subscription "
+                f"{subscription.id} price currency {amount_currency or '<missing>'} "
+                f"does not match enforcement currency {enforcement_currency}"
+            )
         effective = _effective_unit_price(subscription, amount, effective_now)
         if effective > ZERO:
             required[str(subscription.subscriber_id)] += effective
@@ -223,11 +243,12 @@ def resolve_prepaid_threshold(
     account: Subscriber,
     *,
     now: datetime | None = None,
+    currency: str | None = None,
 ) -> Decimal:
     """Threshold for one account — a thin adapter over the batch owner.
 
     Deliberately delegates rather than reimplementing: one set of rules, so the
     enforcement sweep and any batch consumer cannot disagree.
     """
-    resolved = resolve_prepaid_thresholds(db, [account.id], now=now)
+    resolved = resolve_prepaid_thresholds(db, [account.id], now=now, currency=currency)
     return resolved.get(str(account.id), ZERO)
