@@ -336,6 +336,24 @@ def require_user_auth(
     }
 
 
+def user_role_names(db: Session, user_id: object) -> set[str] | None:
+    """Role names for a system user — the RBAC owner's identity read.
+
+    Returns None when the user cannot be resolved (or has no roles relation),
+    so callers can distinguish "no roles" from "unknown user". Consumers map
+    roles to their own visibility; they must not fetch SystemUser directly.
+    """
+    from app.models.system_user import SystemUser
+
+    if not user_id:
+        return None
+    sys_user = db.get(SystemUser, str(user_id))
+    roles = getattr(sys_user, "roles", None)
+    if sys_user is None or roles is None:
+        return None
+    return {getattr(r, "name", "") for r in roles} if roles else set()
+
+
 def require_role(role_name: str):
     def _require_role(
         auth=Depends(require_user_auth),
