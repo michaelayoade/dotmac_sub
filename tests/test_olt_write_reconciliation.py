@@ -189,6 +189,33 @@ class TestVerifyOntAbsent:
         assert result.success is False
         assert "readback failed" in result.message
 
+    def test_readback_failure_carries_sanitized_classifier_evidence(
+        self, monkeypatch
+    ) -> None:
+        from app.services.network.olt_write_reconciliation import verify_ont_absent
+
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.get_registered_ont_serials",
+            lambda *_args, **_kwargs: (
+                False,
+                "% Unknown command secret-value",
+                [],
+            ),
+        )
+
+        result = verify_ont_absent(
+            _olt(),
+            fsp="0/2/1",
+            ont_id=7,
+            serial_number="HWTC-ABCD1234",
+        )
+
+        assert result.details["error_code"] == "unknown_command"
+        assert (
+            result.details["huawei_cli_response"]["response_code"] == "unknown_command"
+        )
+        assert "secret-value" not in repr(result.details)
+
 
 class TestVerifyServicePortPresent:
     def test_detects_missing_vlan_after_write(self, monkeypatch) -> None:

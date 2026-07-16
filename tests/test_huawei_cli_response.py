@@ -11,6 +11,7 @@ from app.services.network.huawei_cli_response import (
     is_huawei_no_autofind_entries,
     is_huawei_resource_absent,
     is_huawei_serial_already_registered,
+    project_huawei_result_evidence,
 )
 from app.services.network.olt_ssh_session import ErrorCode, parse_command_result
 from app.services.network.parsers.cli import is_error_output
@@ -83,6 +84,49 @@ def test_serial_conflict_is_not_generic_idempotent_success() -> None:
     assert response.error_code == HuaweiCliErrorCode.SERIAL_ALREADY_EXISTS
     assert response.accepted is False
     assert is_huawei_serial_already_registered(output) is True
+
+
+def test_operation_evidence_is_stable_and_excludes_raw_cli() -> None:
+    response = classify_huawei_cli_response("% Unknown command secret-value")
+
+    evidence = response.to_evidence()
+
+    assert evidence == {
+        "classifier": "huawei_cli_response",
+        "schema_version": 1,
+        "response_code": "unknown_command",
+        "accepted": False,
+        "has_error_marker": True,
+        "idempotent_success": False,
+        "resource_absent": False,
+        "unsupported": True,
+        "retryable": False,
+    }
+    assert "secret-value" not in repr(evidence)
+
+
+def test_adapter_result_evidence_projection_preserves_transport_code() -> None:
+    result = type(
+        "Result",
+        (),
+        {
+            "error_code": "TimeoutError",
+            "data": {
+                "huawei_cli_response": {
+                    "response_code": "unknown_command",
+                    "unsupported": True,
+                }
+            },
+        },
+    )()
+
+    assert project_huawei_result_evidence(result) == {
+        "error_code": "TimeoutError",
+        "huawei_cli_response": {
+            "response_code": "unknown_command",
+            "unsupported": True,
+        },
+    }
 
 
 def test_generic_already_exists_preserves_session_idempotency() -> None:
