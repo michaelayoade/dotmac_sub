@@ -149,11 +149,10 @@ def test_work_order_lifecycle_native(db_session):
         [{"start_at": start_at, "end_at": start_at + timedelta(minutes=45)}],
     )
     assert len(submitted) == 1 and not submitted[0]["duplicate"]
-    worklog = (
-        db_session.query(FieldWorkLog)
-        .filter(FieldWorkLog.work_order_mirror_id == row.id)
-        .one()
-    )
+    # The start transition auto-opens a timer worklog too, so resolve the
+    # submitted entry by its own id rather than .one() over the FK.
+    worklog = db_session.get(FieldWorkLog, submitted[0]["worklog"]["id"])
+    assert worklog is not None
     assert worklog.crm_work_order_id == row.public_id
 
     field_notes.create(

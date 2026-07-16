@@ -105,9 +105,7 @@ def test_quote_lifecycle_native(db_session):
     assert quote.status == "accepted"
     order = db_session.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).one()
     assert order.deposit_paid is True
-    assert (
-        db_session.query(Payment).filter(Payment.invoice_id == invoice.id).count() == 0
-    )
+    assert db_session.query(Payment).filter(Payment.account_id == sub.id).count() == 0
 
     # 5. Double-charge guard: re-initiating against the paid ledger invoice
     # 409s regardless of any mirror state.

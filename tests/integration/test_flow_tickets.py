@@ -9,6 +9,7 @@ decision steps — the post-cutover posture where sub owns ticket writes.
 
 from __future__ import annotations
 
+import dataclasses
 from uuid import uuid4
 
 from app.models.support import Ticket, TicketComment
@@ -76,7 +77,11 @@ def test_ticket_lifecycle_pull_native_decisions_merge(
 
     # 2. Native decisions on the pulled ticket (post-cutover write posture).
     monkeypatch.setattr(
-        support_service.settings, "crm_ticket_native_writes_enabled", True
+        support_service,
+        "settings",
+        dataclasses.replace(
+            support_service.settings, crm_ticket_native_writes_enabled=True
+        ),
     )
     ticket, token = Tickets.request_resolution_confirmation(
         db_session, str(ticket.id), actor_id=None
