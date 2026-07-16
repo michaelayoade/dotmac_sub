@@ -442,6 +442,23 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert consolidated_credit_evidence_owner is not None
     assert consolidated_credit_evidence_owner.name == "financial.consolidated_payments"
 
+    consolidated_credit_reconciliation_owner = sot_relationships.owning_service_for(
+        "historical consolidated-credit consumption reconciliation"
+    )
+    assert consolidated_credit_reconciliation_owner is not None
+    assert (
+        consolidated_credit_reconciliation_owner.name
+        == "financial.consolidated_payments"
+    )
+
+    consolidated_projection_repair_owner = sot_relationships.owning_service_for(
+        "exact billing-account projection-debit repair evidence"
+    )
+    assert consolidated_projection_repair_owner is not None
+    assert (
+        consolidated_projection_repair_owner.name == "financial.consolidated_payments"
+    )
+
     consolidated_refund_owner = sot_relationships.owning_service_for(
         "billing-account refund confirmation and exact ledger evidence"
     )
@@ -453,6 +470,35 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     )
     assert consolidated_reversal_owner is not None
     assert consolidated_reversal_owner.name == "financial.consolidated_payments"
+
+    consolidated_return_reconciliation_owner = sot_relationships.owning_service_for(
+        "historical consolidated refund/reversal evidence reconciliation"
+    )
+    assert consolidated_return_reconciliation_owner is not None
+    assert (
+        consolidated_return_reconciliation_owner.name
+        == "financial.consolidated_payments"
+    )
+
+    consolidated_return_provenance_owner = sot_relationships.owning_service_for(
+        "exact historical consolidated return provenance links"
+    )
+    assert consolidated_return_provenance_owner is not None
+    assert (
+        consolidated_return_provenance_owner.name == "financial.consolidated_payments"
+    )
+
+    consolidated_return_document_owner = sot_relationships.owning_service_for(
+        "historical consolidated return document reconstruction"
+    )
+    assert consolidated_return_document_owner is not None
+    assert consolidated_return_document_owner.name == "financial.consolidated_payments"
+
+    consolidated_return_source_owner = sot_relationships.owning_service_for(
+        "reviewed historical return source references"
+    )
+    assert consolidated_return_source_owner is not None
+    assert consolidated_return_source_owner.name == "financial.consolidated_payments"
 
     allocation_owner = sot_relationships.owning_service_for(
         "settled account-credit allocation preview and confirmation"

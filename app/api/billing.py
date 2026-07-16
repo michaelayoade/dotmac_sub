@@ -20,11 +20,26 @@ from app.schemas.billing import (
     BankAccountRead,
     BankAccountUpdate,
     BillingAccountCreate,
+    BillingAccountCreditConsumptionEvidenceInspectionRead,
+    BillingAccountCreditConsumptionReconciliationConfirm,
+    BillingAccountCreditConsumptionReconciliationPreviewRead,
+    BillingAccountCreditConsumptionReconciliationRequest,
+    BillingAccountCreditConsumptionReconciliationResultRead,
+    BillingAccountMissingPaymentReturnEvidenceInspectionRead,
     BillingAccountPaymentConfirm,
     BillingAccountPaymentPreviewRead,
     BillingAccountPaymentPreviewRequest,
     BillingAccountPaymentRefundPreviewRead,
     BillingAccountPaymentRefundRequest,
+    BillingAccountPaymentReturnDocumentReconstructionConfirm,
+    BillingAccountPaymentReturnDocumentReconstructionPreviewRead,
+    BillingAccountPaymentReturnDocumentReconstructionRequest,
+    BillingAccountPaymentReturnDocumentReconstructionResultRead,
+    BillingAccountPaymentReturnEvidenceInspectionRead,
+    BillingAccountPaymentReturnReconciliationConfirm,
+    BillingAccountPaymentReturnReconciliationPreviewRead,
+    BillingAccountPaymentReturnReconciliationRequest,
+    BillingAccountPaymentReturnReconciliationResultRead,
     BillingAccountPaymentReversalPreviewRead,
     BillingAccountPaymentReversalRequest,
     BillingAccountPaymentSettlementEvidenceInspectionRead,
@@ -1807,6 +1822,195 @@ def reconcile_consolidated_payment_settlement_evidence(
         "provenance_id": provenance_id,
         "idempotent_replay": result.idempotent_replay,
     }
+
+
+@router.get(
+    "/billing-accounts/{billing_account_id}/credit-consumption/evidence",
+    response_model=BillingAccountCreditConsumptionEvidenceInspectionRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:read"))],
+)
+def inspect_consolidated_credit_consumption_evidence(
+    billing_account_id: str,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_credit_allocations.inspect_reconciliation_evidence(
+            db, billing_account_id
+        ),
+    )
+
+
+@router.post(
+    "/billing-accounts/{billing_account_id}/credit-consumption/evidence/preview",
+    response_model=BillingAccountCreditConsumptionReconciliationPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:write"))],
+)
+def preview_consolidated_credit_consumption_evidence(
+    billing_account_id: str,
+    payload: BillingAccountCreditConsumptionReconciliationRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_credit_allocations.preview_reconciliation(
+            db, billing_account_id, payload
+        ),
+    )
+
+
+@router.post(
+    "/billing-accounts/{billing_account_id}/credit-consumption/evidence/reconcile",
+    response_model=BillingAccountCreditConsumptionReconciliationResultRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+)
+def reconcile_consolidated_credit_consumption_evidence(
+    billing_account_id: str,
+    payload: BillingAccountCreditConsumptionReconciliationConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    actor_type, actor_id = _financial_actor(principal)
+    return billing_service.consolidated_credit_allocations.reconcile_historical_consumption(
+        db,
+        billing_account_id,
+        payload,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    )
+
+
+@router.get(
+    "/consolidated-payments/{payment_id}/returns/{return_type}/{return_id}/evidence",
+    response_model=BillingAccountPaymentReturnEvidenceInspectionRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:read"))],
+)
+def inspect_consolidated_payment_return_evidence(
+    payment_id: str,
+    return_type: str,
+    return_id: str,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_return_reconciliations.inspect_evidence(
+            db, payment_id, return_type, return_id
+        ),
+    )
+
+
+@router.post(
+    "/consolidated-payments/{payment_id}/returns/{return_type}/{return_id}/evidence/preview",
+    response_model=BillingAccountPaymentReturnReconciliationPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:write"))],
+)
+def preview_consolidated_payment_return_evidence(
+    payment_id: str,
+    return_type: str,
+    return_id: str,
+    payload: BillingAccountPaymentReturnReconciliationRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_return_reconciliations.preview(
+            db, payment_id, return_type, return_id, payload
+        ),
+    )
+
+
+@router.post(
+    "/consolidated-payments/{payment_id}/returns/{return_type}/{return_id}/evidence/reconcile",
+    response_model=BillingAccountPaymentReturnReconciliationResultRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+)
+def reconcile_consolidated_payment_return_evidence(
+    payment_id: str,
+    return_type: str,
+    return_id: str,
+    payload: BillingAccountPaymentReturnReconciliationConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    actor_type, actor_id = _financial_actor(principal)
+    return billing_service.consolidated_payment_return_reconciliations.reconcile_historical_evidence(
+        db,
+        payment_id,
+        return_type,
+        return_id,
+        payload,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    )
+
+
+@router.get(
+    "/consolidated-payments/{payment_id}/return-document-reconstruction/{return_type}/evidence",
+    response_model=BillingAccountMissingPaymentReturnEvidenceInspectionRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:read"))],
+)
+def inspect_missing_consolidated_payment_return_document(
+    payment_id: str,
+    return_type: str,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_return_reconciliations.inspect_missing_document_evidence(
+            db, payment_id, return_type
+        ),
+    )
+
+
+@router.post(
+    "/consolidated-payments/{payment_id}/return-document-reconstruction/{return_type}/preview",
+    response_model=BillingAccountPaymentReturnDocumentReconstructionPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:write"))],
+)
+def preview_missing_consolidated_payment_return_document(
+    payment_id: str,
+    return_type: str,
+    payload: BillingAccountPaymentReturnDocumentReconstructionRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_return_reconciliations.preview_document_reconstruction(
+            db, payment_id, return_type, payload
+        ),
+    )
+
+
+@router.post(
+    "/consolidated-payments/{payment_id}/return-document-reconstruction/{return_type}/reconstruct",
+    response_model=BillingAccountPaymentReturnDocumentReconstructionResultRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+)
+def reconstruct_missing_consolidated_payment_return_document(
+    payment_id: str,
+    return_type: str,
+    payload: BillingAccountPaymentReturnDocumentReconstructionConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    actor_type, actor_id = _financial_actor(principal)
+    return billing_service.consolidated_payment_return_reconciliations.reconstruct_missing_document(
+        db,
+        payment_id,
+        return_type,
+        payload,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    )
 
 
 # --- Customer-initiated online payment (hosted checkout) ------------------
