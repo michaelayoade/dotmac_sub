@@ -2061,6 +2061,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "existing granular audit:read."
                 ),
             ),
+            SOTService(
+                name="ui.nas_list_projection",
+                module="app.services.nas.web_builders",
+                owns=(
+                    "admin NAS dashboard searchable fields",
+                    "admin NAS dashboard filter semantics",
+                    "admin NAS dashboard sort and default-order semantics",
+                    "admin NAS dashboard list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts", "network.nas_inventory"),
+                notes=(
+                    "NAS_LIST_DEFINITION declares the list capabilities and "
+                    "build_nas_list_query normalizes/validates request state; "
+                    "build_nas_dashboard_data is the read owner. SQL-expressible "
+                    "filters (vendor/nas_type/status/pop_site/search) paginate and "
+                    "count in the database via NasDevices.list/count; partner_org_id "
+                    "(tag) and olt_status (ping cache) are post-query filters that "
+                    "page over a bounded in-memory scan (logged if the bound is hit) "
+                    "rather than the prior unconditional 1000-row load-then-slice. "
+                    "Gated by the router-level granular network:nas:read/write. "
+                    "Read-only list: no admin bulk command declared."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",
