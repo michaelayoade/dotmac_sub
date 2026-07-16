@@ -52,13 +52,11 @@ from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Subscriber
 from app.schemas.billing import CreditNoteIssuePreviewRequest
 from app.services.billing.credit_notes import CreditNotes
-from app.services.customer_financial_ledger import (
+from app.services.customer_financial_ledger import calculate_customer_balance
+from scripts.one_off.billing_alignment_audit import (
     LEGACY_LEDGER_CUTOVER,
     PAYMENT_ACTIVITY_AT,
     SERVICE_ACTIVITY_AT,
-    calculate_customer_balance,
-)
-from scripts.one_off.billing_alignment_audit import (
     _batch_customer_positions,
     _batch_ledger_credit,
     _batch_reconstructed_positions,
@@ -77,6 +75,7 @@ from scripts.one_off.reconstruct_splynx_mirror import (
 from scripts.one_off.reconstruct_splynx_mirror import (
     _entry_type as normalize_splynx_entry_type,
 )
+from tests.prepaid_funding_test_support import ephemeral_private_signing_key_pem
 
 
 def test_d1_detector_finds_legacy_corrupted_pair(db_session, subscriber):
@@ -230,7 +229,9 @@ def test_batch_position_uses_constant_query_count(db_session, subscriber):
     assert statements <= 6
 
 
-def test_batch_position_matches_canonical_migrated_balance(db_session, subscriber):
+def test_historical_batch_position_is_not_the_native_runtime_balance(
+    db_session, subscriber
+):
     db_session.add(
         SplynxBillingTransaction(
             splynx_transaction_id=900001,
@@ -307,8 +308,8 @@ def test_batch_position_matches_canonical_migrated_balance(db_session, subscribe
     expected = calculate_customer_balance(db_session, str(subscriber.id))
     actual = _batch_customer_positions(db_session, [subscriber.id], currency="NGN")
 
-    assert expected == Decimal("108.00")
-    assert actual[(str(subscriber.id), "NGN")] == expected
+    assert expected == Decimal("23.00")
+    assert actual[(str(subscriber.id), "NGN")] == Decimal("108.00")
 
 
 def test_batch_position_preserves_per_currency_balances(db_session, subscriber):
@@ -528,13 +529,20 @@ def test_funding_export_uses_owner_cohort_replay_and_threshold(db_session, subsc
     payload = export.funding_payload()
     assert payload["source"] == "splynx-final-plus-native-events:test"
     assert payload["captured_at"] == "2026-07-12T00:00:00Z"
+    assert payload["currency"] == "NGN"
     assert payload["accounts"] == [
         {
             "account_id": str(subscriber.id),
             "available_balance": "50.00",
-            "required_balance": f"{export.thresholds[str(subscriber.id)]:.2f}",
         }
     ]
+    sealed = export.sealed_funding_payload(
+        private_key_pem=ephemeral_private_signing_key_pem(),
+        signed_at=datetime(2026, 7, 12, 0, 0, 1, tzinfo=UTC),
+    )
+    assert sealed["manifest"] == payload
+    assert sealed["attestation"]["algorithm"] == "ed25519"
+    assert sealed["attestation"]["manifest_payload_sha256"]
 
 
 def test_funding_export_blocks_candidate_without_source_baseline(

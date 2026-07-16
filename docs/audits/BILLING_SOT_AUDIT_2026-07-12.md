@@ -36,6 +36,17 @@ Do not re-open those forward-fix workstreams from the historical prose below
 without a fresh regression. Their **historical repair** questions remain
 separate from their merged forward fixes.
 
+The 2026-07-16 integration slice closes the remaining forward projection and
+prepaid-authority paths pending its integration PR: F20 invoice issuance emits
+one owner event; F21 portal overdue views consume the canonical collection-
+blocking receivable; F24 reporting consumes collectible, currency-typed money;
+and F23 runtime financial position no longer queries the archived Splynx mirror
+or classifies ledger effects from memo text. Reviewed prepaid opening positions
+are full-cohort signed materializations plus native events, and ledger rows now
+carry an explicit `affects_customer_position` classification. The archived
+mirror and memo-based reconstruction remain only in one-off audit/migration
+tools against the historical backup.
+
 D2/D7/D12 were re-adjudicated on 2026-07-14 with the corrected method. The June
 15 Splynx ledger is the opening source and the retained June 29 snapshot proves
 that legacy financial activity ended on June 17. Both source snapshots reconcile
@@ -392,6 +403,14 @@ protected them.
 (`>= min_balance`) is suspending. It is CLI-only today — **that is the only thing preventing
 a permanent oscillation. Do not schedule it** until the thresholds are unified.
 
+> **Current disposition (2026-07-16):** the historical prepaid inconsistency
+> above is closed by the canonical funding decision named in the status overlay.
+> The stale-overdue repair now follows the lock reason rather than the account's
+> billing mode: it uses the currency-typed native signed receivable position,
+> fails closed on mixed currencies, and excludes the archived Splynx mirror.
+> Prepaid suspension/restoration independently consumes the reviewed opening
+> position plus native events through `resolve_prepaid_funding`.
+
 ---
 
 ## 5. High — the declared control plane does not run
@@ -578,6 +597,15 @@ from the CSV.
   "Total Balance" KPI (`:259-261`) sums `Subscriber.min_balance` — an admin-entered *enforcement
   threshold*, not money.
 (F25 was reclassified **Critical** and moved to §3.)
+
+> **Current disposition (2026-07-16 integration slice):** F20, F21, F23 and
+> F24 above are historical evidence, not current integration-branch behavior.
+> F23 is closed in both dimensions: runtime balance code has no Splynx query or
+> mirror-presence switch, and structural ledger evidence is classified by a
+> durable boolean migrated once from the known historical rows. New writers set
+> that classification explicitly; runtime money no longer depends on memo
+> prefixes. The one-off audit intentionally retains the old cutoff/memo logic
+> because it reconstructs the pre-classification 2026-07-12 backup.
 
 ---
 

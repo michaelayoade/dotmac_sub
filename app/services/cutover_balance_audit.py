@@ -759,6 +759,7 @@ def apply_reconstructed_balance_corrections(
                     amount=amount,
                     currency="NGN",
                     memo=item["memo"],
+                    affects_customer_position=False,
                 )
             )
         output_items.append(item)

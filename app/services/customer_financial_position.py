@@ -64,6 +64,26 @@ class CustomerFinancialPosition:
         return self.collection_blocking_balance > Decimal("0.00")
 
 
+@dataclass(frozen=True)
+class NativeCustomerFinancialBalance:
+    """One currency-typed signed position from native financial events only.
+
+    This is the shared accounting quantity beneath account-credit and prepaid
+    funding decisions. It deliberately excludes the archived Splynx mirror.
+    Callers must fail closed when ``other_currency_balances`` is non-empty;
+    nominal amounts in different currencies are never netted together.
+    """
+
+    account_id: UUID
+    currency: str
+    available_balance: Decimal
+    other_currency_balances: tuple[tuple[str, Decimal], ...]
+
+    @property
+    def automation_safe(self) -> bool:
+        return not self.other_currency_balances
+
+
 def get_customer_financial_position(
     db: Session,
     account_id,
@@ -92,41 +112,102 @@ def get_customer_financial_position(
     )
 
 
-def prepaid_available_balance(db: Session, account_id) -> Decimal:
-    """Available service wallet balance consumed by access resolution.
+def get_native_customer_financial_balance(
+    db: Session,
+    account_id: object,
+    *,
+    currency: str | None = None,
+) -> NativeCustomerFinancialBalance:
+    """Return a native-only signed balance without legacy fallback.
 
-    Multi-currency accounts fail closed on their least-funded currency.  This
-    is a read-only projection over financial events; it never posts money.
+    Credits are positive and collectible charges are negative. The Splynx
+    archive is migration evidence, not a runtime input; reviewed opening
+    positions are consumed separately by the prepaid reconstruction owner.
     """
-    from app.services.customer_financial_ledger import list_customer_financial_events
-
-    balances_by_currency: dict[str, Decimal] = {}
-    for event in list_customer_financial_events(db, str(account_id), currency=None):
-        currency = event.currency or "NGN"
-        balances_by_currency[currency] = (
-            balances_by_currency.get(currency, Decimal("0.00")) + event.signed_amount
-        )
-    balances = list(balances_by_currency.values())
-    return min(balances) if balances else Decimal("0.00")
-
-
-def prepaid_available_balances(
-    db: Session, account_ids: Iterable[object]
-) -> dict[UUID, Decimal]:
-    """Resolve canonical prepaid balances for a cohort in bounded queries."""
+    from app.services import display_format
+    from app.services.common import round_money
     from app.services.customer_financial_ledger import (
         customer_financial_balances_by_currency,
     )
 
+    account_uuid = coerce_uuid(account_id)
+    unit = display_format.currency_code(currency or display_format.default_currency(db))
+    raw = customer_financial_balances_by_currency(
+        db,
+        [account_uuid],
+    ).get(account_uuid, {})
+    normalized: dict[str, Decimal] = {}
+    for code, amount in raw.items():
+        normalized_code = display_format.currency_code(code)
+        normalized[normalized_code] = round_money(
+            normalized.get(normalized_code, Decimal("0.00")) + amount
+        )
+    other_currency_balances = tuple(
+        sorted(
+            (code, amount)
+            for code, amount in normalized.items()
+            if code != unit and amount != Decimal("0.00")
+        )
+    )
+    return NativeCustomerFinancialBalance(
+        account_id=account_uuid,
+        currency=unit,
+        available_balance=normalized.get(unit, Decimal("0.00")),
+        other_currency_balances=other_currency_balances,
+    )
+
+
+def prepaid_available_balance(
+    db: Session, account_id, *, currency: str | None = None
+) -> Decimal:
+    """Available service wallet balance consumed by access resolution.
+
+    Funding authority is the reviewed opening balance plus native events after
+    its timestamp. The optional currency resolves through the enforcement
+    policy owner; nominal amounts from different currencies are never mixed.
+    There is deliberately no Splynx or assumed-zero fallback.
+    """
+    from app.models.catalog import BillingMode
+    from app.models.subscriber import Subscriber
+    from app.services.billing_profile import resolve_billing_profile
+    from app.services.prepaid_funding_reconstruction import (
+        verified_prepaid_funding_balance,
+    )
+
+    account = db.get(Subscriber, coerce_uuid(account_id))
+    if account is None:
+        raise ValueError(f"Subscriber {account_id} was not found")
+    profile = resolve_billing_profile(db, account)
+    if profile.effective_mode != BillingMode.prepaid:
+        return Decimal("0.00")
+    if currency is None:
+        from app.services.access_resolution import resolve_prepaid_enforcement_currency
+
+        currency = resolve_prepaid_enforcement_currency(db)
+    unit = str(currency).strip().upper()
+    return verified_prepaid_funding_balance(db, account_id, currency=unit)
+
+
+def prepaid_available_balances(
+    db: Session,
+    account_ids: Iterable[object],
+    *,
+    currency: str | None = None,
+) -> dict[UUID, Decimal]:
+    """Resolve reviewed opening balances plus native events for a cohort."""
+    from app.services.prepaid_funding_reconstruction import (
+        verified_prepaid_funding_balances,
+    )
+
+    if currency is None:
+        from app.services.access_resolution import resolve_prepaid_enforcement_currency
+
+        currency = resolve_prepaid_enforcement_currency(db)
+    unit = str(currency).strip().upper()
     account_uuids = sorted(
         {coerce_uuid(account_id) for account_id in account_ids}, key=str
     )
-    balances_by_account = customer_financial_balances_by_currency(db, account_uuids)
-    resolved: dict[UUID, Decimal] = {}
-    for account_uuid in account_uuids:
-        balances = list(balances_by_account[account_uuid].values())
-        resolved[account_uuid] = min(balances) if balances else Decimal("0.00")
-    return resolved
+    return verified_prepaid_funding_balances(db, account_uuids, currency=unit)
 
 
 def _oldest_due_invoice(invoices: list[Invoice], now: datetime) -> Invoice | None:

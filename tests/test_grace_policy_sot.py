@@ -91,6 +91,21 @@ def test_dunning_offsets_begin_after_grace_end():
     assert first_action_day.elapsed_days_after_grace == 1
 
 
+def test_configured_zero_grace_is_immediately_actionable():
+    policy = EffectiveGracePolicy(
+        days=0,
+        source="billing_mode_default",
+        billing_mode=BillingMode.prepaid,
+        policy_set_id=None,
+    )
+    starts_at = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
+
+    decision = decide_grace(policy, starts_at=starts_at, as_of=starts_at)
+
+    assert decision.phase == "actionable"
+    assert decision.ends_at == starts_at
+
+
 def test_policy_form_preserves_explicit_zero_grace(db_session):
     policy = PolicySet(name="No grace", grace_days=0, is_active=True)
     db_session.add(policy)

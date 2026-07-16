@@ -7,23 +7,13 @@ Examples (inside the app container):
     python scripts/one_off/plan_prepaid_balance_sweep.py --limit 100 --details
     python scripts/one_off/plan_prepaid_balance_sweep.py --out /tmp/prepaid-plan.json
     python scripts/one_off/plan_prepaid_balance_sweep.py \
-      --funding-snapshot /tmp/cutover-funding.json \
       --activation-at 2026-07-20T08:00:00+01:00
 
-Funding snapshot shape (amounts are decimal strings; timestamp needs a zone):
-
-    {
-      "source": "splynx-cutover-plus-native-events:prod-2026-07-14",
-      "captured_at": "2026-07-14T12:08:25Z",
-      "accounts": [{
-        "account_id": "...",
-        "available_balance": "123.45",
-        "required_balance": "5000.00"
-      }]
-    }
-
-This command has no execute mode. Enabling the production control remains a
-separate, explicit operator decision after the report is reviewed.
+Funding always comes from the same materialized reconstruction owner consumed
+by execution; the command accepts no alternate balance snapshot. The optional
+``--record-readiness`` mode records the reviewed live-owner plan as cutover
+evidence. It does not enable enforcement or change money, timers, notices,
+service state, or sessions.
 """
 
 from __future__ import annotations
@@ -31,16 +21,10 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any
 
 from app.db import SessionLocal
-from app.services.access_resolution import PrepaidFundingDecision
-from app.services.prepaid_enforcement_planner import (
-    PrepaidFundingSnapshot,
-    plan_prepaid_enforcement,
-)
+from app.services.prepaid_enforcement_planner import plan_prepaid_enforcement
 
 SAMPLE_SIZE = 20
 
@@ -59,53 +43,6 @@ def _parse_datetime(value: object, *, field: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"{field} must include a timezone offset")
     return parsed
-
-
-def _parse_money(value: object, *, field: str) -> Decimal:
-    try:
-        parsed = Decimal(str(value))
-    except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"{field} must be a decimal amount") from exc
-    if not parsed.is_finite():
-        raise ValueError(f"{field} must be a finite decimal amount")
-    return parsed
-
-
-def _load_funding_snapshot(path: str) -> PrepaidFundingSnapshot:
-    """Load explicit reconstructed funding facts; never infer missing rows."""
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("funding snapshot must be a JSON object")
-    rows = payload.get("accounts")
-    if not isinstance(rows, list) or not rows:
-        raise ValueError("funding snapshot accounts must be a non-empty list")
-
-    decisions: list[PrepaidFundingDecision] = []
-    for index, row in enumerate(rows):
-        if not isinstance(row, dict):
-            raise ValueError(f"accounts[{index}] must be a JSON object")
-        account_id = row.get("account_id")
-        if not isinstance(account_id, str) or not account_id.strip():
-            raise ValueError(f"accounts[{index}].account_id must be a UUID string")
-        decisions.append(
-            PrepaidFundingDecision(
-                account_id=account_id,
-                available_balance=_parse_money(
-                    row.get("available_balance"),
-                    field=f"accounts[{index}].available_balance",
-                ),
-                required_balance=_parse_money(
-                    row.get("required_balance"),
-                    field=f"accounts[{index}].required_balance",
-                ),
-            )
-        )
-
-    return PrepaidFundingSnapshot(
-        captured_at=_parse_datetime(payload.get("captured_at"), field="captured_at"),
-        source=str(payload.get("source") or ""),
-        decisions=tuple(decisions),
-    )
 
 
 def main() -> int:
@@ -134,15 +71,6 @@ def main() -> int:
         help="Write the complete JSON plan to PATH.",
     )
     parser.add_argument(
-        "--funding-snapshot",
-        metavar="PATH",
-        default=None,
-        help=(
-            "Use reconstructed funding facts from JSON instead of the local "
-            "financial resolver. Requires source, captured_at, and accounts[]."
-        ),
-    )
-    parser.add_argument(
         "--activation-at",
         default=None,
         help=(
@@ -150,16 +78,35 @@ def main() -> int:
             "the setting or enable enforcement."
         ),
     )
+    parser.add_argument(
+        "--record-readiness",
+        action="store_true",
+        help="Persist verified full-cohort cutover evidence; never enables the feature.",
+    )
+    parser.add_argument(
+        "--evidence-ref",
+        default=None,
+        help="Non-secret reference to the reconstruction/bank evidence package.",
+    )
+    parser.add_argument(
+        "--verified-by",
+        default=None,
+        help="Operator identity recorded with the readiness evidence.",
+    )
     args = parser.parse_args()
 
-    funding_snapshot = (
-        _load_funding_snapshot(args.funding_snapshot) if args.funding_snapshot else None
-    )
     activation_at = (
         _parse_datetime(args.activation_at, field="activation_at")
         if args.activation_at
         else None
     )
+    if args.record_readiness:
+        if activation_at is None:
+            parser.error("--record-readiness requires --activation-at")
+        if args.account_id or args.limit is not None:
+            parser.error("--record-readiness requires the complete candidate cohort")
+        if not args.evidence_ref or not args.verified_by:
+            parser.error("--record-readiness requires --evidence-ref and --verified-by")
 
     db = SessionLocal()
     try:
@@ -167,7 +114,6 @@ def main() -> int:
             db,
             account_ids=args.account_id or None,
             limit=args.limit,
-            funding_snapshot=funding_snapshot,
             activation_at=activation_at,
         )
         summary = plan.to_dict(include_items=False)
@@ -199,9 +145,32 @@ def main() -> int:
                 output.write("\n")
             print(f"\nFull plan written: {args.out} ({len(rows)} accounts)")
 
-        print(
-            "\nDRY RUN ONLY - no timers, notices, service states, or sessions changed."
-        )
+        if args.record_readiness:
+            from app.services.prepaid_enforcement_readiness import (
+                record_prepaid_enforcement_readiness,
+            )
+
+            assert activation_at is not None
+            record = record_prepaid_enforcement_readiness(
+                db,
+                activation_at=activation_at,
+                evidence_ref=args.evidence_ref,
+                verified_by=args.verified_by,
+                now=plan.generated_at,
+            )
+            db.commit()
+            print(
+                "\nReadiness recorded: "
+                f"id={record.id} accounts={record.candidate_account_count} "
+                f"currency={record.currency}"
+            )
+
+        if args.record_readiness:
+            print("No financial or customer enforcement state was changed.")
+        else:
+            print(
+                "\nDRY RUN ONLY - no timers, notices, service states, or sessions changed."
+            )
         return 0
     finally:
         db.close()

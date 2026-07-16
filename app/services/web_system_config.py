@@ -220,6 +220,7 @@ BILLING_KEYS = [
     "prepaid_default_payment_due_days",
     "prepaid_default_grace_period_days",
     "prepaid_default_min_balance",
+    "prepaid_enforcement_currency",
     # Postpaid customer defaults
     "postpaid_default_billing_day",
     "postpaid_default_payment_due_days",

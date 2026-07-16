@@ -8,6 +8,7 @@ from app.models.splynx_transaction import SplynxBillingTransaction
 from app.schemas.billing import LedgerEntryCreate
 from app.services import billing as billing_service
 from app.services import web_billing_statements as statements_service
+from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
 
 def _create_entry(
@@ -17,6 +18,7 @@ def _create_entry(
     entry_type: LedgerEntryType,
     amount: str,
     created_at: datetime,
+    affects_customer_position: bool = True,
 ):
     entry = billing_service.ledger_entries.create(
         db_session,
@@ -28,6 +30,7 @@ def _create_entry(
             currency="NGN",
             memo="test",
         ),
+        affects_customer_position=affects_customer_position,
     )
     entry.created_at = created_at
     db_session.add(entry)
@@ -109,7 +112,7 @@ def test_render_statement_csv_includes_balances_and_rows(db_session, subscriber)
     assert "50.00" in csv_text
 
 
-def test_statement_uses_legacy_mirror_and_excludes_internal_rows(
+def test_statement_ignores_archived_mirror_and_structural_ledger_rows(
     db_session, subscriber
 ):
     subscriber.splynx_customer_id = 12345
@@ -149,6 +152,7 @@ def test_statement_uses_legacy_mirror_and_excludes_internal_rows(
             memo="Prepaid opening balance @ cutover",
             created_at=datetime(2026, 6, 16, tzinfo=UTC),
             is_active=True,
+            affects_customer_position=False,
         )
     )
     db_session.add(
@@ -161,9 +165,16 @@ def test_statement_uses_legacy_mirror_and_excludes_internal_rows(
             memo="Correction: cutover reconstructed balance true-up",
             created_at=datetime(2026, 7, 9, tzinfo=UTC),
             is_active=True,
+            affects_customer_position=False,
         )
     )
     db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("750.00"),
+        position_at=datetime(2026, 3, 15, tzinfo=UTC),
+    )
 
     date_range = statements_service.parse_statement_range("2026-03-01", "2026-07-31")
     statement = statements_service.build_account_statement(
@@ -179,8 +190,9 @@ def test_statement_uses_legacy_mirror_and_excludes_internal_rows(
     )
 
     assert statement["closing_balance"] == Decimal("750.00")
-    assert "Bank transfer" in csv_text
-    assert "Monthly service" in csv_text
+    assert "Bank transfer" not in csv_text
+    assert "Monthly service" not in csv_text
+    assert "Reviewed prepaid opening position" in csv_text
     assert "Prepaid opening balance" not in csv_text
     assert "cutover reconstructed" not in csv_text
 
@@ -201,6 +213,7 @@ def test_build_account_statement_excludes_internal_repair_entries(
         entry_type=LedgerEntryType.debit,
         amount="75.00",
         created_at=datetime(2026, 2, 2, tzinfo=UTC),
+        affects_customer_position=False,
     )
     internal.memo = "Correction: remove system overcredit"
     db_session.add(internal)
