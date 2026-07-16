@@ -7,9 +7,7 @@ import logging
 import secrets
 from datetime import UTC, datetime
 from decimal import Decimal
-from html import escape
 from typing import TypedDict
-from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -31,7 +29,6 @@ from app.schemas.billing import (
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
-from app.services import email as email_service
 from app.services import invoice_bank_details as invoice_bank_details_service
 from app.services import numbering
 from app.services import web_billing_customers as web_billing_customers_service
@@ -40,11 +37,6 @@ from app.services.audit_helpers import (
     extract_changes,
     format_changes,
     log_audit_event,
-)
-from app.services.brand_theme import (
-    DEFAULT_HEX,
-    DEFAULT_SEMANTIC_COLORS,
-    generate_scale,
 )
 from app.services.status_presentation import invoice_status_presentation
 from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
@@ -253,119 +245,40 @@ def maybe_issue_invoice(db: Session, *, invoice_id, issue_immediately: str | Non
     """Issue invoice when requested."""
     if not issue_immediately:
         return None
-    billing_service.invoices.update(
-        db=db,
-        invoice_id=str(invoice_id),
-        payload=InvoiceUpdate(status=InvoiceStatus.issued, issued_at=datetime.now(UTC)),
+    invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
+    if invoice is None:
+        return None
+    if invoice.status != InvoiceStatus.draft:
+        return invoice
+    transition = billing_service.invoices.issue_draft_system(
+        db,
+        str(invoice_id),
+        issued_at=datetime.now(UTC),
+        due_at=invoice.due_at,
+        reason="admin_invoice_create",
+        announce=False,
+        commit=True,
     )
-    return billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
+    return transition.invoice
 
 
 def maybe_send_invoice_notification(
     db: Session, *, invoice, send_notification: str | None
 ) -> None:
-    """Send invoice email notification when requested."""
-    if not send_notification or not invoice or not invoice.account:
+    """Request canonical invoice notification delivery when selected."""
+    if not send_notification or not invoice:
         return
-
-    account = invoice.account
-    email_addr = getattr(account, "email", None)
-    if not email_addr:
+    if invoice.status in {
+        InvoiceStatus.draft,
+        InvoiceStatus.void,
+        InvoiceStatus.written_off,
+    }:
         return
-    from app.services.brand_profiles import resolve_brand
-    from app.services.email_template import wrap_email_html
-
-    inv_num = invoice.invoice_number or str(invoice.id)
-    account_ref = (
-        getattr(account, "account_number", None)
-        or getattr(account, "subscriber_number", None)
-        or str(getattr(invoice, "account_id", "") or getattr(account, "id", ""))
-    )
-    amount_due = getattr(invoice, "balance_due", None) or getattr(
-        invoice, "total", "0.00"
-    )
-    currency = getattr(invoice, "currency", "")
-    due_at = getattr(invoice, "due_at", None)
-    due_date = due_at.strftime("%Y-%m-%d") if due_at else "Not set"
-    app_url = email_service._get_app_url(db)  # noqa: SLF001 - shared email URL logic
-    invoice_url = f"{app_url}/portal/billing/invoices/{invoice.id}"
-    payment_url = (
-        f"{app_url}/portal/billing/pay?{urlencode({'invoice': str(invoice.id)})}"
-    )
-    amount_label = f"{currency} {Decimal(str(amount_due or 0)):,.2f}".strip()
-    subject = f"Invoice {inv_num} — payment due {due_date}"
-    brand = resolve_brand(db, subscriber_id=account.id).to_dict()
-    semantic_colors = brand.get("semantic_colors")
-    semantic_colors = semantic_colors if isinstance(semantic_colors, dict) else {}
-    email_primary = escape(str(brand.get("primary_color") or DEFAULT_HEX))
-    email_positive = escape(
-        str(semantic_colors.get("positive") or DEFAULT_SEMANTIC_COLORS["positive"])
-    )
-    email_negative = escape(
-        str(semantic_colors.get("negative") or DEFAULT_SEMANTIC_COLORS["negative"])
-    )
-    email_neutral = str(
-        semantic_colors.get("neutral") or DEFAULT_SEMANTIC_COLORS["neutral"]
-    )
-    email_neutral_scale = generate_scale(email_neutral)
-    email_muted = escape(email_neutral_scale[600])
-    email_surface = escape(email_neutral_scale[50])
-    body_html = wrap_email_html(
-        (
-            f'<p style="margin: 0 0 16px; font-size: 15px; line-height: 1.6;">'
-            f"Dear {escape(getattr(account, 'display_name', None) or getattr(account, 'first_name', None) or 'Customer')},"
-            "</p>"
-            f'<p style="margin: 0 0 18px; font-size: 15px; line-height: 1.6;">'
-            "Your invoice has been issued. Please review the details below and make payment through the customer portal before the due date."
-            "</p>"
-            f'<div style="margin: 22px 0; padding: 18px; border: 1px solid {email_positive}; border-left: 5px solid {email_primary}; background: {email_surface};">'
-            f'<p style="margin: 0 0 12px; color: {email_primary}; font-size: 16px; font-weight: 700;">Invoice Summary</p>'
-            '<table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; border-collapse: collapse; font-size: 14px;">'
-            f'<tr><td style="padding: 7px 0; color: {email_muted};">Account ID</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(str(account_ref))}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: {email_muted};">Invoice ID</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(str(inv_num))}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: {email_muted};">Amount to Pay</td><td style="padding: 7px 0; text-align: right; color: {email_negative}; font-weight: 700;">{escape(amount_label)}</td></tr>'
-            f'<tr><td style="padding: 7px 0; color: {email_muted};">Due Date</td><td style="padding: 7px 0; text-align: right; font-weight: 700;">{escape(due_date)}</td></tr>'
-            "</table>"
-            "</div>"
-            f'<p style="margin: 0 0 20px;"><a href="{escape(payment_url)}" style="display: inline-block; padding: 12px 20px; background: {email_primary}; color: #ffffff; text-decoration: none; font-weight: 700;">Pay Invoice in Portal</a></p>'
-            '<div style="margin-top: 24px;">'
-            f'<p style="margin: 0 0 10px; color: {email_positive}; font-size: 15px; font-weight: 700;">How to pay through the portal</p>'
-            '<ol style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.7;">'
-            "<li>Open the customer portal and sign in to your account.</li>"
-            "<li>Go to <strong>Billing</strong>, then select <strong>Invoices</strong>.</li>"
-            f"<li>Open invoice <strong>{escape(str(inv_num))}</strong> and confirm the amount due.</li>"
-            "<li>Click <strong>Pay invoice</strong>, choose your payment method, and complete the payment.</li>"
-            "<li>Wait for the payment confirmation page before closing the browser.</li>"
-            "</ol>"
-            "</div>"
-            f'<p style="margin: 18px 0 0; font-size: 13px; line-height: 1.6; color: {email_muted};">You can also view the invoice here: <a href="{escape(invoice_url)}" style="color: {email_positive};">{escape(invoice_url)}</a></p>'
-        ),
-        subject=subject,
-        brand=brand,
-    )
-    body_text = (
-        f"Dear {getattr(account, 'display_name', None) or getattr(account, 'first_name', None) or 'Customer'},\n\n"
-        "Your invoice has been issued.\n\n"
-        f"Account ID: {account_ref}\n"
-        f"Invoice ID: {inv_num}\n"
-        f"Amount to Pay: {amount_label}\n"
-        f"Due Date: {due_date}\n\n"
-        "How to pay through the portal:\n"
-        "1. Open the customer portal and sign in to your account.\n"
-        "2. Go to Billing, then select Invoices.\n"
-        f"3. Open invoice {inv_num} and confirm the amount due.\n"
-        "4. Click Pay invoice, choose your payment method, and complete the payment.\n"
-        "5. Wait for the payment confirmation page before closing the browser.\n\n"
-        f"Pay now: {payment_url}\n"
-        f"View invoice: {invoice_url}"
-    )
-    email_service.send_email(
-        db=db,
-        to_email=email_addr,
-        subject=subject,
-        body_html=body_html,
-        body_text=body_text,
-        activity="billing_invoice",
+    billing_service.invoices.announce_issued(
+        db,
+        str(invoice.id),
+        reason="admin_invoice_send",
+        commit=True,
     )
 
 

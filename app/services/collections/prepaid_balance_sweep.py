@@ -3,9 +3,11 @@
 Deposit-is-truth prepaid customers are invoiced in advance; the read-side
 (``service_status``) already *projects* low-balance / grace / deactivation
 dates, but nothing armed the timers or acted on them. This periodic sweep is
-the single writer that arms ``prepaid_low_balance_at`` /
-``prepaid_deactivation_at``, warns the customer, and eventually suspends via the
+the enforcement writer that arms ``prepaid_low_balance_at`` /
+``prepaid_deactivation_at`` and applies the configured grace decision via the
 lifecycle state machine — then clears/restores once the account is funded again.
+A resolved zero-day policy suspends on the first eligible sweep; a nonzero
+configured policy arms the timer and warning first.
 
 SAFETY: this SUSPENDS customers. It is gated OFF by default behind the
 ``collections.prepaid_balance_enforcement`` control (legacy key
@@ -25,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.enforcement_lock import EnforcementReason
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import Subscriber
 from app.services import enforcement_window
 from app.services.access_resolution import PrepaidFundingDecision
 from app.services.billing_enforcement_guards import (
@@ -63,7 +65,7 @@ def _send_notice(
     threshold: Decimal,
     *,
     suppression_reason: str | None = None,
-) -> None:
+) -> bool:
     """Queue a customer email using the operator-configured subject/body.
 
     Reuses the same simple ``Notification`` (channel=email, status=queued)
@@ -77,7 +79,7 @@ def _send_notice(
             account.id,
             suppression_reason,
         )
-        return
+        return False
 
     from app.models.notification import NotificationChannel
     from app.schemas.notification import NotificationCreate
@@ -88,7 +90,7 @@ def _send_notice(
         logger.warning(
             "prepaid_balance_sweep notice skipped for %s: no email", account.id
         )
-        return
+        return False
     try:
         rendered = str(body).format(balance=balance, threshold=threshold)
     except (KeyError, IndexError, ValueError):
@@ -105,6 +107,7 @@ def _send_notice(
             body=rendered,
         ),
     )
+    return True
 
 
 def _deactivation_deferred(
@@ -168,30 +171,35 @@ def _reconcile_low(
     threshold: Decimal,
     *,
     notice_suppression_reason: str | None = None,
+    suspend_now: bool = False,
 ) -> str:
-    """Balance below threshold: arm/warn, then (later) arm-deactivate/suspend."""
+    """Apply the low-balance action already resolved by the policy owner."""
     result = "ok"
     just_armed = False
     if account.prepaid_low_balance_at is None:
+        if not suspend_now:
+            queued = _send_notice(
+                db,
+                account,
+                cfg.warning_subject,
+                cfg.warning_body,
+                balance,
+                threshold,
+                suppression_reason=notice_suppression_reason,
+            )
+            if not queued:
+                return "notice_blocked"
         account.prepaid_low_balance_at = now
         db.flush()
-        _send_notice(
-            db,
-            account,
-            cfg.warning_subject,
-            cfg.warning_body,
-            balance,
-            threshold,
-            suppression_reason=notice_suppression_reason,
-        )
         just_armed = True
-        result = "warned"
+        result = "ok" if suspend_now else "warned"
         logger.info(
             "prepaid_balance_sweep armed low-balance for account %s", account.id
         )
 
-    # Already deactivated, or only just armed this run → nothing more to do.
-    if account.prepaid_deactivation_at is not None or just_armed:
+    # Non-zero configured grace arms and warns on the first observation. A
+    # resolved zero-grace suspension deliberately continues in this locked unit.
+    if account.prepaid_deactivation_at is not None or (just_armed and not suspend_now):
         return result
 
     if _deactivation_deferred(db, now, cfg):
@@ -234,6 +242,7 @@ def _process_account(
     *,
     enforcement_health: EnforcementHealth,
     notice_suppression_reason: str | None,
+    readiness_block_reason: str | None,
 ) -> str:
     decision = plan_prepaid_account(
         db,
@@ -261,6 +270,7 @@ def _process_account(
                 account_id=str(account.id),
                 available_balance=decision.available_balance,
                 required_balance=decision.required_balance,
+                currency=decision.currency,
             ),
         )
     if decision.action == PrepaidEnforcementAction.deferred:
@@ -280,6 +290,13 @@ def _process_account(
         PrepaidEnforcementAction.warn,
         PrepaidEnforcementAction.suspend,
     }:
+        if readiness_block_reason:
+            logger.warning(
+                "prepaid_balance_sweep adverse action blocked for account %s: %s",
+                account.id,
+                readiness_block_reason,
+            )
+            return "readiness_blocked"
         if cfg.activation_error is not None:
             logger.warning(
                 "prepaid_balance_sweep adverse action blocked for account %s: %s",
@@ -302,6 +319,7 @@ def _process_account(
             decision.available_balance,
             decision.required_balance,
             notice_suppression_reason=decision.notice_suppression_reason,
+            suspend_now=decision.action == PrepaidEnforcementAction.suspend,
         )
     if decision.action == PrepaidEnforcementAction.not_applicable:
         return "ok"
@@ -322,6 +340,20 @@ def run_prepaid_balance_sweep(
 
     run_at = now or datetime.now(UTC)
     cfg = resolve_prepaid_enforcement_policy(db)
+    from app.services.prepaid_enforcement_readiness import (
+        mark_prepaid_enforcement_activated,
+        prepaid_enforcement_readiness_block_reason,
+    )
+
+    readiness_block = prepaid_enforcement_readiness_block_reason(db, now=run_at)
+    if readiness_block:
+        logger.error(
+            "prepaid_balance_sweep adverse actions blocked: funding readiness (%s)",
+            readiness_block,
+        )
+    elif cfg.activation_at is not None and run_at >= cfg.activation_at:
+        mark_prepaid_enforcement_activated(db, activated_at=run_at)
+        db.commit()
     health = billing_enforcement_health(db)
     stats: dict[str, int | str] = {
         "accounts_scanned": 0,
@@ -332,6 +364,9 @@ def run_prepaid_balance_sweep(
         "shielded": 0,
         "health_blocked": 0,
         "activation_blocked": 0,
+        "readiness_blocked": 0,
+        "billing_profile_invalid": 0,
+        "notice_blocked": 0,
         "state_drift": 0,
         "ok": 0,
         "errors": 0,
@@ -346,7 +381,7 @@ def run_prepaid_balance_sweep(
                 .where(Subscriber.id == coerce_uuid(str(account_id)))
                 .with_for_update()
             ).scalar_one_or_none()
-            if account is None or account.status == SubscriberStatus.canceled:
+            if account is None:
                 continue
             outcome = _process_account(
                 db,
@@ -355,6 +390,7 @@ def run_prepaid_balance_sweep(
                 cfg,
                 enforcement_health=health,
                 notice_suppression_reason=notice_reasons.get(account.id),
+                readiness_block_reason=readiness_block,
             )
             db.commit()
             stats[outcome] = int(stats.get(outcome, 0)) + 1

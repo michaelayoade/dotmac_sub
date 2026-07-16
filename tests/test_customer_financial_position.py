@@ -6,9 +6,19 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    LedgerEntry,
+    LedgerEntryType,
+    LedgerSource,
+)
+from app.models.catalog import BillingMode
 from app.models.subscriber import Subscriber
-from app.services.customer_financial_position import get_customer_financial_position
+from app.services.customer_financial_position import (
+    get_customer_financial_position,
+    get_native_customer_financial_balance,
+)
 from app.services.invoice_collectibility import (
     due_invoice_balance,
     invoice_balance_sum_by_currency,
@@ -29,6 +39,7 @@ def _subscriber(db_session) -> Subscriber:
         first_name="Financial",
         last_name="Position",
         email=f"financial-{uuid.uuid4().hex}@example.com",
+        billing_mode=BillingMode.postpaid,
     )
     db_session.add(subscriber)
     db_session.commit()
@@ -197,6 +208,36 @@ def test_customer_financial_position_summarizes_customer_debt(db_session):
     assert position.has_due_debt is True
     assert position.has_overdue_debt is True
     assert position.has_collection_blocking_debt is True
+
+
+def test_native_signed_balance_is_currency_typed_and_fail_closed(db_session):
+    subscriber = _subscriber(db_session)
+    _invoice(
+        db_session,
+        subscriber,
+        status=InvoiceStatus.issued,
+        balance="100.00",
+        currency="NGN",
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("150.00"),
+            currency="USD",
+            memo="Approved USD credit",
+        )
+    )
+    db_session.commit()
+
+    position = get_native_customer_financial_balance(
+        db_session, subscriber.id, currency="NGN"
+    )
+
+    assert position.available_balance == Decimal("-100.00")
+    assert position.other_currency_balances == (("USD", Decimal("150.00")),)
+    assert position.automation_safe is False
 
 
 def test_wired_consumers_use_shared_due_and_overdue_rules(db_session):

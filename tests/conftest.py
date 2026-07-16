@@ -304,6 +304,39 @@ def db_session(engine):
     SessionLocal = sessionmaker(bind=connection, autoflush=False, autocommit=False)
     session = SessionLocal()
     try:
+        # The application starts only after the one-time opening-balance
+        # authority cutover. Unit tests therefore run as a fresh post-cutover
+        # installation: accounts created by a test are native accounts with a
+        # zero opening position plus their own events. Reconstruction tests
+        # explicitly remove this empty bootstrap record when exercising the
+        # migration cutover itself.
+        from datetime import datetime
+        from decimal import Decimal
+
+        from app.models.prepaid_funding import PrepaidFundingReconstructionBatch
+
+        bootstrap_at = datetime(2000, 1, 1, tzinfo=UTC)
+        session.add(
+            PrepaidFundingReconstructionBatch(
+                manifest_sha256="0" * 64,
+                manifest_payload_sha256="0" * 64,
+                attestation_sha256="0" * 64,
+                attestation_key_fingerprint_sha256="0" * 64,
+                attestation_signed_at=bootstrap_at,
+                blocker_manifest_sha256="0" * 64,
+                candidate_cohort_sha256="0" * 64,
+                source="pytest-empty-native-install-cutover",
+                evidence_ref="pytest:native-install",
+                position_at=bootstrap_at,
+                currency="NGN",
+                account_count=0,
+                total_amount=Decimal("0.00"),
+                approved_by="pytest",
+                is_authority_cutover=True,
+                approved_at=bootstrap_at,
+            )
+        )
+        session.commit()
         yield session
     finally:
         session.close()

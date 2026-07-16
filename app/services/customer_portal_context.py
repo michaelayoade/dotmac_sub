@@ -39,6 +39,7 @@ from app.services.customer_context import (
     optional_customer_subscriber_id,
     resolve_customer_account_ids,
 )
+from app.services.customer_financial_position import get_customer_financial_position
 from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.network.radius_sessions import live_framed_ips_by_subscription
@@ -834,9 +835,11 @@ def get_outstanding_balance(db: Session, account_id: str) -> dict:
         .limit(50)
         .all()
     )
-    gross = sum(inv.balance_due or 0 for inv in invoices)
-    # Net against available credit — see get_total_outstanding_balance.
-    available = get_available_balance(db, str(account_id)) or 0
-    outstanding_balance = max(0, gross - max(available, 0))
+    position = get_customer_financial_position(db, account_id)
+    outstanding_balance = position.collection_blocking_balance
 
-    return {"invoices": invoices, "outstanding_balance": outstanding_balance}
+    return {
+        "invoices": invoices,
+        "outstanding_balance": outstanding_balance,
+        "invoices_truncated": len(invoices) == 50,
+    }

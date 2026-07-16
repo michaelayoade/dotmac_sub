@@ -501,6 +501,11 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessageType,
     PortalOnboardingState,
 )
+from app.models.prepaid_enforcement import PrepaidEnforcementReadiness  # noqa: F401
+from app.models.prepaid_funding import (  # noqa: F401
+    PrepaidFundingBaseline,
+    PrepaidFundingReconstructionBatch,
+)
 from app.models.project import (  # noqa: F401
     Project,
     ProjectComment,

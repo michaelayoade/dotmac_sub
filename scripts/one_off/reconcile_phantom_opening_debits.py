@@ -322,6 +322,7 @@ def _apply(db: Session, candidates: list[Candidate]) -> int:
                 amount=candidate.remaining,
                 currency=entry.currency or "NGN",
                 memo=REVERSAL_MEMO.format(id=entry.id),
+                affects_customer_position=False,
             )
         )
         written += 1

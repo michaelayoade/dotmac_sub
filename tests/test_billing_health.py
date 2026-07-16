@@ -27,9 +27,14 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import billing_health
 from app.services.billing_health import BillingHealthSnapshot
+from tests.prepaid_funding_helpers import (
+    materialize_test_prepaid_opening_balance,
+    materialize_test_prepaid_opening_balances,
+)
 
 
 def _subscriber(
@@ -252,11 +257,19 @@ def test_anomalies_flag_each_signal():
 
 
 def _enable_prepaid_balance_sweep(db, enabled: bool) -> None:
-    from app.services import control_registry
-
-    control_registry.update_canonical_feature_controls(
-        db, payload={"collections.prepaid_balance_enforcement": enabled}
+    # Monitoring tests exercise the effective-state projection. Cutover-gate
+    # behavior is covered in test_prepaid_enforcement_readiness.py.
+    db.add(
+        DomainSetting(
+            domain=SettingDomain.modules,
+            key="collections_prepaid_balance_enforcement",
+            value_type=SettingValueType.boolean,
+            value_text="true" if enabled else "false",
+            value_json=enabled,
+            is_active=True,
+        )
     )
+    db.commit()
 
 
 def test_negative_prepaid_balance_exposure_flags_disabled_sweep(db_session):
@@ -274,6 +287,7 @@ def test_negative_prepaid_balance_exposure_flags_disabled_sweep(db_session):
         )
     )
     db_session.commit()
+    materialize_test_prepaid_opening_balance(db_session, account.id, "0.00")
 
     count, total, sweep_enabled, disabled_count = (
         billing_health.negative_prepaid_balance_exposure(db_session)
@@ -305,6 +319,7 @@ def test_negative_prepaid_balance_exposure_respects_enabled_sweep(db_session):
         )
     )
     db_session.commit()
+    materialize_test_prepaid_opening_balance(db_session, account.id, "0.00")
     _enable_prepaid_balance_sweep(db_session, True)
 
     count, total, sweep_enabled, disabled_count = (
@@ -319,6 +334,7 @@ def test_negative_prepaid_balance_exposure_respects_enabled_sweep(db_session):
 
 def test_negative_prepaid_balance_exposure_has_bounded_query_count(db_session):
     offer = _offer(db_session)
+    accounts = []
     for index in range(20):
         account = _subscriber(
             db_session,
@@ -335,7 +351,12 @@ def test_negative_prepaid_balance_exposure_has_bounded_query_count(db_session):
                 memo="prepaid drawdown",
             )
         )
+        accounts.append(account)
     db_session.commit()
+    materialize_test_prepaid_opening_balances(
+        db_session,
+        {account.id: "0.00" for account in accounts},
+    )
 
     statements: list[str] = []
 
@@ -398,6 +419,10 @@ def test_billing_profile_integrity_counts_mismatch_and_mixed_modes(db_session):
     _subscription(db_session, mixed, offer, billing_mode=BillingMode.prepaid)
     _subscription(db_session, mixed, offer, billing_mode=BillingMode.postpaid)
     db_session.commit()
+    materialize_test_prepaid_opening_balances(
+        db_session,
+        {mismatch.id: "0.00", mixed.id: "0.00"},
+    )
 
     mismatch_count, mixed_count = billing_health.billing_profile_integrity(db_session)
 

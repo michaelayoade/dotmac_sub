@@ -82,6 +82,8 @@ def prepaid_enforcement_eligible_filters(subscription_model, subscriber_model) -
     return (
         subscription_model.status.in_(COLLECTIBLE_SERVICE_STATUSES),
         subscriber_model.status.in_(BILLABLE_SUBSCRIBER_STATUSES),
+        subscriber_model.is_active.is_(True),
+        subscriber_model.billing_enabled.is_(True),
         subscription_model.billing_mode == BillingMode.prepaid,
     )
 

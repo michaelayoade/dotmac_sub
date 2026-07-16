@@ -6,19 +6,17 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
-import pytest
-
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.notification import Notification
+from app.models.prepaid_enforcement import PrepaidEnforcementReadiness
 from app.models.subscriber import SubscriberStatus
-from app.services.access_resolution import PrepaidFundingDecision
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
 from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
-    PrepaidFundingSnapshot,
     plan_prepaid_enforcement,
 )
+from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
 _MONDAY_NOON = datetime(2026, 7, 6, 12, 0, tzinfo=UTC)
 
@@ -28,12 +26,17 @@ def _prepare(db, account, subscription) -> None:
     account.min_balance = Decimal("100.00")
     account.splynx_customer_id = None
     account.deposit = None
+    account.status = SubscriberStatus.active
+    account.is_active = True
+    account.billing_enabled = True
     subscription.billing_mode = BillingMode.prepaid
     subscription.status = SubscriptionStatus.active
     db.commit()
+    materialize_test_prepaid_opening_balance(db, account.id, Decimal("0.00"))
 
 
 def _enable(db) -> None:
+    activation_at = _MONDAY_NOON - timedelta(days=10)
     db.add_all(
         [
             DomainSetting(
@@ -48,7 +51,24 @@ def _enable(db) -> None:
                 domain=SettingDomain.collections,
                 key="prepaid_enforcement_activation_at",
                 value_type=SettingValueType.string,
-                value_text=(_MONDAY_NOON - timedelta(days=10)).isoformat(),
+                value_text=activation_at.isoformat(),
+                is_active=True,
+            ),
+            PrepaidEnforcementReadiness(
+                intended_activation_at=activation_at,
+                funding_observed_at=activation_at,
+                source="test-reconciled-funding",
+                evidence_ref="test:prepaid-readiness",
+                currency="NGN",
+                candidate_account_count=1,
+                candidate_account_ids_hash="0" * 64,
+                configuration_hash="1" * 64,
+                funding_decisions_hash="2" * 64,
+                reconstruction_evidence_sha256="3" * 64,
+                blocker_count=0,
+                verified_by="pytest",
+                verified_at=activation_at,
+                activated_at=activation_at,
                 is_active=True,
             ),
         ]
@@ -56,7 +76,7 @@ def _enable(db) -> None:
     db.commit()
 
 
-def test_disabled_control_still_reports_warn_without_writes(
+def test_disabled_control_reports_configured_zero_grace_without_writes(
     db_session, subscriber_account, subscription
 ):
     _prepare(db_session, subscriber_account, subscription)
@@ -77,7 +97,7 @@ def test_disabled_control_still_reports_warn_without_writes(
     assert plan.policy.activation_error == (
         "prepaid_enforcement_activation_at_not_configured"
     )
-    assert plan.action_counts == {"warn": 1}
+    assert plan.action_counts == {"suspend": 1}
     assert plan.items[0].available_balance == Decimal("0.00")
     assert plan.items[0].required_balance >= Decimal("100.00")
     db_session.refresh(subscriber_account)
@@ -133,63 +153,41 @@ def test_plan_classifies_financial_shield_without_mutation(
     assert subscription.status == SubscriptionStatus.active
 
 
-def test_plan_uses_independent_funding_snapshot_without_local_money_fallback(
+def test_plan_always_uses_materialized_funding_owner(
     db_session, subscriber_account, subscription, monkeypatch
 ):
     _prepare(db_session, subscriber_account, subscription)
+    calls: list[str] = []
+
+    def _funding(db, account, *, now):  # noqa: ANN001
+        from app.services.access_resolution import PrepaidFundingDecision
+
+        calls.append(str(account.id))
+        return PrepaidFundingDecision(
+            account_id=str(account.id),
+            available_balance=Decimal("500.00"),
+            required_balance=Decimal("100.00"),
+            currency="NGN",
+        )
+
     monkeypatch.setattr(
         "app.services.prepaid_enforcement_planner.resolve_prepaid_funding",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("local funding resolver must not run")
-        ),
-    )
-    snapshot = PrepaidFundingSnapshot(
-        captured_at=_MONDAY_NOON,
-        source="splynx-cutover-plus-native-events:prod-2026-07-14",
-        decisions=(
-            PrepaidFundingDecision(
-                account_id=str(subscriber_account.id),
-                available_balance=Decimal("500.00"),
-                required_balance=Decimal("100.00"),
-            ),
-        ),
+        _funding,
     )
 
     plan = plan_prepaid_enforcement(
         db_session,
-        funding_snapshot=snapshot,
+        now=_MONDAY_NOON,
+        account_ids=[subscriber_account.id],
         activation_at=_MONDAY_NOON,
     )
 
     assert plan.generated_at == _MONDAY_NOON
-    assert plan.funding_source == snapshot.source
-    assert plan.funding_snapshot_at == _MONDAY_NOON
+    assert plan.funding_owner == "financial.prepaid_funding_reconstruction"
+    assert plan.funding_observed_at == _MONDAY_NOON
     assert plan.items[0].available_balance == Decimal("500.00")
     assert plan.items[0].action == PrepaidEnforcementAction.ok
-
-
-def test_plan_rejects_incomplete_independent_funding_snapshot(
-    db_session, subscriber_account, subscription
-):
-    _prepare(db_session, subscriber_account, subscription)
-    snapshot = PrepaidFundingSnapshot(
-        captured_at=_MONDAY_NOON,
-        source="cutover-reconstruction",
-        decisions=(
-            PrepaidFundingDecision(
-                account_id="f7a996e4-8a25-4c33-9d73-e69da71cf406",
-                available_balance=Decimal("0.00"),
-                required_balance=Decimal("100.00"),
-            ),
-        ),
-    )
-
-    with pytest.raises(ValueError, match="missing selected account"):
-        plan_prepaid_enforcement(
-            db_session,
-            account_ids=[subscriber_account.id],
-            funding_snapshot=snapshot,
-        )
+    assert calls == [str(subscriber_account.id)]
 
 
 def test_plan_reports_deactivation_marker_without_prepaid_lock_as_drift(
@@ -228,7 +226,7 @@ def test_sweep_does_not_mutate_enforcement_state_drift(
     assert subscription.status == SubscriptionStatus.active
 
 
-def test_sweep_suppresses_notice_during_infrastructure_fault(
+def test_zero_grace_suspends_even_when_notice_is_fault_suppressed(
     db_session, subscriber_account, subscription, monkeypatch
 ):
     _prepare(db_session, subscriber_account, subscription)
@@ -250,9 +248,48 @@ def test_sweep_suppresses_notice_during_infrastructure_fault(
 
     result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
 
-    assert result["warned"] == 1
+    assert result["suspended"] == 1
     db_session.refresh(subscriber_account)
     assert subscriber_account.prepaid_low_balance_at.replace(tzinfo=UTC) == _MONDAY_NOON
+    assert (
+        subscriber_account.prepaid_deactivation_at.replace(tzinfo=UTC) == _MONDAY_NOON
+    )
+    assert (
+        db_session.query(Notification)
+        .filter(Notification.event_type == "prepaid_balance_enforcement")
+        .count()
+        == 0
+    )
+
+
+def test_nonzero_grace_does_not_start_until_warning_is_queued(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    _prepare(db_session, subscriber_account, subscription)
+    subscriber_account.grace_period_days = 1
+    db_session.commit()
+    _enable(db_session)
+
+    def _decisions(db, subscriptions):
+        return {
+            sub.id: SimpleNamespace(
+                suppress_suspension_notice=True,
+                reason="open_infrastructure_down_ticket",
+            )
+            for sub in subscriptions
+        }
+
+    monkeypatch.setattr(
+        "app.services.prepaid_enforcement_planner.billing_communication_decisions",
+        _decisions,
+    )
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    assert result["notice_blocked"] == 1
+    assert result["warned"] == 0
+    db_session.refresh(subscriber_account)
+    assert subscriber_account.prepaid_low_balance_at is None
     assert (
         db_session.query(Notification)
         .filter(Notification.event_type == "prepaid_balance_enforcement")

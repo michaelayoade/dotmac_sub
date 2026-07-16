@@ -148,10 +148,14 @@ Implemented readiness layer:
   snapshot for migrated accounts and never fills missing rows from the local
   ledger, while the enforcement owner still selects the cohort and applies all
   non-money policy;
-- launch requires an explicit activation timestamp and a non-zero warning
-  window (three days by default); stale timers are floored at activation so
-  enabling the control cannot immediately suspend an old cohort;
-- production enablement remains a launch decision after reviewing the report;
+- launch requires an explicit activation timestamp plus a fresh, durable
+  full-cohort comparison between independent evidence and Sub's canonical
+  currency-bound funding decision;
+- grace remains configuration-owned. The approved zero-day prepaid default is
+  actionable on the first eligible sweep, and activation does not reset stale
+  timers. Explicit account/policy-set nonzero grace is reported and honored;
+- the feature-control writer rejects production enablement until readiness is
+  recorded and still matches the activation, currency, cohort, and config;
 - add billing health alert when billing is live, prepaid accounts are negative,
   and the sweep is disabled.
 

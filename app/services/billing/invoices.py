@@ -1215,6 +1215,50 @@ class Invoices(ListResponseMixin):
         )
 
     @staticmethod
+    def announce_issued(
+        db: Session,
+        invoice_id: str,
+        *,
+        reason: str,
+        commit: bool = False,
+    ) -> Invoice:
+        """Emit the canonical invoice notification event for an issued document."""
+
+        invoice = lock_for_update(db, Invoice, invoice_id)
+        if invoice is None or not invoice.is_active:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if invoice.status in {
+            InvoiceStatus.draft,
+            InvoiceStatus.void,
+            InvoiceStatus.written_off,
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail="Only an issued invoice can be announced",
+            )
+        emit_event(
+            db,
+            EventType.invoice_sent,
+            {
+                "invoice_id": str(invoice.id),
+                "invoice_number": invoice.invoice_number,
+                "total": str(invoice.total),
+                "balance_due": str(invoice.balance_due),
+                "currency": invoice.currency,
+                "status": invoice.status.value,
+                "reason": reason,
+            },
+            account_id=invoice.account_id,
+            invoice_id=invoice.id,
+        )
+        if commit:
+            db.commit()
+            db.refresh(invoice)
+        else:
+            db.flush()
+        return invoice
+
+    @staticmethod
     def return_unfunded_prepaid_to_draft_system(
         db: Session,
         invoice_id: str,
