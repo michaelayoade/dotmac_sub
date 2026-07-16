@@ -1375,8 +1375,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="control.settings_spec",
                 module="app.services.settings_spec",
-                owns=("setting schema", "setting value coercion", "env fallback rules"),
+                owns=(
+                    "setting schema and validation bounds",
+                    "setting value coercion",
+                    "DB-authoritative runtime setting resolution",
+                    "registered setting defaults",
+                ),
                 depends_on=("control.domain_settings",),
+                notes=(
+                    "Runtime precedence is Redis cache, active database row, then "
+                    "the registered default. SettingSpec.env_var is bootstrap and "
+                    "migration metadata, never an implicit live override."
+                ),
             ),
             SOTService(
                 name="control.settings_bootstrap",
@@ -1387,6 +1397,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "default notification-template seeding",
                 ),
                 depends_on=("control.domain_settings", "control.settings_spec"),
+                notes=(
+                    "Environment inputs are materialized one way into stored "
+                    "settings and do not override runtime database decisions."
+                ),
             ),
             SOTService(
                 name="control.relationships",
@@ -1406,9 +1420,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.api.settings",
         ),
         rule=(
-            "Callers ask the feature registry whether a capability is enabled; "
-            "they should not independently compose module, env, DB, and legacy "
-            "flag state."
+            "Settings are inputs, not decision owners. Callers ask the named "
+            "owner or resolver for a decision; they do not independently compose "
+            "module, environment, database, and legacy state. Business and "
+            "operational tuning is database-authoritative unless a separately "
+            "registered, visible emergency override says otherwise."
         ),
     ),
     DomainSOT(

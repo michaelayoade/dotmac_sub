@@ -1301,6 +1301,34 @@ Feature controls:
    `app/services/web_control_plane.py`. It reports the decision and provenance
    from each owner; it is never a mutation path or a second policy resolver.
 
+Decision-input ownership:
+
+| Input class | Named owner / resolver | Canonical source |
+| --- | --- | --- |
+| Capability and module gates | `control.feature_registry` / `control.module_manager` | canonical module setting plus the registered default |
+| Global business and operational tuning | `control.settings_spec` | active database setting, otherwise the registered default |
+| Task cadence and task enablement | `scheduler.registry` | scheduler registry and `ScheduledTask` state |
+| Per-customer, subscriber, service, or device policy | the named domain owner | the owning domain model or policy record |
+| External integration targets | the named integration/configuration resolver | its configuration model; deployment-only endpoints may use a declared environment resolver |
+| Credentials and secret material | the named credential resolver | OpenBao reference or an approved local secret pointer |
+| Protocol constants and safety invariants | the named domain owner | code, schema, or database constraint |
+
+Settings are inputs to a decision owner; they are not decision owners. Every
+important decision has one named owner, and every variable input has one
+declared source or resolver. Business and operational tuning must not be
+hardcoded at callers. Protocol constants, mathematical constants, enum values,
+and safety invariants remain code or constraints unless operators genuinely
+need to tune them.
+
+Runtime settings are database-authoritative. `control.settings_spec` resolves
+Redis cache, then the active database row, then the registered default. A
+`SettingSpec.env_var` is bootstrap and migration metadata only: startup seeding
+or the explicit one-way settings-sync command may materialize it into the
+database, but runtime resolvers must not treat it as a live override. An
+emergency environment override is allowed only when it is registered as a
+separate control with visible provenance, an explicit safe failure direction,
+and an audited retirement plan.
+
 Rule: task and feature gates should call the feature registry. Callers should
 not separately read env vars, domain settings, module state, and legacy flags.
 The module manager is the canonical writer UX for registered feature controls:
@@ -1322,6 +1350,12 @@ options, prepaid monthly invoicing, RADIUS/session enforcement,
 usage/FUP emission gates, CRM/native transition flags, and GIS/network worker
 toggles. Numeric intervals, thresholds, profile IDs, account lists, and other
 tuning values remain in `settings_spec`.
+
+Decision-input migrations are domain slices, not global literal replacement.
+Each slice names the old source and new resolver, proves precedence and
+provenance, migrates the highest-risk callers, and removes or gates the old
+path. External projections follow the separate authority-MOVE procedure with
+shadow verification before cutover.
 
 Authorization:
 

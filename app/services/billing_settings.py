@@ -45,7 +45,8 @@ def billing_enabled(db: Session, *, default: bool = True) -> bool:
     dunning, prepaid enforcement, payment-arrangement checks, and subscription
     expiry — so they all activate together at cutover and none can charge,
     suspend, or expire an account before then. Resolved via ``settings_spec``
-    (env fallback included) to match the invoice-cycle kill-switch.
+    from the active database row or registered default to match the
+    invoice-cycle kill-switch.
 
     Single control plane: the billing MODULE (resolved by the same module
     resolver the registry uses) composes in — if the billing module is off,
