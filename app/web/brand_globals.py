@@ -44,16 +44,24 @@ def _money_filter(amount: object, currency: str | None = None) -> str:
     return format_money(amount, currency=currency)
 
 
-def _app_datetime_filter(value: object) -> str:
+def _app_datetime_filter(
+    value: object,
+    fmt: str | None = None,
+    fallback: str = "-",
+    include_tz: bool = True,
+) -> str:
     """Admin/reseller sibling of the customer ``portal_datetime`` filter.
 
     Formats an aware / naive-UTC datetime in the fixed display timezone
-    (Africa/Lagos / WAT) with a tz label, reusing the customer portal impl so
-    both surfaces stay identical.
+    (Africa/Lagos / WAT), reusing the customer portal impl so both surfaces
+    stay identical. ``fmt`` defaults to the portal's standard layout; pass
+    ``include_tz=False`` for date-only formats where a timezone label is noise.
     """
     from app.web.customer.branding import _format_portal_datetime
 
-    return _format_portal_datetime(value)
+    if fmt is None:
+        return _format_portal_datetime(value, fallback=fallback, include_tz=include_tz)
+    return _format_portal_datetime(value, fmt, fallback, include_tz)
 
 
 def _attach_globals(templates: Jinja2Templates) -> None:
