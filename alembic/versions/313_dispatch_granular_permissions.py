@@ -7,8 +7,8 @@ that already holds ``operations:dispatch``, so no principal loses access. The
 coarse permission is retained for the app.api.dispatch router (pending its own
 per-endpoint split).
 
-Revision ID: 310_dispatch_granular_permissions
-Revises: 310_subscription_billing_cycle
+Revision ID: 313_dispatch_granular_permissions
+Revises: 312_network_operation_dispatch_outbox
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "311_dispatch_granular_permissions"
-down_revision = "310_subscription_billing_cycle"
+revision = "313_dispatch_granular_permissions"
+down_revision = "312_network_operation_dispatch_outbox"
 branch_labels = None
 depends_on = None
 
