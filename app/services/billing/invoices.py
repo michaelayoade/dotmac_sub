@@ -1460,6 +1460,7 @@ class Invoices(ListResponseMixin):
             CatalogOffer,
             OfferPrice,
             Subscription,
+            billing_cycle_noun,
         )
         from app.models.subscriber import Subscriber
 
@@ -1545,7 +1546,11 @@ class Invoices(ListResponseMixin):
         line = InvoiceLine(
             invoice_id=invoice.id,
             subscription_id=subscription_id,
-            description=f"{offer.name} — monthly service",
+            description=(
+                f"{offer.name} — "
+                f"{billing_cycle_noun(subscription.billing_cycle or offer_price.billing_cycle)}"
+                " service"
+            ),
             quantity=Decimal("1"),
             unit_price=amount,
             amount=amount,
