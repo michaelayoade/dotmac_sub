@@ -985,6 +985,8 @@ class TestRunInvoiceCycle:
             LedgerEntryType,
             LedgerSource,
             Payment,
+            PaymentSettlement,
+            PaymentSettlementOrigin,
             PaymentStatus,
         )
         from app.models.catalog import (
@@ -1020,15 +1022,27 @@ class TestRunInvoiceCycle:
         )
         db_session.add(payment)
         db_session.flush()
+        entry = LedgerEntry(
+            account_id=subscriber_account.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("100.00"),
+            currency="USD",
+            memo="Pre-invoice top-up",
+        )
+        db_session.add(entry)
+        db_session.flush()
         db_session.add(
-            LedgerEntry(
-                account_id=subscriber_account.id,
+            PaymentSettlement(
                 payment_id=payment.id,
-                entry_type=LedgerEntryType.credit,
-                source=LedgerSource.payment,
+                unallocated_ledger_entry_id=entry.id,
                 amount=Decimal("100.00"),
+                unallocated_amount=Decimal("100.00"),
+                prepaid_amount=Decimal("0.00"),
                 currency="USD",
-                memo="Pre-invoice top-up",
+                origin=PaymentSettlementOrigin.system,
+                idempotency_key=f"test-preinvoice-credit-{payment.id}",
             )
         )
         db_session.commit()
@@ -1058,6 +1072,8 @@ class TestRunInvoiceCycle:
             LedgerEntryType,
             LedgerSource,
             Payment,
+            PaymentSettlement,
+            PaymentSettlementOrigin,
             PaymentStatus,
         )
         from app.models.catalog import (
@@ -1095,15 +1111,27 @@ class TestRunInvoiceCycle:
         )
         db_session.add(payment)
         db_session.flush()
+        entry = LedgerEntry(
+            account_id=subscriber_account.id,
+            payment_id=payment.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.payment,
+            amount=Decimal("100.00"),
+            currency="USD",
+            memo="Pre-invoice top-up",
+        )
+        db_session.add(entry)
+        db_session.flush()
         db_session.add(
-            LedgerEntry(
-                account_id=subscriber_account.id,
+            PaymentSettlement(
                 payment_id=payment.id,
-                entry_type=LedgerEntryType.credit,
-                source=LedgerSource.payment,
+                unallocated_ledger_entry_id=entry.id,
                 amount=Decimal("100.00"),
+                unallocated_amount=Decimal("100.00"),
+                prepaid_amount=Decimal("0.00"),
                 currency="USD",
-                memo="Pre-invoice top-up",
+                origin=PaymentSettlementOrigin.system,
+                idempotency_key=f"test-walled-credit-{payment.id}",
             )
         )
         db_session.commit()

@@ -24,6 +24,8 @@ from app.schemas.billing import (
     BillingAccountCreditAllocationConfirm,
     BillingAccountCreditAllocationPreviewRequest,
     BillingAccountPaymentPreviewRequest,
+    BillingAccountPaymentRefundRequest,
+    PaymentRefundPreviewRequest,
 )
 from app.services import billing as billing_service
 
@@ -101,6 +103,41 @@ def test_preview_is_read_only_and_separates_financial_positions(db_session):
     db_session.refresh(invoice)
     assert account.balance == Decimal("100.00")
     assert invoice.balance_due == Decimal("150.00")
+
+
+def test_partial_return_leaves_only_exact_remaining_source_credit(db_session):
+    _reseller, account, subscriber, _invoice = _account_and_subscriber(db_session)
+    payment = _fund(db_session, account, "100.00")
+    refund_request = PaymentRefundPreviewRequest(
+        amount=Decimal("30.00"), reason="Confirmed partial return"
+    )
+    refund_preview = billing_service.consolidated_payment_refunds.preview(
+        db_session, str(payment.id), refund_request
+    )
+    billing_service.consolidated_payment_refunds.confirm(
+        db_session,
+        str(payment.id),
+        BillingAccountPaymentRefundRequest(
+            **refund_request.model_dump(),
+            preview_fingerprint=refund_preview.fingerprint,
+            idempotency_key="credit-source-partial-return",
+        ),
+    )
+
+    preview = billing_service.consolidated_credit_allocations.preview(
+        db_session,
+        str(account.id),
+        str(subscriber.id),
+        BillingAccountCreditAllocationPreviewRequest(),
+    )
+
+    assert preview.recorded_consolidated_credit == Decimal("70.00")
+    assert preview.evidenced_consolidated_credit == Decimal("70.00")
+    assert preview.allocation_amount == Decimal("70.00")
+    assert len(preview.source_effects) == 1
+    assert preview.source_effects[0].payment_id == payment.id
+    assert preview.source_effects[0].available_before == Decimal("70.00")
+    assert preview.source_effects[0].consumed_amount == Decimal("70.00")
 
 
 def test_confirm_links_multiple_sources_replays_and_audits(db_session):

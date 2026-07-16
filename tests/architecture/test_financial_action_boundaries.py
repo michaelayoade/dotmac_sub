@@ -371,6 +371,8 @@ def test_dunning_and_restore_use_one_evidenced_access_consequence_owner() -> Non
     assert "has_overdue_balance(" not in event_adapter
     assert "_suspension_shield_reason" not in event_adapter
     assert "suspension_warning_sent_at" not in event_adapter
+    assert "restore_account_services(" not in billing_automation
+    assert "has_overdue_balance(" not in billing_automation
     assert "_emit_dunning_escalations" not in billing_automation
     assert "_emit_post_grace_suspension_escalation" not in billing_automation
     assert "post_grace_suspension" not in billing_automation
