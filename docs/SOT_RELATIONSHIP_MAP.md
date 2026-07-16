@@ -360,6 +360,13 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   customer financial position excludes that internal debit so the transfer
   does not double-change total funding. Provider adapters and APIs call the
   same owner.
+- Reconciliation boundary: native unallocated-credit reconciliation is an
+  orchestration adapter, not a money writer. For each payment/invoice transfer
+  it calls the same allocation preview and fingerprint-bound confirmation with
+  a stable idempotency key. It never constructs `PaymentAllocation` or
+  `LedgerEntry` rows. Only active succeeded payments with reviewed settlement
+  evidence are spendable; historical or imported credits without that evidence
+  remain visible as unbacked for explicit review.
 - Immutability boundary: evidence-backed payment amounts, currencies,
   settlements, and allocations are not edited, deleted, or re-pointed in
   place. Pending allocation intent has no money evidence and may be withdrawn.

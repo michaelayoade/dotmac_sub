@@ -395,6 +395,12 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert allocation_owner is not None
     assert allocation_owner.name == "financial.payments"
 
+    native_credit_reconciliation_owner = sot_relationships.owning_service_for(
+        "native unallocated-credit reconciliation transactions"
+    )
+    assert native_credit_reconciliation_owner is not None
+    assert native_credit_reconciliation_owner.name == "financial.payments"
+
     refund_owner = sot_relationships.owning_service_for(
         "payment refund confirmation and exact ledger evidence"
     )

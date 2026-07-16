@@ -16,7 +16,6 @@ APP_DIR = PROJECT_ROOT / "app"
 APPROVED_LEDGER_WRITERS = {
     Path("app/services/billing/ledger.py"),
     Path("app/services/billing/payments.py"),
-    Path("app/services/billing/reconcile_unposted.py"),
     # Existing debt outside the canonical billing package.
     Path("app/services/cutover_balance_audit.py"),
 }

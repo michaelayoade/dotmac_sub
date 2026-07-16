@@ -3605,11 +3605,41 @@ class Payments(ListResponseMixin):
         return payment
 
 
+def _payment_has_exact_unallocated_evidence(
+    db: Session,
+    payment: Payment,
+) -> bool:
+    settlement = payment.settlement
+    if (
+        settlement is None
+        or settlement.unallocated_ledger_entry_id is None
+        or settlement.currency != payment.currency
+        or round_money(to_decimal(settlement.unallocated_amount)) <= Decimal("0.00")
+    ):
+        return False
+    entry = db.get(LedgerEntry, settlement.unallocated_ledger_entry_id)
+    return bool(
+        entry is not None
+        and entry.is_active
+        and entry.account_id == payment.account_id
+        and entry.invoice_id is None
+        and entry.payment_id == payment.id
+        and entry.entry_type == LedgerEntryType.credit
+        and entry.source == LedgerSource.payment
+        and entry.currency == payment.currency
+        and round_money(to_decimal(entry.amount))
+        == round_money(to_decimal(settlement.unallocated_amount))
+    )
+
+
 def _payment_unallocated_credit_remaining(
     db: Session,
     payment: Payment,
 ) -> Decimal:
-    if payment.settlement is None:
+    if not _payment_has_exact_unallocated_evidence(db, payment):
+        return Decimal("0.00")
+    settlement = payment.settlement
+    if settlement is None:  # narrowed by the structural evidence check above
         return Decimal("0.00")
     consumed = db.query(
         func.coalesce(func.sum(LedgerEntry.amount), Decimal("0.00"))
@@ -3622,8 +3652,8 @@ def _payment_unallocated_credit_remaining(
     return max(
         Decimal("0.00"),
         round_money(
-            to_decimal(payment.settlement.unallocated_amount)
-            - to_decimal(payment.settlement.prepaid_amount)
+            to_decimal(settlement.unallocated_amount)
+            - to_decimal(settlement.prepaid_amount)
             - to_decimal(consumed)
         ),
     )
@@ -3688,6 +3718,14 @@ def _build_payment_allocation_preview(
             detail=(
                 "Payment has no reviewed settlement evidence; reconcile it before "
                 "allocating account credit"
+            ),
+        )
+    if not _payment_has_exact_unallocated_evidence(db, payment):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Payment has no exact unallocated-credit ledger evidence; "
+                "reconcile its settlement before allocating"
             ),
         )
     invoice = get_by_id(db, Invoice, payload.invoice_id)

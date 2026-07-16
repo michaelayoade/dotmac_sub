@@ -258,6 +258,18 @@ def test_consolidated_credit_allocation_uses_owner_preview_and_confirmation() ->
     assert "Service access is not decided by this screen" in confirmation
 
 
+def test_native_credit_reconciliation_composes_the_payment_allocation_owner() -> None:
+    reconciliation = _source("app/services/billing/reconcile_unposted.py")
+
+    assert "PaymentAllocations.preview(" in reconciliation
+    assert "PaymentAllocations.confirm(" in reconciliation
+    assert "PaymentAllocationConfirm(" in reconciliation
+    assert "preview_fingerprint=preview.fingerprint" in reconciliation
+    assert "reconcile-unposted-" in reconciliation
+    assert "_apply_payment_allocation(" not in reconciliation
+    assert "LedgerEntry(" not in reconciliation
+
+
 def test_invoice_void_and_writeoff_use_owner_preview_and_exact_evidence() -> None:
     route = _source("app/web/admin/billing_invoice_actions.py")
     bulk_route = _source("app/web/admin/billing_invoice_bulk.py")

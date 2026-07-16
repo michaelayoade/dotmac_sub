@@ -194,6 +194,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "previewed prepaid renewal consequence and exact debit link",
                     "settled account-credit allocation preview and confirmation",
                     "exact invoice-credit and account-credit-consumption links",
+                    "native unallocated-credit reconciliation transactions",
                     "historical payment settlement evidence reconciliation",
                     "payment settlement access-reconciliation handoff",
                     "payment-originated ledger postings",
