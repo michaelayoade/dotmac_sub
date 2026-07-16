@@ -23,8 +23,9 @@ def _reconcile_payload(result: Any) -> dict[str, Any]:
             "reason": failure.reason,
             "message": failure.message,
         }
-        if failure.evidence is not None:
-            failure_payload["evidence"] = failure.evidence
+        failure_evidence = getattr(failure, "evidence", None)
+        if failure_evidence is not None:
+            failure_payload["evidence"] = failure_evidence
 
     actions = []
     for action in result.actions_applied:
@@ -33,8 +34,9 @@ def _reconcile_payload(result: Any) -> dict[str, Any]:
             "surface": action.surface,
             "duration_ms": action.duration_ms,
         }
-        if action.evidence is not None:
-            action_payload["evidence"] = action.evidence
+        action_evidence = getattr(action, "evidence", None)
+        if action_evidence is not None:
+            action_payload["evidence"] = action_evidence
         actions.append(action_payload)
 
     return {
@@ -197,9 +199,13 @@ def _close_expired_remote_access() -> dict[str, int]:
 )
 def run_ont_reconcile_sweep(max_onts: int = 25) -> dict[str, Any]:
     """Reconcile the least-recently checked active ONTs without overlap."""
+    from app.services import control_registry
     from app.services.network.reconcile.sweeper import run_sweep_once
 
     bounded = max(1, min(int(max_onts), 100))
+    with db_session_adapter.session() as db:
+        if not control_registry.is_enabled(db, "network.ont_reconcile"):
+            return {"skipped": "ont_reconcile_disabled"}
     with postgres_session_advisory_lock(_ADVISORY_LOCK_KEY) as acquired:
         if not acquired:
             return {"skipped": "already_running"}

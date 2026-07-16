@@ -13,7 +13,11 @@ from app.services.network.reconcile.state import (
     ReconcileResult,
 )
 from app.services.queue_adapter import QueueDispatchResult
-from app.tasks.ont_reconcile import _reconcile_payload, reconcile_huawei_ont
+from app.tasks.ont_reconcile import (
+    _reconcile_payload,
+    reconcile_huawei_ont,
+    run_ont_reconcile_sweep,
+)
 
 
 def test_queue_olt_acs_reconciliation_tracks_children_before_dispatch() -> None:
@@ -215,3 +219,29 @@ def test_targeted_task_forces_acs_credentials_then_aligns_observed_link() -> Non
     sync_link.assert_called_once_with(db, ont, acs.id)
     mark_succeeded.assert_called_once()
     assert payload["success"] is True
+
+
+def test_sweep_stops_before_lock_when_control_is_disabled() -> None:
+    db = MagicMock()
+    session_context = MagicMock()
+    session_context.__enter__.return_value = db
+    session_context.__exit__.return_value = False
+
+    with (
+        patch(
+            "app.tasks.ont_reconcile.db_session_adapter.session",
+            return_value=session_context,
+        ),
+        patch(
+            "app.services.control_registry.is_enabled",
+            return_value=False,
+        ) as is_enabled,
+        patch(
+            "app.tasks.ont_reconcile.postgres_session_advisory_lock"
+        ) as advisory_lock,
+    ):
+        result = run_ont_reconcile_sweep.run()
+
+    assert result == {"skipped": "ont_reconcile_disabled"}
+    is_enabled.assert_called_once_with(db, "network.ont_reconcile")
+    advisory_lock.assert_not_called()

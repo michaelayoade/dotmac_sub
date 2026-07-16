@@ -440,6 +440,14 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="OLT profile sync worker.",
     ),
     Control(
+        key="network.ont_reconcile",
+        layer=Layer.feature,
+        owner_module="network",
+        default=True,
+        on_missing=True,
+        description="Scheduled Huawei ONT desired/observed reconciliation.",
+    ),
+    Control(
         key="network.tr069_sync",
         layer=Layer.feature,
         owner_module="network",
