@@ -77,6 +77,7 @@ from scripts.one_off.reconstruct_splynx_mirror import (
 from scripts.one_off.reconstruct_splynx_mirror import (
     _entry_type as normalize_splynx_entry_type,
 )
+from tests.prepaid_funding_test_support import ephemeral_private_signing_key_pem
 
 
 def test_d1_detector_finds_legacy_corrupted_pair(db_session, subscriber):
@@ -533,9 +534,15 @@ def test_funding_export_uses_owner_cohort_replay_and_threshold(db_session, subsc
         {
             "account_id": str(subscriber.id),
             "available_balance": "50.00",
-            "required_balance": f"{export.thresholds[str(subscriber.id)]:.2f}",
         }
     ]
+    sealed = export.sealed_funding_payload(
+        private_key_pem=ephemeral_private_signing_key_pem(),
+        signed_at=datetime(2026, 7, 12, 0, 0, 1, tzinfo=UTC),
+    )
+    assert sealed["manifest"] == payload
+    assert sealed["attestation"]["algorithm"] == "ed25519"
+    assert sealed["attestation"]["manifest_payload_sha256"]
 
 
 def test_funding_export_blocks_candidate_without_source_baseline(

@@ -1443,6 +1443,13 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
+        key="prepaid_reconstruction_attestation_public_key_ref",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PREPAID_RECONSTRUCTION_ATTESTATION_PUBLIC_KEY_REF", ""),
+        is_secret=True,
+    )
+    billing_settings.ensure_by_key(
+        db,
         key="default_invoice_status",
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_INVOICE_STATUS", "draft"),

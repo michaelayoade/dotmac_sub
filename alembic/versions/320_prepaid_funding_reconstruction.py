@@ -22,6 +22,16 @@ def upgrade() -> None:
         "prepaid_funding_reconstruction_batches",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("manifest_sha256", sa.String(length=64), nullable=False),
+        sa.Column("manifest_payload_sha256", sa.String(length=64), nullable=False),
+        sa.Column("attestation_sha256", sa.String(length=64), nullable=False),
+        sa.Column(
+            "attestation_key_fingerprint_sha256",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.Column("attestation_signed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("blocker_manifest_sha256", sa.String(length=64), nullable=False),
+        sa.Column("candidate_cohort_sha256", sa.String(length=64), nullable=False),
         sa.Column("source", sa.String(length=240), nullable=False),
         sa.Column("evidence_ref", sa.Text(), nullable=False),
         sa.Column("position_at", sa.DateTime(timezone=True), nullable=False),
@@ -40,9 +50,33 @@ def upgrade() -> None:
             "length(manifest_sha256) = 64",
             name="ck_prepaid_funding_batch_manifest_hash",
         ),
+        sa.CheckConstraint(
+            "length(manifest_payload_sha256) = 64",
+            name="ck_prepaid_funding_batch_payload_hash",
+        ),
+        sa.CheckConstraint(
+            "length(attestation_sha256) = 64",
+            name="ck_prepaid_funding_batch_attestation_hash",
+        ),
+        sa.CheckConstraint(
+            "length(attestation_key_fingerprint_sha256) = 64",
+            name="ck_prepaid_funding_batch_attestation_key_hash",
+        ),
+        sa.CheckConstraint(
+            "length(blocker_manifest_sha256) = 64",
+            name="ck_prepaid_funding_batch_blocker_hash",
+        ),
+        sa.CheckConstraint(
+            "length(candidate_cohort_sha256) = 64",
+            name="ck_prepaid_funding_batch_cohort_hash",
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "manifest_sha256", name="uq_prepaid_funding_batch_manifest_sha256"
+        ),
+        sa.UniqueConstraint(
+            "attestation_sha256",
+            name="uq_prepaid_funding_batch_attestation_sha256",
         ),
     )
     op.create_index(

@@ -1,9 +1,11 @@
 """Materialize a reviewed full-cohort prepaid funding reconstruction.
 
-The input is the complete JSON emitted by ``export_prepaid_funding_snapshot``.
-Dry-run is the default. Apply requires the independently reviewed normalized
-manifest hash, a non-secret evidence reference, an approving actor, and an
-explicit acknowledgement that the authority cutover is final.
+The input is the Ed25519-sealed JSON emitted by
+``export_prepaid_funding_snapshot``. The signature is verified against the
+config-owned OpenBao public-key reference before preview or apply. Dry-run is
+the default. Apply requires the independently reviewed normalized manifest
+hash, a non-secret evidence reference, an approving actor, and an explicit
+acknowledgement that the authority cutover is final.
 
 This command stores account IDs, currency, balances, hashes, timestamps, and a
 non-secret evidence pointer. It never stores bank-statement rows, credentials,
@@ -91,6 +93,16 @@ def main() -> int:
                 {
                     "batch_id": str(result.batch.id),
                     "manifest_sha256": result.batch.manifest_sha256,
+                    "manifest_payload_sha256": (result.batch.manifest_payload_sha256),
+                    "attestation_sha256": result.batch.attestation_sha256,
+                    "attestation_key_fingerprint_sha256": (
+                        result.batch.attestation_key_fingerprint_sha256
+                    ),
+                    "attestation_signed_at": (
+                        result.batch.attestation_signed_at.isoformat()
+                    ),
+                    "blocker_manifest_sha256": (result.batch.blocker_manifest_sha256),
+                    "candidate_cohort_sha256": result.batch.candidate_cohort_sha256,
                     "account_count": result.batch.account_count,
                     "idempotent_replay": result.idempotent_replay,
                     "authority": "verified_reconstruction",

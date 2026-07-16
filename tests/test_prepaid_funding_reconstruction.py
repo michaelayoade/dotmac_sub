@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app.models.billing import (
     LedgerEntry,
@@ -16,13 +19,14 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.catalog import BillingMode
-from app.models.prepaid_funding import (
-    PrepaidFundingBaseline,
-    PrepaidFundingReconstructionBatch,
-)
+from app.models.prepaid_funding import PrepaidFundingBaseline
 from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Subscriber
-from app.services.customer_financial_position import prepaid_available_balance
+from app.services import customer_financial_ledger, prepaid_funding_attestation
+from app.services.customer_financial_position import (
+    prepaid_available_balance,
+    prepaid_available_balances,
+)
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
     PrepaidFundingReconstructionError,
@@ -31,32 +35,25 @@ from app.services.prepaid_funding_reconstruction import (
     parse_reconstruction_manifest,
     preview_prepaid_funding_reconstruction,
 )
+from tests.prepaid_funding_test_support import (
+    sealed_reconstruction_payload,
+    sign_test_reconstruction_manifest,
+    trust_test_reconstruction_signer,
+)
+
+
+@pytest.fixture(autouse=True)
+def _trust_reconstruction_signer(monkeypatch):  # noqa: ANN001
+    trust_test_reconstruction_signer(monkeypatch)
 
 
 def _payload(position_at: datetime, balances: dict[object, str]) -> dict:
-    return {
-        "source": "splynx-final-plus-native-events:reviewed-test",
-        "captured_at": position_at.isoformat().replace("+00:00", "Z"),
-        "currency": "NGN",
-        "accounts": [
-            {
-                "account_id": str(account_id),
-                "available_balance": amount,
-                "required_balance": "0.00",
-            }
-            for account_id, amount in balances.items()
-        ],
-    }
+    return sealed_reconstruction_payload(position_at, balances)
 
 
 def _apply(db, position_at: datetime, balances: dict[object, str]):
-    db.query(PrepaidFundingReconstructionBatch).filter(
-        PrepaidFundingReconstructionBatch.source
-        == "pytest-empty-native-install-cutover"
-    ).delete()
-    db.flush()
     payload = _payload(position_at, balances)
-    digest = parse_reconstruction_manifest(payload).manifest_sha256
+    digest = parse_reconstruction_manifest(payload["manifest"]).manifest_sha256
     return apply_prepaid_funding_reconstruction(
         db,
         payload,
@@ -101,7 +98,7 @@ def test_apply_is_hash_bound_idempotent_and_marks_one_final_cutover(
 ):
     position_at = datetime.now(UTC) - timedelta(minutes=5)
     payload = _payload(position_at, {subscriber.id: "100.00"})
-    digest = parse_reconstruction_manifest(payload).manifest_sha256
+    digest = parse_reconstruction_manifest(payload["manifest"]).manifest_sha256
 
     with pytest.raises(PrepaidFundingReconstructionError, match="reviewed hash"):
         apply_prepaid_funding_reconstruction(
@@ -131,6 +128,134 @@ def test_apply_is_hash_bound_idempotent_and_marks_one_final_cutover(
     assert replay.batch.id == first.batch.id
     assert authority_cutover_batch(db_session).id == first.batch.id
     assert first.batch.is_authority_cutover is True
+    assert first.batch.attestation_sha256 == first.preview.attestation.envelope_sha256
+    assert (
+        first.batch.manifest_payload_sha256
+        == first.preview.attestation.manifest_payload_sha256
+    )
+    assert (
+        first.batch.attestation_key_fingerprint_sha256
+        == first.preview.attestation.key_fingerprint_sha256
+    )
+    assert (
+        first.batch.blocker_manifest_sha256
+        == first.preview.manifest.blocker_manifest_sha256
+    )
+    assert (
+        first.batch.candidate_cohort_sha256
+        == first.preview.manifest.candidate_cohort_sha256
+    )
+
+
+def test_unsigned_or_tampered_reconstruction_cannot_reach_preview(
+    db_session, subscriber
+):
+    position_at = datetime.now(UTC) - timedelta(minutes=5)
+    payload = _payload(position_at, {subscriber.id: "100.00"})
+
+    with pytest.raises(ValueError, match="sealed reconstruction manifest"):
+        preview_prepaid_funding_reconstruction(
+            db_session,
+            payload["manifest"],
+            expected_account_ids={subscriber.id},
+            now=position_at + timedelta(minutes=1),
+        )
+
+    tampered = copy.deepcopy(payload)
+    tampered["manifest"]["accounts"][0]["available_balance"] = "999.00"
+    with pytest.raises(ValueError, match="does not match the manifest content"):
+        preview_prepaid_funding_reconstruction(
+            db_session,
+            tampered,
+            expected_account_ids={subscriber.id},
+            now=position_at + timedelta(minutes=1),
+        )
+
+
+def test_reconstruction_rejects_a_signer_outside_configured_trust(
+    db_session, subscriber
+):
+    position_at = datetime.now(UTC) - timedelta(minutes=5)
+    trusted_payload = _payload(position_at, {subscriber.id: "100.00"})
+    other_key = Ed25519PrivateKey.generate()
+    other_private_pem = other_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+    untrusted_payload = prepaid_funding_attestation.sign_prepaid_funding_manifest(
+        trusted_payload["manifest"],
+        private_key_pem=other_private_pem,
+        signed_at=position_at + timedelta(seconds=2),
+    )
+
+    with pytest.raises(ValueError, match="not the configured trust key"):
+        preview_prepaid_funding_reconstruction(
+            db_session,
+            untrusted_payload,
+            expected_account_ids={subscriber.id},
+            now=position_at + timedelta(minutes=1),
+        )
+
+
+def test_signed_manifest_must_embed_an_exact_clean_blocker_manifest(
+    db_session, subscriber
+):
+    position_at = datetime.now(UTC) - timedelta(minutes=5)
+    payload = _payload(position_at, {subscriber.id: "100.00"})
+    manifest = copy.deepcopy(payload["manifest"])
+    manifest["blocker_count"] = 1
+    manifest["blocker_manifest"]["blockers"] = [
+        {"account_id": str(subscriber.id), "reason": "missing_source_baseline"}
+    ]
+    manifest["blocker_manifest_sha256"] = (
+        prepaid_funding_attestation.canonical_payload_sha256(
+            manifest["blocker_manifest"]
+        )
+    )
+    sealed = sign_test_reconstruction_manifest(
+        manifest,
+        signed_at=position_at + timedelta(seconds=2),
+    )
+
+    with pytest.raises(ValueError, match="must attest zero blockers"):
+        preview_prepaid_funding_reconstruction(
+            db_session,
+            sealed,
+            expected_account_ids={subscriber.id},
+            now=position_at + timedelta(minutes=1),
+        )
+
+
+def test_existing_semantic_manifest_cannot_be_resealed_silently(db_session, subscriber):
+    position_at = datetime.now(UTC) - timedelta(minutes=5)
+    payload = _payload(position_at, {subscriber.id: "100.00"})
+    first = _apply(db_session, position_at, {subscriber.id: "100.00"})
+    db_session.commit()
+    resealed = sign_test_reconstruction_manifest(
+        payload["manifest"],
+        signed_at=position_at + timedelta(seconds=3),
+    )
+
+    preview = preview_prepaid_funding_reconstruction(
+        db_session,
+        resealed,
+        expected_account_ids={subscriber.id},
+        now=position_at + timedelta(minutes=1),
+    )
+    assert preview.manifest.manifest_sha256 == first.batch.manifest_sha256
+    assert "reconstruction_existing_attestation_mismatch" in preview.blockers
+
+    with pytest.raises(PrepaidFundingReconstructionError, match="attestation_mismatch"):
+        apply_prepaid_funding_reconstruction(
+            db_session,
+            resealed,
+            expected_manifest_sha256=first.batch.manifest_sha256,
+            evidence_ref="finance-review:prepaid-reconstruction-test",
+            approved_by="billing-operations-test",
+            expected_account_ids={subscriber.id},
+            now=position_at + timedelta(minutes=1),
+        )
 
 
 def test_runtime_uses_baseline_plus_native_events_and_never_splynx(
@@ -183,38 +308,46 @@ def test_runtime_uses_baseline_plus_native_events_and_never_splynx(
     assert prepaid_available_balance(db_session, subscriber.id) == Decimal("115.00")
 
 
-def test_archived_mirror_presence_does_not_apply_old_runtime_cutoff_heuristics(
-    db_session, subscriber
+def test_runtime_batches_accounts_that_share_a_reviewed_position(
+    db_session, subscriber, monkeypatch
 ):
     subscriber.billing_mode = BillingMode.prepaid
-    position_at = datetime(2026, 3, 16, tzinfo=UTC)
-    native_at = datetime(2026, 4, 1, tzinfo=UTC)
-    _apply(db_session, position_at, {subscriber.id: "100.00"})
-    db_session.add_all(
-        [
-            SplynxBillingTransaction(
-                splynx_transaction_id=992,
-                splynx_customer_id=1002,
-                subscriber_id=subscriber.id,
-                entry_type="credit",
-                amount=Decimal("9999.00"),
-                description="Archived migration evidence",
-                transaction_date=position_at.date(),
-            ),
-            Payment(
-                account_id=subscriber.id,
-                amount=Decimal("25.00"),
-                refunded_amount=Decimal("0.00"),
-                currency="NGN",
-                status=PaymentStatus.succeeded,
-                paid_at=native_at,
-                created_at=native_at,
-            ),
-        ]
+    second = Subscriber(
+        first_name="Second",
+        last_name="Prepaid",
+        email="second-prepaid-reconstruction@example.com",
+        billing_mode=BillingMode.prepaid,
+    )
+    db_session.add(second)
+    db_session.flush()
+    position_at = datetime.now(UTC) - timedelta(days=1)
+    _apply(
+        db_session,
+        position_at,
+        {subscriber.id: "100.00", second.id: "50.00"},
     )
     db_session.commit()
 
-    assert prepaid_available_balance(db_session, subscriber.id) == Decimal("125.00")
+    calls: list[tuple[frozenset[object], datetime]] = []
+    aggregate = customer_financial_ledger.native_customer_financial_balances_by_currency
+
+    def tracked_aggregate(db, account_ids, *, after):  # noqa: ANN001
+        calls.append((frozenset(account_ids), after))
+        return aggregate(db, account_ids, after=after)
+
+    monkeypatch.setattr(
+        customer_financial_ledger,
+        "native_customer_financial_balances_by_currency",
+        tracked_aggregate,
+    )
+
+    assert prepaid_available_balances(db_session, [subscriber.id, second.id]) == {
+        subscriber.id: Decimal("100.00"),
+        second.id: Decimal("50.00"),
+    }
+    assert calls == [
+        (frozenset({subscriber.id, second.id}), position_at),
+    ]
 
 
 def test_reviewed_supersession_is_append_only_not_legacy_rollback(
