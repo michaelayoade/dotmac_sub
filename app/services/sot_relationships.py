@@ -1912,9 +1912,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "web_admin_resellers owns the reseller read; this projection "
                     "declares the list capabilities (status filter, name sort, "
                     "pagination) so the route derives no pagination or filter rules. "
-                    "The admin reseller surface is currently gated by customer:read/"
-                    "write; a reseller:read/write split is a tracked follow-up "
-                    "requiring a reseller access-policy decision."
+                    "The admin reseller surface is granularly gated by reseller:read "
+                    "(list) and reseller:write (create/edit), split off the shared "
+                    "customer:read/write."
                 ),
             ),
             SOTService(
