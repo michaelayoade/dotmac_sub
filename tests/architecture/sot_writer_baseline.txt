@@ -265,7 +265,6 @@ app.services.web_network_splice_closures
 app.services.web_network_topology
 app.services.web_network_tr069
 app.services.web_network_vlans
-app.services.web_projects
 app.services.web_provisioning_bulk_activate
 app.services.web_provisioning_migration
 app.services.web_reseller_routes
