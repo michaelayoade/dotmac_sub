@@ -7,8 +7,8 @@ that holds customer:read and reseller:write to every role that holds customer:wr
 customer:read/write are unchanged (still used for customer management). Admins can
 tighten reseller access afterwards via the role builder.
 
-Revision ID: 313_reseller_granular_permissions
-Revises: 312_network_operation_dispatch_outbox
+Revision ID: 315_reseller_granular_permissions
+Revises: 314_retire_coarse_dispatch_permission
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "313_reseller_granular_permissions"
-down_revision = "312_network_operation_dispatch_outbox"
+revision = "315_reseller_granular_permissions"
+down_revision = "314_retire_coarse_dispatch_permission"
 branch_labels = None
 depends_on = None
 

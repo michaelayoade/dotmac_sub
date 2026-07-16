@@ -1912,9 +1912,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "web_admin_resellers owns the reseller read; this projection "
                     "declares the list capabilities (status filter, name sort, "
                     "pagination) so the route derives no pagination or filter rules. "
-                    "The admin reseller surface is currently gated by customer:read/"
-                    "write; a reseller:read/write split is a tracked follow-up "
-                    "requiring a reseller access-policy decision."
+                    "The admin reseller surface is granularly gated by reseller:read "
+                    "(list) and reseller:write (create/edit), split off the shared "
+                    "customer:read/write."
+                ),
+            ),
+            SOTService(
+                name="ui.work_order_list_projection",
+                module="app.services.web_dispatch_work_orders",
+                owns=(
+                    "admin work-order searchable fields",
+                    "admin work-order status filter and stable sort semantics",
+                    "admin work-order list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "operations.work_orders",
+                ),
+                notes=(
+                    "work_order_views.query_work_orders owns the canonical filtered "
+                    "and sorted work-order query; this projection declares list "
+                    "capabilities, normalizes request state, and delegates the read "
+                    "(it issues no SQL of its own). Read-only: work orders are a CRM "
+                    "mirror with no Sub-owned admin bulk command, so no selection or "
+                    "bulk is declared. Each dispatch route is granularly gated "
+                    "(operations:dispatch:read/write/assign)."
                 ),
             ),
         ),

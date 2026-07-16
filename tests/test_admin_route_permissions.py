@@ -108,17 +108,23 @@ def test_dashboard_routes_require_any_domain_read_permission():
 
 
 def test_dispatch_work_order_routes_require_operations_dispatch_permission():
-    for path, method in [
-        ("/dispatch/work-orders", "GET"),
-        ("/dispatch/work-orders", "POST"),
-        ("/dispatch/work-orders/{work_order_id}", "POST"),
-        ("/dispatch/work-orders/{work_order_id}/queue", "POST"),
+    # Granular dispatch RBAC (#1329): read to view, write to mutate, assign to
+    # queue — replacing the coarse operations:dispatch guard.
+    for path, method, permission in [
+        ("/dispatch/work-orders", "GET", "operations:dispatch:read"),
+        ("/dispatch/work-orders", "POST", "operations:dispatch:write"),
+        ("/dispatch/work-orders/{work_order_id}", "POST", "operations:dispatch:write"),
+        (
+            "/dispatch/work-orders/{work_order_id}/queue",
+            "POST",
+            "operations:dispatch:assign",
+        ),
     ]:
         assert _route_has_permission(
             admin_dispatch_work_orders.router,
             path,
             method,
-            "operations:dispatch",
+            permission,
         )
 
 
@@ -387,11 +393,13 @@ def test_support_assignment_rule_routes_require_automation_permissions():
 
 
 def test_reseller_routes_require_customer_permissions():
+    # Granular reseller RBAC (#1334): reseller admin split off customer:read/
+    # write onto reseller:read (list) / reseller:write (create/edit).
     assert _route_has_permission(
-        admin_resellers.router, "/resellers", "GET", "customer:read"
+        admin_resellers.router, "/resellers", "GET", "reseller:read"
     )
     assert _route_has_permission(
-        admin_resellers.router, "/resellers", "POST", "customer:write"
+        admin_resellers.router, "/resellers", "POST", "reseller:write"
     )
 
 

@@ -208,7 +208,9 @@ DEFAULT_PERMISSIONS = [
     ("operations:expense_request:write", "Approve or reject field expense requests"),
     ("operations:asset_custody:read", "View asset custody records"),
     ("operations:asset_custody:write", "Manage asset custody records"),
-    ("operations:dispatch", "Dispatch operational work"),
+    ("operations:dispatch:read", "View dispatch work orders and maps"),
+    ("operations:dispatch:write", "Create and edit dispatch work orders"),
+    ("operations:dispatch:assign", "Queue and assign dispatch work orders"),
     ("operations:material_request:read", "View material requests"),
     ("operations:material_request:write", "Manage material requests"),
     # Support - Tickets

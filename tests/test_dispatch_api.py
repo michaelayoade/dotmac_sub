@@ -11,12 +11,20 @@ from app.db import get_db
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order_mirror import WorkOrderMirror
+from app.services.auth_dependencies import require_user_auth
 
 
 def _client(db_session) -> TestClient:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[get_db] = lambda: db_session
+    # The per-endpoint operations:dispatch:read/write/assign gates need an
+    # authenticated principal; grant an admin principal so these tests exercise
+    # endpoint behaviour (auth itself is covered by the RBAC guard suite).
+    app.dependency_overrides[require_user_auth] = lambda: {
+        "roles": ["admin"],
+        "scopes": [],
+    }
     return TestClient(app)
 
 
@@ -184,12 +192,34 @@ def test_dispatch_api_native_work_order_header_crud(db_session):
     assert queue.json()["crm_work_order_id"] == "sub-wo-api-1"
 
 
+def test_granular_dispatch_permissions_are_role_builder_assignable():
+    """Operators must be able to build new roles from the granular dispatch perms."""
+    from scripts.seed.seed_rbac import (
+        ADMIN_ONLY_PERMISSION_KEYS,
+        DEFAULT_PERMISSIONS,
+    )
+
+    seeded = {key for key, _ in DEFAULT_PERMISSIONS}
+    for perm in (
+        "operations:dispatch:read",
+        "operations:dispatch:write",
+        "operations:dispatch:assign",
+    ):
+        assert perm in seeded, f"{perm} must be seeded"
+        # role builder lists/assigns only is_ui_assignable perms (not admin-only)
+        assert perm not in ADMIN_ONLY_PERMISSION_KEYS, (
+            f"{perm} must be role-builder-assignable"
+        )
+    assert "operations:dispatch" not in seeded, "coarse permission must be retired"
+
+
 def test_dispatch_router_registered_with_permission_guard():
     from app.main import _DEFERRED_API_ROUTER_SPECS
 
+    # Router floor is operations:dispatch:read; mutations add write/assign gates.
     assert (
         "app.api.dispatch",
         "router",
         "api",
-        "perm:operations:dispatch",
+        "perm:operations:dispatch:read",
     ) in _DEFERRED_API_ROUTER_SPECS
