@@ -186,6 +186,39 @@ def test_push_radius_metrics_writes_gauges(monkeypatch):
     assert written["kwargs"]["operation"] == "radius_health"
 
 
+def test_push_radius_metrics_includes_writer_equivalence_gate(monkeypatch):
+    written = {}
+
+    class _Writer:
+        def write_prometheus_lines(self, lines, **kwargs):
+            written["lines"] = lines
+            return SimpleNamespace(success=True, written=len(lines))
+
+    monkeypatch.setattr(radius_health, "_writer", lambda: _Writer())
+
+    result = radius_health.push_radius_metrics(
+        {
+            "writer_target_count": 2,
+            "writer_unique_target_count": 1,
+            "writer_targets_equivalent": 1,
+            "writer_schema_contract_ok": 1,
+            "writer_group_semantics_required": 0,
+            "writer_single_owner_ready": 1,
+        }
+    )
+
+    assert result == {"radius_metric_lines": 6, "radius_metric_write_failed": 0}
+    names = {line.split(" ")[0] for line in written["lines"]}
+    assert names == {
+        "radius_writer_target_count",
+        "radius_writer_unique_target_count",
+        "radius_writer_targets_equivalent",
+        "radius_writer_schema_contract_ok",
+        "radius_writer_group_semantics_required",
+        "radius_writer_single_owner_ready",
+    }
+
+
 class _FakeCache:
     def __init__(self):
         self.store: dict[str, object] = {}
@@ -292,3 +325,41 @@ def test_enforcement_drift_is_warning(db_session, monkeypatch):
     ]
     assert findings[0].severity.name == "warning"
     assert "1 account(s), 1 subscription(s), and 2 session(s)" in findings[0].summary
+
+
+def test_radius_writer_target_split_brain_is_critical(db_session, monkeypatch):
+    _wire_heartbeat(
+        monkeypatch,
+        {
+            **_HEALTHY,
+            "writer_targets_equivalent": 0,
+            "writer_schema_contract_ok": 1,
+            "writer_group_semantics_required": 0,
+        },
+    )
+
+    findings = admin_alerts._radius_health_findings(db_session)
+
+    assert [finding.fingerprint for finding in findings] == [
+        "infrastructure:radius:writer-target-split-brain"
+    ]
+    assert findings[0].severity.name == "critical"
+
+
+def test_radius_group_projection_blocks_move_as_warning(db_session, monkeypatch):
+    _wire_heartbeat(
+        monkeypatch,
+        {
+            **_HEALTHY,
+            "writer_targets_equivalent": 1,
+            "writer_schema_contract_ok": 1,
+            "writer_group_semantics_required": 1,
+        },
+    )
+
+    findings = admin_alerts._radius_health_findings(db_session)
+
+    assert [finding.fingerprint for finding in findings] == [
+        "infrastructure:radius:writer-groups-require-owner"
+    ]
+    assert findings[0].severity.name == "warning"
