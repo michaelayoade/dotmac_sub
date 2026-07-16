@@ -175,6 +175,25 @@ class TestBlockHandlerInvokesShadowWrite:
 
         mock_shadow.assert_called_once_with(db, str(sub.id))
 
+    def test_projection_failure_suppresses_session_cleanup(self):
+        handler = EnforcementHandler()
+        db = MagicMock()
+        sub = _stub_subscription(status=SubscriptionStatus.suspended)
+        db.get.return_value = sub
+        with (
+            patch("app.services.events.handlers.enforcement.radius_reject_service"),
+            patch(
+                "app.services.events.handlers.enforcement.radius_service."
+                "reconcile_subscription_connectivity",
+                side_effect=RuntimeError("projection incomplete"),
+            ),
+            patch.object(handler, "_shadow_write_access_state"),
+            patch.object(handler, "_enqueue_subscription_session_cleanup") as cleanup,
+        ):
+            handler._enforce_subscription_block(db, str(sub.id))
+
+        cleanup.assert_not_called()
+
 
 class TestRestoreHandlerInvokesShadowWrite:
     """Confirms _handle_subscription_restore calls _shadow_write_access_state
@@ -216,3 +235,36 @@ class TestRestoreHandlerInvokesShadowWrite:
             handler._handle_subscription_restore(db, event)
 
         mock_shadow.assert_called_once_with(db, str(sub.id))
+
+    def test_projection_failure_suppresses_restore_coa_and_unblock(self):
+        handler = EnforcementHandler()
+        db = MagicMock()
+        sub = _stub_subscription(status=SubscriptionStatus.active)
+        db.get.return_value = sub
+        event = Event(
+            event_type=EventType.subscription_resumed,
+            payload={"subscription_id": str(sub.id)},
+            subscription_id=sub.id,
+        )
+        with (
+            patch("app.services.account_lifecycle.compute_account_status"),
+            patch("app.services.events.handlers.enforcement.radius_reject_service"),
+            patch(
+                "app.services.events.handlers.enforcement.radius_service."
+                "reconcile_subscription_connectivity",
+                side_effect=RuntimeError("projection incomplete"),
+            ),
+            patch.object(handler, "_shadow_write_access_state"),
+            patch(
+                "app.services.events.handlers.enforcement."
+                "disconnect_subscription_sessions"
+            ) as disconnect,
+            patch(
+                "app.services.events.handlers.enforcement."
+                "remove_subscription_address_list_block"
+            ) as remove_block,
+        ):
+            handler._handle_subscription_restore(db, event)
+
+        disconnect.assert_not_called()
+        remove_block.assert_not_called()

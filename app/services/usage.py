@@ -7,7 +7,7 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
-from typing import cast
+from typing import Any, cast
 
 from fastapi import HTTPException
 from sqlalchemy import and_, bindparam, create_engine, func, or_, text
@@ -212,13 +212,17 @@ def _write_subscription_ips_from_accounting(
         subscription.ipv6_address = ipv6
 
 
-def _radius_accounting_db_url() -> str | None:
-    # The accounting importer must read the SAME database the RADIUS writers
-    # write — resolve through the one DSN owner (radius_dsn, the authority the
-    # writers use) instead of a private precedence chain that drifts from it.
-    from app.services.radius_dsn import resolve_radius_dsn
+def _radius_accounting_target(db: Session) -> dict[str, Any] | None:
+    """Resolve the singular DB-configured accounting authority and schema."""
+    from app.services.external_radius_targets import authoritative_accounting_target
 
-    return resolve_radius_dsn()
+    return authoritative_accounting_target(db)
+
+
+def _radius_accounting_db_url(db: Session) -> str | None:
+    """Compatibility reader for callers that only need the configured URL."""
+    target = _radius_accounting_target(db)
+    return str(target["db_url"]) if target else None
 
 
 def _get_radius_accounting_cursor(db: Session) -> int:
@@ -611,9 +615,24 @@ def _release_postgres_read_transaction(db: Session) -> None:
         db.rollback()
 
 
-def _radacct_select_list(conn) -> str:
+def _quoted_table_identifier(conn, table_name: str) -> str:
+    from app.services.external_radius_targets import sanitize_table_identifier
+
+    safe_name = sanitize_table_identifier(table_name, "radacct")
+    quote = conn.dialect.identifier_preparer.quote
+    return ".".join(quote(part) for part in safe_name.split("."))
+
+
+def _radacct_select_list(conn, table_name: str) -> str:
+    from app.services.external_radius_targets import sanitize_table_identifier
+
+    safe_name = sanitize_table_identifier(table_name, "radacct")
+    parts = safe_name.split(".")
+    schema = ".".join(parts[:-1]) or None
     try:
-        available = {c["name"] for c in sa_inspect(conn).get_columns("radacct")}
+        available = {
+            c["name"] for c in sa_inspect(conn).get_columns(parts[-1], schema=schema)
+        }
     except Exception:
         available = set()
     extras = [c for c in _RADACCT_OPTIONAL_COLUMNS if c in available]
@@ -624,6 +643,7 @@ def _refresh_open_sessions_from_radacct(
     db: Session,
     conn,
     select_list: str,
+    table_sql: str,
     *,
     batch: int = _RADIUS_REFRESH_BATCH,
 ) -> tuple[int, int]:
@@ -683,7 +703,7 @@ def _refresh_open_sessions_from_radacct(
     stmt = text(
         f"""
                 SELECT {select_list}
-                FROM radacct
+                FROM {table_sql}
                 WHERE acctsessionid IN :session_ids
                   AND username IN :usernames
                 ORDER BY radacctid ASC
@@ -709,8 +729,8 @@ def import_radius_accounting(
     *,
     limit: int | None = None,
 ) -> dict[str, int | bool | str | None]:
-    db_url = _radius_accounting_db_url()
-    if not db_url:
+    target = _radius_accounting_target(db)
+    if not target:
         return {
             "ok": False,
             "processed": 0,
@@ -721,6 +741,8 @@ def import_radius_accounting(
             "source_age_seconds": None,
         }
 
+    db_url = str(target["db_url"])
+    radacct_table = str(target["radacct_table"])
     batch_size = max(limit or 500, 1)
     last_radacctid = _get_radius_accounting_cursor(db)
     _release_postgres_read_transaction(db)
@@ -730,12 +752,13 @@ def import_radius_accounting(
     cursor = last_radacctid
     engine = _radacct_engine(db_url)
     with engine.begin() as conn:
-        select_list = _radacct_select_list(conn)
+        table_sql = _quoted_table_identifier(conn, radacct_table)
+        select_list = _radacct_select_list(conn, radacct_table)
         result = conn.execute(
             text(
                 f"""
                 SELECT {select_list}
-                FROM radacct
+                FROM {table_sql}
                 WHERE radacctid > :cursor
                 ORDER BY radacctid ASC
                 LIMIT :limit
@@ -755,13 +778,17 @@ def import_radius_accounting(
         # New rows first (a fresh Stop may close a session and shrink the
         # refresh set), then re-read radacct for whatever is still open.
         refresh_checked, refreshed = _refresh_open_sessions_from_radacct(
-            db, conn, select_list, batch=_RADIUS_REFRESH_BATCH
+            db,
+            conn,
+            select_list,
+            table_sql,
+            batch=_RADIUS_REFRESH_BATCH,
         )
         source_latest_at = _coerce_radacct_ts(
             conn.execute(
                 text(
-                    "SELECT MAX(COALESCE(acctstoptime, acctupdatetime, "
-                    "acctstarttime)) FROM radacct"
+                    "SELECT MAX(COALESCE(acctstoptime, acctupdatetime, "  # nosec B608  # noqa: S608 -- sanitized identifier
+                    f"acctstarttime)) FROM {table_sql}"
                 )
             ).scalar()
         )

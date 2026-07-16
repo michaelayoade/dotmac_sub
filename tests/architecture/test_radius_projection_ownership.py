@@ -1,16 +1,11 @@
 """Boundary guard for the `access.radius_projection` SOT owner.
 
-`radcheck`/`radreply` (and the `radcheck_admin`/`radreply_admin` device-login
+`radcheck`/`radreply`/`radusergroup` (and the admin device-login
 tables) decide whether a subscriber's session authenticates at the BNG. The
 relationship map names `access.radius_projection` (app.services.radius_population)
 as their single idempotent writer.
 
-Today three scoped writers still mutate those tables directly. That is a
-shrink-only migration debt, not an approved set of parallel writers: no NEW
-module may write these tables, and each baseline entry is removed the moment its
-writes are collapsed into the owner. The test is inverted on purpose (assert the
-detected writer set *equals* owner + baseline) so a baseline entry cannot be left
-behind after its writes are gone, and a new writer cannot land silently.
+The migration debt is closed: no adapter may mutate these tables directly.
 """
 
 from __future__ import annotations
@@ -28,19 +23,15 @@ OWNER = "app/services/radius_population.py"
 # owner. Remove an entry when its radcheck/radreply writes are gone. Adding an
 # entry requires an explicit ownership decision — it means a new split-brain
 # writer was introduced instead of requesting a projection.
-WRITER_BASELINE: set[str] = {
-    "app/services/radius.py",
-    "app/services/enforcement.py",
-    "app/services/connectivity_backup.py",
-}
+WRITER_BASELINE: set[str] = set()
 
 # Raw-psycopg literal SQL against the auth tables.
 _RAW_SQL_WRITE = re.compile(
-    r"(INSERT\s+INTO|DELETE\s+FROM|UPDATE)\s+\"?rad(check|reply)(_admin)?\b",
+    r"(INSERT\s+INTO|DELETE\s+FROM|UPDATE)\s+\"?rad(check|reply|usergroup)(_admin)?\b",
     re.IGNORECASE,
 )
 # SQLAlchemy-Core writes against a reflected radcheck/radreply Table object.
-_CORE_WRITE = re.compile(r"(insert|delete)\(\s*rad(check|reply)_table\b")
+_CORE_WRITE = re.compile(r"(insert|delete)\(\s*rad(check|reply|usergroup)(_table)?\b")
 
 
 def _radius_auth_writers() -> set[str]:

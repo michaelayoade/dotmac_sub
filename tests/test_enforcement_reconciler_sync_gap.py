@@ -40,7 +40,12 @@ def test_reconciler_spares_entitled_login_and_kicks_the_rest(
     )
     db_session.commit()
 
-    monkeypatch.setenv("RADIUS_DB_DSN", "postgresql://u:p@radius-test:5432/radius")
+    target = {
+        "db_url": "postgresql://u:p@radius-test:5432/radius",
+        "radacct_table": "radacct",
+        "radcheck_table": "radcheck",
+        "radreply_table": "radreply",
+    }
     unserviceable = [
         # (username, acctsessionid, nas_ip, framed_ip, radacctid, stale)
         ("100077777", "sess-gap", "10.0.0.1", "100.64.0.5", 1, False),
@@ -49,6 +54,11 @@ def test_reconciler_spares_entitled_login_and_kicks_the_rest(
 
     with (
         patch("app.db.SessionLocal", return_value=db_session),
+        patch.object(db_session, "rollback"),
+        patch(
+            "app.services.external_radius_targets.authoritative_accounting_target",
+            return_value=target,
+        ),
         patch("psycopg.connect", return_value=_fake_radius_db(unserviceable, [])),
         patch(
             "app.services.radius_reject.get_reject_networks",

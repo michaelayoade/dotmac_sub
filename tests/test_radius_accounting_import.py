@@ -64,15 +64,45 @@ def _naive(dt: datetime) -> datetime:
     return dt.astimezone(UTC).replace(tzinfo=None)
 
 
-def _make_radacct(tmp_path, monkeypatch, *, ddl=_RADACCT_DDL):
+def _make_radacct(tmp_path, monkeypatch, *, ddl=_RADACCT_DDL, table_name="radacct"):
     url = f"sqlite:///{tmp_path / 'radacct.sqlite'}"
     engine = create_engine(url)
     with engine.begin() as conn:
-        conn.execute(text(ddl))
-    monkeypatch.setattr(usage_service, "_radius_accounting_db_url", lambda: url)
+        conn.execute(
+            text(ddl.replace("CREATE TABLE radacct", f"CREATE TABLE {table_name}"))
+        )
+    monkeypatch.setattr(
+        usage_service,
+        "_radius_accounting_target",
+        lambda _db: {"db_url": url, "radacct_table": table_name},
+    )
     # No Redis in unit tests — keeps the bandwidth-delta emit a no-op.
     monkeypatch.delenv("REDIS_URL", raising=False)
     return engine
+
+
+def test_import_uses_configured_radacct_table(
+    db_session, subscription, tmp_path, monkeypatch
+):
+    engine = _make_radacct(tmp_path, monkeypatch, table_name="custom_radacct")
+    credential = _credential(db_session, subscription)
+    start = datetime.now(UTC) - timedelta(minutes=5)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO custom_radacct "
+                "(radacctid, acctsessionid, username, acctstarttime, "
+                "acctinputoctets, acctoutputoctets) "
+                "VALUES (1, 'custom-session', :username, :started, 1, 2)"
+            ),
+            {"username": credential.username, "started": start.isoformat()},
+        )
+
+    result = usage_service.import_radius_accounting(db_session)
+
+    assert result["ok"] is True
+    assert result["processed"] == 1
+    assert _local_session(db_session, credential).session_id == "custom-session"
 
 
 def _insert_radacct_row(engine, **values):

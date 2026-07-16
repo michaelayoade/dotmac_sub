@@ -171,17 +171,18 @@ def run_enforcement_reconciler() -> dict[str, int]:
     mass disconnect.
     """
     import ipaddress
-    import os
 
     import psycopg
+    from psycopg import sql
 
     from app.db import SessionLocal
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
     from app.services.enforcement import _nas_device_by_ip, _send_coa_disconnect
-    from app.services.radius_dsn import radius_dsn_libpq
+    from app.services.external_radius_targets import authoritative_accounting_target
+    from app.services.radius_address_lists import suspended_address_list
     from app.services.radius_reject import get_reject_networks
 
-    max_kicks = int(os.environ.get("ENFORCEMENT_RECONCILER_MAX_KICKS", "25"))
-    dsn = radius_dsn_libpq() or ""
     stats = {
         "stale_unserviceable_sessions": 0,
         "reject_pool_sessions": 0,
@@ -192,37 +193,72 @@ def run_enforcement_reconciler() -> dict[str, int]:
         "sync_gap_logins": 0,
         "ghosts_closed": 0,
     }
-    if not dsn:
-        logger.error("enforcement reconciler: radius DSN not configured")
+    db = SessionLocal()
+    max_kicks = int(
+        settings_spec.resolve_value(
+            db, SettingDomain.radius, "enforcement_reconciler_max_kicks"
+        )
+        or 25
+    )
+    unserviceable_grace_seconds = int(
+        settings_spec.resolve_value(
+            db,
+            SettingDomain.radius,
+            "enforcement_reconciler_unserviceable_grace_seconds",
+        )
+        or 1200
+    )
+    ghost_stale_seconds = int(
+        settings_spec.resolve_value(
+            db,
+            SettingDomain.radius,
+            "enforcement_reconciler_ghost_stale_seconds",
+        )
+        or 7200
+    )
+    walled_garden_address_list = suspended_address_list(db)
+    target = authoritative_accounting_target(db)
+    db.rollback()
+    if not target:
+        db.close()
+        logger.error("enforcement reconciler: accounting target not configured")
         return stats
+    dsn = str(target["db_url"]).replace("postgresql+psycopg://", "postgresql://", 1)
+    radacct = sql.Identifier(*str(target["radacct_table"]).split("."))
+    radcheck = sql.Identifier(*str(target["radcheck_table"]).split("."))
+    radreply = sql.Identifier(*str(target["radreply_table"]).split("."))
 
     # --- collect violations from radacct -------------------------------
     with psycopg.connect(dsn) as rconn, rconn.cursor() as cur:
         cur.execute(
-            "SELECT r.username, r.acctsessionid, host(r.nasipaddress), "
-            "host(r.framedipaddress), r.radacctid, "
-            "GREATEST(r.acctstarttime, COALESCE(r.acctupdatetime, "
-            "r.acctstarttime)) < now() - interval '2 hours' AS stale "
-            "FROM radacct r "
-            "WHERE r.acctstoptime IS NULL "
-            "AND r.acctstarttime < now() - interval '20 minutes' "
-            "AND r.username IS NOT NULL AND r.username <> '' "
-            "AND NOT EXISTS (SELECT 1 FROM radcheck rc "
-            "                WHERE rc.username = r.username)",
+            sql.SQL(
+                "SELECT r.username, r.acctsessionid, host(r.nasipaddress), "
+                "host(r.framedipaddress), r.radacctid, "
+                "GREATEST(r.acctstarttime, COALESCE(r.acctupdatetime, "
+                "r.acctstarttime)) < now() - (%s * interval '1 second') AS stale "
+                "FROM {} r "
+                "WHERE r.acctstoptime IS NULL "
+                "AND r.acctstarttime < now() - (%s * interval '1 second') "
+                "AND r.username IS NOT NULL AND r.username <> '' "
+                "AND NOT EXISTS (SELECT 1 FROM {} rc "
+                "                WHERE rc.username = r.username)"
+            ).format(radacct, radcheck),
+            (ghost_stale_seconds, unserviceable_grace_seconds),
         )
         unserviceable = cur.fetchall()
         cur.execute(
-            "SELECT r.username, r.acctsessionid, host(r.nasipaddress), "
-            "host(r.framedipaddress), r.radacctid, false AS stale "
-            "FROM radacct r "
-            "WHERE r.acctstoptime IS NULL AND r.framedipaddress IS NOT NULL",
+            sql.SQL(
+                "SELECT r.username, r.acctsessionid, host(r.nasipaddress), "
+                "host(r.framedipaddress), r.radacctid, false AS stale "
+                "FROM {} r "
+                "WHERE r.acctstoptime IS NULL AND r.framedipaddress IS NOT NULL"
+            ).format(radacct)
         )
         open_sessions = cur.fetchall()
 
     stats["stale_unserviceable_sessions"] = len(unserviceable)
     to_kick = {(row[1], row[2]): row for row in unserviceable}
 
-    db = SessionLocal()
     try:
         reject_nets = {
             reason: net
@@ -344,9 +380,11 @@ def run_enforcement_reconciler() -> dict[str, int]:
         if ghost_rows:
             with psycopg.connect(dsn) as rconn, rconn.cursor() as cur:
                 cur.execute(
-                    "UPDATE radacct SET acctstoptime = now(), "
-                    "acctterminatecause = 'Ghost-Reconciled' "
-                    "WHERE radacctid = ANY(%s) AND acctstoptime IS NULL",
+                    sql.SQL(
+                        "UPDATE {} SET acctstoptime = now(), "
+                        "acctterminatecause = 'Ghost-Reconciled' "
+                        "WHERE radacctid = ANY(%s) AND acctstoptime IS NULL"
+                    ).format(radacct),
                     ([rid for rid, _ in ghost_rows],),
                 )
                 rconn.commit()
@@ -416,11 +454,14 @@ def run_enforcement_reconciler() -> dict[str, int]:
     if expected_wg:
         with psycopg.connect(dsn) as rconn, rconn.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT username FROM radreply "
-                "WHERE attribute='Mikrotik-Address-List' AND value='suspended'",
+                sql.SQL(
+                    "SELECT DISTINCT username FROM {} "
+                    "WHERE attribute='Mikrotik-Address-List' AND value=%s"
+                ).format(radreply),
+                (walled_garden_address_list,),
             )
             tagged = {r[0] for r in cur.fetchall()}
-            cur.execute("SELECT DISTINCT username FROM radcheck")
+            cur.execute(sql.SQL("SELECT DISTINCT username FROM {}").format(radcheck))
             in_radcheck = {r[0] for r in cur.fetchall()}
         # only logins that are supposed to be in radcheck can drift
         drift = (expected_wg & in_radcheck) - tagged

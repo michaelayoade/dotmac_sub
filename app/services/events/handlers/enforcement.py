@@ -159,15 +159,11 @@ class EnforcementHandler:
         than a full credential rebuild."""
         subscription = db.get(Subscription, subscription_id)
 
-        # RADIUS reject IP
+        # RADIUS reject IP is source state for the projection.
         try:
-            ip_result = radius_reject_service.enforce_subscription_reject_ip(
+            radius_reject_service.enforce_subscription_reject_ip(
                 db, str(subscription_id), reject_reason=reject_reason
             )
-            if ip_result.get("ok"):
-                radius_service.reconcile_subscription_connectivity(
-                    db, str(subscription_id)
-                )
         except Exception as exc:
             logger.error(
                 "Failed to apply RADIUS reject for subscription %s: %s",
@@ -175,23 +171,19 @@ class EnforcementHandler:
                 exc,
             )
 
-        # External radcheck/radreply state: radius_population is the
-        # SOLE writer (single-writer decision, 2026-06-11). The previous
-        # remove/block_external_radius_credentials calls here acted on the
-        # WHOLE SUBSCRIBER — suspending one subscription wiped auth for the
-        # subscriber's other active logins, and their writes fought the
-        # populate sweeps. Instead, enqueue an immediate full refresh (~3s,
-        # idempotent) so the status change reaches radcheck within seconds.
+        # Materialize all configured targets synchronously. Session CoA is a
+        # consequence and must not run after a partial projection.
+        projection_ready = False
         if subscription:
             try:
-                from app.tasks.radius_population import refresh_radius_from_subs
-
-                refresh_radius_from_subs.delay()
+                result = radius_service.reconcile_subscription_connectivity(
+                    db, str(subscription_id)
+                )
+                projection_ready = bool(result.get("ok"))
             except Exception as exc:
                 logger.error(
-                    "Failed to enqueue RADIUS refresh for subscriber %s: %s "
-                    "(periodic sweep will converge within 15 min)",
-                    subscription.subscriber_id,
+                    "Failed to project blocked RADIUS state for subscription %s: %s",
+                    subscription_id,
                     exc,
                 )
 
@@ -199,9 +191,16 @@ class EnforcementHandler:
         # No-op unless the enforcement event policy enables group routing.
         self._shadow_write_access_state(db, str(subscription_id))
 
-        # Slow NAS cleanup runs out-of-band so the authoritative DB/RADIUS
-        # reject state is not held hostage by session disconnect latency.
-        self._enqueue_subscription_session_cleanup(str(subscription_id), reason=reason)
+        if projection_ready:
+            self._enqueue_subscription_session_cleanup(
+                str(subscription_id), reason=reason
+            )
+        else:
+            logger.error(
+                "Session cleanup deferred for subscription %s: external RADIUS "
+                "projection is incomplete",
+                subscription_id,
+            )
 
     def _handle_subscription_block(
         self, db: Session, event: Event, reason: str
@@ -270,61 +269,49 @@ class EnforcementHandler:
                     exc,
                 )
 
-        # Lift the Auth-Type := Reject overlay before the reconcile rebuild,
-        # so the rebuild doesn't carry the block forward via the
-        # status-aware sync path.
-        if subscription:
-            try:
-                radius_service.unblock_external_radius_credentials(
-                    db, str(subscription.subscriber_id)
-                )
-            except Exception as exc:
-                logger.error(
-                    "Failed to unblock RADIUS credentials for subscriber %s: %s",
-                    subscription.subscriber_id,
-                    exc,
-                )
-
-        # Clear RADIUS reject and reconcile connectivity
+        # Clear desired reject state, then synchronously project every target.
+        projection_ready = False
         try:
-            ip_result = radius_reject_service.enforce_subscription_reject_ip(
+            radius_reject_service.enforce_subscription_reject_ip(
                 db, str(subscription_id)
             )
-            if ip_result.get("ok"):
-                radius_service.reconcile_subscription_connectivity(
-                    db, str(subscription_id)
-                )
         except Exception as exc:
             logger.error(
-                "Failed to clear RADIUS reject for subscription %s: %s",
+                "Failed to clear RADIUS reject source state for subscription %s: %s",
                 subscription_id,
                 exc,
             )
+        if subscription:
+            try:
+                result = radius_service.reconcile_subscription_connectivity(
+                    db, str(subscription_id)
+                )
+                projection_ready = bool(result.get("ok"))
+            except Exception as exc:
+                logger.error(
+                    "Failed to project restored RADIUS state for subscription %s: %s",
+                    subscription_id,
+                    exc,
+                )
 
         # Phase 3 shadow write — mirror the restored state to radusergroup.
         # No-op unless the enforcement event policy enables group routing.
         self._shadow_write_access_state(db, str(subscription_id))
 
-        # Converge radcheck/radreply to the restored state within seconds
-        # via the single-writer sweep.
-        try:
-            from app.tasks.radius_population import refresh_radius_from_subs
-
-            refresh_radius_from_subs.delay()
-        except Exception as exc:
-            logger.error(
-                "Failed to enqueue RADIUS refresh on restore for %s: %s",
-                subscription_id,
-                exc,
-            )
-
         # Refresh sessions and remove address block
         try:
-            if refresh_enabled:
+            if refresh_enabled and projection_ready:
                 disconnect_subscription_sessions(
                     db, str(subscription_id), reason="restore"
                 )
-            remove_subscription_address_list_block(db, str(subscription_id))
+            if projection_ready:
+                remove_subscription_address_list_block(db, str(subscription_id))
+            else:
+                logger.error(
+                    "Restore consequences deferred for subscription %s: external "
+                    "RADIUS projection is incomplete",
+                    subscription_id,
+                )
         except Exception as exc:
             logger.error(
                 "Failed to restore sessions for subscription %s: %s",
@@ -341,6 +328,11 @@ class EnforcementHandler:
             )
             return
         try:
+            projection = radius_service.reconcile_subscription_connectivity(
+                db, str(subscription_id)
+            )
+            if not projection.get("ok"):
+                raise RuntimeError("RADIUS projection did not converge")
             updated = update_subscription_sessions(
                 db,
                 str(subscription_id),
@@ -363,26 +355,21 @@ class EnforcementHandler:
         if not account_id:
             logger.debug("Skipping throttle enforcement: event missing account_id")
             return
-        # Rebuild radreply so the credential's throttle profile actually shapes
-        # the line — populate() now honours the credential override, but only on
-        # a sweep. Without this immediate refresh the throttle wouldn't land
-        # until the next scheduled sweep (up to ~15 min). Best-effort; the
-        # periodic sweep is the backstop if the enqueue is lost.
+        projection_ready = False
         try:
-            from app.tasks.radius_population import refresh_radius_from_subs
-
-            refresh_radius_from_subs.delay()
-        except Exception:
-            logger.warning(
-                "Failed to enqueue radius refresh after throttle for account %s",
+            radius_service.sync_account_credentials_to_radius(db, account_id)
+            projection_ready = True
+        except Exception as exc:
+            logger.error(
+                "Failed to project throttle for account %s: %s",
                 account_id,
-                exc_info=True,
+                exc,
             )
         refresh_enabled = (
             enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
         )
         try:
-            if refresh_enabled:
+            if refresh_enabled and projection_ready:
                 disconnect_account_sessions(db, str(account_id), reason="throttle")
         except Exception as exc:
             logger.error(
@@ -404,21 +391,21 @@ class EnforcementHandler:
         if not account_id:
             logger.debug("Skipping unthrottle enforcement: event missing account_id")
             return
+        projection_ready = False
         try:
-            from app.tasks.radius_population import refresh_radius_from_subs
-
-            refresh_radius_from_subs.delay()
-        except Exception:
-            logger.warning(
-                "Failed to enqueue radius refresh after unthrottle for account %s",
+            radius_service.sync_account_credentials_to_radius(db, account_id)
+            projection_ready = True
+        except Exception as exc:
+            logger.error(
+                "Failed to project unthrottle for account %s: %s",
                 account_id,
-                exc_info=True,
+                exc,
             )
         refresh_enabled = (
             enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
         )
         try:
-            if refresh_enabled:
+            if refresh_enabled and projection_ready:
                 disconnect_account_sessions(db, str(account_id), reason="unthrottle")
         except Exception as exc:
             logger.error(

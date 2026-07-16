@@ -1561,20 +1561,29 @@ Network access:
 4. `access.radius_state`: maps the effective tier to RADIUS groups/profiles.
 5. `access.radius_reject`: owns reject IP lifecycle.
 6. `access.radius_projection`: is the single idempotent writer that projects
-   desired access and reject state into `radcheck`/`radreply` (and the
-   `radcheck_admin`/`radreply_admin` device-login tables), under a Postgres
-   advisory lock on one shared RADIUS DSN. Blocked/suspended users get a
+   desired access and reject state into `radcheck`/`radreply`/`radusergroup`
+   (and the `radcheck_admin`/`radreply_admin` device-login tables), under a
+   per-target Postgres advisory lock. Runtime targets come only from active
+   `RadiusSyncJob` + encrypted `ConnectorConfig` rows and can fan out to
+   multiple databases. The environment DSN is bootstrap and cutover-shadow
+   input only; it is never a runtime fallback. Blocked/suspended users get a
    walled-garden `radreply` rather than row deletion, so suspension takes effect
    at the BNG without losing the captive pay-page treatment.
 7. `access.session_enforcement`: applies CoA/disconnect outcomes.
 
 Rule: billing, FUP, and admin actions resolve the desired access outcome once,
 map it to RADIUS state once, and let enforcement apply the network-side change.
-No module outside `access.radius_projection` writes `radcheck`/`radreply`;
+No module outside `access.radius_projection` writes `radcheck`, `radreply`, or
+`radusergroup`;
 event-time and per-user callers request a projection (full sweep or a scoped
-reconcile) or enqueue `refresh_radius_from_subs`. The remaining scoped writers in
-`radius.py` and `enforcement.py` are a shrink-only migration to that owner,
-pinned by `tests/architecture/test_radius_projection_ownership.py`.
+reconcile) or enqueue `refresh_radius_from_subs`. Target failures are reported
+per target and suppress downstream CoA. The closed boundary is pinned by
+`tests/architecture/test_radius_projection_ownership.py`.
+
+RADIUS schema names and target capabilities are configuration owned by each
+`ConnectorConfig`; access-group names, priorities, address-list names, and
+enforcement reconciler thresholds are database settings. Code defaults are
+bootstrap values only, not parallel runtime policy.
 
 Service intent:
 
