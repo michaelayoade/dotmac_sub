@@ -22,9 +22,7 @@ def test_defaults_to_5s(monkeypatch):
 
 @pytest.mark.parametrize("value", ["5s", "3000ms", "30s", "2min", "0"])
 def test_valid_settings_value_is_used(monkeypatch, value):
-    monkeypatch.setattr(
-        "app.db.settings", SimpleNamespace(alembic_lock_timeout=value)
-    )
+    monkeypatch.setattr("app.db.settings", SimpleNamespace(alembic_lock_timeout=value))
     assert resolve_migration_lock_timeout() == value
 
 
@@ -39,8 +37,6 @@ def test_malformed_input_falls_back_to_default(monkeypatch, bad):
 
 
 def test_explicit_arg_overrides_settings(monkeypatch):
-    monkeypatch.setattr(
-        "app.db.settings", SimpleNamespace(alembic_lock_timeout="99s")
-    )
+    monkeypatch.setattr("app.db.settings", SimpleNamespace(alembic_lock_timeout="99s"))
     assert resolve_migration_lock_timeout("10s") == "10s"
     assert resolve_migration_lock_timeout("bad") == "5s"
