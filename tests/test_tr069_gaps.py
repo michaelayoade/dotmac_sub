@@ -856,13 +856,19 @@ class TestAutoLinkOnts:
         }
 
         env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
+        # The template renders timestamps through the owned app_datetime filter;
+        # a bare Environment doesn't get it (that's registered on Jinja2Templates
+        # instances), so register it here to keep the test isolation-safe.
         env.filters["app_datetime"] = _app_datetime_filter
         html = env.get_template("admin/network/onts/index.html").render(context)
 
         assert "UI-ACS-LAST-SEEN-001" in html
-        assert "Apr 28, 08:55" in html
-        assert "2026-04-28 08:55:00" in html
-        assert "Apr 28, 08:10" not in html
+        # Timestamps render in the fixed display timezone (WAT = UTC+1) via the
+        # app_datetime owned filter, so the 08:55 UTC Zabbix reading shows as
+        # 09:55 and the stale 08:10 ONT reading (superseded by Zabbix) as 09:10.
+        assert "Apr 28, 09:55" in html
+        assert "2026-04-28 09:55:00" in html
+        assert "Apr 28, 09:10" not in html
 
     def test_sync_auto_links_ont_by_normalized_serial(self, db_session) -> None:
         from app.models.network import OntUnit
