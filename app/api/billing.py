@@ -23,6 +23,10 @@ from app.schemas.billing import (
     BillingAccountPaymentConfirm,
     BillingAccountPaymentPreviewRead,
     BillingAccountPaymentPreviewRequest,
+    BillingAccountPaymentRefundPreviewRead,
+    BillingAccountPaymentRefundRequest,
+    BillingAccountPaymentReversalPreviewRead,
+    BillingAccountPaymentReversalRequest,
     BillingAccountRead,
     BillingAccountStatement,
     BillingAccountUpdate,
@@ -1570,7 +1574,7 @@ def sync_payments(
 
 @router.post(
     "/payments/{payment_id}/refund/preview",
-    response_model=PaymentRefundPreviewRead,
+    response_model=PaymentRefundPreviewRead | BillingAccountPaymentRefundPreviewRead,
     tags=["payments"],
     dependencies=[Depends(require_permission("billing:payment:update"))],
 )
@@ -1579,6 +1583,11 @@ def preview_payment_refund(
     payload: PaymentRefundPreviewRequest,
     db: Session = Depends(get_db),
 ):
+    payment = billing_service.payments.get(db, payment_id)
+    if payment.billing_account_id is not None:
+        return billing_service.consolidated_payment_refunds.preview(
+            db, payment_id, payload
+        )
     return billing_service.refunds.preview(db, payment_id, payload)
 
 
@@ -1594,12 +1603,21 @@ def confirm_payment_refund(
     payload: PaymentRefundRequest,
     db: Session = Depends(get_db),
 ):
+    payment = billing_service.payments.get(db, payment_id)
+    if payment.billing_account_id is not None:
+        return billing_service.consolidated_payment_refunds.confirm(
+            db,
+            payment_id,
+            BillingAccountPaymentRefundRequest(**payload.model_dump()),
+        ).refund
     return billing_service.refunds.process_with_evidence(db, payment_id, payload).refund
 
 
 @router.post(
     "/payments/{payment_id}/reversal/preview",
-    response_model=PaymentReversalPreviewRead,
+    response_model=(
+        PaymentReversalPreviewRead | BillingAccountPaymentReversalPreviewRead
+    ),
     tags=["payments"],
     dependencies=[Depends(require_permission("billing:payment:update"))],
 )
@@ -1608,6 +1626,11 @@ def preview_payment_reversal(
     payload: PaymentReversalPreviewRequest,
     db: Session = Depends(get_db),
 ):
+    payment = billing_service.payments.get(db, payment_id)
+    if payment.billing_account_id is not None:
+        return billing_service.consolidated_payment_reversals.preview(
+            db, payment_id, payload
+        )
     return billing_service.reversals.preview(db, payment_id, payload)
 
 
@@ -1623,6 +1646,13 @@ def confirm_payment_reversal(
     payload: PaymentReversalRequest,
     db: Session = Depends(get_db),
 ):
+    payment = billing_service.payments.get(db, payment_id)
+    if payment.billing_account_id is not None:
+        return billing_service.consolidated_payment_reversals.confirm(
+            db,
+            payment_id,
+            BillingAccountPaymentReversalRequest(**payload.model_dump()),
+        ).reversal
     return billing_service.reversals.process_with_evidence(
         db, payment_id, payload
     ).reversal

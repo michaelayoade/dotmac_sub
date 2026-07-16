@@ -442,7 +442,7 @@ financial service:
   service-access consequence remain separate. Projection drift or historical
   allocation without exact source-consumption evidence fails closed; no
   synthetic payment repairs it.
-- Exact evidence: revision `310_consolidated_credit_allocation` records one
+- Exact evidence: revision `311_consolidated_credit_allocation` records one
   allocation decision linked to its billing-account debit and item rows linking
   each source billing-account credit to the exact `PaymentAllocation` and
   subscriber `LedgerEntry` it produced. `BillingAccount.balance` is updated only
@@ -452,6 +452,40 @@ financial service:
   cross-reseller scope, partial allocation, exact dual-ledger links, replay,
   audit, UI/API preview-confirm, and sole-writer architecture tests must remain
   green.
+
+Consolidated refunds and payment reversals remain under that scoped owner:
+
+- Old path: the subscriber payment refund/reversal owner rejected every
+  billing-account payment. Admin/API confirmation and normalized provider
+  refund or reversal events therefore stopped without an authoritative money
+  path, while ad hoc balance repair risked assigning reseller money to a fake
+  subscriber or leaving paid member receivables closed.
+- Owner: `financial.consolidated_payments` owns refund and reversal capability,
+  preview, locked fingerprint confirmation, idempotency, actor/provider audit,
+  payment state, and every resulting ledger link. Generic
+  `financial.payments` continues to own subscriber-scoped returns and refuses
+  consolidated scope.
+- Position boundary: reseller-held credit, member invoice receivables, payment
+  refund/reversal state, and service access remain separate in preview and
+  confirmation. A partial refund may consume only credit still evidenced for
+  that payment at billing-account scope. A partial request that would infer an
+  allocation clawback fails closed; a complete refund or reversal explicitly
+  reopens every remaining allocation.
+- Evidence boundary: consolidated credit consumption writes and links one exact
+  `BillingAccountLedgerEntry`. Each reopened member allocation writes an exact
+  invoice-linked subscriber debit and records its source `PaymentAllocation`
+  through `ConsolidatedPaymentReturnAllocationEvidence`. No fake subscriber,
+  UI-derived balance, mutable-only restoration amount, or unlinked ledger row
+  is permitted.
+- Access/provider boundary: member receivable reopening emits a reconciliation
+  request but does not decide suspension or restoration. Trusted normalized
+  provider events dispatch to the same consolidated owner; untrusted API
+  callers cannot claim provider evidence.
+- Cutover gate: revision `312_consolidated_payment_returns.py`, partial-surplus,
+  full-refund, reversal, stale-preview, replay, dual-ledger, provider dispatch,
+  admin/API dispatch, and sole-writer tests must remain green. Historical
+  consolidated refund/reversal rows without exact structural evidence remain a
+  separate explicit reconciliation task.
 
 Imported-payment batch reversal is a separate migrated wrapper owner:
 

@@ -1157,6 +1157,11 @@ class PaymentRefund(Base):
             unique=True,
         ),
         Index(
+            "uq_payment_refunds_billing_account_ledger_entry_id",
+            "billing_account_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
             "uq_payment_refunds_credit_consumption_ledger_entry_id",
             "credit_consumption_ledger_entry_id",
             unique=True,
@@ -1180,10 +1185,13 @@ class PaymentRefund(Base):
         UUID(as_uuid=True),
         ForeignKey("payment_provider_events.id", ondelete="RESTRICT"),
     )
-    ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
-        nullable=False,
+    )
+    billing_account_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
     )
     # The total refund ledger row is accounting/audit evidence. If part of the
     # refunded payment remained as unallocated account credit, this second link
@@ -1208,8 +1216,16 @@ class PaymentRefund(Base):
     payment = relationship("Payment", back_populates="refunds")
     provider_event = relationship("PaymentProviderEvent", back_populates="refunds")
     ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    billing_account_ledger_entry = relationship(
+        "BillingAccountLedgerEntry", foreign_keys=[billing_account_ledger_entry_id]
+    )
     credit_consumption_ledger_entry = relationship(
         "LedgerEntry", foreign_keys=[credit_consumption_ledger_entry_id]
+    )
+    consolidated_allocation_evidence = relationship(
+        "ConsolidatedPaymentReturnAllocationEvidence",
+        back_populates="refund",
+        foreign_keys="ConsolidatedPaymentReturnAllocationEvidence.refund_id",
     )
 
 
@@ -1231,6 +1247,11 @@ class PaymentReversal(Base):
             unique=True,
         ),
         Index(
+            "uq_payment_reversals_billing_account_ledger_entry_id",
+            "billing_account_ledger_entry_id",
+            unique=True,
+        ),
+        Index(
             "uq_payment_reversals_credit_consumption_ledger_entry_id",
             "credit_consumption_ledger_entry_id",
             unique=True,
@@ -1249,10 +1270,13 @@ class PaymentReversal(Base):
         UUID(as_uuid=True),
         ForeignKey("payment_provider_events.id", ondelete="RESTRICT"),
     )
-    ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+    ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
-        nullable=False,
+    )
+    billing_account_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
     )
     credit_consumption_ledger_entry_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
@@ -1272,9 +1296,82 @@ class PaymentReversal(Base):
     payment = relationship("Payment", back_populates="reversal")
     provider_event = relationship("PaymentProviderEvent", back_populates="reversals")
     ledger_entry = relationship("LedgerEntry", foreign_keys=[ledger_entry_id])
+    billing_account_ledger_entry = relationship(
+        "BillingAccountLedgerEntry", foreign_keys=[billing_account_ledger_entry_id]
+    )
     credit_consumption_ledger_entry = relationship(
         "LedgerEntry", foreign_keys=[credit_consumption_ledger_entry_id]
     )
+    consolidated_allocation_evidence = relationship(
+        "ConsolidatedPaymentReturnAllocationEvidence",
+        back_populates="reversal",
+        foreign_keys="ConsolidatedPaymentReturnAllocationEvidence.reversal_id",
+    )
+
+
+class ConsolidatedPaymentReturnAllocationEvidence(Base):
+    """Exact subscriber-ledger result for one returned consolidated allocation."""
+
+    __tablename__ = "consolidated_payment_return_allocation_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN refund_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN reversal_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_consolidated_return_evidence_exactly_one_owner",
+        ),
+        UniqueConstraint(
+            "refund_id",
+            "payment_allocation_id",
+            name="uq_consolidated_refund_allocation_evidence",
+        ),
+        UniqueConstraint(
+            "reversal_id",
+            "payment_allocation_id",
+            name="uq_consolidated_reversal_allocation_evidence",
+        ),
+        Index(
+            "uq_consolidated_return_allocation_ledger_entry_id",
+            "ledger_entry_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    refund_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_refunds.id", ondelete="RESTRICT")
+    )
+    reversal_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_reversals.id", ondelete="RESTRICT")
+    )
+    payment_allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    refund = relationship(
+        "PaymentRefund",
+        back_populates="consolidated_allocation_evidence",
+        foreign_keys=[refund_id],
+    )
+    reversal = relationship(
+        "PaymentReversal",
+        back_populates="consolidated_allocation_evidence",
+        foreign_keys=[reversal_id],
+    )
+    payment_allocation = relationship("PaymentAllocation")
+    ledger_entry = relationship("LedgerEntry")
 
 
 class PaymentSettlement(Base):

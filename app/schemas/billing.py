@@ -689,7 +689,8 @@ class PaymentRefundRead(BaseModel):
     id: UUID
     payment_id: UUID
     provider_event_id: UUID | None = None
-    ledger_entry_id: UUID
+    ledger_entry_id: UUID | None = None
+    billing_account_ledger_entry_id: UUID | None = None
     credit_consumption_ledger_entry_id: UUID | None = None
     amount: Decimal
     currency: str
@@ -736,7 +737,8 @@ class PaymentReversalRead(BaseModel):
     id: UUID
     payment_id: UUID
     provider_event_id: UUID | None = None
-    ledger_entry_id: UUID
+    ledger_entry_id: UUID | None = None
+    billing_account_ledger_entry_id: UUID | None = None
     credit_consumption_ledger_entry_id: UUID | None = None
     amount: Decimal
     currency: str
@@ -744,6 +746,66 @@ class PaymentReversalRead(BaseModel):
     reason: str
     preview_fingerprint: str | None = None
     created_at: datetime
+
+
+class BillingAccountPaymentReturnInvoiceEffectRead(BaseModel):
+    payment_allocation_id: UUID
+    invoice_id: UUID
+    account_id: UUID
+    invoice_number: str | None = None
+    receivable_before: Decimal
+    return_amount: Decimal
+    receivable_after: Decimal
+    result_ledger_entry_type: LedgerEntryType
+    result_ledger_source: LedgerSource
+
+
+class BillingAccountPaymentRefundPreviewRead(BaseModel):
+    payment_id: UUID
+    billing_account_id: UUID
+    currency: str
+    payment_gross: Decimal
+    refunded_before: Decimal
+    refundable_before: Decimal
+    refund_amount: Decimal
+    refunded_after: Decimal
+    payment_net_after: Decimal
+    status_after: PaymentStatus
+    consolidated_credit_before: Decimal
+    consolidated_credit_after: Decimal
+    consolidated_credit_consumption: Decimal
+    invoice_effects: list[BillingAccountPaymentReturnInvoiceEffectRead]
+    billing_account_ledger_entry_type: LedgerEntryType | None = None
+    billing_account_ledger_source: LedgerSource | None = None
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountPaymentRefundRequest(PaymentRefundRequest):
+    pass
+
+
+class BillingAccountPaymentReversalPreviewRead(BaseModel):
+    payment_id: UUID
+    billing_account_id: UUID
+    currency: str
+    payment_gross: Decimal
+    refunded_before: Decimal
+    payment_net_before: Decimal
+    reversal_amount: Decimal
+    status_after: PaymentStatus
+    consolidated_credit_before: Decimal
+    consolidated_credit_after: Decimal
+    consolidated_credit_consumption: Decimal
+    invoice_effects: list[BillingAccountPaymentReturnInvoiceEffectRead]
+    billing_account_ledger_entry_type: LedgerEntryType | None = None
+    billing_account_ledger_source: LedgerSource | None = None
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountPaymentReversalRequest(PaymentReversalRequest):
+    pass
 
 
 class PaymentSyncRead(BaseModel):

@@ -166,6 +166,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "consolidated-credit allocation preview and confirmation",
                     "exact source-credit consumption and subscriber-ledger links",
                     "consolidated-credit allocation idempotency and actor audit",
+                    "consolidated payment refund eligibility and preview",
+                    "billing-account refund confirmation and exact ledger evidence",
+                    "consolidated payment reversal eligibility and preview",
+                    "billing-account reversal confirmation and exact ledger evidence",
+                    "consolidated return idempotency and actor audit evidence",
                     "consolidated payment access-reconciliation handoff",
                 ),
                 depends_on=(

@@ -128,6 +128,9 @@ def test_payment_refund_adapters_require_owner_preview_and_exact_evidence() -> N
     edit = _source("templates/admin/billing/payment_form.html")
     confirmation = _source("templates/admin/billing/payment_refund_confirm.html")
     provider = _source("app/services/billing/providers.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+    web_service = _source("app/services/web_billing_payments.py")
+    generic_api = _source("app/api/billing.py")
 
     assert '"/payments/{payment_id:uuid}/refund/preview"' in route
     assert "preview_fingerprint: str = Form(...)" in route
@@ -143,6 +146,16 @@ def test_payment_refund_adapters_require_owner_preview_and_exact_evidence() -> N
     assert "Exact evidence and access consequence" in confirmation
     assert "does not promise a particular service-access state" in confirmation
     assert "Refunds.process_provider_event_refund" in provider
+    assert "ConsolidatedPaymentRefunds.process_provider_event" in provider
+    assert "consolidated_payment_refunds.preview" in web_service
+    assert "consolidated_payment_refunds.confirm" in web_service
+    assert "consolidated_payment_refunds.preview" in generic_api
+    assert "consolidated_payment_refunds.confirm" in generic_api
+    assert "class ConsolidatedPaymentRefunds" in owner
+    assert 'action="refund_consolidated_payment"' in owner
+    assert "ConsolidatedPaymentReturnAllocationEvidence(" in owner
+    assert "Consolidated credit" in confirmation
+    assert "subscriber allocation-reversal ledger row(s)" in confirmation
     assert "Payments.mark_status(" in provider
     assert "origin=PaymentSettlementOrigin.provider_event" in provider
 
@@ -155,6 +168,8 @@ def test_payment_reversal_adapters_require_owner_preview_and_exact_evidence() ->
     provider = _source("app/services/billing/providers.py")
     verified_webhook = _source("app/services/api_billing_webhooks.py")
     generic_api = _source("app/api/billing.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+    web_service = _source("app/services/web_billing_payments.py")
 
     assert '"/payments/{payment_id:uuid}/reversal/preview"' in route
     assert "preview_fingerprint: str = Form(...)" in route
@@ -169,6 +184,15 @@ def test_payment_reversal_adapters_require_owner_preview_and_exact_evidence() ->
     assert "Exact evidence and access consequence" in confirmation
     assert "does not contact a bank or provider" in confirmation
     assert "PaymentReversals.process_provider_event_reversal" in provider
+    assert "ConsolidatedPaymentReversals.process_provider_event" in provider
+    assert "consolidated_payment_reversals.preview" in web_service
+    assert "consolidated_payment_reversals.confirm" in web_service
+    assert "consolidated_payment_reversals.preview" in generic_api
+    assert "consolidated_payment_reversals.confirm" in generic_api
+    assert "class ConsolidatedPaymentReversals" in owner
+    assert 'action="reverse_consolidated_payment"' in owner
+    assert "Consolidated credit" in confirmation
+    assert "subscriber allocation-reversal ledger row(s)" in confirmation
     assert "trusted_financial_effects=True" in verified_webhook
     assert "trusted_financial_effects=True" not in generic_api
 

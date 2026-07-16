@@ -16,6 +16,7 @@ APP_DIR = PROJECT_ROOT / "app"
 APPROVED_LEDGER_WRITERS = {
     Path("app/services/billing/ledger.py"),
     Path("app/services/billing/payments.py"),
+    Path("app/services/billing/consolidated_payments.py"),
     # Existing debt outside the canonical billing package.
     Path("app/services/cutover_balance_audit.py"),
 }
@@ -58,9 +59,19 @@ APPROVED_CREDIT_NOTE_LIFECYCLE_WRITERS = {
     Path("app/services/billing/credit_notes.py"),
 }
 
-APPROVED_PAYMENT_REFUND_WRITERS = {Path("app/services/billing/payments.py")}
+APPROVED_PAYMENT_REFUND_WRITERS = {
+    Path("app/services/billing/payments.py"),
+    Path("app/services/billing/consolidated_payments.py"),
+}
 
-APPROVED_PAYMENT_REVERSAL_WRITERS = {Path("app/services/billing/payments.py")}
+APPROVED_PAYMENT_REVERSAL_WRITERS = {
+    Path("app/services/billing/payments.py"),
+    Path("app/services/billing/consolidated_payments.py"),
+}
+
+APPROVED_CONSOLIDATED_RETURN_EVIDENCE_WRITERS = {
+    Path("app/services/billing/consolidated_payments.py")
+}
 
 APPROVED_PAYMENT_IMPORT_BATCH_REVERSAL_WRITERS = {
     Path("app/services/financial_import_batch_reversals.py")
@@ -418,6 +429,12 @@ def test_only_the_payment_owner_writes_refunds_reversals_and_payment_status() ->
         lambda path: _constructor_lines(path, "PaymentReversal"),
         APPROVED_PAYMENT_REVERSAL_WRITERS,
     )
+    consolidated_evidence = _violations(
+        lambda path: _constructor_lines(
+            path, "ConsolidatedPaymentReturnAllocationEvidence"
+        ),
+        APPROVED_CONSOLIDATED_RETURN_EVIDENCE_WRITERS,
+    )
     transitions = _violations(
         lambda path: _enum_status_write_lines(path, "PaymentStatus"),
         APPROVED_PAYMENT_LIFECYCLE_WRITERS,
@@ -427,6 +444,10 @@ def test_only_the_payment_owner_writes_refunds_reversals_and_payment_status() ->
     )
     assert not reversals, (
         "PaymentReversal constructed outside its owner:\n  " + "\n  ".join(reversals)
+    )
+    assert not consolidated_evidence, (
+        "Consolidated return evidence constructed outside its owner:\n  "
+        + "\n  ".join(consolidated_evidence)
     )
     assert not transitions, (
         "Payment status transitioned outside its owner:\n  " + "\n  ".join(transitions)
