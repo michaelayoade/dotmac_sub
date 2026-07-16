@@ -1,0 +1,104 @@
+name: E2E (Playwright)
+
+# The browser suite in tests/playwright/ — 17 specs that previously never ran
+# in CI. Boots the real image against PostGIS+Redis (same recipe as the
+# Docker Build & Health Check job), seeds RBAC + an admin, and drives the app
+# over HTTP. Nightly + on demand; not a PR gate (the integration-test job's
+# module flows are the per-PR gate).
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  playwright:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: dotmac-sub:e2e
+          cache-from: type=gha
+
+      - name: Create network + services
+        run: |
+          docker network create e2e-net
+          docker run -d --name e2e-db --network e2e-net \
+            -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=dotmac_sub_e2e \
+            --health-cmd "pg_isready -U postgres" --health-interval 5s \
+            --health-retries 10 postgis/postgis:16-3.4
+          docker run -d --name e2e-redis --network e2e-net redis:7
+          for i in $(seq 1 30); do
+            docker exec e2e-db pg_isready -U postgres >/dev/null 2>&1 && break
+            sleep 2
+          done
+
+      - name: Migrate + seed
+        run: |
+          COMMON="--network e2e-net \
+            -e DATABASE_URL=postgresql+psycopg://postgres:postgres@e2e-db:5432/dotmac_sub_e2e \
+            -e SECRET_KEY=e2e-test-secret-key-not-for-production \
+            -e REDIS_URL=redis://e2e-redis:6379/0"
+          docker run --rm $COMMON dotmac-sub:e2e alembic upgrade head
+          docker run --rm $COMMON dotmac-sub:e2e python -m scripts.seed.seed_rbac
+          docker run --rm $COMMON dotmac-sub:e2e python -m scripts.seed.seed_admin \
+            --email e2e.admin@example.com --first-name E2E --last-name Admin \
+            --username e2e.admin@example.com --password "E2eAdminPass123!"
+
+      - name: Start application
+        run: |
+          docker run -d --name e2e-app --network e2e-net -p 8001:8001 \
+            -e DATABASE_URL=postgresql+psycopg://postgres:postgres@e2e-db:5432/dotmac_sub_e2e \
+            -e SECRET_KEY=e2e-test-secret-key-not-for-production \
+            -e REDIS_URL=redis://e2e-redis:6379/0 \
+            -e CELERY_BROKER_URL=redis://e2e-redis:6379/0 \
+            dotmac-sub:e2e
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:8001/health >/dev/null 2>&1 && exit 0
+            STATUS=$(docker inspect --format='{{.State.Status}}' e2e-app)
+            [ "$STATUS" = "exited" ] && { docker logs e2e-app; exit 1; }
+            sleep 3
+          done
+          echo "app never became healthy"; docker logs e2e-app; exit 1
+
+      - name: Install Python + Poetry
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies + browsers
+        run: |
+          pipx install poetry
+          poetry install --no-interaction
+          poetry run playwright install chromium --with-deps
+
+      - name: Run Playwright suite
+        env:
+          PLAYWRIGHT_BASE_URL: "http://localhost:8001"
+          E2E_ADMIN_USERNAME: "e2e.admin@example.com"
+          E2E_ADMIN_PASSWORD: "E2eAdminPass123!"
+        run: poetry run pytest tests/playwright/ -v --tb=short -o "addopts="
+
+      - name: App logs on failure
+        if: failure()
+        run: docker logs e2e-app --tail 200
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f e2e-app e2e-db e2e-redis 2>/dev/null || true
+          docker network rm e2e-net 2>/dev/null || true

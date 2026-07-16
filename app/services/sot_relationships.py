@@ -1301,6 +1301,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "communications.notification_service",
                 ),
             ),
+            SOTService(
+                name="communications.team_inbox_campaigns",
+                module="app.services.team_inbox_campaigns",
+                owns=(
+                    "campaign-sourced inbox conversation materialization",
+                    "campaign outbound inbox message rows",
+                ),
+                depends_on=("communications.team_inbox",),
+                notes=(
+                    "Campaigns decide audience, sequence, and content; inbox "
+                    "rows stay inside the team-inbox family. comms_campaigns "
+                    "requests materialization here instead of writing inbox "
+                    "ORM rows itself."
+                ),
+            ),
         ),
         entrypoints=(
             "app.services.events.handlers.notification",

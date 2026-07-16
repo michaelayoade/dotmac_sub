@@ -33,15 +33,10 @@ from app.models.notification import (
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
     InboxConversation,
-    InboxConversationStatus,
-    InboxConversationTeam,
-    InboxMessage,
-    InboxMessageDirection,
-    InboxTeamRole,
-    InboxTeamSource,
 )
 from app.services import (
     communication_eligibility,
+    team_inbox_campaigns,
     team_inbox_routing,
     team_outbound,
 )
@@ -689,48 +684,20 @@ def _conversation_for_recipient(
     recipient: CampaignRecipient,
     now: datetime,
 ) -> InboxConversation:
-    external_thread_id = f"campaign:{campaign.id}:{recipient.subscriber_id}"
-    conversation = (
-        db.query(InboxConversation)
-        .filter(InboxConversation.channel_type == campaign.channel)
-        .filter(InboxConversation.external_thread_id == external_thread_id)
-        .one_or_none()
-    )
-    if conversation is not None:
-        if conversation.status == InboxConversationStatus.resolved.value:
-            conversation.status = InboxConversationStatus.open.value
-        return conversation
-
-    conversation = InboxConversation(
+    """Request the campaign conversation from the inbox owner family —
+    campaigns decide audience/content; the inbox owns its rows
+    (test_team_inbox_boundaries)."""
+    return team_inbox_campaigns.ensure_campaign_conversation(
+        db,
         subscriber_id=recipient.subscriber_id,
-        primary_service_team_id=campaign.service_team_id,
         channel_type=campaign.channel,
-        status=InboxConversationStatus.open.value,
+        campaign_id=campaign.id,
+        campaign_recipient_id=recipient.id,
         subject=campaign.subject or campaign.name,
         contact_address=recipient.address,
-        external_thread_id=external_thread_id,
-        first_message_at=now,
-        last_message_at=now,
-        metadata_={
-            "source": "native_campaign",
-            "campaign_id": str(campaign.id),
-            "campaign_recipient_id": str(recipient.id),
-        },
+        service_team_id=campaign.service_team_id,
+        now=now,
     )
-    db.add(conversation)
-    db.flush()
-    if campaign.service_team_id is not None:
-        db.add(
-            InboxConversationTeam(
-                conversation_id=conversation.id,
-                service_team_id=campaign.service_team_id,
-                role=InboxTeamRole.owner.value,
-                source=InboxTeamSource.manual.value,
-                metadata_={"source": "native_campaign"},
-            )
-        )
-    db.flush()
-    return conversation
 
 
 def _new_unsubscribe_token() -> str:
@@ -1021,21 +988,17 @@ def send_campaign_batch(
                 db, campaign=campaign, recipient=recipient, now=current_time
             )
             recipient.conversation_id = conversation.id
-            message = InboxMessage(
-                conversation_id=conversation.id,
-                notification_id=notification.id,
+            message = team_inbox_campaigns.record_campaign_message(
+                db,
+                conversation=conversation,
                 channel_type=campaign.channel,
-                direction=InboxMessageDirection.outbound.value,
+                notification_id=notification.id,
                 subject=rendered.subject,
                 body=rendered.body_html or rendered.body_text,
-                external_thread_id=conversation.external_thread_id,
                 from_address=rendered.from_address,
-                to_addresses=[recipient.address],
-                cc_addresses=[],
-                metadata_={**rendered.metadata, "delivery_status": "queued"},
+                to_address=recipient.address,
+                metadata=rendered.metadata,
             )
-            db.add(message)
-            db.flush()
             recipient.notification_id = notification.id
             recipient.message_id = message.id
             recipient.status = CampaignRecipientStatus.queued.value

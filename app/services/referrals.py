@@ -58,6 +58,7 @@ from app.services.customer_identity_normalization import (
     normalize_phone_identifier,
 )
 from app.services.customer_identity_resolution import resolve_customer_identity
+from app.services.subscriber import _default_reseller_id
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,10 @@ def _create_prospect_subscriber(
         phone=(phone or "").strip() or None,
         status=SubscriberStatus.new,
         party_status=PartyStatus.lead.value,
+        # subscribers.reseller_id is NOT NULL (migration 116); a referred
+        # prospect has no explicit reseller, so default to House like every
+        # other unowned customer (app.services.subscriber._default_reseller_id).
+        reseller_id=_default_reseller_id(db),
     )
     db.add(prospect)
     db.flush()
