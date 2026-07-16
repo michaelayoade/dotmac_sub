@@ -33,8 +33,12 @@ def _sub(db, subscriber, catalog_offer, status=SubscriptionStatus.active):
 
 
 def test_throttle_lifted_restores_original_profile(
-    db_session, subscriber, catalog_offer
+    db_session, subscriber, catalog_offer, monkeypatch
 ):
+    monkeypatch.setattr(
+        "app.services.radius_population.reconcile_usernames",
+        lambda *_args, **_kwargs: {"projection_targets": 1},
+    )
     full = RadiusProfile(name="full-speed", is_active=True)
     throttle = RadiusProfile(name="throttle", is_active=True)
     db_session.add_all([full, throttle])

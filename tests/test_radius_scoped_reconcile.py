@@ -12,6 +12,7 @@ Dry-run only: the psycopg write is never reached, so no radius DB is touched.
 
 from __future__ import annotations
 
+import sqlite3
 import uuid
 
 import pytest
@@ -37,8 +38,18 @@ from app.services.credential_crypto import (
 
 @pytest.fixture()
 def _radius_env(monkeypatch, db_session):
-    # populate() aborts without a DSN; dry-run never connects, so a dummy is safe.
-    monkeypatch.setattr(radius_population, "radius_dsn_libpq", lambda: "postgresql://x")
+    target = {
+        "target_name": "test",
+        "target_fingerprint": "test-target",
+    }
+    monkeypatch.setattr(
+        radius_population,
+        "active_external_radius_targets",
+        lambda _db, capability=None: [target],
+    )
+    monkeypatch.setattr(
+        radius_population, "assert_legacy_target_alignment", lambda _db: []
+    )
     monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     # The owner opens its own SessionLocal(); point it at the test session so the
     # fleet-wide projection reads the fixtures instead of the blocked real DB.
@@ -140,3 +151,117 @@ def test_empty_target_set_is_a_noop(_radius_env, db_session):
     _seed(db_session)
     stats = radius_population.reconcile_usernames(set(), dry_run=True)
     assert stats["radcheck_upserts"] == 0
+
+
+def test_scoped_reconcile_fans_out_to_every_configured_target(
+    monkeypatch, db_session, tmp_path
+):
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    a1, _a2, _b1 = _seed(db_session)
+    targets = []
+    for index in (1, 2):
+        path = tmp_path / f"radius-{index}.db"
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "CREATE TABLE radcheck "
+                "(username TEXT, attribute TEXT, op TEXT, value TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE radreply "
+                "(username TEXT, attribute TEXT, op TEXT, value TEXT)"
+            )
+            conn.execute(
+                "CREATE TABLE radusergroup "
+                "(username TEXT, groupname TEXT, priority INTEGER)"
+            )
+        targets.append(
+            {
+                "target_name": f"target-{index}",
+                "target_fingerprint": f"target-{index}",
+                "db_url": f"sqlite:///{path}",
+                "radcheck_table": "radcheck",
+                "radreply_table": "radreply",
+                "radusergroup_table": "radusergroup",
+                "nas_table": "nas",
+                "password_attribute": "Cleartext-Password",
+                "password_op": ":=",
+                "default_reply_op": ":=",
+                "use_group": False,
+                "group_priority": 0,
+            }
+        )
+    monkeypatch.setattr(
+        radius_population,
+        "active_external_radius_targets",
+        lambda _db, capability=None: targets,
+    )
+    monkeypatch.setattr(
+        radius_population, "assert_legacy_target_alignment", lambda _db: []
+    )
+
+    result = radius_population.reconcile_usernames(
+        {a1}, dry_run=False, source_db=db_session
+    )
+
+    assert result["projection_targets"] == 2
+    assert all(outcome["ok"] for outcome in result["target_outcomes"])
+    for target in targets:
+        path = target["db_url"].removeprefix("sqlite:///")
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("SELECT username FROM radcheck").fetchall() == [(a1,)]
+
+
+def test_partial_target_failure_is_reported_and_raises(
+    monkeypatch, db_session, tmp_path
+):
+    monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    a1, _a2, _b1 = _seed(db_session)
+    good = tmp_path / "good.db"
+    bad = tmp_path / "bad.db"
+    for path, complete in ((good, True), (bad, False)):
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "CREATE TABLE radcheck "
+                "(username TEXT, attribute TEXT, op TEXT, value TEXT)"
+            )
+            if complete:
+                conn.execute(
+                    "CREATE TABLE radreply "
+                    "(username TEXT, attribute TEXT, op TEXT, value TEXT)"
+                )
+                conn.execute(
+                    "CREATE TABLE radusergroup "
+                    "(username TEXT, groupname TEXT, priority INTEGER)"
+                )
+
+    def target(path, name):
+        return {
+            "target_name": name,
+            "target_fingerprint": name,
+            "db_url": f"sqlite:///{path}",
+            "radcheck_table": "radcheck",
+            "radreply_table": "radreply",
+            "radusergroup_table": "radusergroup",
+            "nas_table": "nas",
+            "password_attribute": "Cleartext-Password",
+            "password_op": ":=",
+            "default_reply_op": ":=",
+            "use_group": False,
+            "group_priority": 0,
+        }
+
+    targets = [target(good, "good"), target(bad, "bad")]
+    monkeypatch.setattr(
+        radius_population,
+        "active_external_radius_targets",
+        lambda _db, capability=None: targets,
+    )
+    monkeypatch.setattr(
+        radius_population, "assert_legacy_target_alignment", lambda _db: []
+    )
+
+    with pytest.raises(radius_population.RadiusProjectionIncomplete) as error:
+        radius_population.reconcile_usernames({a1}, dry_run=False, source_db=db_session)
+
+    assert [outcome["ok"] for outcome in error.value.outcomes] == [True, False]
+    assert error.value.outcomes[1]["error_type"] == "OperationalError"

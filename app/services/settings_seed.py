@@ -1097,6 +1097,43 @@ def seed_collections_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("PREPAID_BLOCKING_TIME", "08:00"),
     )
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_window_mode",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("ENFORCEMENT_WINDOW_MODE", "audit"),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_window_start",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("ENFORCEMENT_WINDOW_START", ""),
+    )
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_window_end",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("ENFORCEMENT_WINDOW_END", ""),
+    )
+    enforcement_skip_weekends = os.getenv("ENFORCEMENT_SKIP_WEEKENDS", "false")
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_skip_weekends",
+        value_type=SettingValueType.boolean,
+        value_text=enforcement_skip_weekends,
+        value_json=enforcement_skip_weekends.lower() in {"1", "true", "yes", "on"},
+    )
+    enforcement_skip_holidays_raw = os.getenv("ENFORCEMENT_SKIP_HOLIDAYS", "[]")
+    try:
+        enforcement_skip_holidays = json.loads(enforcement_skip_holidays_raw)
+    except json.JSONDecodeError:
+        enforcement_skip_holidays = []
+    collections_settings.ensure_by_key(
+        db,
+        key="enforcement_skip_holidays",
+        value_type=SettingValueType.json,
+        value_json=enforcement_skip_holidays,
+    )
     prepaid_skip_weekends_raw = os.getenv("PREPAID_SKIP_WEEKENDS", "false")
     collections_settings.ensure_by_key(
         db,
@@ -1295,6 +1332,26 @@ def seed_scheduler_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("CELERY_BEAT_REFRESH_MINUTES", "5"),
     )
+    event_dispatch_enabled = os.getenv("EVENT_DISPATCH_ENABLED", "true")
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=event_dispatch_enabled,
+        value_json=event_dispatch_enabled.lower() in {"1", "true", "yes", "on"},
+    )
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("EVENT_DISPATCH_INTERVAL_SECONDS", "60"),
+    )
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_batch_size",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("EVENT_DISPATCH_BATCH_SIZE", "100"),
+    )
     for key, env_name, default in [
         ("crm_ticket_pull_interval_minutes", "CRM_TICKET_PULL_INTERVAL_MINUTES", "5"),
         ("crm_cache_list_seconds", "CRM_CACHE_LIST_SECONDS", "60"),
@@ -1365,6 +1422,58 @@ def seed_radius_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("RADIUS_SUSPENDED_ADDRESS_LIST", "suspended"),
     )
+    group_routing_raw = os.getenv("RADIUS_GROUP_ROUTING_ENABLED", "false")
+    radius_settings.ensure_by_key(
+        db,
+        key="group_routing_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=group_routing_raw,
+        value_json=group_routing_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    for key, env_name, default in (
+        ("active_group_name", "RADIUS_ACTIVE_GROUP_NAME", "dotmac-active"),
+        (
+            "suspended_group_name",
+            "RADIUS_SUSPENDED_GROUP_NAME",
+            "dotmac-suspended",
+        ),
+        ("captive_group_name", "RADIUS_CAPTIVE_GROUP_NAME", "dotmac-captive"),
+    ):
+        radius_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.string,
+            value_text=os.getenv(env_name, default),
+        )
+    radius_settings.ensure_by_key(
+        db,
+        key="access_group_priority",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("RADIUS_ACCESS_GROUP_PRIORITY", "0"),
+    )
+    for key, env_name, default in (
+        (
+            "enforcement_reconciler_max_kicks",
+            "ENFORCEMENT_RECONCILER_MAX_KICKS",
+            "25",
+        ),
+        (
+            "enforcement_reconciler_unserviceable_grace_seconds",
+            "ENFORCEMENT_RECONCILER_UNSERVICEABLE_GRACE_SECONDS",
+            "1200",
+        ),
+        (
+            "enforcement_reconciler_ghost_stale_seconds",
+            "ENFORCEMENT_RECONCILER_GHOST_STALE_SECONDS",
+            "7200",
+        ),
+    ):
+        radius_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer,
+            value_text=os.getenv(env_name, default),
+        )
     refresh_raw = os.getenv("RADIUS_REFRESH_SESSIONS_ON_PROFILE_CHANGE", "true")
     radius_settings.ensure_by_key(
         db,

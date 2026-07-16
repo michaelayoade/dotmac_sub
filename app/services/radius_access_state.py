@@ -1,18 +1,17 @@
 """Derive and apply the RADIUS access state.
 
 ``derive_access_state`` — pure mapping (phase 2).
-``set_subscription_access_state`` — dual-write app DB ``access_state``
-+ external RADIUS ``radusergroup`` (phase 3, shadow).
+``set_subscription_access_state`` — write app DB ``access_state`` and expose
+the subscriber aggregate consumed by the external projection owner.
 
 See ``docs/radius_state_refactor/phase0_state_model.md``.
 """
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
-from sqlalchemy import Column, Integer, String, delete, insert, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -24,13 +23,6 @@ from app.models.catalog import (
 from app.models.enforcement_lock import AccessRestrictionMode
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
-from app.services.radius import (
-    _active_external_sync_configs,
-    _external_radius_table,
-    _get_external_engine,
-)
-
-logger = logging.getLogger(__name__)
 
 AccessStateWriteResult = dict[str, int | str | None]
 
@@ -100,17 +92,6 @@ if _UNCLASSIFIED:  # pragma: no cover - import-time invariant
     raise RuntimeError(
         f"Unclassified SubscriptionStatus in connectivity map: {_UNCLASSIFIED}"
     )
-
-
-# Map AccessState → external RADIUS group name. Terminated and None
-# both mean "no row in radusergroup", which causes auth to fail with
-# user-not-found at next attempt.
-_GROUP_FOR_STATE: dict[AccessState, str] = {
-    AccessState.active: "dotmac-active",
-    AccessState.suspended: "dotmac-suspended",
-    AccessState.captive: "dotmac-captive",
-    AccessState.terminated: "",  # sentinel — delete only, don't insert
-}
 
 
 def derive_access_state(
@@ -208,9 +189,7 @@ def set_subscription_access_state(
     subscription_id: str,
     state: AccessState | None,
 ) -> AccessStateWriteResult:
-    """Set ``subscription.access_state`` to ``state`` and mirror the
-    SUBSCRIBER's aggregate state to external RADIUS ``radusergroup``.
-    Idempotent.
+    """Set ``subscription.access_state`` and derive the subscriber aggregate.
 
     Two writes happen:
 
@@ -218,20 +197,9 @@ def set_subscription_access_state(
          Reflects what this single subscription thinks its state should
          be. Used for observability/debugging.
 
-      2. ``radusergroup`` row for every credential of the SUBSCRIBER
-         is set to the group of the subscriber-aggregate state (see
-         ``derive_subscriber_access_state``). Reflects the user's
-         effective auth state, because credentials are per-subscriber
-         and a subscriber with multiple subs in different states must
-         get the most-permissive state's group (active > captive >
-         suspended > terminated).
-
-    The radusergroup write is the SHADOW path during phases 3-7 — the
-    legacy block path still runs in parallel. Callers typically wrap
-    this in a feature-flag check.
-
-    The DELETE is scoped to ``groupname LIKE 'dotmac-%'`` so any
-    operator-managed groups outside this namespace are preserved.
+      2. The subscriber aggregate is returned to callers for observability.
+         ``radius_population`` derives and projects the configured access group
+         after the source transaction is durable.
 
     Returns counts for observability:
       {"credentials": n, "external_rows_written": n,
@@ -252,7 +220,9 @@ def set_subscription_access_state(
         sub.access_state = new_value
         db.flush()
 
-    # 2. Subscriber-aggregate radusergroup write
+    # 2. Subscriber aggregate is returned for observability. External group
+    # projection is owned by radius_population and is requested by the caller
+    # after the source-state transaction is durable.
     aggregate_state = derive_subscriber_access_state(db, sub.subscriber_id)
 
     credentials = list(
@@ -270,59 +240,9 @@ def set_subscription_access_state(
             "aggregate_state": aggregate_state.value if aggregate_state else None,
         }
 
-    target_group: str | None = None
-    if aggregate_state is not None and aggregate_state != AccessState.terminated:
-        target_group = _GROUP_FOR_STATE[aggregate_state]
-
-    external_configs = _active_external_sync_configs(db)
-    if not external_configs:
-        return {
-            "credentials": len(credentials),
-            "external_rows_written": 0,
-            "external_rows_deleted": 0,
-            "aggregate_state": aggregate_state.value if aggregate_state else None,
-        }
-
-    rows_written = 0
-    rows_deleted = 0
-    for config in external_configs:
-        radusergroup = config.get("radusergroup_table", "radusergroup")
-        try:
-            engine = _get_external_engine(config["db_url"])
-            radusergroup_table = _external_radius_table(
-                radusergroup,
-                Column("username", String),
-                Column("groupname", String),
-                Column("priority", Integer),
-            )
-            with engine.begin() as conn:
-                for credential in credentials:
-                    result = conn.execute(
-                        delete(radusergroup_table).where(
-                            radusergroup_table.c.username == credential.username,
-                            radusergroup_table.c.groupname.like("dotmac-%"),
-                        )
-                    )
-                    rows_deleted += result.rowcount or 0
-                    if target_group:
-                        conn.execute(
-                            insert(radusergroup_table).values(
-                                username=credential.username,
-                                groupname=target_group,
-                                priority=0,
-                            )
-                        )
-                        rows_written += 1
-        except Exception:
-            logger.warning(
-                "shadow set_subscription_access_state failed for sub=%s",
-                subscription_id,
-                exc_info=True,
-            )
-
     return {
         "credentials": len(credentials),
-        "external_rows_written": rows_written,
-        "external_rows_deleted": rows_deleted,
+        "external_rows_written": 0,
+        "external_rows_deleted": 0,
         "aggregate_state": aggregate_state.value if aggregate_state else None,
     }

@@ -37,6 +37,11 @@ from app.services import backup_alerts as backup_alerts_service
 from app.services import ping as ping_service
 from app.services import web_admin as web_admin_service
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
 from app.services.nas._helpers import (
     RADIUS_REQUIRED_CONNECTION_TYPES,
     TEMPLATE_AUDIT_EXCLUDE_FIELDS,
@@ -809,6 +814,65 @@ def sync_all_monitoring_redirect_url(db: Session) -> str:
         return f"/admin/nas?error={quote_plus(str(exc))}"
 
 
+# UI page contract for the admin NAS dashboard list. The projection-boundary
+# owner: it declares searchable/filterable/sortable fields, default order and
+# page sizes. vendor/nas_type/status/pop_site_id/search are SQL-filterable;
+# partner_org_id (tag match) and olt_status (ping cache) are post-query filters
+# applied in memory. Only name is sortable (the read owner's ordering).
+NAS_LIST_DEFINITION = ListDefinition(
+    key="nas_devices",
+    fields=(
+        ListFieldDefinition("search", "Search", searchable=True),
+        ListFieldDefinition("vendor", "Vendor", filterable=True),
+        ListFieldDefinition("nas_type", "Type", filterable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("pop_site_id", "POP site", filterable=True),
+        ListFieldDefinition("partner_org_id", "Partner", filterable=True),
+        ListFieldDefinition("olt_status", "Reachability", filterable=True),
+        ListFieldDefinition("name", "Name", sortable=True),
+    ),
+    default_sort="name",
+    default_sort_dir="asc",
+    default_per_page=25,
+)
+
+
+def build_nas_list_query(
+    *,
+    vendor: str | None = None,
+    nas_type: str | None = None,
+    status: str | None = None,
+    pop_site_id: str | None = None,
+    partner_org_id: str | None = None,
+    olt_status: str | None = None,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise loose NAS-dashboard request params through the page contract.
+
+    Drops blank filters and rejects unsupported sort fields / page sizes, so the
+    read owner receives an already-validated query.
+    """
+    return NAS_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "vendor": vendor,
+            "nas_type": nas_type,
+            "status": status,
+            "pop_site_id": pop_site_id,
+            "partner_org_id": partner_org_id,
+            "olt_status": olt_status,
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
 def build_nas_dashboard_data(
     db: Session,
     *,
@@ -822,8 +886,16 @@ def build_nas_dashboard_data(
     refresh: str | None,
     page: int,
     limit: int = 25,
+    sort_dir: str = "asc",
 ) -> dict[str, Any]:
-    """Build NAS dashboard page datasets, filters, and pagination."""
+    """Build NAS dashboard page datasets, filters, and pagination.
+
+    Read owner for the NAS list. When no post-query filter (partner_org_id tag /
+    olt_status ping) is active the page is paginated purely in SQL via
+    NasDevices.list/count, so devices past the old 1000-row scan are no longer
+    dropped. When a post-query filter is active the read scans a bounded set,
+    filters in memory, and paginates in memory (logging if the bound is hit).
+    """
     from app.services.nas.devices import NasDevices
 
     vendor_filter_value = nas_type or vendor
@@ -837,45 +909,82 @@ def build_nas_dashboard_data(
         except ValueError:
             pop_site_uuid = None
 
-    devices_all = NasDevices.list(
-        db=db,
-        limit=1000,
-        offset=0,
-        order_by="name",
-        order_dir="asc",
-        vendor=vendor_filter,
-        status=status_filter,
-        pop_site_id=pop_site_uuid,
-        search=search_filter,
-    )
-    if partner_org_id:
-        devices_all = [
-            device
-            for device in devices_all
-            if f"partner_org:{partner_org_id}"
-            in [str(tag) for tag in (device.tags or [])]
-        ]
-
-    ping_statuses_all = {
-        str(device.id): get_cached_ping_status(device) for device in devices_all
-    }
-    if olt_status == "online":
-        devices_all = [
-            d
-            for d in devices_all
-            if ping_statuses_all.get(str(d.id), {}).get("state") == "reachable"
-        ]
-    elif olt_status == "offline":
-        devices_all = [
-            d
-            for d in devices_all
-            if ping_statuses_all.get(str(d.id), {}).get("state") != "reachable"
-        ]
-
-    total = len(devices_all)
     offset = (page - 1) * limit
-    devices = devices_all[offset : offset + limit]
-    total_pages = (total + limit - 1) // limit
+    has_post_query_filter = bool(partner_org_id) or olt_status in {"online", "offline"}
+
+    if not has_post_query_filter:
+        # Common path: partner/olt filters inactive, so every filter is
+        # SQL-expressible. Paginate and count in the database — no in-memory cap.
+        total = NasDevices.count(
+            db=db,
+            vendor=vendor_filter,
+            status=status_filter,
+            pop_site_id=pop_site_uuid,
+            search=search_filter,
+        )
+        devices = NasDevices.list(
+            db=db,
+            limit=limit,
+            offset=offset,
+            order_by="name",
+            order_dir=sort_dir,
+            vendor=vendor_filter,
+            status=status_filter,
+            pop_site_id=pop_site_uuid,
+            search=search_filter,
+        )
+        ping_statuses_all = {
+            str(device.id): get_cached_ping_status(device) for device in devices
+        }
+    else:
+        # partner_org_id (tag match) and olt_status (ping cache) are post-query
+        # filters, so the full filtered set must be materialised and paginated in
+        # memory. Bound the scan and log if the bound is hit rather than silently
+        # truncating.
+        post_query_scan_limit = 5000
+        scanned = NasDevices.list(
+            db=db,
+            limit=post_query_scan_limit,
+            offset=0,
+            order_by="name",
+            order_dir=sort_dir,
+            vendor=vendor_filter,
+            status=status_filter,
+            pop_site_id=pop_site_uuid,
+            search=search_filter,
+        )
+        if len(scanned) >= post_query_scan_limit:
+            logger.warning(
+                "NAS post-query filter scan hit the %d-row bound; "
+                "partner/reachability results may be truncated",
+                post_query_scan_limit,
+            )
+        if partner_org_id:
+            scanned = [
+                device
+                for device in scanned
+                if f"partner_org:{partner_org_id}"
+                in [str(tag) for tag in (device.tags or [])]
+            ]
+        ping_statuses_all = {
+            str(device.id): get_cached_ping_status(device) for device in scanned
+        }
+        if olt_status == "online":
+            scanned = [
+                d
+                for d in scanned
+                if ping_statuses_all.get(str(d.id), {}).get("state") == "reachable"
+            ]
+        elif olt_status == "offline":
+            scanned = [
+                d
+                for d in scanned
+                if ping_statuses_all.get(str(d.id), {}).get("state") != "reachable"
+            ]
+        total = len(scanned)
+        devices = scanned[offset : offset + limit]
+
+    total_pages = (total + limit - 1) // limit if total > 0 else 1
 
     linked_by_nas = _resolve_linked_monitoring_devices(db, devices)
     runtime_statuses: dict[str, str] = {}

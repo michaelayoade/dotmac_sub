@@ -13,6 +13,7 @@ from app.services.billing_communication_policy import billing_communication_deci
 from app.services.billing_profile import (
     BillingProfile,
     plan_billing_mode_transition,
+    plan_subscription_billing_mode_write,
 )
 from app.services.customer_reporting_policy import active_customer_subscription_count
 from app.services.radius_projection_planner import plan_radius_projection
@@ -81,6 +82,28 @@ def test_billing_mode_transition_blocks_mixed_collectible_modes():
     assert decision.allowed is False
     assert decision.requires_subscription_alignment is True
     assert decision.reason == "mixed_collectible_subscription_billing_modes"
+
+
+def test_subscription_billing_mode_write_rejects_account_offer_drift():
+    decision = plan_subscription_billing_mode_write(
+        account_mode=BillingMode.prepaid,
+        offer_mode=BillingMode.postpaid,
+        requested_mode=None,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "account_offer_billing_mode_mismatch"
+
+
+def test_subscription_billing_mode_write_rejects_explicit_override():
+    decision = plan_subscription_billing_mode_write(
+        account_mode=BillingMode.prepaid,
+        offer_mode=BillingMode.prepaid,
+        requested_mode=BillingMode.postpaid,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "requested_billing_mode_mismatch"
 
 
 def test_subscription_lifecycle_status_sets_are_named_by_workflow():

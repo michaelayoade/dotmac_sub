@@ -275,6 +275,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Beat-rerun self-heals; all-active cohort filter is the guard.",
     ),
     "app.tasks.events.cleanup_old_events": _c("events", SWEEP, IDEMP, LOG),
+    "app.tasks.events.dispatch_pending_events": _c(
+        "events",
+        SWEEP,
+        PER_ITEM,
+        STATUS,
+        "Beat-rerun drains committed outbox rows; per-event row state gates "
+        "delivery and records item-level failures.",
+    ),
     "app.tasks.events.mark_stale_processing_events": _c("events", SWEEP, IDEMP, STATUS),
     "app.tasks.events.retry_failed_events": _c("events", STATE, STATEFUL, STATUS),
     "app.tasks.exports.run_export_job": _c("exports", MANUAL, GUARDED, STATUS),

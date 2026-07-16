@@ -119,6 +119,14 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "customer.financial_position",
         "financial.grace_policy",
     )
+    assert sot_relationships.dependencies_for("customer.profile_commands") == (
+        "customer.identity_scope",
+    )
+    business_conversion = sot_relationships.owning_service_for(
+        "person-to-business customer conversion"
+    )
+    assert business_conversion is not None
+    assert business_conversion.name == "customer.profile_commands"
     assert sot_relationships.dependencies_for("customer.usage_summary") == (
         "sessions.radius_reconciliation",
     )
@@ -281,6 +289,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("access.radius_projection") == (
         "access.radius_state",
         "access.radius_reject",
+        "access.radius_target_registry",
     )
     assert sot_relationships.dependencies_for("communications.intents") == (
         "communications.channel_policy",

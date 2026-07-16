@@ -258,7 +258,7 @@ def test_nas_index_renders_status_cards_with_non_active_buckets(
         },
     )
 
-    response = nas_web.nas_index(request=request, db=db_session)
+    response = nas_web.nas_index(request=request, db=db_session, page=1)
 
     assert response.status_code == 200
     body = response.body.decode()

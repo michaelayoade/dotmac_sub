@@ -75,11 +75,14 @@ def _patch_jose_datetime(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _disable_bundled_external_radius(monkeypatch):
-    """Do not let unit tests fall back to the deployment FreeRADIUS database."""
+def _disable_bundled_external_radius(monkeypatch, request):
+    """Do not let unit tests read the deployment's legacy bootstrap DSN."""
+    if request.node.path.name == "test_radius_dsn.py":
+        return
+
     from app.services import radius as radius_service
 
-    monkeypatch.setattr(radius_service, "_bundled_external_db_config", lambda: None)
+    monkeypatch.setattr(radius_service.radius_dsn, "resolve_radius_dsn", lambda: None)
 
 
 # Register UUID adapter for SQLite - store as string

@@ -858,20 +858,26 @@ Tax-accounting migration record:
 network summary composition.
 2. Customer network context owns the raw customer-to-network footprint.
 3. Network access path owns the customer service path.
-4. `customer.service_status` owns customer-visible service health and action
+4. `customer.profile_commands` owns admin customer profile edits and explicit
+   person-to-business customer conversion. Normal person edit submission must
+   not mutate account type; conversion is a dedicated command with its own
+   validation and audit trail.
+5. `customer.service_status` owns customer-visible service health and action
    hints, including whether payment can restore every active service hold and
    the authoritative amount required by financial policy.
-5. `customer.usage_summary` owns customer usage windows, headline totals, and
+6. `customer.usage_summary` owns customer usage windows, headline totals, and
    total provenance. An authoritative zero is a valid value, not a missing-data
    sentinel.
 
 Rule: admin, portal, support, and reporting views should consume context
-services instead of rebuilding customer joins. Customer clients must not infer
-that `blocked` or `suspended` means payment-restorable, or calculate restoration
-amounts from locally loaded invoice rows; they consume `/me/service-status`.
-Customer clients consume `/me/usage-summary` totals and provenance; they do not
-replace a server total with a loaded-session page, chart-series sum, or a
-different time window.
+services instead of rebuilding customer joins. Admin routes submit explicit
+profile commands; they do not expose a generic category dropdown that can
+silently move an individual into business workflows. Customer clients must not
+infer that `blocked` or `suspended` means payment-restorable, or calculate
+restoration amounts from locally loaded invoice rows; they consume
+`/me/service-status`. Customer clients consume `/me/usage-summary` totals and
+provenance; they do not replace a server total with a loaded-session page,
+chart-series sum, or a different time window.
 
 ## Support Operations
 
@@ -1665,21 +1671,33 @@ Network access:
    explicit eligible residential opt-in and network readiness.
 4. `access.radius_state`: maps the effective tier to RADIUS groups/profiles.
 5. `access.radius_reject`: owns reject IP lifecycle.
-6. `access.radius_projection`: is the single idempotent writer that projects
-   desired access and reject state into `radcheck`/`radreply` (and the
-   `radcheck_admin`/`radreply_admin` device-login tables), under a Postgres
-   advisory lock on one shared RADIUS DSN. Blocked/suspended users get a
-   walled-garden `radreply` rather than row deletion, so suspension takes effect
-   at the BNG without losing the captive pay-page treatment.
-7. `access.session_enforcement`: applies CoA/disconnect outcomes.
+6. `access.radius_target_registry`: owns external RADIUS database target
+   selection, per-target capabilities and schema names, environment bootstrap,
+   and cutover-shadow verification. Active `RadiusSyncJob` + encrypted
+   `ConnectorConfig` rows are the runtime authority; the environment DSN is
+   bootstrap and verification input only, never a runtime fallback.
+7. `access.radius_projection`: is the single idempotent writer that projects
+   desired access and reject state into `radcheck`/`radreply`/`radusergroup`
+   (and the `radcheck_admin`/`radreply_admin` device-login tables), under a
+   per-target Postgres advisory lock across every target selected by
+   `access.radius_target_registry`. Blocked/suspended users get a walled-garden
+   `radreply` rather than row deletion, so suspension takes effect at the BNG
+   without losing the captive pay-page treatment.
+8. `access.session_enforcement`: applies CoA/disconnect outcomes.
 
 Rule: billing, FUP, and admin actions resolve the desired access outcome once,
 map it to RADIUS state once, and let enforcement apply the network-side change.
-No module outside `access.radius_projection` writes `radcheck`/`radreply`;
+No module outside `access.radius_projection` writes `radcheck`, `radreply`, or
+`radusergroup`;
 event-time and per-user callers request a projection (full sweep or a scoped
-reconcile) or enqueue `refresh_radius_from_subs`. The remaining scoped writers in
-`radius.py` and `enforcement.py` are a shrink-only migration to that owner,
-pinned by `tests/architecture/test_radius_projection_ownership.py`.
+reconcile) or enqueue `refresh_radius_from_subs`. Target failures are reported
+per target and suppress downstream CoA. The closed boundary is pinned by
+`tests/architecture/test_radius_projection_ownership.py`.
+
+RADIUS schema names and target capabilities are configuration owned by each
+`ConnectorConfig`; access-group names, priorities, address-list names, and
+enforcement reconciler thresholds are database settings. Code defaults are
+bootstrap values only, not parallel runtime policy.
 
 Service intent:
 

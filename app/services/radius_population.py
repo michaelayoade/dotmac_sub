@@ -17,11 +17,11 @@ from __future__ import annotations
 
 import logging
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import cast
 
 import psycopg
-from sqlalchemy import select
+from sqlalchemy import Boolean, Column, Integer, String, delete, insert, select, text
 from sqlalchemy.orm import joinedload
 
 from app.db import SessionLocal
@@ -36,11 +36,16 @@ from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
 )
+from app.services.external_radius_targets import (
+    active_external_radius_targets,
+    assert_legacy_target_alignment,
+    external_radius_table,
+    get_external_engine,
+)
 from app.services.radius_address_lists import (
     DEFAULT_SUSPENDED_ADDRESS_LIST,
     suspended_address_list,
 )
-from app.services.radius_dsn import radius_dsn_libpq
 from app.services.radius_projection_planner import plan_radius_projection
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -48,6 +53,18 @@ logger = logging.getLogger(__name__)
 
 ACCT_INTERIM_SECONDS = 300  # 5 min Acct-Interim-Update cadence
 SUSPENDED_ADDRESS_LIST = DEFAULT_SUSPENDED_ADDRESS_LIST
+
+
+def _result_count(result: Mapping[str, object], key: str) -> int:
+    """Read an integer counter from a structured projection result."""
+    value = result.get(key, 0)
+    return value if isinstance(value, int) else 0
+
+
+def _increment_result_count(
+    result: dict[str, object], key: str, amount: int = 1
+) -> None:
+    result[key] = _result_count(result, key) + amount
 
 
 def _captive_redirect_allowed(subscriber: object | None) -> bool:
@@ -189,58 +206,154 @@ def _radreply_attrs(
     return attrs
 
 
-def _write_radius_projection(cur, work, delete_usernames) -> None:
-    """Idempotent radcheck/radreply write for a bounded set of usernames.
+class RadiusProjectionIncomplete(RuntimeError):
+    """At least one target failed; callers must not issue customer CoA."""
 
-    The single reusable write primitive of `access.radius_projection`. Deletes
-    `delete_usernames` from radcheck/radreply, then reinserts rows from `work`:
-    non-rejected users authenticate with their Cleartext-Password (active
-    normally, opted-in-blocked into the captive walled-garden via radreply);
-    hard-rejected users get a single `Auth-Type := Reject` row so FreeRADIUS
-    refuses them — no password, fully offline — and no radreply (they never
-    authenticate).
+    def __init__(self, outcomes: list[dict[str, object]]) -> None:
+        self.outcomes = outcomes
+        failed = [str(item["target_name"]) for item in outcomes if not item["ok"]]
+        super().__init__(
+            "External RADIUS projection incomplete for target(s): " + ", ".join(failed)
+        )
 
-    `delete_usernames` is passed explicitly (rather than derived from `work`) so
-    a scoped reconcile can remove a now-inactive username that has no `work` row.
-    For the full sweep it is exactly the `work` usernames. `work` items are the
-    ``(login, cleartext, attrs, blocked, status, mode)`` tuples built by the
-    projection loop.
-    """
-    delete_list = list(delete_usernames)
-    cur.execute("DELETE FROM radcheck WHERE username = ANY(%s)", (delete_list,))
-    password_rows = [(w[0], w[1]) for w in work if w[5] != "reject"]
-    reject_rows = [(w[0],) for w in work if w[5] == "reject"]
-    if password_rows:
-        cur.executemany(
-            "INSERT INTO radcheck (username, attribute, op, value) "
-            "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-            password_rows,
-        )
-    if reject_rows:
-        cur.executemany(
-            "INSERT INTO radcheck (username, attribute, op, value) "
-            "VALUES (%s, 'Auth-Type', ':=', 'Reject')",
-            reject_rows,
-        )
-    cur.execute("DELETE FROM radreply WHERE username = ANY(%s)", (delete_list,))
-    cur.executemany(
-        "INSERT INTO radreply (username, attribute, op, value) VALUES (%s, %s, %s, %s)",
-        [(w[0], a, o, v) for w in work if w[5] != "reject" for (a, o, v) in w[2]],
+
+def _projection_tables(config: dict):
+    radcheck = external_radius_table(
+        config["radcheck_table"],
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
     )
+    radreply = external_radius_table(
+        config["radreply_table"],
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
+    )
+    radusergroup = external_radius_table(
+        config["radusergroup_table"],
+        Column("username", String),
+        Column("groupname", String),
+        Column("priority", Integer),
+    )
+    return radcheck, radreply, radusergroup
+
+
+def _write_radius_projection(
+    conn,
+    config: dict,
+    work,
+    delete_usernames,
+    *,
+    access_groups: dict[str, str],
+    access_group_priority: int,
+    group_routing_enabled: bool,
+) -> dict[str, int]:
+    """Idempotently project auth, reply, and owned group rows to one target."""
+    if conn.dialect.name == "postgresql":
+        conn.execute(text("SELECT pg_advisory_xact_lock(3281601275)"))
+    radcheck, radreply, radusergroup = _projection_tables(config)
+    delete_list = sorted({str(name) for name in delete_usernames if name})
+    counts = {
+        "radcheck_written": 0,
+        "radreply_written": 0,
+        "radusergroup_written": 0,
+    }
+    if delete_list:
+        conn.execute(delete(radcheck).where(radcheck.c.username.in_(delete_list)))
+        conn.execute(delete(radreply).where(radreply.c.username.in_(delete_list)))
+        group_delete = delete(radusergroup).where(
+            radusergroup.c.username.in_(delete_list)
+        )
+        delete_group_rows = True
+        if not config["use_group"]:
+            owned_names = sorted({name for name in access_groups.values() if name})
+            if owned_names:
+                group_delete = group_delete.where(
+                    radusergroup.c.groupname.in_(owned_names)
+                )
+            else:
+                delete_group_rows = False
+        if delete_group_rows:
+            conn.execute(group_delete)
+
+    for item in work:
+        username, cleartext, attrs, _blocked, _status, mode, profile_group = item
+        if mode == "reject":
+            conn.execute(
+                insert(radcheck).values(
+                    username=username,
+                    attribute="Auth-Type",
+                    op=":=",
+                    value="Reject",
+                )
+            )
+            counts["radcheck_written"] += 1
+        else:
+            conn.execute(
+                insert(radcheck).values(
+                    username=username,
+                    attribute=config["password_attribute"],
+                    op=config["password_op"],
+                    value=cleartext,
+                )
+            )
+            counts["radcheck_written"] += 1
+            reply_rows = [
+                {
+                    "username": username,
+                    "attribute": attribute,
+                    "op": op or config["default_reply_op"],
+                    "value": value,
+                }
+                for attribute, op, value in attrs
+            ]
+            if reply_rows:
+                conn.execute(insert(radreply), reply_rows)
+                counts["radreply_written"] += len(reply_rows)
+
+        group_rows: list[dict[str, object]] = []
+        if config["use_group"] and profile_group and mode == "active":
+            group_rows.append(
+                {
+                    "username": username,
+                    "groupname": profile_group,
+                    "priority": config["group_priority"],
+                }
+            )
+        if group_routing_enabled:
+            access_key = (
+                "captive"
+                if mode == "captive"
+                else "suspended"
+                if mode == "reject"
+                else "active"
+            )
+            access_group = access_groups.get(access_key)
+            if access_group:
+                group_rows.append(
+                    {
+                        "username": username,
+                        "groupname": access_group,
+                        "priority": access_group_priority,
+                    }
+                )
+        if group_rows:
+            conn.execute(insert(radusergroup), group_rows)
+            counts["radusergroup_written"] += len(group_rows)
+    return counts
 
 
 def populate(
-    dry_run: bool = True, only_usernames: set[str] | None = None
-) -> dict[str, int]:
-    # Single authority (shared with radius.py's event-time sync) so both writers
-    # target the same radius DB and cannot split-brain. `only_usernames` narrows
-    # the WRITE set to a scoped reconcile (see reconcile_usernames); the
-    # projection is still computed fleet-wide so service-count/dedup are stable.
-    radius_dsn = radius_dsn_libpq()
-    if not radius_dsn:
-        raise RuntimeError("RADIUS database DSN not configured")
-
-    stats = {
+    dry_run: bool = True,
+    only_usernames: set[str] | None = None,
+    *,
+    source_db=None,
+) -> dict[str, object]:
+    """Project the authoritative subscriber state to every configured target."""
+    stats: dict[str, object] = {
         "subscriptions_considered": 0,
         "skipped_no_credential": 0,
         "skipped_no_password": 0,
@@ -252,8 +365,46 @@ def populate(
     }
 
     enc_key = get_encryption_key()
-    db = SessionLocal()
+    db = source_db or SessionLocal()
+    owns_db = source_db is None
     try:
+        projection_targets = active_external_radius_targets(db, capability="users")
+        if not projection_targets:
+            raise RuntimeError("No DB-configured external RADIUS user target")
+        alignment = assert_legacy_target_alignment(db)
+        stats["projection_targets"] = len(projection_targets)
+        stats["legacy_targets_verified"] = len(alignment)
+
+        from app.models.domain_settings import SettingDomain
+        from app.services import enforcement_event_policy, settings_spec
+
+        group_routing_enabled = enforcement_event_policy.group_routing_enabled(db)
+        access_groups = {
+            "active": str(
+                settings_spec.resolve_value(
+                    db, SettingDomain.radius, "active_group_name"
+                )
+                or "dotmac-active"
+            ),
+            "suspended": str(
+                settings_spec.resolve_value(
+                    db, SettingDomain.radius, "suspended_group_name"
+                )
+                or "dotmac-suspended"
+            ),
+            "captive": str(
+                settings_spec.resolve_value(
+                    db, SettingDomain.radius, "captive_group_name"
+                )
+                or "dotmac-captive"
+            ),
+        }
+        access_group_priority = int(
+            settings_spec.resolve_value(
+                db, SettingDomain.radius, "access_group_priority"
+            )
+            or 0
+        )
         suspended_list_name = suspended_address_list(db)
         from app.models.subscriber import Subscriber
 
@@ -391,27 +542,34 @@ def populate(
         # alive, then release it BEFORE the radius writes — holding the read
         # transaction through the write phase trips the app's 120s
         # idle-in-transaction timeout on large fleets.
-        by_login: dict[str, tuple[str, str, list, bool, SubscriptionStatus, str]] = {}
+        by_login: dict[
+            str,
+            tuple[str, str, list, bool, SubscriptionStatus, str, str | None],
+        ] = {}
+        preserve_usernames: set[str] = set()
         for sub in rows:
             login = cast(str | None, sub.login)
             if not login:
-                stats["skipped_no_credential"] += 1
+                _increment_result_count(stats, "skipped_no_credential")
                 continue
             cred = creds_by_username.get(login)
             if cred is None:
-                stats["skipped_no_credential"] += 1
+                _increment_result_count(stats, "skipped_no_credential")
                 continue
             if not cred.secret_hash:
-                stats["skipped_no_password"] += 1
+                _increment_result_count(stats, "skipped_no_password")
+                preserve_usernames.add(login)
                 continue
             try:
                 cleartext = decrypt_credential_with_key(cred.secret_hash, enc_key)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("decrypt failed for %s: %s", login, exc)
-                stats["skipped_decrypt_failed"] += 1
+                _increment_result_count(stats, "skipped_decrypt_failed")
+                preserve_usernames.add(login)
                 continue
             if not cleartext:
-                stats["skipped_no_password"] += 1
+                _increment_result_count(stats, "skipped_no_password")
+                preserve_usernames.add(login)
                 continue
 
             from app.models.enforcement_lock import AccessRestrictionMode
@@ -432,7 +590,7 @@ def populate(
                 getattr(sub.subscriber, "captive_redirect_enabled", False)
                 and not captive
             ):
-                stats["captive_ineligible_optins"] += 1
+                _increment_result_count(stats, "captive_ineligible_optins")
             projection = plan_radius_projection(
                 sub,
                 restriction_mode=(restriction.effective_mode if restriction else None),
@@ -494,11 +652,13 @@ def populate(
                 blocked_flag,
                 sub.status,
                 mode,
+                effective_profile.name if effective_profile else None,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
     finally:
-        db.close()
+        if owns_db:
+            db.close()
 
     work = list(by_login.values())
     # A scoped reconcile writes only the requested usernames. The projection is
@@ -510,78 +670,79 @@ def populate(
     if only_usernames is not None:
         work = [w for w in work if w[0] in only_usernames]
         stats["scoped_targets"] = len(only_usernames)
-    stats["radcheck_upserts"] = len(work)
-    stats["radreply_upserts"] = sum(len(w[2]) for w in work)
+    stats["radcheck_upserts"] = len(work) * len(projection_targets)
+    stats["radreply_upserts"] = sum(len(w[2]) for w in work) * len(projection_targets)
     stats["blocked_users_written"] = sum(1 for w in work if w[3])
     stats["captive_users_written"] = sum(1 for w in work if w[5] == "captive")
     stats["rejected_users_written"] = sum(1 for w in work if w[5] == "reject")
 
+    delete_usernames = (
+        (set(only_usernames or set()) - preserve_usernames)
+        if scoped
+        else {w[0] for w in work}
+    )
     if dry_run:
+        stats["target_outcomes"] = [
+            {
+                "target_name": target["target_name"],
+                "target_fingerprint": target["target_fingerprint"],
+                "ok": True,
+                "dry_run": True,
+            }
+            for target in projection_targets
+        ]
         logger.info("DRY RUN — no writes (orphan cleanup also skipped)")
         logger.info("done: %s", stats)
         return stats
 
-    rconn = psycopg.connect(radius_dsn)
-    rconn.autocommit = False
-    try:
-        with rconn.cursor() as cur:
-            if scoped:
-                # Delete exactly the requested usernames (removes a now-inactive
-                # one) and reinsert only those still present in `work`. No global
-                # orphan reap and no probe sync — a scoped call must not touch
-                # any other user's rows.
-                _write_radius_projection(cur, work, only_usernames)
-            else:
-                usernames = [w[0] for w in work]
-                _write_radius_projection(cur, work, usernames)
-
-                # --- orphan cleanup: drop radcheck/radreply rows whose ---
-                # username is not in the active+blocked set (e.g. subs that
-                # have since been cancelled/disabled). Keeps the radius DB lean
-                # and prevents stale auth surface from accumulating.
-                if active_usernames:
-                    from app.services.radius_probe import probe_username
-
-                    cur.execute("SELECT DISTINCT username FROM radcheck")
-                    radcheck_users = {r[0] for r in cur.fetchall()}
-                    # The synthetic health-probe credential is app-owned but not
-                    # a subscription — never reap it.
-                    protected = {probe_username()}
-                    orphans = list(radcheck_users - active_usernames - protected)
-                    if orphans:
-                        cur.execute(
-                            "DELETE FROM radcheck WHERE username = ANY(%s)", (orphans,)
+    outcomes: list[dict[str, object]] = []
+    for target in projection_targets:
+        outcome: dict[str, object] = {
+            "target_name": target["target_name"],
+            "target_fingerprint": target["target_fingerprint"],
+            "ok": False,
+        }
+        try:
+            engine = get_external_engine(str(target["db_url"]))
+            with engine.begin() as conn:
+                counts = _write_radius_projection(
+                    conn,
+                    target,
+                    work,
+                    delete_usernames,
+                    access_groups=access_groups,
+                    access_group_priority=access_group_priority,
+                    group_routing_enabled=group_routing_enabled,
+                )
+                if not scoped:
+                    counts.update(
+                        _reap_radius_orphans(
+                            conn,
+                            target,
+                            active_usernames,
+                            access_groups=access_groups,
                         )
-                        stats["radcheck_orphans_deleted"] = cur.rowcount
-                        cur.execute(
-                            "DELETE FROM radreply WHERE username = ANY(%s)", (orphans,)
-                        )
-                        stats["radreply_orphans_deleted"] = cur.rowcount
-                        logger.info(
-                            "orphan cleanup: %d radcheck + %d radreply rows",
-                            stats["radcheck_orphans_deleted"],
-                            stats["radreply_orphans_deleted"],
-                        )
-
-                # --- synthetic health-probe identity ---------------------------
-                # App-owned, not a subscription: ensure the probe user (radcheck)
-                # and client (nas) exist so the RADIUS auth probe can
-                # authenticate. Idempotent, only when configured; protected from
-                # orphan cleanup.
-                stats["probe_identity_synced"] = _ensure_probe_identity(cur)
-
-        rconn.commit()
-        logger.info("committed RADIUS DB writes")
-    finally:
-        rconn.close()
+                    )
+                    counts["probe_identity_synced"] = _ensure_probe_identity(
+                        conn, target
+                    )
+            outcome.update(counts)
+            outcome["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            # Do not include exception text: DB errors can echo secret binds.
+            outcome["error_type"] = type(exc).__name__
+        outcomes.append(outcome)
+    stats["target_outcomes"] = outcomes
+    if any(not outcome["ok"] for outcome in outcomes):
+        raise RadiusProjectionIncomplete(outcomes)
 
     logger.info("done: %s", stats)
     return stats
 
 
 def reconcile_usernames(
-    usernames: Iterable[str], dry_run: bool = True
-) -> dict[str, int]:
+    usernames: Iterable[str], dry_run: bool = True, *, source_db=None
+) -> dict[str, object]:
     """Scoped `access.radius_projection` reconcile for a bounded username set.
 
     Computes the same fleet-wide projection as the full sweep — so the
@@ -598,10 +759,165 @@ def reconcile_usernames(
     targets = {u for u in usernames if u}
     if not targets:
         return {"scoped_targets": 0, "radcheck_upserts": 0, "radreply_upserts": 0}
-    return populate(dry_run=dry_run, only_usernames=targets)
+    return populate(dry_run=dry_run, only_usernames=targets, source_db=source_db)
 
 
-def _ensure_probe_identity(cur) -> int:
+def restore_projection_snapshot(db, snapshots: list[dict]) -> dict[str, object]:
+    """Restore an operator-approved backup through the projection owner.
+
+    This is intentionally separate from normal desired-state reconciliation:
+    it consumes an auditable backup transport, but retains the same DB target
+    resolution, cutover guard, per-target transaction, and ownership boundary.
+    """
+    targets = active_external_radius_targets(db, capability="users")
+    if not targets:
+        raise RuntimeError("No DB-configured external RADIUS user target")
+    assert_legacy_target_alignment(db)
+    by_id = {target["target_id"]: target for target in targets}
+    outcomes: list[dict[str, object]] = []
+    totals = {
+        "radcheck_restored": 0,
+        "radreply_restored": 0,
+        "radusergroup_restored": 0,
+    }
+    for snapshot in snapshots:
+        target_id = snapshot.get("target_id")
+        fingerprint = snapshot.get("target_fingerprint")
+        target = by_id.get(target_id) if target_id else None
+        if target is None and fingerprint:
+            matches = [
+                candidate
+                for candidate in targets
+                if candidate["target_fingerprint"] == fingerprint
+            ]
+            target = matches[0] if len(matches) == 1 else None
+        if target is None and len(targets) == 1 and len(snapshots) == 1:
+            target = targets[0]
+        if target is None:
+            outcomes.append(
+                {
+                    "target_name": snapshot.get("target_name") or "unmatched",
+                    "target_fingerprint": fingerprint or "legacy",
+                    "ok": False,
+                    "error_type": "TargetNotConfigured",
+                }
+            )
+            continue
+        outcome: dict[str, object] = {
+            "target_name": target["target_name"],
+            "target_fingerprint": target["target_fingerprint"],
+            "ok": False,
+        }
+        try:
+            restored_counts = {
+                "radcheck_restored": 0,
+                "radreply_restored": 0,
+                "radusergroup_restored": 0,
+            }
+            radcheck, radreply, radusergroup = _projection_tables(target)
+            usernames = sorted(
+                {
+                    str(username)
+                    for username in snapshot.get("usernames", [])
+                    if username
+                }
+                | {
+                    str(row["username"])
+                    for key in ("radcheck", "radreply", "radusergroup")
+                    for row in snapshot.get(key, [])
+                    if row.get("username")
+                }
+            )
+            engine = get_external_engine(str(target["db_url"]))
+            with engine.begin() as conn:
+                if conn.dialect.name == "postgresql":
+                    conn.execute(text("SELECT pg_advisory_xact_lock(3281601275)"))
+                if usernames:
+                    conn.execute(
+                        delete(radcheck).where(radcheck.c.username.in_(usernames))
+                    )
+                    conn.execute(
+                        delete(radreply).where(radreply.c.username.in_(usernames))
+                    )
+                    conn.execute(
+                        delete(radusergroup).where(
+                            radusergroup.c.username.in_(usernames)
+                        )
+                    )
+                for key, table, columns in (
+                    (
+                        "radcheck",
+                        radcheck,
+                        ("username", "attribute", "op", "value"),
+                    ),
+                    (
+                        "radreply",
+                        radreply,
+                        ("username", "attribute", "op", "value"),
+                    ),
+                    (
+                        "radusergroup",
+                        radusergroup,
+                        ("username", "groupname", "priority"),
+                    ),
+                ):
+                    rows = [
+                        {column: row.get(column) for column in columns}
+                        for row in snapshot.get(key, [])
+                    ]
+                    if rows:
+                        conn.execute(insert(table), rows)
+                    restored_counts[f"{key}_restored"] = len(rows)
+            for key, value in restored_counts.items():
+                totals[key] += value
+                outcome[key] = value
+            outcome["ok"] = True
+        except Exception as exc:  # noqa: BLE001
+            outcome["error_type"] = type(exc).__name__
+        outcomes.append(outcome)
+    if any(not outcome["ok"] for outcome in outcomes):
+        raise RadiusProjectionIncomplete(outcomes)
+    return {**totals, "target_outcomes": outcomes}
+
+
+def _reap_radius_orphans(
+    conn,
+    config: dict,
+    active_usernames: set[str],
+    *,
+    access_groups: dict[str, str],
+) -> dict[str, int]:
+    from app.services.radius_probe import probe_username
+
+    radcheck, radreply, radusergroup = _projection_tables(config)
+    radcheck_users = set(conn.scalars(select(radcheck.c.username).distinct()).all())
+    orphans = sorted(radcheck_users - active_usernames - {probe_username()})
+    counts = {
+        "radcheck_orphans_deleted": 0,
+        "radreply_orphans_deleted": 0,
+        "radusergroup_orphans_deleted": 0,
+    }
+    if not orphans:
+        return counts
+    result = conn.execute(delete(radcheck).where(radcheck.c.username.in_(orphans)))
+    counts["radcheck_orphans_deleted"] = result.rowcount or 0
+    result = conn.execute(delete(radreply).where(radreply.c.username.in_(orphans)))
+    counts["radreply_orphans_deleted"] = result.rowcount or 0
+    group_delete = delete(radusergroup).where(radusergroup.c.username.in_(orphans))
+    delete_group_rows = True
+    if not config["use_group"]:
+        owned_names = sorted({name for name in access_groups.values() if name})
+        if owned_names:
+            group_delete = group_delete.where(radusergroup.c.groupname.in_(owned_names))
+        else:
+            delete_group_rows = False
+    if delete_group_rows:
+        result = conn.execute(group_delete)
+        counts["radusergroup_orphans_deleted"] = result.rowcount or 0
+    return counts
+
+
+def _ensure_probe_identity(conn, target: dict) -> int:
     """Upsert the synthetic auth-probe's radcheck user and nas client.
 
     Returns 1 when synced, 0 when the probe is unconfigured. Env-sourced
@@ -613,28 +929,47 @@ def _ensure_probe_identity(cur) -> int:
 
     from app.services.radius_probe import probe_config, probe_username
 
-    config = probe_config()
-    if not config["configured"]:
+    probe = probe_config()
+    if not probe["configured"]:
         return 0
     username = probe_username()
-    cur.execute(
-        "DELETE FROM radcheck WHERE username = %s AND attribute = 'Cleartext-Password'",
-        (username,),
+    radcheck, _radreply, _radusergroup = _projection_tables(target)
+    conn.execute(
+        delete(radcheck).where(
+            radcheck.c.username == username,
+            radcheck.c.attribute == target["password_attribute"],
+        )
     )
-    cur.execute(
-        "INSERT INTO radcheck (username, attribute, op, value) "
-        "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-        (username, config["password"]),
+    conn.execute(
+        insert(radcheck).values(
+            username=username,
+            attribute=target["password_attribute"],
+            op=target["password_op"],
+            value=probe["password"],
+        )
     )
 
     # nas client covering the worker source range (compose bridge by default).
     client_subnet = os.getenv("RADIUS_PROBE_CLIENT_SUBNET", "172.20.0.0/16").strip()
-    cur.execute("DELETE FROM nas WHERE shortname = %s", (username,))
-    cur.execute(
-        "INSERT INTO nas (nasname, shortname, type, secret, description, "
-        "require_message_authenticator) "
-        "VALUES (%s, %s, 'other', %s, 'synthetic health probe', TRUE)",
-        (client_subnet, username, config["secret"]),
+    nas = external_radius_table(
+        target["nas_table"],
+        Column("nasname", String),
+        Column("shortname", String),
+        Column("type", String),
+        Column("secret", String),
+        Column("description", String),
+        Column("require_message_authenticator", Boolean),
+    )
+    conn.execute(delete(nas).where(nas.c.shortname == username))
+    conn.execute(
+        insert(nas).values(
+            nasname=client_subnet,
+            shortname=username,
+            type="other",
+            secret=probe["secret"],
+            description="synthetic health probe",
+            require_message_authenticator=True,
+        )
     )
     return 1
 
@@ -778,7 +1113,8 @@ def populate_device_login(
     *,
     dry_run: bool = False,
     _conn_factory=None,
-) -> dict[str, int]:
+    _target_config=None,
+) -> dict[str, object]:
     """Project device-login-enabled staff into the admin RADIUS auth set.
 
     Writes ONLY to radcheck_admin / radreply_admin — never touches radcheck /
@@ -796,8 +1132,8 @@ def populate_device_login(
         _conn_factory: Optional zero-arg callable that returns a DB-API 2
             connection to the RADIUS DB.  Used by tests to inject an in-memory
             SQLite connection in place of the real psycopg Postgres connection.
-            When None (production), connects to the resolved radius DSN
-            (radius_dsn.radius_dsn_libpq()).
+            When None (production), connects to the DB-configured authoritative
+            accounting target.
 
     Returns:
         dict with keys: considered, radcheck_upserts, radreply_upserts,
@@ -808,6 +1144,72 @@ def populate_device_login(
     from app.models.system_user import SystemUser
     from app.services.credential_crypto import decrypt_credential
     from app.services.device_login import derive_router_tier
+
+    if _conn_factory is None and _target_config is None:
+        targets = active_external_radius_targets(db, capability="users")
+        if not targets:
+            raise RuntimeError("No DB-configured external RADIUS user target")
+        assert_legacy_target_alignment(db)
+        aggregate: dict[str, object] = {
+            "considered": 0,
+            "radcheck_upserts": 0,
+            "radreply_upserts": 0,
+            "removed": 0,
+            "skipped_ineligible": 0,
+            "app_disabled": 0,
+            "projection_targets": len(targets),
+            "target_outcomes": [],
+        }
+        outcomes: list[dict[str, object]] = []
+        for target_config in targets:
+
+            def _factory(config=target_config):
+                url = str(config["db_url"]).replace(
+                    "postgresql+psycopg://", "postgresql://", 1
+                )
+                connection = psycopg.connect(url)
+                connection.autocommit = False
+                return connection
+
+            try:
+                result = populate_device_login(
+                    db,
+                    dry_run=dry_run,
+                    _conn_factory=_factory,
+                    _target_config=target_config,
+                )
+            except Exception as exc:  # noqa: BLE001
+                outcomes.append(
+                    {
+                        "target_name": target_config["target_name"],
+                        "target_fingerprint": target_config["target_fingerprint"],
+                        "ok": False,
+                        "error_type": type(exc).__name__,
+                    }
+                )
+                continue
+            for key in ("radcheck_upserts", "radreply_upserts", "removed"):
+                aggregate[key] = _result_count(aggregate, key) + _result_count(
+                    result, key
+                )
+            for key in ("considered", "skipped_ineligible"):
+                aggregate[key] = max(
+                    _result_count(aggregate, key), _result_count(result, key)
+                )
+            aggregate["app_disabled"] = _result_count(
+                aggregate, "app_disabled"
+            ) + _result_count(result, "app_disabled")
+            outcomes.append(
+                {
+                    "target_name": target_config["target_name"],
+                    "target_fingerprint": target_config["target_fingerprint"],
+                    "ok": True,
+                }
+            )
+        aggregate["target_outcomes"] = outcomes
+        if any(not outcome["ok"] for outcome in outcomes):
+            raise RadiusProjectionIncomplete(outcomes)
+        return aggregate
 
     stats: dict[str, int] = {
         "considered": 0,
@@ -866,17 +1268,30 @@ def populate_device_login(
         work.append((u.email, cleartext, tier, "eligible"))
 
     # Open RADIUS connection
+    target = _target_config
     if _conn_factory is not None:
         conn = _conn_factory()
-    else:
-        radius_dsn = radius_dsn_libpq()
-        if not radius_dsn:
-            raise RuntimeError("RADIUS database DSN not configured")
-        conn = psycopg.connect(radius_dsn)
-        conn.autocommit = False
+    else:  # pragma: no cover - production fan-out above supplies a factory
+        raise RuntimeError("RADIUS connection factory not configured")
 
     try:
         cur = conn.cursor()
+
+        def _admin_query(template: str, *table_keys: str):
+            defaults = {
+                "radcheck_admin_table": "radcheck_admin",
+                "radreply_admin_table": "radreply_admin",
+            }
+            names = [
+                str(target[key]) if target else defaults[key] for key in table_keys
+            ]
+            if target is None:
+                return template.format(*names)
+            from psycopg import sql
+
+            return sql.SQL(template).format(
+                *(sql.Identifier(*name.split(".")) for name in names)
+            )
 
         # Desired end-state: eligible active users with a derivable tier.
         desired = {
@@ -899,32 +1314,69 @@ def populate_device_login(
         # which appear in `work` (which only scans active users). Without this,
         # router login can survive staff deactivation.
         cur.execute(
-            "SELECT username FROM radcheck_admin "
-            "UNION SELECT username FROM radreply_admin"
+            _admin_query(
+                "SELECT username FROM {} UNION SELECT username FROM {}",
+                "radcheck_admin_table",
+                "radreply_admin_table",
+            )
         )
         existing = {row[0] for row in cur.fetchall()}
         for uname in existing - set(desired):
-            cur.execute("DELETE FROM radcheck_admin WHERE username=%s", (uname,))
-            cur.execute("DELETE FROM radreply_admin WHERE username=%s", (uname,))
+            cur.execute(
+                _admin_query(
+                    "DELETE FROM {} WHERE username=%s", "radcheck_admin_table"
+                ),
+                (uname,),
+            )
+            cur.execute(
+                _admin_query(
+                    "DELETE FROM {} WHERE username=%s", "radreply_admin_table"
+                ),
+                (uname,),
+            )
             stats["removed"] += 1
 
         # Upsert desired users (DELETE+INSERT keeps it idempotent).
         for uname, (cleartext, tier) in desired.items():
-            cur.execute("DELETE FROM radcheck_admin WHERE username=%s", (uname,))
-            cur.execute("DELETE FROM radreply_admin WHERE username=%s", (uname,))
             cur.execute(
-                "INSERT INTO radcheck_admin (username, attribute, op, value) "
-                "VALUES (%s, 'Cleartext-Password', ':=', %s)",
-                (uname, cleartext),
+                _admin_query(
+                    "DELETE FROM {} WHERE username=%s", "radcheck_admin_table"
+                ),
+                (uname,),
             )
             cur.execute(
-                "INSERT INTO radreply_admin (username, attribute, op, value) "
-                "VALUES (%s, 'Mikrotik-Group', ':=', %s)",
+                _admin_query(
+                    "DELETE FROM {} WHERE username=%s", "radreply_admin_table"
+                ),
+                (uname,),
+            )
+            cur.execute(
+                _admin_query(
+                    "INSERT INTO {} (username, attribute, op, value) "
+                    "VALUES (%s, %s, %s, %s)",
+                    "radcheck_admin_table",
+                ),
+                (
+                    uname,
+                    target["password_attribute"] if target else "Cleartext-Password",
+                    target["password_op"] if target else ":=",
+                    cleartext,
+                ),
+            )
+            cur.execute(
+                _admin_query(
+                    "INSERT INTO {} (username, attribute, op, value) "
+                    "VALUES (%s, 'Mikrotik-Group', ':=', %s)",
+                    "radreply_admin_table",
+                ),
                 (uname, tier),
             )
             cur.execute(
-                "INSERT INTO radreply_admin (username, attribute, op, value) "
-                "VALUES (%s, 'Service-Type', ':=', 'Administrative-User')",
+                _admin_query(
+                    "INSERT INTO {} (username, attribute, op, value) "
+                    "VALUES (%s, 'Service-Type', ':=', 'Administrative-User')",
+                    "radreply_admin_table",
+                ),
                 (uname,),
             )
             stats["radcheck_upserts"] += 1
@@ -952,7 +1404,7 @@ def populate_device_login(
         conn.close()
 
     logger.info("populate_device_login done (dry_run=%s): %s", dry_run, stats)
-    return stats
+    return cast(dict[str, object], stats)
 
 
 # -----------------------------------------------------------------------------

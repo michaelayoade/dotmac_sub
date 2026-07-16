@@ -641,6 +641,35 @@ class TestBuildBeatSchedule:
         assert row.enabled is True
         assert row.interval_seconds == 900
 
+    def test_registers_configured_event_outbox_dispatch(self, db_session, monkeypatch):
+        from app.services.domain_settings import scheduler_settings
+
+        scheduler_settings.ensure_by_key(
+            db_session,
+            key="event_dispatch_interval_seconds",
+            value_type=SettingValueType.integer,
+            value_text="30",
+        )
+        db_session.commit()
+        monkeypatch.setattr(db_session, "close", lambda: None)
+
+        with patch.object(scheduler_config, "SessionLocal", return_value=db_session):
+            with patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ):
+                scheduler_config.build_beat_schedule()
+
+        row = (
+            db_session.query(ScheduledTask)
+            .filter(ScheduledTask.name == "event_dispatch_runner")
+            .one()
+        )
+        assert row.task_name == "app.tasks.events.dispatch_pending_events"
+        assert row.enabled is True
+        assert row.interval_seconds == 30
+
     def test_disables_ont_reconcile_row_via_canonical_control(
         self, db_session, monkeypatch
     ):

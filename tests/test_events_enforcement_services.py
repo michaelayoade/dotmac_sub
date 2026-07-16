@@ -263,6 +263,26 @@ class TestEventDispatcher:
         # Verify db.add was called (event persistence)
         mock_db.add.assert_called_once()
 
+    def test_dispatch_pending_event_claims_existing_record(self, db_session):
+        from app.models.event_store import EventStatus
+        from app.services import event_store as event_store_service
+
+        dispatcher = EventDispatcher()
+        event = Event(event_type=EventType.custom, payload={"source": "outbox"})
+        record = event_store_service.create_event_record(
+            db_session,
+            event,
+            status=EventStatus.pending,
+        )
+        db_session.commit()
+
+        assert dispatcher.dispatch_pending_event(db_session, record.id) is True
+        db_session.commit()
+
+        db_session.refresh(record)
+        assert record.status == EventStatus.completed
+        assert dispatcher.dispatch_pending_event(db_session, record.id) is False
+
     def test_dispatch_logs_structured_lifecycle(self, db_session, caplog):
         dispatcher = EventDispatcher()
         handler = MagicMock()
@@ -362,6 +382,13 @@ class TestEventDispatcher:
 
 
 class TestEnforcementHandler:
+    @pytest.fixture(autouse=True)
+    def _successful_radius_projection(self, monkeypatch):
+        monkeypatch.setattr(
+            "app.services.events.handlers.enforcement.radius_service.reconcile_subscription_connectivity",
+            lambda _db, _subscription_id: {"ok": True},
+        )
+
     def _make_event(self, event_type, payload=None, **kwargs):
         return Event(
             event_type=event_type,
@@ -374,18 +401,17 @@ class TestEnforcementHandler:
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_suspended_disconnects_and_blocks(
-        self, mock_reject_ip, mock_cleanup, db_session
+        self, mock_reject_ip, mock_cleanup, db_session, subscription
     ):
         mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
         event = self._make_event(
             EventType.subscription_suspended,
-            subscription_id=sub_id,
+            subscription_id=subscription.id,
         )
         handler.handle(db_session, event)
 
-        mock_cleanup.assert_called_once_with(str(sub_id), reason="suspended")
+        mock_cleanup.assert_called_once_with(str(subscription.id), reason="suspended")
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
@@ -419,35 +445,33 @@ class TestEnforcementHandler:
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_canceled_disconnects_and_blocks(
-        self, mock_reject_ip, mock_cleanup, db_session
+        self, mock_reject_ip, mock_cleanup, db_session, subscription
     ):
         mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
         event = self._make_event(
             EventType.subscription_canceled,
-            subscription_id=sub_id,
+            subscription_id=subscription.id,
         )
         handler.handle(db_session, event)
 
-        mock_cleanup.assert_called_once_with(str(sub_id), reason="canceled")
+        mock_cleanup.assert_called_once_with(str(subscription.id), reason="canceled")
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
         "app.services.events.handlers.enforcement.radius_reject_service.enforce_subscription_reject_ip"
     )
     def test_subscription_block_uses_payload_fallback(
-        self, mock_reject_ip, mock_cleanup, db_session
+        self, mock_reject_ip, mock_cleanup, db_session, subscription
     ):
         mock_reject_ip.return_value = {"ok": False}
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
         event = self._make_event(
             EventType.subscription_suspended,
-            payload={"subscription_id": str(sub_id)},
+            payload={"subscription_id": str(subscription.id)},
         )
         handler.handle(db_session, event)
-        mock_cleanup.assert_called_once_with(str(sub_id), reason="suspended")
+        mock_cleanup.assert_called_once_with(str(subscription.id), reason="suspended")
 
     @patch("app.tasks.enforcement.cleanup_subscription_block_sessions.delay")
     @patch(
@@ -502,20 +526,24 @@ class TestEnforcementHandler:
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscription_activated_restores(
-        self, mock_settings, mock_disconnect, mock_remove_block, db_session
+        self,
+        mock_settings,
+        mock_disconnect,
+        mock_remove_block,
+        db_session,
+        subscription,
     ):
         mock_settings.resolve_value.return_value = "true"
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
         event = self._make_event(
             EventType.subscription_activated,
-            subscription_id=sub_id,
+            subscription_id=subscription.id,
         )
         handler.handle(db_session, event)
         mock_disconnect.assert_called_once_with(
-            db_session, str(sub_id), reason="restore"
+            db_session, str(subscription.id), reason="restore"
         )
-        mock_remove_block.assert_called_once_with(db_session, str(sub_id))
+        mock_remove_block.assert_called_once_with(db_session, str(subscription.id))
 
     @patch(
         "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
@@ -523,20 +551,24 @@ class TestEnforcementHandler:
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscription_resumed_restores(
-        self, mock_settings, mock_disconnect, mock_remove_block, db_session
+        self,
+        mock_settings,
+        mock_disconnect,
+        mock_remove_block,
+        db_session,
+        subscription,
     ):
         mock_settings.resolve_value.return_value = "true"
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
         event = self._make_event(
             EventType.subscription_resumed,
-            subscription_id=sub_id,
+            subscription_id=subscription.id,
         )
         handler.handle(db_session, event)
         mock_disconnect.assert_called_once_with(
-            db_session, str(sub_id), reason="restore"
+            db_session, str(subscription.id), reason="restore"
         )
-        mock_remove_block.assert_called_once_with(db_session, str(sub_id))
+        mock_remove_block.assert_called_once_with(db_session, str(subscription.id))
 
     @patch(
         "app.services.events.handlers.enforcement.remove_subscription_address_list_block"
@@ -579,14 +611,18 @@ class TestEnforcementHandler:
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_subscription_restore_skips_disconnect_when_refresh_disabled(
-        self, mock_settings, mock_disconnect, mock_remove_block, db_session
+        self,
+        mock_settings,
+        mock_disconnect,
+        mock_remove_block,
+        db_session,
+        subscription,
     ):
         mock_settings.resolve_value.return_value = "false"
         handler = EnforcementHandler()
-        sub_id = uuid.uuid4()
         event = self._make_event(
             EventType.subscription_activated,
-            subscription_id=sub_id,
+            subscription_id=subscription.id,
         )
         handler.handle(db_session, event)
         mock_disconnect.assert_not_called()

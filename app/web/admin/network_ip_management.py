@@ -42,6 +42,7 @@ def ip_management(
     page: int = 1,
     search: str | None = None,
     pool_filter: str | None = None,
+    sort_dir: str | None = None,
     tab: str | None = None,
     notice: str | None = None,
     warning: str | None = None,
@@ -51,11 +52,19 @@ def ip_management(
     active_tab = tab if tab in allowed_tabs else None
     if active_tab is None:
         active_tab = "addresses" if search or pool_filter else "overview"
+    try:
+        list_query = web_network_ip_service.build_ip_address_list_query(
+            search=search, pool_filter=pool_filter, sort_dir=sort_dir, page=page
+        )
+    except ValueError:
+        list_query = web_network_ip_service.build_ip_address_list_query(page=page)
     state = web_network_ip_service.build_ip_management_data(
         db,
-        page=page,
-        search=search,
-        pool_filter=pool_filter,
+        page=list_query.page,
+        search=list_query.search,
+        pool_filter=list_query.filter_value("pool_filter"),
+        address_limit=list_query.per_page,
+        sort_dir=list_query.sort_dir,
     )
 
     context = _base_context(

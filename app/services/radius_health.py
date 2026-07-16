@@ -233,6 +233,24 @@ def _enforcement_signals(db: Session) -> dict[str, int]:
     }
 
 
+def _writer_equivalence_signals(db: Session) -> dict:
+    """Read-only migration gate for the remaining physical RADIUS writers."""
+    from app.services.radius_writer_equivalence import (
+        assess_radius_writer_equivalence,
+    )
+
+    report = assess_radius_writer_equivalence(db, probe_schema=True)
+    return {
+        "writer_target_count": report.target_count,
+        "writer_unique_target_count": report.unique_target_count,
+        "writer_targets_equivalent": int(report.all_targets_match_canonical),
+        "writer_schema_contract_ok": int(report.schema_contract_ok),
+        "writer_group_semantics_required": int(report.group_semantics_required),
+        "writer_single_owner_ready": int(report.ready_for_single_owner),
+        "writer_equivalence_report": report.as_dict(),
+    }
+
+
 def collect_radius_health(
     db: Session,
     *,
@@ -246,6 +264,17 @@ def collect_radius_health(
         _radacct_signals(db, now=now, stale_after_seconds=stale_after_seconds)
     )
     health.update(_enforcement_signals(db))
+    try:
+        health.update(_writer_equivalence_signals(db))
+    except Exception:
+        logger.exception("radius_writer_equivalence_probe_failed")
+        health.update(
+            {
+                "writer_targets_equivalent": 0,
+                "writer_schema_contract_ok": 0,
+                "writer_single_owner_ready": 0,
+            }
+        )
     try:
         from app.services.radius_probe import run_configured_probe
 
@@ -282,6 +311,14 @@ def push_radius_metrics(health: dict, *, now: datetime | None = None) -> dict[st
         "radius_probe_retries": (
             health.get("probe_retries") if health.get("probe_configured") else None
         ),
+        "radius_writer_target_count": health.get("writer_target_count"),
+        "radius_writer_unique_target_count": health.get("writer_unique_target_count"),
+        "radius_writer_targets_equivalent": health.get("writer_targets_equivalent"),
+        "radius_writer_schema_contract_ok": health.get("writer_schema_contract_ok"),
+        "radius_writer_group_semantics_required": health.get(
+            "writer_group_semantics_required"
+        ),
+        "radius_writer_single_owner_ready": health.get("writer_single_owner_ready"),
     }
     lines = [
         f"{name} {float(value)} {ts_ms}"

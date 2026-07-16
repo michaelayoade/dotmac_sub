@@ -61,7 +61,6 @@ env 1 app/services/workqueue/scoring_config.py
 env 3 app/syslog/listener.py
 env 3 app/tasks/bandwidth.py
 env 3 app/tasks/crm_native_sync.py
-env 1 app/tasks/radius.py
 env 2 app/tasks/tr069.py
 env 1 app/websocket/manager.py
 setting 9 app/main.py
