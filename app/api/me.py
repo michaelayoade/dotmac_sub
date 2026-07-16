@@ -1055,8 +1055,21 @@ def my_refer_a_friend(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Refer a friend: capture in the CRM (source of truth), mirror locally."""
+    """Refer a friend. Behind the Phase 3 ``referrals_native_write_enabled``
+    write-flip flag: OFF captures in the CRM (write-through, mirrored
+    locally); ON captures in sub's native referral tables — no CRM link
+    required, so native-only subscribers can refer too. Same response shape
+    either way."""
     subscriber_id = _subscriber_id(principal)
+    if referrals_service.native_write_enabled(db):
+        return referrals_service.referrals.refer_a_friend(
+            db,
+            subscriber_id,
+            name=payload.name,
+            email=payload.email,
+            phone=payload.phone,
+            note=payload.note,
+        )
     try:
         return referrals_mirror.refer_a_friend(
             db,

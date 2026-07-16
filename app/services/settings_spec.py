@@ -4045,6 +4045,19 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Referrals: native read path (Phase 3 read-flip flag)",
     ),
+    # §4.3 write flip, referrals vertical: OFF keeps POST /me/referrals and
+    # the portal refer-a-friend form writing through the CRM mirror; ON
+    # captures the referral in sub's native tables (no CRM link required).
+    # Reward money is unaffected either way — financial.credit_notes owns it
+    # behind the shared referral:{id} idempotency namespace.
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="referrals_native_write_enabled",
+        env_var="REFERRALS_NATIVE_WRITE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Referrals: native write path (Phase 3 flip flag)",
+    ),
 ]
 
 # Tombstone the settings-registry surfaces whose decisions moved to canonical
@@ -4081,6 +4094,7 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.projects, "projects_native_read_enabled"),
         (SettingDomain.projects, "quotes_native_read_enabled"),
         (SettingDomain.projects, "referrals_native_read_enabled"),
+        (SettingDomain.projects, "referrals_native_write_enabled"),
     }
 )
 SETTINGS_SPECS = [

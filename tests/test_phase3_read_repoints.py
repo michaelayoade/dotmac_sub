@@ -200,8 +200,11 @@ def test_me_quote_request_stays_mirror_write_through_with_read_flag_on(monkeypat
 
 
 def test_me_refer_a_friend_stays_mirror_write_through_with_read_flag_on(monkeypatch):
+    # The read flip must not flip writes: with native_read ON but the §4.3
+    # write flag OFF, refer-a-friend still writes through the mirror.
     principal = _subscriber_principal()
     monkeypatch.setattr(referrals_service, "native_read_enabled", lambda db: True)
+    monkeypatch.setattr(referrals_service, "native_write_enabled", lambda db: False)
     captured = {}
 
     def fake_refer(db, sid, **kw):
