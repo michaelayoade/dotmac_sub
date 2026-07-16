@@ -78,7 +78,7 @@
 
     <!-- Current Plan -->
     {% if current_offer %}
-    <div class="rounded-xl border border-primary-200 bg-primary-50 p-6 shadow-sm dark:border-primary-900 dark:bg-primary-900/20">
+    <div data-testid="plan-change-current" class="rounded-xl border border-primary-200 bg-primary-50 p-6 shadow-sm dark:border-primary-900 dark:bg-primary-900/20">
         <div class="flex items-center justify-between">
             <div>
                 <h3 class="text-sm font-medium text-primary-600 dark:text-primary-400">Current Plan</h3>
@@ -92,6 +92,17 @@
                 <p class="text-sm text-slate-500 dark:text-slate-400">{{ current_offer_summary.period_label }}</p>
             </div>
         </div>
+    </div>
+    {% endif %}
+
+    {% if form_contract and form_contract.unmet_prerequisites %}
+    <div data-testid="plan-change-prerequisites" class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+        <h3 class="text-sm font-semibold text-amber-800 dark:text-amber-300">Before you can change plans</h3>
+        <ul class="mt-2 space-y-1 text-sm text-amber-800 dark:text-amber-200">
+            {% for prereq in form_contract.unmet_prerequisites %}
+            <li data-prereq="{{ prereq.key }}">{{ prereq.reason or prereq.label }}</li>
+            {% endfor %}
+        </ul>
     </div>
     {% endif %}
 
@@ -255,6 +266,17 @@
                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500"
                       placeholder="Any additional notes..."></textarea>
         </div>
+
+        {% if form_contract and form_contract.consequences %}
+        <div data-testid="plan-change-consequences" class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
+            <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">What happens when you switch</h3>
+            <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-600 dark:text-slate-400">
+                {% for consequence in form_contract.consequences %}
+                <li data-consequence="{{ consequence.key }}">{{ consequence.label }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
 
         <!-- Submit -->
         <div class="flex items-center justify-between pt-4">

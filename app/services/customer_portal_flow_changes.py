@@ -15,6 +15,11 @@ from app.models.subscription_change import (
     SubscriptionChangeStatus,
 )
 from app.services import catalog as catalog_service
+from app.services.form_contracts import (
+    FormConsequence,
+    FormContract,
+    FormPrerequisite,
+)
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
 from app.services.customer_context import (
@@ -236,6 +241,72 @@ def _build_migration_offers(
     return offers
 
 
+# Editor contract for the customer plan-change form (ui.form_contracts pilot).
+# The command owner (apply_instant_plan_change) re-checks every prerequisite at
+# execution time; this rendered contract is disclosure, not enforcement.
+PLAN_CHANGE_FORM = FormContract(
+    key="customer.plan_change",
+    title="Change plan",
+    entity="subscription",
+    command_owner="customer_portal_flow_changes.apply_instant_plan_change",
+    consequences=(
+        FormConsequence(
+            "proration",
+            "Switching today applies an immediate prorated charge or credit "
+            "for the remainder of your current period",
+        ),
+        FormConsequence(
+            "reprovision",
+            "Your connection is re-provisioned to the new plan's speed right away",
+        ),
+        FormConsequence(
+            "cross_family",
+            "Choosing a plan from a different family submits a migration "
+            "request for our team instead of changing instantly",
+        ),
+    ),
+)
+
+
+def _plan_change_prerequisites(
+    subscription, available_offers, arrears_amount
+) -> list[FormPrerequisite]:
+    """Evaluate the plan-change preconditions the submit command enforces."""
+    status_value = getattr(subscription.status, "value", subscription.status)
+    return [
+        FormPrerequisite(
+            key="subscription_active",
+            label="Your subscription is active",
+            met=str(status_value) == "active",
+            reason=(
+                None
+                if str(status_value) == "active"
+                else "Plans can only be changed on an active subscription"
+            ),
+        ),
+        FormPrerequisite(
+            key="no_arrears",
+            label="No overdue balance",
+            met=arrears_amount <= Decimal("0.00"),
+            reason=(
+                None
+                if arrears_amount <= Decimal("0.00")
+                else "Clear your overdue balance before changing plans"
+            ),
+        ),
+        FormPrerequisite(
+            key="offers_available",
+            label="Plans are available to switch to",
+            met=len(available_offers) > 0,
+            reason=(
+                None
+                if available_offers
+                else "No alternative plans are currently available for your service"
+            ),
+        ),
+    ]
+
+
 def get_change_plan_page(
     db: Session,
     customer: dict,
@@ -309,6 +380,11 @@ def get_change_plan_page(
         "next_billing_date": next_billing_date,
         "arrears_amount": _to_float(arrears_amount),
         "in_arrears": arrears_amount > Decimal("0.00"),
+        "form_contract": PLAN_CHANGE_FORM.state(
+            _plan_change_prerequisites(
+                subscription, available_offers, arrears_amount
+            )
+        ),
         **copy,
     }
 

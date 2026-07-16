@@ -2053,6 +2053,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ui.form_contracts",
+                module="app.services.form_contracts",
+                owns=(
+                    "editor/form contract vocabulary",
+                    "rendered prerequisite and consequence disclosure shape",
+                ),
+                notes=(
+                    "Declarative contract for editor pages per the UI "
+                    "information/action standard: current vs proposed state, "
+                    "prerequisites near the control, impact preview, named "
+                    "consequences. The owning domain service evaluates "
+                    "prerequisites and computes impact; the command owner "
+                    "re-checks everything at execution — the rendered contract "
+                    "is disclosure, never enforcement. Pilot consumer: the "
+                    "customer plan-change editor (PLAN_CHANGE_FORM in "
+                    "customer_portal_flow_changes)."
+                ),
+            ),
+            SOTService(
                 name="ui.customer_list_projection",
                 module="app.services.web_customer_lists",
                 owns=(
