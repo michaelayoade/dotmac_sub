@@ -820,6 +820,12 @@ def list_users(
         if _row_matches_filter_query(reseller_user, merged_query):
             reseller_users.append(reseller_user)
 
+    # Cross-source merge (system users + reseller portal users) sorted by an
+    # arbitrary key: both populations are loaded COMPLETELY before sorting, so
+    # totals and pages are exact — this is not the load-then-slice truncation
+    # bug class. Bounded by design: staff + reseller logins are an
+    # operator-scale population. Revisit with a merged SQL window only if that
+    # assumption breaks.
     combined_users = users + reseller_users
     combined_users.sort(
         key=lambda item: _user_sort_key(item, sort_field), reverse=reverse
