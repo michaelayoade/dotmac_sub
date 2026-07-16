@@ -1,6 +1,6 @@
 """Pre-change backup of a subscriber's connectivity state — capture + restore.
 
-Snapshots the external RADIUS rows (``radcheck``/``radreply``), the internal
+Snapshots the external RADIUS rows (``radcheck``/``radreply``/``radusergroup``), the internal
 credential/radius-user active flags, and the IP state (served columns + active
 ``IPAssignment`` rows) for one subscriber *before* a destructive connectivity
 mutation. The reconciler/enforcement paths can then mutate with a way back.
@@ -14,8 +14,8 @@ Design rules:
 - **Restore defaults to dry-run.** Applying a backup re-materializes the captured
   RADIUS rows and flips the local flags/IP back — an operator action, gated.
 
-The RADIUS rows are read/written through the one canonical DSN
-(``radius_dsn_libpq``) shared by both writers, so a restore can't split-brain.
+RADIUS targets are resolved from DB configuration. Restore requests the sole
+``access.radius_projection`` owner; this module never writes auth tables.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Column, Integer, String, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditEvent
@@ -37,36 +37,13 @@ from app.models.network import (
 )
 from app.models.radius import RadiusUser
 from app.services.common import coerce_uuid
+from app.services.external_radius_targets import (
+    active_external_radius_targets,
+    external_radius_table,
+    get_external_engine,
+)
 
 logger = logging.getLogger(__name__)
-
-_RADIUS_TABLES = ("radcheck", "radreply")
-
-# Literal SQL per table (no name interpolation) — matches radius_population's
-# convention so the SQL-injection lint (S608) stays a real gate, not a noqa.
-_RADIUS_SELECT = {
-    "radcheck": (
-        "SELECT username, attribute, op, value FROM radcheck "
-        "WHERE username = ANY(%s) ORDER BY username, id"
-    ),
-    "radreply": (
-        "SELECT username, attribute, op, value FROM radreply "
-        "WHERE username = ANY(%s) ORDER BY username, id"
-    ),
-}
-_RADIUS_DELETE = {
-    "radcheck": "DELETE FROM radcheck WHERE username = ANY(%s)",
-    "radreply": "DELETE FROM radreply WHERE username = ANY(%s)",
-}
-_RADIUS_INSERT = {
-    "radcheck": (
-        "INSERT INTO radcheck (username, attribute, op, value) VALUES (%s, %s, %s, %s)"
-    ),
-    "radreply": (
-        "INSERT INTO radreply (username, attribute, op, value) VALUES (%s, %s, %s, %s)"
-    ),
-}
-
 
 # ---------------------------------------------------------------------------
 # Reads (best-effort, no mutation)
@@ -103,38 +80,86 @@ def _subscriber_usernames(db: Session, subscriber_id: Any) -> list[str]:
 
 
 def _read_radius_rows(
+    db: Session,
     usernames: list[str],
-) -> tuple[list[dict] | None, list[dict] | None, str | None]:
-    """Read radcheck/radreply rows for ``usernames`` from the canonical RADIUS
-    DB. Returns ``(radcheck, radreply, error)``; on any failure returns
-    ``(None, None, error)`` so capture degrades to a partial backup."""
+) -> tuple[list[dict] | None, str | None]:
+    """Read all three owned tables from every configured projection target."""
     if not usernames:
-        return [], [], None
-    try:
-        import psycopg
-
-        from app.services.radius_dsn import radius_dsn_libpq
-
-        dsn = radius_dsn_libpq()
-        if not dsn:
-            return None, None, "radius_dsn_unconfigured"
-        out: dict[str, list[dict]] = {}
-        with psycopg.connect(dsn, connect_timeout=5) as conn:
-            for table in _RADIUS_TABLES:
-                cur = conn.execute(_RADIUS_SELECT[table], (usernames,))
-                out[table] = [
-                    {
-                        "username": r[0],
-                        "attribute": r[1],
-                        "op": r[2],
-                        "value": r[3],
-                    }
-                    for r in cur.fetchall()
+        return [], None
+    targets = active_external_radius_targets(db, capability="users")
+    if not targets:
+        return None, "radius_targets_unconfigured"
+    snapshots: list[dict] = []
+    failures: list[str] = []
+    for target in targets:
+        snapshot = {
+            "target_id": target["target_id"],
+            "target_name": target["target_name"],
+            "target_fingerprint": target["target_fingerprint"],
+            "usernames": list(usernames),
+            "radcheck": [],
+            "radreply": [],
+            "radusergroup": [],
+        }
+        try:
+            radcheck = external_radius_table(
+                target["radcheck_table"],
+                Column("username", String),
+                Column("attribute", String),
+                Column("op", String),
+                Column("value", String),
+            )
+            radreply = external_radius_table(
+                target["radreply_table"],
+                Column("username", String),
+                Column("attribute", String),
+                Column("op", String),
+                Column("value", String),
+            )
+            radusergroup = external_radius_table(
+                target["radusergroup_table"],
+                Column("username", String),
+                Column("groupname", String),
+                Column("priority", Integer),
+            )
+            engine = get_external_engine(target["db_url"])
+            with engine.connect() as conn:
+                snapshot["radcheck"] = [
+                    dict(row._mapping)
+                    for row in conn.execute(
+                        select(
+                            radcheck.c.username,
+                            radcheck.c.attribute,
+                            radcheck.c.op,
+                            radcheck.c.value,
+                        ).where(radcheck.c.username.in_(usernames))
+                    ).all()
                 ]
-        return out["radcheck"], out["radreply"], None
-    except Exception as exc:  # best-effort: a partial backup beats no mutation
-        logger.warning("connectivity backup: RADIUS read failed: %s", exc)
-        return None, None, str(exc)[:200]
+                snapshot["radreply"] = [
+                    dict(row._mapping)
+                    for row in conn.execute(
+                        select(
+                            radreply.c.username,
+                            radreply.c.attribute,
+                            radreply.c.op,
+                            radreply.c.value,
+                        ).where(radreply.c.username.in_(usernames))
+                    ).all()
+                ]
+                snapshot["radusergroup"] = [
+                    dict(row._mapping)
+                    for row in conn.execute(
+                        select(
+                            radusergroup.c.username,
+                            radusergroup.c.groupname,
+                            radusergroup.c.priority,
+                        ).where(radusergroup.c.username.in_(usernames))
+                    ).all()
+                ]
+            snapshots.append(snapshot)
+        except Exception as exc:  # best-effort: partial backup beats no mutation
+            failures.append(f"{target['target_name']}:{type(exc).__name__}")
+    return (snapshots or None), (",".join(failures) or None)
 
 
 def _capture_credentials(db: Session, subscriber_id: Any) -> list[dict]:
@@ -225,10 +250,14 @@ def capture_connectivity_state(
     try:
         sid = coerce_uuid(subscriber_id)
         usernames = _subscriber_usernames(db, sid)
+        radius_targets = None
         radcheck = radreply = None
         radius_error = None
         if include_radius:
-            radcheck, radreply, radius_error = _read_radius_rows(usernames)
+            radius_targets, radius_error = _read_radius_rows(db, usernames)
+            if radius_targets and len(radius_targets) == 1:
+                radcheck = radius_targets[0]["radcheck"]
+                radreply = radius_targets[0]["radreply"]
         credentials = _capture_credentials(db, sid)
         ip_state = _capture_ip_state(db, sid)
 
@@ -238,6 +267,7 @@ def capture_connectivity_state(
             captured_by=captured_by,
             radcheck=radcheck,
             radreply=radreply,
+            radius_targets=radius_targets,
             credentials=credentials,
             ip_state=ip_state,
         )
@@ -255,6 +285,7 @@ def capture_connectivity_state(
                     "usernames": len(usernames),
                     "radcheck_rows": len(radcheck) if radcheck is not None else None,
                     "radreply_rows": len(radreply) if radreply is not None else None,
+                    "radius_targets": len(radius_targets or []),
                     "credentials": len(credentials),
                     "radius_error": radius_error,
                 },
@@ -274,41 +305,6 @@ def capture_connectivity_state(
 # ---------------------------------------------------------------------------
 # Restore (operator rollback — dry-run by default)
 # ---------------------------------------------------------------------------
-
-
-def _restore_radius_rows(backup: ConnectivityStateBackup) -> dict[str, int]:
-    """Re-materialize the captured radcheck/radreply rows: delete the current
-    rows for the captured usernames, then insert exactly what was captured. Only
-    touches usernames present in the backup."""
-    import psycopg
-
-    from app.services.radius_dsn import radius_dsn_libpq
-
-    captured = {"radcheck": backup.radcheck or [], "radreply": backup.radreply or []}
-    usernames = sorted(
-        {r["username"] for rows in captured.values() for r in rows if r.get("username")}
-    )
-    counts = {"radcheck_restored": 0, "radreply_restored": 0}
-    if not usernames:
-        return counts
-    dsn = radius_dsn_libpq()
-    if not dsn:
-        raise RuntimeError("RADIUS database DSN not configured")
-    with psycopg.connect(dsn, connect_timeout=10) as conn:
-        for table in _RADIUS_TABLES:
-            conn.execute(_RADIUS_DELETE[table], (usernames,))
-            rows = captured[table]
-            if rows:
-                conn.cursor().executemany(
-                    _RADIUS_INSERT[table],
-                    [
-                        (r["username"], r["attribute"], r["op"], r["value"])
-                        for r in rows
-                    ],
-                )
-            counts[f"{table}_restored"] = len(rows)
-        conn.commit()
-    return counts
 
 
 def restore_connectivity_state(
@@ -337,6 +333,7 @@ def restore_connectivity_state(
         "subscriptions": len((backup.ip_state or {}).get("subscriptions", [])),
         "radcheck_rows": len(backup.radcheck or []) if backup.radcheck else 0,
         "radreply_rows": len(backup.radreply or []) if backup.radreply else 0,
+        "radius_targets": len(backup.radius_targets or []),
         "applied": False,
     }
     if dry_run:
@@ -377,9 +374,29 @@ def restore_connectivity_state(
         if snap is not None and snap.get("is_active") is not None:
             assign.is_active = bool(snap["is_active"])
 
-    radius_counts: dict[str, int] = {}
-    if include_radius and (backup.radcheck is not None or backup.radreply is not None):
-        radius_counts = _restore_radius_rows(backup)
+    radius_counts: dict[str, object] = {}
+    if include_radius and (
+        backup.radius_targets
+        or backup.radcheck is not None
+        or backup.radreply is not None
+    ):
+        from app.services.radius_population import restore_projection_snapshot
+
+        snapshots = backup.radius_targets
+        if not snapshots:
+            snapshots = [
+                {
+                    "usernames": [
+                        item["username"]
+                        for item in (backup.credentials or [])
+                        if item.get("username")
+                    ],
+                    "radcheck": backup.radcheck or [],
+                    "radreply": backup.radreply or [],
+                    "radusergroup": [],
+                }
+            ]
+        radius_counts = restore_projection_snapshot(db, snapshots)
 
     from datetime import UTC, datetime
 

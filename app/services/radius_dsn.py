@@ -1,12 +1,9 @@
-"""Single authority for the bundled FreeRADIUS database DSN.
+"""Legacy FreeRADIUS environment DSN bootstrap resolver.
 
-Both RADIUS writers — the ``radius_population`` sweep (raw psycopg) and the
-event-time ``_external_sync_users`` path (SQLAlchemy) — must point at the SAME
-radius database, or they split-brain: one becomes authoritative for some writes
-and the other for the rest, silently, with no error. They historically resolved
-the DSN through *different* precedence chains, so a stray ``RADIUS_SYNC_DB_URL``
-(or an unset ``RADIUS_DB_DSN``) could split them. This module is the one place
-that resolves it, so they cannot drift.
+Runtime readers and writers resolve active ``RadiusSyncJob`` + encrypted
+``ConnectorConfig`` rows through ``external_radius_targets``. This module is
+retained only to seed the first DB-configured target and shadow-verify the MOVE
+cutover. It must never become a runtime fallback again.
 
 Precedence (highest first):
   1. ``RADIUS_SYNC_DB_URL``
@@ -89,7 +86,7 @@ def _from_parts() -> str | None:
 
 
 def resolve_radius_dsn() -> str | None:
-    """THE bundled FreeRADIUS DSN (SQLAlchemy form), or None if unconfigured."""
+    """Legacy bootstrap/cutover DSN (SQLAlchemy form), if configured."""
     return (
         container_safe_external_db_url(os.getenv("RADIUS_SYNC_DB_URL"))
         or container_safe_external_db_url(os.getenv("RADIUS_DB_DSN"))
@@ -98,8 +95,11 @@ def resolve_radius_dsn() -> str | None:
 
 
 def radius_dsn_libpq() -> str | None:
-    """The same target as ``resolve_radius_dsn()`` in libpq form
-    (``postgresql://…``), for ``psycopg.connect()``."""
+    """Legacy bootstrap/cutover DSN in libpq form.
+
+    Kept for deployment migration tooling; application runtime paths must use
+    DB-configured targets instead.
+    """
     url = resolve_radius_dsn()
     if not url:
         return None

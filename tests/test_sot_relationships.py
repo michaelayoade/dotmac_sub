@@ -289,6 +289,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("access.radius_projection") == (
         "access.radius_state",
         "access.radius_reject",
+        "access.radius_target_registry",
     )
     assert sot_relationships.dependencies_for("communications.intents") == (
         "communications.channel_policy",

@@ -31,7 +31,6 @@ from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.nas import DeviceProvisioner
-from app.services.radius import sync_credential_to_radius
 from app.services.radius_address_lists import suspended_address_list
 from app.services.secrets import resolve_secret
 
@@ -248,28 +247,6 @@ def _nas_with_api_creds(db: Session, nas_device: NasDevice) -> NasDevice | None:
     )
 
 
-def _nas_secret_from_radius_db(nas_ip: str) -> str | None:
-    """Operative shared secret from the radius ``nas`` table — the value
-    FreeRADIUS actually authenticates this NAS with. Fallback for
-    nas_devices rows whose Fernet-encrypted secret no longer decrypts
-    (key-rotation drift, see 2026-06-11)."""
-    from app.services.radius_dsn import radius_dsn_libpq
-
-    dsn = radius_dsn_libpq()
-    if not dsn or not nas_ip:
-        return None
-    try:
-        import psycopg
-
-        with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-            cur.execute("SELECT secret FROM nas WHERE nasname = %s LIMIT 1", (nas_ip,))
-            row = cur.fetchone()
-        return row[0] if row and row[0] else None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("radius nas-table secret lookup failed for %s: %s", nas_ip, exc)
-        return None
-
-
 # Per-process cache of CoA secrets resolved from the external FreeRADIUS
 # ``nas`` table, keyed by NAS device id. Secrets effectively never change
 # without a NAS re-sync (which restarts workers on deploy), so no TTL.
@@ -386,11 +363,6 @@ def _send_coa_disconnect(
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
         return False
     decrypted_secret = _resolve_coa_secret(db, nas_device)
-    if not decrypted_secret:
-        # Last resort: direct radius `nas` table lookup by NAS host IP via
-        # RADIUS_DB_DSN (the 2026-06-11 decrypt-drift hotfix path) — covers
-        # devices whose radius_client link is missing.
-        decrypted_secret = _nas_secret_from_radius_db(str(host))
     if not decrypted_secret:
         logger.warning(
             "No usable shared secret for CoA disconnect to NAS %s "
@@ -806,7 +778,7 @@ def _enforce_address_list_on_nas(
         return False
 
 
-def _open_radacct_sessions_for_username(username: str) -> list[dict]:
+def _open_radacct_sessions_for_username(db: Session, username: str) -> list[dict]:
     """Open sessions straight from radacct (the source of truth).
 
     The imported RadiusAccountingSession rows lag behind radacct and their
@@ -814,23 +786,46 @@ def _open_radacct_sessions_for_username(username: str) -> list[dict]:
     subscribers, so live sessions were silently missed on suspend/disable
     (incident 2026-06-11).
     """
-    from app.services.radius_dsn import radius_dsn_libpq
-
-    dsn = radius_dsn_libpq()
-    if not dsn or not username:
+    if not username:
         return []
     try:
-        import psycopg
+        from sqlalchemy import Column, DateTime, String, func, select
 
-        with psycopg.connect(dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT acctsessionid, host(nasipaddress), "
-                    "host(framedipaddress) FROM radacct "
-                    "WHERE username = %s AND acctstoptime IS NULL",
-                    (username,),
+        from app.services.external_radius_targets import (
+            authoritative_accounting_target,
+            external_radius_table,
+            get_external_engine,
+        )
+
+        target = authoritative_accounting_target(db)
+        if not target:
+            return []
+        engine = get_external_engine(target["db_url"])
+        radacct = external_radius_table(
+            target["radacct_table"],
+            Column("username", String),
+            Column("acctsessionid", String),
+            Column("nasipaddress", String),
+            Column("framedipaddress", String),
+            Column("acctstoptime", DateTime),
+        )
+        nas_ip = (
+            func.host(radacct.c.nasipaddress)
+            if engine.dialect.name == "postgresql"
+            else radacct.c.nasipaddress
+        )
+        framed_ip = (
+            func.host(radacct.c.framedipaddress)
+            if engine.dialect.name == "postgresql"
+            else radacct.c.framedipaddress
+        )
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(radacct.c.acctsessionid, nas_ip, framed_ip).where(
+                    radacct.c.username == username,
+                    radacct.c.acctstoptime.is_(None),
                 )
-                rows = cur.fetchall()
+            ).all()
         return [
             {"session_id": r[0], "nas_ip": r[1], "framed_ip": r[2] or None}
             for r in rows
@@ -872,7 +867,7 @@ def disconnect_subscription_sessions(
     # to dedupe against the legacy app-side rows added below.
     targets: dict[str, tuple[Any, str | None, str, str | None]] = {}
     found = 0
-    for sess in _open_radacct_sessions_for_username(login):
+    for sess in _open_radacct_sessions_for_username(db, login):
         found += 1
         nas_device = _nas_device_by_ip(db, sess["nas_ip"])
         if not nas_device:
@@ -1087,13 +1082,17 @@ def reauth_subscription_on_identity_change(
         from app.services.radius import reconcile_subscription_connectivity
 
         reconcile_subscription_connectivity(db, subscription_id)
-    except Exception as exc:  # pragma: no cover - reconcile is best-effort here
+    except Exception as exc:  # pragma: no cover - operational guard
         logger.warning(
-            "reauth: RADIUS reconcile failed for sub=%s: %s (periodic sweep "
-            "converges within 15 min)",
+            "reauth: RADIUS reconcile failed for sub=%s: %s; session CoA deferred",
             subscription_id,
             exc,
         )
+        return {
+            "changed": True,
+            "disconnected": 0,
+            "reason": "projection_incomplete",
+        }
 
     disconnected = 0
     try:
@@ -1147,15 +1146,13 @@ def apply_radius_profile_to_account(
             cred.radius_profile_id = profile.id
             updated += 1
     db.commit()
-    for cred in credentials:
-        try:
-            sync_credential_to_radius(db, cred)
-        except Exception as exc:
-            logger.warning(
-                "Failed to sync credential %s to RADIUS: %s",
-                cred.username,
-                exc,
-            )
+    from app.services.radius_population import reconcile_usernames
+
+    reconcile_usernames(
+        {credential.username for credential in credentials},
+        dry_run=False,
+        source_db=db,
+    )
     return updated
 
 
@@ -1345,17 +1342,7 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
 
     capture_connectivity_state(db, subscription.subscriber_id, reason="cancel")
 
-    # 1. Disconnect active sessions
-    try:
-        stats["sessions_disconnected"] = disconnect_subscription_sessions(
-            db,
-            subscription_id,
-            reason="canceled",
-        )
-    except Exception as exc:
-        logger.warning("Session disconnect on cancel failed: %s", exc)
-
-    # 2. Deactivate RADIUS credentials for this subscriber
+    # 1. Deactivate source credentials and project before any CoA consequence.
     credentials = (
         db.query(AccessCredential)
         .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
@@ -1386,6 +1373,16 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
             for ru in radius_users:
                 ru.is_active = False
                 stats["radius_users_removed"] += 1
+
+    # 2. Disconnect only after every configured projection target committed.
+    try:
+        stats["sessions_disconnected"] = disconnect_subscription_sessions(
+            db,
+            subscription_id,
+            reason="canceled",
+        )
+    except Exception as exc:
+        logger.warning("Session disconnect on cancel failed: %s", exc)
 
     # 4. Clear IP from subscription (IP assignments are now subscriber-level)
     # IP assignments are managed independently of subscriptions
@@ -1472,17 +1469,7 @@ def cleanup_subscription_on_suspend(
 
     capture_connectivity_state(db, subscription.subscriber_id, reason="suspend")
 
-    # 1. Disconnect active sessions
-    try:
-        stats["sessions_disconnected"] = disconnect_subscription_sessions(
-            db,
-            subscription_id,
-            reason="suspended",
-        )
-    except Exception as exc:
-        logger.warning("Session disconnect on suspend failed: %s", exc)
-
-    # 2. Deactivate RadiusUser records for this subscription
+    # 1. Deactivate RadiusUser source state for this subscription.
     # This prevents new authentication attempts while suspended
     radius_users = (
         db.query(RadiusUser)
@@ -1531,12 +1518,31 @@ def cleanup_subscription_on_suspend(
         .filter(AccessCredential.is_active.is_(True))
         .all()
     )
+    projection_ready = True
     if credentials:
         try:
             _remove_credentials_from_external_radius(db, credentials)
             stats["external_radius_removed"] = len(credentials)
         except Exception as exc:
+            projection_ready = False
             logger.warning("External RADIUS removal on suspend failed: %s", exc)
+
+    # 2. CoA only follows a complete multi-target projection.
+    if projection_ready:
+        try:
+            stats["sessions_disconnected"] = disconnect_subscription_sessions(
+                db,
+                subscription_id,
+                reason="suspended",
+            )
+        except Exception as exc:
+            logger.warning("Session disconnect on suspend failed: %s", exc)
+    else:
+        logger.error(
+            "Session disconnect deferred for subscription %s: external RADIUS "
+            "projection is incomplete",
+            subscription_id,
+        )
 
     # 4. Apply address list block if configured
     try:
@@ -1599,19 +1605,28 @@ def restore_subscription_connectivity(
         stats["radius_users_reactivated"] += 1
 
     # 2. Sync credentials back to external RADIUS
+    projection_ready = False
     try:
         result = reconcile_subscription_connectivity(db, subscription_id)
         stats["external_radius_synced"] = result.get("external_credentials_synced", 0)
+        projection_ready = bool(result.get("ok"))
     except Exception as exc:
         logger.warning("RADIUS sync on restore failed: %s", exc)
 
     # 3. Remove address list blocks
-    try:
-        stats["address_list_unblocked"] = remove_subscription_address_list_block(
-            db, subscription_id
+    if projection_ready:
+        try:
+            stats["address_list_unblocked"] = remove_subscription_address_list_block(
+                db, subscription_id
+            )
+        except Exception as exc:
+            logger.warning("Address list unblock on restore failed: %s", exc)
+    else:
+        logger.error(
+            "Address-list restore deferred for subscription %s: external RADIUS "
+            "projection is incomplete",
+            subscription_id,
         )
-    except Exception as exc:
-        logger.warning("Address list unblock on restore failed: %s", exc)
 
     db.flush()
     logger.info(
@@ -1625,72 +1640,13 @@ def restore_subscription_connectivity(
 def _remove_credentials_from_external_radius(
     db: Session, credentials: list[AccessCredential]
 ) -> None:
-    """Remove credentials from all external RADIUS databases."""
-    from app.models.radius import RadiusSyncJob
-
+    """Request convergence from the sole external RADIUS projection owner."""
     if not credentials:
         return
-    sync_jobs = (
-        db.query(RadiusSyncJob)
-        .filter(RadiusSyncJob.is_active.is_(True))
-        .filter(RadiusSyncJob.sync_users.is_(True))
-        .filter(RadiusSyncJob.connector_config_id.isnot(None))
-        .all()
+    from app.services.radius_population import reconcile_usernames
+
+    reconcile_usernames(
+        {credential.username for credential in credentials if credential.username},
+        dry_run=False,
+        source_db=db,
     )
-    if not sync_jobs:
-        return
-    for job in sync_jobs:
-        try:
-            from app.services.radius import _external_db_config
-
-            config = _external_db_config(db, job)
-            if not config:
-                continue
-            _delete_users_from_external_radius(config, credentials)
-        except Exception as exc:
-            logger.warning("External RADIUS cleanup failed for job %s: %s", job.id, exc)
-
-
-def _delete_users_from_external_radius(
-    config: dict,
-    credentials: list[AccessCredential],
-) -> None:
-    """Delete user entries from an external FreeRADIUS database."""
-    from sqlalchemy import Column, MetaData, String, Table, create_engine, delete
-
-    radcheck = config["radcheck_table"]
-    radreply = config["radreply_table"]
-    radusergroup = config["radusergroup_table"]
-    use_group = config["use_group"]
-
-    engine = create_engine(config["db_url"])
-    radcheck_table = Table(
-        radcheck,
-        MetaData(),
-        Column("username", String),
-    )
-    radreply_table = Table(
-        radreply,
-        MetaData(),
-        Column("username", String),
-    )
-    radusergroup_table = Table(
-        radusergroup,
-        MetaData(),
-        Column("username", String),
-    )
-    with engine.begin() as conn:
-        for credential in credentials:
-            username = credential.username
-            conn.execute(
-                delete(radcheck_table).where(radcheck_table.c.username == username)
-            )
-            conn.execute(
-                delete(radreply_table).where(radreply_table.c.username == username)
-            )
-            if use_group:
-                conn.execute(
-                    delete(radusergroup_table).where(
-                        radusergroup_table.c.username == username
-                    )
-                )

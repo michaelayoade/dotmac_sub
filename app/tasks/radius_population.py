@@ -22,7 +22,7 @@ _POPULATE_LOCK_KEY = 778_001
 
 
 @celery_app.task(name="app.tasks.radius_population.refresh_radius_from_subs")
-def refresh_radius_from_subs() -> dict[str, int]:
+def refresh_radius_from_subs() -> dict[str, object]:
     """Rebuild radcheck + radreply from dotmac_sub authoritative joins."""
     from app.services.radius_population import populate
 
@@ -46,7 +46,7 @@ _DEVICE_LOGIN_LOCK_KEY = 778_002
 
 
 @celery_app.task(name="app.tasks.radius_population.sync_device_login")
-def sync_device_login() -> dict[str, int]:
+def sync_device_login() -> dict[str, object]:
     """Rebuild radcheck_admin + radreply_admin from active SystemUser device-login state.
 
     Runs the same advisory-lock guard as refresh_radius_from_subs so a

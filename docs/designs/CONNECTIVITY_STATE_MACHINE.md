@@ -41,12 +41,12 @@ projection.
 
 | Output | Field/target | Today's writer count |
 | --- | --- | --- |
-| Access state | `subscription.access_state` + `radusergroup` (via `set_subscription_access_state`) | 1 (already centralized) |
+| Access state | `subscription.access_state`; `radusergroup` is projected by `radius_population` | 1 (already centralized) |
 | Internal RADIUS user flag | `RadiusUser.is_active` | 6 |
 | Credential flag | `AccessCredential.is_active` | 7 |
 | IP activation | `IPAssignment.is_active` | 12 |
 | Served-IP cache | `subscription.ipv4_address` / `ipv6_address` | 11 / 3 |
-| External RADIUS | `radcheck`/`radreply`/`radusergroup` | 1 (`_external_sync_users` sweep — already single-writer, reconciler *enqueues* it) |
+| External RADIUS | `radcheck`/`radreply`/`radusergroup` | 1 (`radius_population`; adapters request scoped/full reconciliation) |
 | Live session | CoA-disconnect / SSH kick | `disconnect_subscription_sessions` (keep) |
 
 The reconciler computes the desired value of each output from the source of truth and

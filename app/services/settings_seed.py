@@ -1422,6 +1422,58 @@ def seed_radius_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("RADIUS_SUSPENDED_ADDRESS_LIST", "suspended"),
     )
+    group_routing_raw = os.getenv("RADIUS_GROUP_ROUTING_ENABLED", "false")
+    radius_settings.ensure_by_key(
+        db,
+        key="group_routing_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=group_routing_raw,
+        value_json=group_routing_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    for key, env_name, default in (
+        ("active_group_name", "RADIUS_ACTIVE_GROUP_NAME", "dotmac-active"),
+        (
+            "suspended_group_name",
+            "RADIUS_SUSPENDED_GROUP_NAME",
+            "dotmac-suspended",
+        ),
+        ("captive_group_name", "RADIUS_CAPTIVE_GROUP_NAME", "dotmac-captive"),
+    ):
+        radius_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.string,
+            value_text=os.getenv(env_name, default),
+        )
+    radius_settings.ensure_by_key(
+        db,
+        key="access_group_priority",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("RADIUS_ACCESS_GROUP_PRIORITY", "0"),
+    )
+    for key, env_name, default in (
+        (
+            "enforcement_reconciler_max_kicks",
+            "ENFORCEMENT_RECONCILER_MAX_KICKS",
+            "25",
+        ),
+        (
+            "enforcement_reconciler_unserviceable_grace_seconds",
+            "ENFORCEMENT_RECONCILER_UNSERVICEABLE_GRACE_SECONDS",
+            "1200",
+        ),
+        (
+            "enforcement_reconciler_ghost_stale_seconds",
+            "ENFORCEMENT_RECONCILER_GHOST_STALE_SECONDS",
+            "7200",
+        ),
+    ):
+        radius_settings.ensure_by_key(
+            db,
+            key=key,
+            value_type=SettingValueType.integer,
+            value_text=os.getenv(env_name, default),
+        )
     refresh_raw = os.getenv("RADIUS_REFRESH_SESSIONS_ON_PROFILE_CHANGE", "true")
     radius_settings.ensure_by_key(
         db,

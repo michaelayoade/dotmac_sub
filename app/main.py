@@ -452,6 +452,11 @@ def _seed_startup_settings() -> None:
         seed_collections_policy_settings(db)
         seed_geocoding_settings(db)
         seed_radius_settings(db)
+        from app.services.external_radius_targets import (
+            seed_external_radius_target_from_env,
+        )
+
+        seed_external_radius_target_from_env(db)
         seed_radius_policy_settings(db)
         seed_scheduler_settings(db)
         seed_subscriber_settings(db)

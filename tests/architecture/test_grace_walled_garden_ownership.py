@@ -32,7 +32,6 @@ def test_access_decision_modules_do_not_consume_raw_captive_flag():
 
 def test_radius_and_connectivity_writers_consume_canonical_restriction():
     for relative in (
-        "app/services/radius.py",
         "app/services/radius_population.py",
         "app/services/events/handlers/enforcement.py",
         "app/services/connectivity_reconciler.py",

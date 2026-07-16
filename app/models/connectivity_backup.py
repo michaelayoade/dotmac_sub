@@ -51,6 +51,9 @@ class ConnectivityStateBackup(Base):
     # External RADIUS rows as captured (list of {username, attribute, op, value}).
     radcheck: Mapped[list | None] = mapped_column(JSON, nullable=True)
     radreply: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Per configured target, including radusergroup. Target identity is a
+    # credential-free fingerprint; DSNs are never copied into a backup.
+    radius_targets: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # Internal credential/radius-user flags
     # (list of {credential_id, login, credential_active, radius_user_active}).
     credentials: Mapped[list | None] = mapped_column(JSON, nullable=True)

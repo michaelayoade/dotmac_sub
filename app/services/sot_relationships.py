@@ -1716,21 +1716,39 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("access.radius_state",),
             ),
             SOTService(
+                name="access.radius_target_registry",
+                module="app.services.external_radius_targets",
+                owns=(
+                    "configured external RADIUS database target selection",
+                    "per-target capability and schema configuration",
+                    "legacy environment bootstrap and cutover verification",
+                ),
+                depends_on=("control.settings_spec", "runtime.db_sessions"),
+                notes=(
+                    "Active RadiusSyncJob and encrypted ConnectorConfig rows are "
+                    "the runtime authority. The environment DSN is bootstrap and "
+                    "cutover-shadow input only, never a runtime fallback."
+                ),
+            ),
+            SOTService(
                 name="access.radius_projection",
                 module="app.services.radius_population",
                 owns=(
-                    "radcheck/radreply projection (customer credentials)",
+                    "radcheck/radreply/radusergroup customer projection",
                     "radcheck_admin/radreply_admin device-login projection",
-                    "idempotent advisory-locked single-writer RADIUS auth sweep",
+                    "idempotent per-target advisory-locked RADIUS auth projection",
                     "walled-garden/reject radreply on blocked/suspended access",
                 ),
-                depends_on=("access.radius_state", "access.radius_reject"),
+                depends_on=(
+                    "access.radius_state",
+                    "access.radius_reject",
+                    "access.radius_target_registry",
+                ),
                 notes=(
-                    "Single writer of the FreeRADIUS auth tables on one shared "
-                    "DSN. Event-time and per-user callers request a projection "
-                    "(full sweep or scoped reconcile); they do not write radcheck/"
-                    "radreply directly. Collapsing the remaining scoped writers in "
-                    "radius.py/enforcement.py is a tracked shrink-only migration."
+                    "Single writer of the FreeRADIUS auth tables across every "
+                    "configured runtime target. Event-time and per-user callers "
+                    "request a full or scoped projection; they do not write auth "
+                    "tables directly."
                 ),
             ),
             SOTService(
