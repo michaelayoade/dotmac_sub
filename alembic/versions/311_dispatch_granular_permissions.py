@@ -1,0 +1,114 @@
+"""Add granular dispatch permissions and grant them to coarse-permission holders.
+
+The admin dispatch web surface is split from the coarse ``operations:dispatch``
+into ``operations:dispatch:read`` / ``:write`` / ``:assign``. This migration seeds
+the granular permissions on existing databases and grants all three to every role
+that already holds ``operations:dispatch``, so no principal loses access. The
+coarse permission is retained for the app.api.dispatch router (pending its own
+per-endpoint split).
+
+Revision ID: 310_dispatch_granular_permissions
+Revises: 310_subscription_billing_cycle
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from uuid import uuid4
+
+import sqlalchemy as sa
+
+from alembic import op
+
+revision = "311_dispatch_granular_permissions"
+down_revision = "310_subscription_billing_cycle"
+branch_labels = None
+depends_on = None
+
+COARSE_KEY = "operations:dispatch"
+GRANULAR = [
+    ("operations:dispatch:read", "View dispatch work orders and maps"),
+    ("operations:dispatch:write", "Create and edit dispatch work orders"),
+    ("operations:dispatch:assign", "Queue and assign dispatch work orders"),
+]
+
+
+def _permission_id(bind, key: str):
+    return bind.execute(
+        sa.text("SELECT id FROM permissions WHERE key = :key"), {"key": key}
+    ).scalar()
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    tables = sa.inspect(bind).get_table_names()
+    if "permissions" not in tables:
+        return
+    now = datetime.now(UTC)
+
+    granular_ids: dict[str, str] = {}
+    for key, description in GRANULAR:
+        pid = _permission_id(bind, key)
+        if not pid:
+            pid = str(uuid4())
+            bind.execute(
+                sa.text(
+                    """
+                    INSERT INTO permissions (
+                        id, key, description, is_active, is_ui_assignable,
+                        created_at, updated_at
+                    )
+                    VALUES (:id, :key, :description, true, true, :now, :now)
+                    """
+                ),
+                {"id": pid, "key": key, "description": description, "now": now},
+            )
+        granular_ids[key] = pid
+
+    if "role_permissions" not in tables:
+        return
+    coarse_id = _permission_id(bind, COARSE_KEY)
+    if not coarse_id:
+        return
+    role_ids = [
+        row[0]
+        for row in bind.execute(
+            sa.text("SELECT role_id FROM role_permissions WHERE permission_id = :p"),
+            {"p": coarse_id},
+        ).fetchall()
+    ]
+    for role_id in role_ids:
+        for pid in granular_ids.values():
+            already = bind.execute(
+                sa.text(
+                    "SELECT 1 FROM role_permissions "
+                    "WHERE role_id = :r AND permission_id = :p"
+                ),
+                {"r": role_id, "p": pid},
+            ).scalar()
+            if not already:
+                bind.execute(
+                    sa.text(
+                        "INSERT INTO role_permissions (id, role_id, permission_id) "
+                        "VALUES (:id, :r, :p)"
+                    ),
+                    {"id": str(uuid4()), "r": role_id, "p": pid},
+                )
+
+
+def downgrade() -> None:
+    bind = op.get_bind()
+    tables = sa.inspect(bind).get_table_names()
+    if "permissions" not in tables:
+        return
+    keys = [key for key, _ in GRANULAR]
+    if "role_permissions" in tables:
+        for key in keys:
+            pid = _permission_id(bind, key)
+            if pid:
+                bind.execute(
+                    sa.text("DELETE FROM role_permissions WHERE permission_id = :p"),
+                    {"p": pid},
+                )
+    for key in keys:
+        bind.execute(sa.text("DELETE FROM permissions WHERE key = :key"), {"key": key})

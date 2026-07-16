@@ -1833,6 +1833,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "scope without a silent row cap."
                 ),
             ),
+            SOTService(
+                name="ui.work_order_list_projection",
+                module="app.services.web_dispatch_work_orders",
+                owns=(
+                    "admin work-order searchable fields",
+                    "admin work-order status filter and stable sort semantics",
+                    "admin work-order list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "operations.work_orders",
+                ),
+                notes=(
+                    "work_order_views.query_work_orders owns the canonical filtered "
+                    "and sorted work-order query; this projection declares list "
+                    "capabilities, normalizes request state, and delegates the read "
+                    "(it issues no SQL of its own). Read-only: work orders are a CRM "
+                    "mirror with no Sub-owned admin bulk command, so no selection or "
+                    "bulk is declared. Each dispatch route is granularly gated "
+                    "(operations:dispatch:read/write/assign)."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",
