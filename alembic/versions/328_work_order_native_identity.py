@@ -43,9 +43,11 @@ def upgrade() -> None:
     if has_native:
         # Fresh squash-built DB: 001 already created work_order in its final
         # model shape (public_id identity, nullable crm ref). The guarded 190
-        # left behind an empty work_order_mirror; nothing references it (the
-        # evidence FKs from 001 point at work_order). Refuse to guess if it
-        # somehow holds data.
+        # left behind an empty work_order_mirror, and later guarded migrations
+        # (e.g. 232's named fk_ont_assignments_work_order_mirror_id) attached
+        # stray named FKs to it — duplicates of the model FKs that 001 already
+        # pointed at work_order. Drop those references, then the vestige.
+        # Refuse to guess if the mirror somehow holds data.
         if has_mirror:
             count = conn.execute(
                 sa.text("SELECT count(*) FROM work_order_mirror")
@@ -56,6 +58,15 @@ def upgrade() -> None:
                     f"mirror holds {count} rows; refusing to reconcile "
                     "automatically"
                 )
+            inspector = sa.inspect(conn)
+            for table in inspector.get_table_names():
+                if table == "work_order_mirror":
+                    continue
+                for fk in inspector.get_foreign_keys(table):
+                    if fk.get("referred_table") == "work_order_mirror" and fk.get(
+                        "name"
+                    ):
+                        op.drop_constraint(fk["name"], table, type_="foreignkey")
             op.drop_table("work_order_mirror")
         return
 
