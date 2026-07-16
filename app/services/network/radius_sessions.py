@@ -102,6 +102,24 @@ def resolve_subscriber_radius_sessions(
     )
 
 
+def online_summary(db: Session) -> dict[str, int]:
+    """Return the live active-session counts for the operations overview.
+
+    Canonical read owner for "who is online now": total active sessions and the
+    number of distinct subscribers with at least one session. Dashboards and
+    other surfaces consume this instead of querying RadiusActiveSession directly.
+    """
+    row = db.execute(
+        select(
+            func.count(RadiusActiveSession.id).label("sessions"),
+            func.count(func.distinct(RadiusActiveSession.subscriber_id))
+            .filter(RadiusActiveSession.subscriber_id.is_not(None))
+            .label("customers"),
+        )
+    ).one()
+    return {"sessions": int(row.sessions or 0), "customers": int(row.customers or 0)}
+
+
 def active_session_count_for_subscriber(db: Session, subscriber_id) -> int:
     return int(
         db.scalar(

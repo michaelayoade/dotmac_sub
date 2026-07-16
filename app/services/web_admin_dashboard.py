@@ -3,7 +3,7 @@
 import logging
 import os
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from time import monotonic
 
@@ -277,9 +277,14 @@ def _network_monitoring_int_setting(db: Session, key: str, default: int) -> int:
 
 
 def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
-    """Return the small billing aggregate needed by the admin overview."""
-    from sqlalchemy import text as sa_text
+    """Return the small billing aggregate needed by the admin overview.
 
+    Revenue this month comes from the billing reporting read owner
+    (BillingReporting.get_overview_stats); this service no longer sums payments
+    itself. Pending/overdue receivables stay on the invoice_collectibility owner
+    so the value matches the Overdue KPI exactly.
+    """
+    from app.services.billing.reporting import BillingReporting
     from app.services.invoice_collectibility import (
         invoice_balance_sum,
         open_invoice_filters,
@@ -287,26 +292,17 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
     )
 
     try:
-        row = db.execute(
-            sa_text(
-                """
-                SELECT
-                    COALESCE((
-                        SELECT SUM(amount)
-                        FROM payments
-                        WHERE is_active = true
-                          AND status = 'succeeded'
-                          AND paid_at >= date_trunc('month', NOW())
-                          AND paid_at < date_trunc('month', NOW()) + INTERVAL '1 month'
-                    ), 0) AS payments_this_month
-                """
-            )
-        ).one()
+        now = datetime.now(UTC)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_end = (month_start + timedelta(days=32)).replace(day=1)
+        overview = BillingReporting.get_overview_stats(
+            db, period_start=month_start, period_end=month_end
+        )
         return {
-            "payments_this_month": float(row.payments_this_month or 0),
+            "payments_this_month": float(overview["total_revenue"]),
             "pending_amount": float(invoice_balance_sum(db, open_invoice_filters())),
             "overdue_amount": float(
-                invoice_balance_sum(db, overdue_debt_filters(now=datetime.now(UTC)))
+                invoice_balance_sum(db, overdue_debt_filters(now=now))
             ),
         }
     except Exception:
@@ -320,20 +316,15 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
 
 
 def _build_online_customer_summary(db: Session) -> dict[str, int]:
-    """Return active-session counts focused on customers, not raw sessions."""
-    try:
-        from app.models.radius_active_session import RadiusActiveSession
+    """Return active-session counts focused on customers, not raw sessions.
 
-        row = db.query(
-            func.count(RadiusActiveSession.id).label("sessions"),
-            func.count(func.distinct(RadiusActiveSession.subscriber_id))
-            .filter(RadiusActiveSession.subscriber_id.is_not(None))
-            .label("customers"),
-        ).one()
-        return {
-            "sessions": int(row.sessions or 0),
-            "customers": int(row.customers or 0),
-        }
+    Delegates to the radius_sessions read owner (online_summary); this service no
+    longer queries RadiusActiveSession directly.
+    """
+    try:
+        from app.services.network import radius_sessions
+
+        return radius_sessions.online_summary(db)
     except Exception:
         logger.debug("Failed to load online customer summary", exc_info=True)
         _rollback_after_failed_query(db)
@@ -442,44 +433,26 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     active_subscribers = sub_stats["active_count"]
     arpu = payments_this_month / active_subscribers if active_subscribers > 0 else 0
 
-    # --- AR aging breakdown ---
+    # --- AR aging breakdown (canonical buckets from the billing read owner) ---
     ar_30 = 0.0
     ar_60 = 0.0
     try:
-        from sqlalchemy import text as sa_text
+        from app.services.billing.reporting import BillingReporting
 
-        ar_row = db.execute(
-            sa_text(
-                "SELECT "
-                "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
-                "  AND due_at >= NOW() - INTERVAL '30 days'), 0) as ar_30, "
-                "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
-                "  AND due_at < NOW() - INTERVAL '30 days' "
-                "  AND due_at >= NOW() - INTERVAL '60 days'), 0) as ar_60 "
-                "FROM invoices WHERE is_active = true AND status != 'void'"
-            )
-        ).one()
-        ar_30 = float(ar_row.ar_30)
-        ar_60 = float(ar_row.ar_60)
+        aging_totals = BillingReporting.get_ar_aging_buckets(db)["totals"]
+        ar_30 = float(aging_totals.get("1_30", 0) or 0)
+        ar_60 = float(aging_totals.get("31_60", 0) or 0)
     except Exception:
         logger.debug("Failed to compute AR aging", exc_info=True)
         _rollback_after_failed_query(db)
 
-    # --- Bandwidth from device metrics ---
+    # --- Bandwidth from the network monitoring read owner ---
     bw_current = "0"
     bw_peak = "0"
     try:
-        from sqlalchemy import text as sa_text
+        from app.services import network_monitoring as network_monitoring_service
 
-        bw_row = db.execute(
-            sa_text(
-                "SELECT COALESCE(SUM(value), 0) as total_bps "
-                "FROM device_metrics "
-                "WHERE metric_type = 'rx_bps' "
-                "AND recorded_at > NOW() - INTERVAL '10 minutes' AND value > 0"
-            )
-        ).one()
-        total_bps = float(bw_row.total_bps)
+        total_bps = network_monitoring_service.bandwidth_summary(db)["total_bps"]
         if total_bps > 1e9:
             bw_current = f"{total_bps / 1e9:.1f} Gbps"
         elif total_bps > 1e6:
@@ -883,6 +856,9 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "vpn_tunnels": [],
         "whats_new_items": whats_new_items,
         "unconfigured_ont_count": unconfigured_ont_count,
+        # Wall-clock time this snapshot was built. Travels with the cached
+        # context so the header shows real freshness, not render time.
+        "refreshed_at": datetime.now(UTC),
     }
 
 
@@ -980,7 +956,8 @@ def dashboard(request: Request, db: Session):
         {
             "request": request,
             "now": datetime.now(UTC),
-            "data_as_of": datetime.now(UTC),
+            # Real freshness of the cached snapshot, not render time.
+            "data_as_of": global_ctx.get("refreshed_at") or datetime.now(UTC),
             "active_page": "dashboard",
             "current_user": current_user,
             "show_financials": show_financials,
@@ -1086,6 +1063,11 @@ def _load_dashboard_infrastructure_health(
 def _build_infrastructure_service_summary(
     services: Sequence[object],
 ) -> dict[str, int]:
+    from app.schemas.status_presentation import StatusTone
+    from app.services.status_presentation import (
+        infrastructure_service_status_presentation,
+    )
+
     summary = {
         "total": len(services),
         "up": 0,
@@ -1093,16 +1075,16 @@ def _build_infrastructure_service_summary(
         "down": 0,
         "unknown": 0,
     }
+    _tone_bucket = {
+        StatusTone.positive: "up",
+        StatusTone.warning: "degraded",
+        StatusTone.negative: "down",
+    }
     for service in services:
-        status = str(getattr(service, "status", "unknown") or "unknown").lower()
-        if status in {"up", "healthy", "ok", "streaming"}:
-            summary["up"] += 1
-        elif status in {"degraded", "partial", "warning"}:
-            summary["degraded"] += 1
-        elif status in {"down", "critical", "failed"}:
-            summary["down"] += 1
-        else:
-            summary["unknown"] += 1
+        tone = infrastructure_service_status_presentation(
+            getattr(service, "status", None)
+        ).tone
+        summary[_tone_bucket.get(tone, "unknown")] += 1
     return summary
 
 
