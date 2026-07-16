@@ -2438,7 +2438,11 @@ def test_devices_list_page_data_includes_core_network_devices(db_session):
     db_session.add_all([core, olt_monitor, olt])
     db_session.commit()
 
-    payload = core_devices_inventory_service.devices_list_page_data(db_session)
+    from app.services.device_projection_reconcile import reconcile_device_projections
+
+    reconcile_device_projections(db_session)
+    query = core_devices_inventory_service.build_network_device_list_query()
+    payload = core_devices_inventory_service.devices_list_page_data(db_session, query)
 
     names_by_type = {(device["name"], device["type"]) for device in payload["devices"]}
     assert ("Distribution Switch 1", "core") in names_by_type
@@ -2469,9 +2473,13 @@ def test_devices_list_page_data_filters_core_network_devices(db_session):
     )
     db_session.commit()
 
-    payload = core_devices_inventory_service.devices_list_page_data(
-        db_session, device_type="core"
+    from app.services.device_projection_reconcile import reconcile_device_projections
+
+    reconcile_device_projections(db_session)
+    query = core_devices_inventory_service.build_network_device_list_query(
+        device_type="core"
     )
+    payload = core_devices_inventory_service.devices_list_page_data(db_session, query)
 
     assert [device["name"] for device in payload["devices"]] == ["Core Router 1"]
     assert payload["type"] == "core"
