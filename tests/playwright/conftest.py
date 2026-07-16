@@ -15,6 +15,14 @@ from playwright.sync_api import expect, sync_playwright
 # can't touch a real deployment DB — but these e2e fixtures DO need the live
 # (disposable) database the app under test uses. Honor TEST_DATABASE_URL here;
 # app.db.SessionLocal is already bound to the poisoned URL by import order.
+# Same un-poisoning for Redis: the customer-session store reads REDIS_URL at
+# call time, so restoring the env here lets the e2e fixtures write sessions the
+# app under test can validate.
+_e2e_redis_url = os.getenv("E2E_REDIS_URL")
+if _e2e_redis_url:
+    os.environ["REDIS_URL"] = _e2e_redis_url
+    os.environ["SESSION_REDIS_URL"] = _e2e_redis_url
+
 _e2e_database_url = os.getenv("TEST_DATABASE_URL")
 if _e2e_database_url:
     from sqlalchemy import create_engine as _create_engine
