@@ -1,7 +1,7 @@
 """Store multi-target external RADIUS connectivity snapshots.
 
-Revision ID: 323_connectivity_backup_radius_targets
-Revises: 322_ledger_customer_position_effect
+Revision ID: 324_connectivity_backup_radius_targets
+Revises: 323_notification_granular_permissions
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "323_connectivity_backup_radius_targets"
-down_revision = "322_ledger_customer_position_effect"
+revision = "324_connectivity_backup_radius_targets"
+down_revision = "323_notification_granular_permissions"
 branch_labels = None
 depends_on = None
 
