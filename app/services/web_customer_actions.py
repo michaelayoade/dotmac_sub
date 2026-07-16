@@ -1987,10 +1987,12 @@ def update_person_customer(
         "status": normalized_status,
         "is_active": active,
         "marketing_opt_in": marketing_opt_in == "true",
-        "category": SubscriberCategory.residential.value,
         "notes": _normalize_optional(notes),
-        "metadata_": metadata_json,
     }
+    if metadata_json is not None:
+        metadata_payload = dict(metadata_json)
+        metadata_payload["subscriber_category"] = before.category.value
+        data["metadata_"] = metadata_payload
     if bool((before.metadata_ or {}).get("nin_verified")) and data["nin"] != before.nin:
         data["nin"] = before.nin
     data.update(
@@ -2093,6 +2095,44 @@ def update_business_customer(
             if parsed_date:
                 subscriber.account_start_date = parsed_date
                 db.commit()
+    return before, after
+
+
+def convert_person_to_business_customer(
+    db: Session,
+    customer_id: str,
+    *,
+    company_name: str,
+    legal_name: str | None,
+    tax_id: str | None,
+    domain: str | None,
+    website: str | None,
+):
+    before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    if before.category == SubscriberCategory.business:
+        raise ValueError("Customer is already a business customer.")
+
+    normalized_company_name = _require_text(
+        company_name, "Business name", max_length=160
+    )
+    db.expunge(before)
+    payload = SubscriberUpdate.model_validate(
+        {
+            "category": SubscriberCategory.business.value,
+            "company_name": normalized_company_name,
+            "display_name": normalized_company_name,
+            "legal_name": _normalize_optional(legal_name),
+            "tax_id": _normalize_optional(tax_id),
+            "domain": _normalize_optional(domain),
+            "website": _normalize_optional(website),
+        }
+    )
+    subscriber_service.subscribers.update(
+        db=db,
+        subscriber_id=customer_id,
+        payload=payload,
+    )
+    after = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     return before, after
 
 

@@ -510,6 +510,66 @@ def test_update_person_allows_keeping_own_email(db_session, subscriber):
     assert refreshed.first_name == "Renamed"
 
 
+def test_update_person_preserves_existing_customer_category(db_session, subscriber):
+    subscriber.category = SubscriberCategory.government
+    db_session.commit()
+
+    _update_person(
+        db_session,
+        subscriber,
+        first_name="Renamed",
+        metadata_json={"subscriber_category": "business", "source": "form"},
+    )
+
+    refreshed = db_session.get(Subscriber, subscriber.id)
+    assert refreshed.category == SubscriberCategory.government
+    assert refreshed.company_name is None
+    assert refreshed.metadata_["source"] == "form"
+
+
+def test_convert_person_to_business_customer_changes_account_type(
+    db_session, subscriber
+):
+    actions.convert_person_to_business_customer(
+        db=db_session,
+        customer_id=str(subscriber.id),
+        company_name="  Acme Corporate  ",
+        legal_name=" Acme Corporate Limited ",
+        tax_id=" TIN-123 ",
+        domain=" acme.example ",
+        website=" https://acme.example ",
+    )
+
+    refreshed = db_session.get(Subscriber, subscriber.id)
+    assert refreshed.category == SubscriberCategory.business
+    assert refreshed.company_name == "Acme Corporate"
+    assert refreshed.display_name == "Acme Corporate"
+    assert refreshed.legal_name == "Acme Corporate Limited"
+    assert refreshed.tax_id == "TIN-123"
+    assert refreshed.domain == "acme.example"
+    assert refreshed.website == "https://acme.example"
+    assert refreshed.first_name == subscriber.first_name
+    assert refreshed.last_name == subscriber.last_name
+
+
+def test_convert_person_to_business_customer_rejects_existing_business(
+    db_session, subscriber
+):
+    subscriber.category = SubscriberCategory.business
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="already a business customer"):
+        actions.convert_person_to_business_customer(
+            db=db_session,
+            customer_id=str(subscriber.id),
+            company_name="Acme Corporate",
+            legal_name=None,
+            tax_id=None,
+            domain=None,
+            website=None,
+        )
+
+
 def test_update_person_normalizes_nin(db_session, subscriber):
     _update_person(db_session, subscriber, nin="123-456-78901")
     refreshed = db_session.get(Subscriber, subscriber.id)
