@@ -6,8 +6,8 @@ and each mutating endpoint declares operations:dispatch:write/:assign, so the co
 granted the granular permissions to every role that held the coarse one, so deleting
 it here removes no access.
 
-Revision ID: 312_retire_coarse_dispatch_permission
-Revises: 311_dispatch_granular_permissions
+Revision ID: 314_retire_coarse_dispatch_permission
+Revises: 313_dispatch_granular_permissions
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "312_retire_coarse_dispatch_permission"
-down_revision = "311_dispatch_granular_permissions"
+revision = "314_retire_coarse_dispatch_permission"
+down_revision = "313_dispatch_granular_permissions"
 branch_labels = None
 depends_on = None
 

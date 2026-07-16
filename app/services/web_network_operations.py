@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import TYPE_CHECKING, Any
 
 from app.models.network_operation import (
     NetworkOperationTargetType,
 )
 from app.services.control_plane_intent import phase_for_network_operation
+from app.services.network_operation_dispatch import operation_dispatch_summary
+from app.services.network_operation_recovery import review_redrive
 from app.services.network_operations import network_operations
 
 if TYPE_CHECKING:
@@ -138,6 +141,8 @@ def build_operation_history(
         status_val = op.status.value if op.status else "pending"
         op_type_val = op.operation_type.value if op.operation_type else ""
 
+        redrive_review = review_redrive(db, op)
+        dispatch_summary = operation_dispatch_summary(op)
         entry: dict[str, Any] = {
             "id": str(op.id),
             "title": _operation_title(op),
@@ -153,7 +158,18 @@ def build_operation_history(
             "initiated_by": op.initiated_by or "",
             "occurred_at": op.created_at,
             "duration": _format_duration(op),
-            "can_retry": status_val == "failed",
+            "can_retry": redrive_review.eligible,
+            "retry_reason": redrive_review.message,
+            "redrive_expected_head": redrive_review.expected_head,
+            "redrive_idempotency_key": (
+                secrets.token_urlsafe(24) if redrive_review.eligible else None
+            ),
+            "redrive_action_label": redrive_review.action_label,
+            "redrive_of_id": str(op.redrive_of_id) if op.redrive_of_id else None,
+            "redrive_reason": op.redrive_reason,
+            "retry_count": int(op.retry_count or 0),
+            "max_retries": int(op.max_retries or 0),
+            "dispatch": dispatch_summary,
             "operation_type": op_type_val,
             "target_type": target_type,
             "target_id": target_id,

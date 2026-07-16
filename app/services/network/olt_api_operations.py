@@ -12,8 +12,10 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network import OLTDevice
-from app.services.network import olt_operations, ont_authorization
+from app.services.network import olt_operations
+from app.services.network.action_logging import actor_label
 from app.services.network.olt import OLTDevices
+from app.services.network.ont_provisioning_commands import request_ont_authorization
 
 
 @dataclass(frozen=True)
@@ -36,43 +38,24 @@ def authorize_ont(
     force_reauthorize: bool = False,
     request: Request | None = None,
 ) -> OltApiWriteResult:
-    result = ont_authorization.authorize_ont(
+    command = request_ont_authorization(
         db,
-        olt_id,
-        fsp,
-        serial_number,
+        olt_id=olt_id,
+        fsp=fsp,
+        serial_number=serial_number,
         force_reauthorize=force_reauthorize,
-        request=request,
+        initiated_by=actor_label(request) if request is not None else "api",
     )
     return OltApiWriteResult(
-        result.success or result.partial_success,
-        result.message,
-        _serialize_authorization_result(result),
+        command.accepted,
+        command.message,
+        {
+            "operation_id": command.operation_id,
+            "dispatch_id": command.dispatch_id,
+            "waiting": command.waiting,
+            "duplicate": command.duplicate,
+        },
     )
-
-
-def _serialize_authorization_result(
-    result: ont_authorization.AuthorizationWorkflowResult,
-) -> dict[str, object]:
-    return {
-        "status": result.status,
-        "ont_unit_id": result.ont_unit_id,
-        "ont_id_on_olt": result.ont_id_on_olt,
-        "completed_authorization": result.completed_authorization,
-        "partial_success": result.partial_success,
-        "baseline_applied": getattr(result, "baseline_applied", None),
-        "duration_ms": result.duration_ms,
-        "steps": [
-            {
-                "step": step.step,
-                "name": step.name,
-                "success": step.success,
-                "message": step.message,
-                "duration_ms": step.duration_ms,
-            }
-            for step in result.steps
-        ],
-    }
 
 
 def _serialize_service_port(entry: object) -> dict[str, object]:

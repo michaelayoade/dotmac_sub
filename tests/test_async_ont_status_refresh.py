@@ -4,6 +4,8 @@ from pathlib import Path
 from app.celery_app import celery_app
 from app.models.network import OntUnit
 from app.models.network_operation import (
+    NetworkOperationDispatch,
+    NetworkOperationDispatchStatus,
     NetworkOperationStatus,
     NetworkOperationTargetType,
     NetworkOperationType,
@@ -24,14 +26,8 @@ def _ont(db_session, serial: str = "ASYNC-REFRESH-ONT") -> OntUnit:
     return ont
 
 
-def test_queue_refresh_tracks_and_deduplicates_operation(db_session, monkeypatch):
+def test_queue_refresh_tracks_and_deduplicates_operation(db_session):
     ont = _ont(db_session)
-    queued: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        ont_runtime_status.refresh_single_ont_status,
-        "delay",
-        lambda ont_id, operation_id: queued.append((ont_id, operation_id)),
-    )
 
     first = device_actions.queue_refresh(db_session, str(ont.id))
     second = device_actions.queue_refresh(db_session, str(ont.id))
@@ -41,14 +37,20 @@ def test_queue_refresh_tracks_and_deduplicates_operation(db_session, monkeypatch
     assert first.operation_id
     assert second.operation_id == first.operation_id
     assert second.message == "ONT status refresh is already in progress."
-    assert queued == [(str(ont.id), first.operation_id)]
 
     operation = network_operations.get(db_session, first.operation_id)
     assert operation.status == NetworkOperationStatus.pending
     assert operation.target_type == NetworkOperationTargetType.ont
     assert operation.input_payload == {"action": "status_refresh"}
+    dispatch = db_session.query(NetworkOperationDispatch).one()
+    assert dispatch.operation_id == operation.id
+    assert dispatch.args_payload == [str(ont.id), first.operation_id]
+    assert dispatch.queue == "ingestion"
+    assert dispatch.status == NetworkOperationDispatchStatus.pending
     history = build_operation_history(db_session, "ont", str(ont.id))
     assert history[0]["title"] == "ONT Status Refresh"
+    assert history[0]["dispatch"]["status"] == "pending"
+    assert history[0]["dispatch"]["label"] == "Awaiting broker delivery"
 
 
 def test_refresh_operation_status_is_read_only_and_target_scoped(db_session):

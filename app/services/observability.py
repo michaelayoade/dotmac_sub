@@ -47,6 +47,7 @@ _STATE_SNAPSHOT_SPECS = {
     "credentials": {"max_observations": 500, "ttl_seconds": 7 * 86_400},
     "database_pressure": {"max_observations": 16, "ttl_seconds": 86_400},
     "nas_lifecycle": {"max_observations": 32, "ttl_seconds": 7 * 86_400},
+    "network_operations": {"max_observations": 32, "ttl_seconds": 86_400},
     "router_sot": {"max_observations": 16, "ttl_seconds": 7 * 86_400},
 }
 _STATE_TOKEN = re.compile(r"^[A-Za-z0-9_.:-]+$")

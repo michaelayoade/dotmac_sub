@@ -599,6 +599,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "stale-active operation reclamation",
                     "parent/child operation status rollup",
                     "device operation re-execution eligibility",
+                    "immutable redrive lineage and reviewed-head evidence",
+                    "typed recovery eligibility and retry limits",
                 ),
                 depends_on=("network.identity",),
                 notes=(
@@ -608,7 +610,72 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "retry eligibility. app.services.task_reliability declares "
                     "each task's contract and is a projection of this owner, not "
                     "a parallel authority — a task whose contract claims operator "
-                    "redrive requires a redrive path here first."
+                    "redrive requires a redrive path here first. Failed attempts "
+                    "remain immutable; approved retries create linked operations "
+                    "through app.services.network_operation_recovery. Unregistered "
+                    "device writes fail closed."
+                ),
+            ),
+            SOTService(
+                name="network.operation_dispatch",
+                module="app.services.network_operation_dispatch",
+                owns=(
+                    "transactional network command outbox",
+                    "typed operation-to-task command registry",
+                    "broker publication attempts and acknowledgement state",
+                    "single-admission worker execution claims",
+                    "unknown-delivery and interrupted-execution classification",
+                ),
+                depends_on=("network.operation_ledger",),
+                notes=(
+                    "Stages the exact registered command in the same transaction "
+                    "as its operation. A scheduled publisher is the only broker "
+                    "writer for managed commands, and a worker envelope claims the "
+                    "dispatch row before entering device code. Operation status "
+                    "remains the device/business outcome; transport uncertainty is "
+                    "preserved separately and fails closed for reviewed recovery."
+                ),
+            ),
+            SOTService(
+                name="network.ont_provisioning_commands",
+                module="app.services.network.ont_provisioning_commands",
+                owns=(
+                    "ONT authorization and baseline-repair command acceptance",
+                    "provisioning operation and dispatch atomicity",
+                    "bootstrap child-operation and delayed-attempt staging",
+                    "provisioning command duplicate responses",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "network.operation_ledger",
+                    "network.operation_dispatch",
+                ),
+                notes=(
+                    "Admin, API, and bulk adapters submit typed intent here. "
+                    "They never publish provisioning device tasks directly, and "
+                    "workers never create their own operation after broker delivery."
+                ),
+            ),
+            SOTService(
+                name="network.ont_provisioning_execution",
+                module="app.services.network.ont_provisioning_execution",
+                owns=(
+                    "tracked ONT authorization execution transitions",
+                    "tracked baseline-repair execution transitions",
+                    "DB-only ONT baseline preview execution",
+                    "TR-069 bootstrap verification and retry policy",
+                    "bootstrap parent and bulk-item outcome projection",
+                ),
+                depends_on=(
+                    "network.ont_provisioning_commands",
+                    "network.operation_ledger",
+                ),
+                notes=(
+                    "Celery tasks claim a durable dispatch and delegate here. "
+                    "Inform-driven confirmation and scheduled verification share "
+                    "the same parent/child completion projection. A pre-cutover "
+                    "broker envelope may only re-submit intent to the command "
+                    "owner and cannot enter device code."
                 ),
             ),
             SOTService(
@@ -2169,6 +2236,40 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "adapters and device-access code do not build WireGuard config, "
             "mutate peers, or write the system interface directly. The Redis "
             "vpn_cache is a rebuildable projection, never a source of truth."
+        ),
+    ),
+    DomainSOT(
+        domain="geospatial",
+        services=(
+            SOTService(
+                name="gis.geocoding",
+                module="app.services.geocoding",
+                owns=(
+                    "address and coordinate resolution",
+                    "geocode lookup and result caching",
+                ),
+            ),
+            SOTService(
+                name="gis.spatial_sync",
+                module="app.services.gis_sync",
+                owns=(
+                    "GIS/spatial data synchronization",
+                    "spatial feature import and projection",
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.api.geocoding",
+            "app.api.gis",
+            "app.tasks.gis",
+            "app.services.web_system_geocode_tool",
+            "app.services.web_gis",
+        ),
+        rule=(
+            "Address/coordinate resolution and spatial data synchronization "
+            "resolve through these owners. API, web, and task callers request a "
+            "geocode or a sync outcome; they do not embed their own geocode "
+            "lookups or spatial write logic."
         ),
     ),
     DomainSOT(
