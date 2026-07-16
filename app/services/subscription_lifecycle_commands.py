@@ -461,6 +461,11 @@ def _dispatch_plan_change(
                 "plan_change_preview_missing",
                 "The financial plan-change preview is missing its fingerprint",
             )
+        if not isinstance(quote, dict):
+            raise SubscriptionCommandExecutionRejected(
+                "plan_change_preview_missing",
+                "The financial plan-change preview is missing its quote",
+            )
         if (
             command.expected_financial_fingerprint is not None
             and command.expected_financial_fingerprint != fingerprint

@@ -389,9 +389,7 @@ def test_prepaid_upgrade_returns_insufficient_balance_without_mutation(
     confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
     # The customer can spend time reading the preview. Confirmation must reuse
     # its frozen pricing timestamp instead of recalculating three seconds later.
-    _freeze_subscription_now(
-        monkeypatch, datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC)
-    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC))
 
     result = apply_instant_plan_change(
         db_session,
@@ -505,9 +503,7 @@ def test_prepaid_upgrade_with_exact_funding_preserves_anniversary_and_posts_debi
     db_session.commit()
 
     confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
-    _freeze_subscription_now(
-        monkeypatch, datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC)
-    )
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC))
     result = apply_instant_plan_change(
         db_session,
         {
