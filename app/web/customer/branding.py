@@ -119,10 +119,10 @@ def customer_branding_context(request: Request) -> dict[str, object]:
         stats, portal_name, favicon = cached
     else:
         # Brand assets only — the customer portal must never receive admin
-        # operational data (the previous get_sidebar_stats call injected
-        # unscoped system-wide counts into every portal page, including the
-        # unauthenticated login screen). brand_profiles is the canonical
-        # customer-facing brand owner.
+        # operational data (a previous admin-service call injected unscoped
+        # system-wide counts into every portal page, including the
+        # unauthenticated login screen; see the portal boundary architecture
+        # test). brand_profiles is the canonical customer-facing brand owner.
         db = db_session_adapter.create_session()
         stats: dict[str, object] = {}
         portal_name = ""
