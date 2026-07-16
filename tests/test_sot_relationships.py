@@ -18,6 +18,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "runtime_infrastructure",
         "observability",
         "support_operations",
+        "ai_advisory",
         "provisioning_operations",
         "feature_control_plane",
         "authorization_control_plane",
