@@ -706,11 +706,26 @@ def my_reseller_quote_request(
     principal: dict = Depends(require_user_auth),
 ) -> dict:
     """Request a map-pinned installation quote on a managed customer's behalf.
-    404 if the account isn't one of the reseller's (no IDOR)."""
+    404 if the account isn't one of the reseller's (no IDOR). Behind the
+    Phase 3 ``quotes_native_write_enabled`` write-flip flag: OFF writes through
+    to the CRM; ON creates the quote natively in sub (same §2.5 shape)."""
+    from app.services.sales import selfserve as selfserve_service
+
     reseller_id = _reseller_id(db, principal)
     account = reseller_portal._get_customer_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    if selfserve_service.native_write_enabled(db):
+        quote = selfserve_service.selfserve_quotes.request_quote(
+            db,
+            str(account.id),
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            address=payload.address,
+            region=payload.region,
+            note=payload.note,
+        )
+        return selfserve_service.build_portal_quote_payload(db, quote)
     return quotes_mirror.request_quote(
         db,
         str(account.id),

@@ -178,8 +178,11 @@ def test_me_referrals_flag_on_serves_native(monkeypatch):
 
 
 def test_me_quote_request_stays_mirror_write_through_with_read_flag_on(monkeypatch):
+    # The read flip must not flip writes: with native_read ON but the §4.3
+    # write flag OFF, quote-request still writes through the mirror.
     principal = _subscriber_principal()
     monkeypatch.setattr(selfserve_service, "native_read_enabled", lambda db: True)
+    monkeypatch.setattr(selfserve_service, "native_write_enabled", lambda db: False)
     captured = {}
 
     def fake_request_quote(db, sid, **kw):

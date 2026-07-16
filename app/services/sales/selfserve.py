@@ -31,8 +31,9 @@ Phase 3 deltas vs the CRM source (§2.2):
   line metadata ``sub_offer_id`` (§1.4 convention, already what the admin
   quote form writes).
 * ``portal_scope.resolve_target_subscriber`` is replaced by the
-  authenticated sub subscriber — no reseller write path exists in sub
-  (crm_client never sent ``for_subscriber_id``).
+  authenticated sub subscriber. The reseller surface reuses the same
+  entrypoint on a managed account's subscriber_id
+  (``api/reseller.my_reseller_quote_request``, IDOR-scoped by the route).
 * ``lead_source="Portal"`` — the §2.1/risk-#7 fix (the raw ``"portal"``
    400'd in the old CRM vocabulary).
 * New quote metadata stops writing ``subscriber_external_id`` (§1.4) — the
@@ -408,6 +409,15 @@ def native_read_enabled(db: Session) -> bool:
     (``quotes_native_write_enabled``) so reads can flip first (§4.2 step 3).
     """
     return control_registry.is_enabled(db, "quotes.native_read")
+
+
+def native_write_enabled(db: Session) -> bool:
+    """Phase 3 write-flip flag (§4.3): native quote writes vs CRM
+    write-through. OFF (default) — quote requests and the deposit
+    initiate/accept tail write through to the CRM via ``quotes_mirror``;
+    ON — ``SelfServeQuotes.request_quote`` / ``accept_with_deposit`` own the
+    write in sub's native ``quotes`` table (no CRM link required)."""
+    return control_registry.is_enabled(db, "quotes.native_write")
 
 
 class SelfServeQuotes:

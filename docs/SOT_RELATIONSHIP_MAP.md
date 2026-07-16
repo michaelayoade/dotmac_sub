@@ -1810,4 +1810,8 @@ Rule: sales order, self-serve quote/signup, sales service, and Refer & Earn
 referral logic resolve through these owners. `web_sales`/`web_referrals` adapters
 and API/task callers request an outcome; the referral mirror is the sole DB and
 CRM data-access path for Refer & Earn, treated as a cache of CRM data, never a
-parallel authority.
+parallel authority. Quote-request and deposit surfaces branch on the Phase 3
+`quotes_native_write_enabled` flag: the native branch is owned by
+`sales.selfserve`, and its deposit "already paid" decision belongs to the paid
+deposit Invoice in the billing ledger — never to a mirror flag the CRM could
+stale-sync.
