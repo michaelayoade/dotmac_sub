@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
@@ -1115,4 +1115,149 @@ def service_order_dashboard_counts(db: Session) -> dict[str, int]:
         "pending": int(row.pending or 0),
         "in_progress": int(row.in_progress or 0),
         "completed": int(row.completed or 0),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Admin report read owners
+#
+# The admin /reports technician page renders these figures; the web layer
+# (app.services.web_reports) composes them and owns presentation only. The
+# aggregations were moved here verbatim from the web layer so the displayed
+# numbers do not change.
+# ---------------------------------------------------------------------------
+
+
+def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def technician_report_stats(db: Session) -> dict:
+    """Aggregated technician/provisioning figures for the admin report.
+
+    Returns ``total_technicians``, ``jobs_completed`` (active service
+    orders), ``avg_completion_hours``, ``first_visit_rate``,
+    ``technician_stats`` (per-technician appointment counts, unsliced), and
+    ``job_type_breakdown`` (service-order counts by status).
+
+    Note: the original web implementation also counted no-show appointments
+    but never used the result; that dead aggregation was dropped in the move.
+    """
+    jobs_completed = (
+        db.scalar(
+            select(func.count(ServiceOrder.id)).where(
+                ServiceOrder.status == ServiceOrderStatus.active
+            )
+        )
+        or 0
+    )
+
+    # Real technician count from appointments + provisioning tasks
+    tech_names: set[str] = set()
+    appt_techs = db.scalars(
+        select(InstallAppointment.technician)
+        .where(InstallAppointment.technician.isnot(None))
+        .distinct()
+    ).all()
+    tech_names.update(t for t in appt_techs if t)
+    task_assignees = db.scalars(
+        select(ProvisioningTask.assigned_to)
+        .where(ProvisioningTask.assigned_to.isnot(None))
+        .distinct()
+    ).all()
+    tech_names.update(t for t in task_assignees if t)
+    total_technicians = len(tech_names)
+
+    # Average completion hours from provisioning tasks with start/end times
+    completed_tasks = db.execute(
+        select(
+            ProvisioningTask.started_at,
+            ProvisioningTask.completed_at,
+        ).where(
+            ProvisioningTask.status == TaskStatus.completed,
+            ProvisioningTask.started_at.isnot(None),
+            ProvisioningTask.completed_at.isnot(None),
+        )
+    ).all()
+    if completed_tasks:
+        total_hours = 0.0
+        counted = 0
+        for t in completed_tasks:
+            t_start = _ensure_aware_datetime(t.started_at)
+            t_end = _ensure_aware_datetime(t.completed_at)
+            if t_start and t_end:
+                total_hours += max(0.0, (t_end - t_start).total_seconds() / 3600)
+                counted += 1
+        avg_completion_hours = round(total_hours / max(1, counted), 1)
+    else:
+        avg_completion_hours = 0.0
+
+    # First visit rate from appointments (completed vs total)
+    total_appointments = db.scalar(select(func.count(InstallAppointment.id))) or 0
+    completed_appointments = (
+        db.scalar(
+            select(func.count(InstallAppointment.id)).where(
+                InstallAppointment.status == AppointmentStatus.completed
+            )
+        )
+        or 0
+    )
+    if total_appointments > 0:
+        first_visit_rate = round((completed_appointments / total_appointments) * 100, 1)
+    else:
+        first_visit_rate = 0.0
+
+    # Per-technician stats
+    technician_stats: list[dict[str, object]] = []
+    for tech_name in sorted(tech_names):
+        tech_total = (
+            db.scalar(
+                select(func.count(InstallAppointment.id)).where(
+                    InstallAppointment.technician == tech_name
+                )
+            )
+            or 0
+        )
+        tech_completed = (
+            db.scalar(
+                select(func.count(InstallAppointment.id)).where(
+                    InstallAppointment.technician == tech_name,
+                    InstallAppointment.status == AppointmentStatus.completed,
+                )
+            )
+            or 0
+        )
+        technician_stats.append(
+            {
+                "name": tech_name,
+                "total_jobs": tech_total,
+                "completed_jobs": tech_completed,
+                "avg_hours": avg_completion_hours,
+                "rating": round(
+                    (tech_completed / tech_total * 5) if tech_total > 0 else 0, 1
+                ),
+            }
+        )
+
+    job_type_rows = db.execute(
+        select(ServiceOrder.status, func.count(ServiceOrder.id)).group_by(
+            ServiceOrder.status
+        )
+    ).all()
+    job_type_breakdown = {
+        (row.status.value if row.status else "unknown"): int(row[1] or 0)
+        for row in job_type_rows
+    }
+
+    return {
+        "total_technicians": total_technicians,
+        "jobs_completed": jobs_completed,
+        "avg_completion_hours": avg_completion_hours,
+        "first_visit_rate": first_visit_rate,
+        "technician_stats": technician_stats,
+        "job_type_breakdown": job_type_breakdown,
     }

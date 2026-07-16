@@ -1426,3 +1426,131 @@ def get_customer_statement_totals(db: Session, *, limit: int = 200) -> list[dict
     return [
         {"name": r[0], "doc_count": r[1], "total": r[2]} for r in db.execute(stmt).all()
     ]
+
+
+def get_active_subscription_count(db: Session) -> int:
+    """Count of active/suspended subscriptions (the MRR-countable population)."""
+    from app.models.catalog import SubscriptionStatus
+
+    return int(
+        db.scalar(
+            select(func.count(Subscription.id)).where(
+                Subscription.status.in_(
+                    [SubscriptionStatus.active, SubscriptionStatus.suspended]
+                )
+            )
+        )
+        or 0
+    )
+
+
+def get_subscription_movement(db: Session, *, year: int | None = None) -> list[dict]:
+    """Per-month subscription movement counts for one calendar year.
+
+    Each row carries ``month`` (``YYYY-MM``), ``start_count`` (active,
+    suspended, or pending subscriptions created before the month),
+    ``new`` (created in the month), ``cancellations`` (canceled with an
+    update in the month), ``end_count``, and ``net_change``. Future months
+    are returned as zero rows. Status sets moved verbatim from the admin
+    MRR report; the web layer windows and presents the rows.
+    """
+    from app.models.catalog import SubscriptionStatus
+
+    if not year:
+        year = datetime.now(UTC).year
+
+    months: list[dict] = []
+    now = datetime.now(UTC)
+
+    for m in range(1, 13):
+        month_start = datetime(year, m, 1, tzinfo=UTC)
+        if m < 12:
+            month_end = datetime(year, m + 1, 1, tzinfo=UTC)
+        else:
+            month_end = datetime(year + 1, 1, 1, tzinfo=UTC)
+
+        # Skip future months
+        if month_start > now:
+            months.append(
+                {
+                    "month": f"{year}-{m:02d}",
+                    "start_count": 0,
+                    "new": 0,
+                    "cancellations": 0,
+                    "end_count": 0,
+                    "net_change": 0,
+                }
+            )
+            continue
+
+        # Active at start of month (created before month_start and not canceled before)
+        start_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.created_at < month_start,
+                    Subscription.status.in_(
+                        [
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.suspended,
+                            SubscriptionStatus.pending,
+                        ]
+                    ),
+                )
+            )
+            or 0
+        )
+
+        # New subscriptions created this month
+        new_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.created_at >= month_start,
+                    Subscription.created_at < month_end,
+                )
+            )
+            or 0
+        )
+
+        # Cancellations this month
+        cancel_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.status == SubscriptionStatus.canceled,
+                    Subscription.updated_at >= month_start,
+                    Subscription.updated_at < month_end,
+                )
+            )
+            or 0
+        )
+
+        end_count = start_count + new_count - cancel_count
+
+        months.append(
+            {
+                "month": f"{year}-{m:02d}",
+                "start_count": start_count,
+                "new": new_count,
+                "cancellations": cancel_count,
+                "end_count": max(0, end_count),
+                "net_change": new_count - cancel_count,
+            }
+        )
+
+    return months
+
+
+def get_subscription_count_by_offer(db: Session) -> list[dict]:
+    """Subscription count per catalog offer (all statuses), largest first."""
+    from app.models.catalog import CatalogOffer
+
+    stmt = (
+        select(
+            CatalogOffer.name,
+            func.count(Subscription.id).label("sub_count"),
+        )
+        .join(Subscription, Subscription.offer_id == CatalogOffer.id, isouter=True)
+        .group_by(CatalogOffer.id, CatalogOffer.name)
+        .order_by(func.count(Subscription.id).desc())
+    )
+    rows = db.execute(stmt).all()
+    return [{"name": r[0], "count": r[1]} for r in rows]

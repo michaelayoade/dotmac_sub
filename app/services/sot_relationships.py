@@ -106,6 +106,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="subscriber.growth_reports",
+                module="app.services.subscriber_growth",
+                owns=(
+                    "admin subscriber growth and churn report figures",
+                    "monthly subscriber growth and churn series",
+                    "derived subscriber-status report counts",
+                ),
+                notes=(
+                    "Domain read owner for the admin /reports growth, churn, "
+                    "and status figures. The web report layer composes these "
+                    "reads and owns presentation only."
+                ),
+            ),
+            SOTService(
                 name="customer.branding",
                 module="app.services.brand_profiles",
                 owns=(
@@ -539,6 +553,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.billing_reporting",
+                module="app.services.billing.reporting",
+                owns=(
+                    "billing statistics and dashboard report read models",
+                    "admin revenue report figure definitions",
+                    "payments-basis revenue definitions",
+                    "subscription movement and per-offer report counts",
+                ),
+                depends_on=("financial.invoices", "financial.payments"),
+                notes=(
+                    "Read owner only: aggregates invoice/payment/subscription "
+                    "facts for dashboards and the admin reports. It decides no "
+                    "financial consequences."
+                ),
+            ),
+            SOTService(
                 name="financial.billing_scheduled",
                 module="app.services.billing.scheduled",
                 owns=(
@@ -905,6 +935,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device group bulk action queueing",
                 ),
                 depends_on=("network.identity",),
+            ),
+            SOTService(
+                name="network.ip_pool_utilization",
+                module="app.services.ip_pool_utilization_snapshot",
+                owns=(
+                    "IP pool utilization snapshot capture and retention",
+                    "IP pool utilization history reads",
+                    "live IP pool used/total report counts",
+                ),
+                notes=(
+                    "Snapshot rows are point-in-time capacity observations; "
+                    "the live report counts are counted address rows. Both "
+                    "definitions live here so readers do not maintain "
+                    "parallel counting paths."
+                ),
             ),
             SOTService(
                 name="network.outage_lifecycle",

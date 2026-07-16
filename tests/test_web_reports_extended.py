@@ -5,11 +5,11 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects import postgresql
 
 from app.models.bandwidth import BandwidthSample
-from app.services import web_reports_extended
+from app.services import usage_summary, web_reports_extended
 
 
 def test_bandwidth_total_bps_expr_casts_columns_before_addition():
-    expr = web_reports_extended._bandwidth_total_bps_expr()
+    expr = usage_summary._bandwidth_total_bps_expr()
     sql = str(
         select(func.avg(expr))
         .order_by(func.avg(expr).desc())
