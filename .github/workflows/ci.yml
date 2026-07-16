@@ -337,7 +337,9 @@ jobs:
         run: poetry run alembic upgrade head
 
       - name: Run integration tests
-        run: poetry run pytest tests/integration/ -v --tb=short -o "addopts=" || true
+        # No `|| true`: these are the module flow gates (native Phase 3 paths
+        # on real PostgreSQL). If they fail, the build fails.
+        run: poetry run pytest tests/integration/ -v --tb=short -o "addopts="
 
   publish-image:
     name: Publish Docker Image

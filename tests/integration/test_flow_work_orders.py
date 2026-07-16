@@ -1,0 +1,186 @@
+"""Work-order module flow on PostgreSQL: create → assign → start → evidence →
+complete, fully on Sub-native identity (no flag — work orders are native
+since #1373; ``public_id`` is the job key throughout).
+
+All services are real; only the completion evidence gate is configured off
+(the photo/signature path is unit-covered with faked uploads).
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+from app.models.dispatch import TechnicianProfile
+from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
+from app.models.field_job_event import FieldJobEvent
+from app.models.field_note import FieldWorkOrderNote
+from app.models.field_worklog import FieldWorkLog
+from app.models.subscriber import Subscriber, UserType
+from app.models.system_user import SystemUser
+from app.schemas.dispatch import WorkOrderAssignmentQueueCreate, WorkOrderHeaderCreate
+from app.services import dispatch as dispatch_service
+from app.services.field.notes import field_notes
+from app.services.field.transitions import field_transitions
+from app.services.field.worklogs import field_worklogs
+from app.services.work_orders_mirror import is_sub_authoritative
+
+
+def _user(db) -> SystemUser:
+    user = SystemUser(
+        first_name="Flow",
+        last_name="Tech",
+        display_name="Flow Tech",
+        email=f"flowtech-{uuid4().hex[:8]}@example.com",
+        user_type=UserType.system_user,
+    )
+    db.add(user)
+    db.flush()
+    return user
+
+
+def _auth(user: SystemUser) -> dict:
+    return {
+        "principal_id": str(user.id),
+        "person_id": str(user.id),
+        "subscriber_id": str(user.id),
+        "principal_type": "system_user",
+        "roles": [],
+        "scopes": [],
+    }
+
+
+def _profile(db, user: SystemUser) -> TechnicianProfile:
+    profile = TechnicianProfile(
+        person_id=user.id,
+        system_user_id=user.id,
+        crm_person_id=f"flow-tech-{uuid4().hex[:6]}",
+        title="Installer",
+    )
+    db.add(profile)
+    db.flush()
+    return profile
+
+
+def _subscriber(db) -> Subscriber:
+    sub = Subscriber(
+        first_name="Flow",
+        last_name="WorkOrder",
+        email=f"fwo-{uuid4().hex[:8]}@example.com",
+    )
+    db.add(sub)
+    db.flush()
+    return sub
+
+
+def _disable_completion_gate(db) -> None:
+    db.add(
+        DomainSetting(
+            domain=SettingDomain.field,
+            key="completion_requires_evidence",
+            value_type=SettingValueType.boolean,
+            value_text="false",
+            is_active=True,
+        )
+    )
+    db.flush()
+
+
+def test_work_order_lifecycle_native(db_session):
+    user = _user(db_session)
+    profile = _profile(db_session, user)
+    sub = _subscriber(db_session)
+    _disable_completion_gate(db_session)
+
+    # 1. Create — native identity minted (sub-<uuid>), CRM column dual-written
+    # for the compat window (WORK_ORDER_IDENTITY_SOT slice 1).
+    row = dispatch_service.work_order_headers.create(
+        db_session,
+        WorkOrderHeaderCreate(
+            title="Flow install",
+            subscriber_id=sub.id,
+            status="dispatched",
+            assigned_to_crm_person_id=profile.crm_person_id,
+            scheduled_start=datetime.now(UTC),
+        ),
+    )
+    assert row.public_id.startswith("sub-")
+    assert row.crm_work_order_id == row.public_id
+    assert is_sub_authoritative(row)
+
+    # 2. Assign — the queue row resolves the header by public_id and carries
+    # both the FK and the (compat-window) string key.
+    queue = dispatch_service.assignment_queue.create(
+        db_session,
+        WorkOrderAssignmentQueueCreate(
+            crm_work_order_id=row.public_id,
+            assigned_technician_id=profile.id,
+            status="assigned",
+        ),
+    )
+    assert queue.work_order_mirror_id == row.id
+    assert queue.crm_work_order_id == row.public_id
+
+    # 3. Start — transition engine keyed on public_id; the job event lands
+    # FK-linked to the work order.
+    started = field_transitions.apply(
+        db_session,
+        _auth(user),
+        row.public_id,
+        event="start",
+        client_event_id=uuid4(),
+    )
+    assert started["job"].status == "in_progress"
+    event = (
+        db_session.query(FieldJobEvent)
+        .filter(FieldJobEvent.work_order_mirror_id == row.id)
+        .filter(FieldJobEvent.event == "start")
+        .one()
+    )
+    assert event.crm_work_order_id == row.public_id
+
+    # 4. Evidence — worklog + note join through the FK and dual-write the
+    # string key (dropped at slice 5).
+    start_at = datetime.now(UTC) - timedelta(hours=1)
+    submitted = field_worklogs.submit(
+        db_session,
+        _auth(user),
+        row.public_id,
+        [{"start_at": start_at, "end_at": start_at + timedelta(minutes=45)}],
+    )
+    assert len(submitted) == 1 and not submitted[0]["duplicate"]
+    # The start transition auto-opens a timer worklog too, so resolve the
+    # submitted entry by its own id rather than .one() over the FK.
+    worklog = db_session.get(FieldWorkLog, submitted[0]["worklog"]["id"])
+    assert worklog is not None
+    assert worklog.crm_work_order_id == row.public_id
+
+    field_notes.create(
+        db_session, _auth(user), row.public_id, body="Splice completed at FDH."
+    )
+    note = (
+        db_session.query(FieldWorkOrderNote)
+        .filter(FieldWorkOrderNote.work_order_mirror_id == row.id)
+        .one()
+    )
+    assert note.crm_work_order_id == row.public_id
+
+    # 5. Complete (evidence gate configured off — the gated path is
+    # unit-covered) — status lands terminal with a timestamp and the native
+    # activity marker.
+    completed_at = datetime.now(UTC)
+    completed = field_transitions.apply(
+        db_session,
+        _auth(user),
+        row.public_id,
+        event="complete",
+        client_event_id=uuid4(),
+        occurred_at=completed_at,
+    )
+    assert completed["job"].status == "completed"
+    assert completed["job"].completed_at is not None
+    assert completed["job"].metadata_["native_field_source"] == "sub"
+
+    # 6. Identity invariant — public_id resolves through the owner service.
+    fetched = dispatch_service.work_order_headers.get(db_session, row.public_id)
+    assert fetched.id == row.id
