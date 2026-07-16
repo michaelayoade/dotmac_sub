@@ -964,16 +964,24 @@ def build_beat_schedule() -> dict:
         # control key, routed through the single control-plane resolver): it
         # arms low-balance/deactivation timers and SUSPENDS depleted prepaid
         # accounts, so it stays a deliberate opt-in. The sweep also no-ops
-        # internally when the control is off. Daily cadence.
+        # internally when the control is off. Cadence is constrained by the
+        # registered setting so the sweep reaches every configured blocking
+        # window instead of being anchored once daily before that window.
         prepaid_balance_enforcement_enabled = control_registry.is_enabled(
             session, "collections.prepaid_balance_enforcement"
+        )
+        prepaid_balance_sweep_interval_seconds = _resolve_int(
+            session,
+            SettingDomain.collections,
+            "prepaid_balance_sweep_interval_seconds",
+            3600,
         )
         _sync_scheduled_task(
             session,
             name="prepaid_balance_sweep",
             task_name="app.tasks.collections.prepaid_balance_sweep",
             enabled=prepaid_balance_enforcement_enabled,
-            interval_seconds=86400,
+            interval_seconds=prepaid_balance_sweep_interval_seconds,
         )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.
@@ -1324,6 +1332,33 @@ def build_beat_schedule() -> dict:
             ),
             enabled=infra_availability_prune_enabled,
             interval_seconds=infra_availability_prune_interval_seconds,
+        )
+        # Unified device projection reconcile - keeps device_projections fresh
+        # (one materialised row per device with pre-derived operational status)
+        # so the admin device list can page in SQL.
+        device_projection_reconcile_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "device_projection_reconcile_enabled",
+            "DEVICE_PROJECTION_RECONCILE_ENABLED",
+            True,
+        )
+        device_projection_reconcile_interval_seconds = _effective_int(
+            session,
+            SettingDomain.network_monitoring,
+            "device_projection_reconcile_interval_seconds",
+            "DEVICE_PROJECTION_RECONCILE_INTERVAL_SECONDS",
+            300,  # Every 5 minutes - operational-status freshness.
+        )
+        device_projection_reconcile_interval_seconds = max(
+            device_projection_reconcile_interval_seconds, 60
+        )
+        _sync_scheduled_task(
+            session,
+            name="device_projection_reconcile",
+            task_name="app.tasks.device_projection.reconcile_device_projections",
+            enabled=device_projection_reconcile_enabled,
+            interval_seconds=device_projection_reconcile_interval_seconds,
         )
         # Vacation hold auto-resume - runs hourly to resume expired holds
         vacation_hold_resume_enabled = _effective_bool(

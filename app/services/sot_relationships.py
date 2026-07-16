@@ -605,6 +605,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("runtime.infrastructure_polling",),
             ),
             SOTService(
+                name="network.device_projection",
+                module="app.services.device_projection_reconcile",
+                owns=(
+                    "device_projections materialised table",
+                    "unified cross-type device row (OLT/core/ONT/CPE)",
+                    "projected operational status and freshness",
+                    "device projection orphan pruning",
+                ),
+                depends_on=(
+                    "network.device_state",
+                    "network.monitoring_inventory",
+                    "network.identity",
+                ),
+                notes=(
+                    "Sole canonical writer of device_projections. Delegates the "
+                    "multi-source device derivation to collect_devices and "
+                    "projects one materialised row per device so the admin device "
+                    "list can search/filter/sort/paginate in SQL. The table is a "
+                    "rebuildable cache: reconcile is idempotent, stamps "
+                    "refreshed_at, and prunes rows whose source device is gone. "
+                    "Readers never write it; they request a reconcile rather than "
+                    "maintaining a parallel derivation path."
+                ),
+            ),
+            SOTService(
                 name="network.operation_ledger",
                 module="app.services.network_operations",
                 owns=(
@@ -1457,8 +1482,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="control.settings_spec",
                 module="app.services.settings_spec",
-                owns=("setting schema", "setting value coercion", "env fallback rules"),
+                owns=(
+                    "setting schema and validation bounds",
+                    "setting value coercion",
+                    "DB-authoritative runtime setting resolution",
+                    "registered setting defaults",
+                ),
                 depends_on=("control.domain_settings",),
+                notes=(
+                    "Runtime precedence is Redis cache, active database row, then "
+                    "the registered default. SettingSpec.env_var is bootstrap and "
+                    "migration metadata, never an implicit live override."
+                ),
             ),
             SOTService(
                 name="control.settings_bootstrap",
@@ -1469,6 +1504,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "default notification-template seeding",
                 ),
                 depends_on=("control.domain_settings", "control.settings_spec"),
+                notes=(
+                    "Environment inputs are materialized one way into stored "
+                    "settings and do not override runtime database decisions."
+                ),
             ),
             SOTService(
                 name="control.relationships",
@@ -1488,9 +1527,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.api.settings",
         ),
         rule=(
-            "Callers ask the feature registry whether a capability is enabled; "
-            "they should not independently compose module, env, DB, and legacy "
-            "flag state."
+            "Settings are inputs, not decision owners. Callers ask the named "
+            "owner or resolver for a decision; they do not independently compose "
+            "module, environment, database, and legacy state. Business and "
+            "operational tuning is database-authoritative unless a separately "
+            "registered, visible emergency override says otherwise."
         ),
     ),
     DomainSOT(
