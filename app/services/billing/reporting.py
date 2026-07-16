@@ -1230,3 +1230,194 @@ class BillingReporting:
 
 
 billing_reporting = BillingReporting()
+
+
+# ---------------------------------------------------------------------------
+# Admin report read owners
+#
+# The admin /reports pages render these figures; the web layer composes them
+# and owns presentation only. Payments-basis revenue is deliberately distinct
+# from the invoice settled-value basis used by get_overview_stats — both are
+# owned here so the definitions live in one place.
+# ---------------------------------------------------------------------------
+
+
+def _report_month_starts(months: int = 6) -> list[datetime]:
+    now = datetime.now(UTC)
+    first_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    starts: list[datetime] = []
+    year = first_this_month.year
+    month = first_this_month.month - months + 1
+    while month <= 0:
+        month += 12
+        year -= 1
+    for _ in range(months):
+        starts.append(datetime(year, month, 1, tzinfo=UTC))
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return starts
+
+
+def get_payments_revenue_summary(db: Session, *, months: int = 6) -> dict:
+    """Payments-basis revenue: lifetime, current/previous month, monthly series."""
+    now = datetime.now(UTC)
+    current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous_start = (
+        current_start.replace(year=current_start.year - 1, month=12)
+        if current_start.month == 1
+        else current_start.replace(month=current_start.month - 1)
+    )
+
+    def _paid_between(start: datetime | None, end: datetime | None) -> Decimal:
+        stmt = select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+        )
+        if start is not None:
+            stmt = stmt.where(Payment.paid_at >= start)
+        if end is not None:
+            stmt = stmt.where(Payment.paid_at < end)
+        return db.scalar(stmt) or Decimal("0")
+
+    starts = _report_month_starts(months)
+    labels: list[str] = []
+    series: list[float] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else now
+        labels.append(start.strftime("%b"))
+        series.append(float(_paid_between(start, end)))
+
+    return {
+        "total": _paid_between(None, None),
+        "current_month": _paid_between(current_start, now),
+        "previous_month": _paid_between(previous_start, current_start),
+        "monthly": {"labels": labels, "revenue": series, "collected": list(series)},
+    }
+
+
+def get_outstanding_receivables(db: Session) -> dict:
+    """Open receivables: balance due and invoice count for collectible statuses."""
+    row = db.execute(
+        select(
+            func.coalesce(func.sum(Invoice.balance_due), 0).label("amount"),
+            func.count(Invoice.id).label("count"),
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.status.in_(
+                (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+            ),
+            Invoice.balance_due > 0,
+        )
+    ).one()
+    return {
+        "amount": row.amount or Decimal("0"),
+        "count": int(row._mapping["count"] or 0),
+    }
+
+
+def get_total_invoiced(db: Session) -> Decimal:
+    """Lifetime invoiced value across non-void active invoices."""
+    return db.scalar(
+        select(func.coalesce(func.sum(Invoice.total), 0)).where(
+            Invoice.is_active.is_(True),
+            Invoice.status != InvoiceStatus.void,
+        )
+    ) or Decimal("0")
+
+
+def get_recurring_revenue(db: Session) -> Decimal:
+    """Recurring revenue as the sum of active/suspended subscription prices.
+
+    NOTE: unit_price basis, kept for report continuity. The dashboard's MRR
+    trend uses mrr_countable_service_filters — consolidating the two bases is a
+    pending finance decision.
+    """
+    from app.models.catalog import SubscriptionStatus
+
+    return db.scalar(
+        select(func.coalesce(func.sum(Subscription.unit_price), 0)).where(
+            Subscription.status.in_(
+                [SubscriptionStatus.active, SubscriptionStatus.suspended]
+            )
+        )
+    ) or Decimal("0")
+
+
+def get_revenue_by_offer(
+    db: Session,
+    *,
+    issued_from: datetime | None = None,
+    issued_before: datetime | None = None,
+) -> list[dict]:
+    """Invoice-line revenue and distinct invoice count per catalog offer."""
+    from app.models.billing import InvoiceLine
+    from app.models.catalog import CatalogOffer
+
+    stmt = (
+        select(
+            CatalogOffer.name,
+            func.count(func.distinct(Invoice.id)).label("invoice_count"),
+            func.coalesce(func.sum(InvoiceLine.amount), 0).label("total_revenue"),
+        )
+        .select_from(CatalogOffer)
+        .join(Subscription, Subscription.offer_id == CatalogOffer.id, isouter=True)
+        .join(InvoiceLine, InvoiceLine.subscription_id == Subscription.id, isouter=True)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id, isouter=True)
+        .group_by(CatalogOffer.id, CatalogOffer.name)
+        .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
+    )
+    if issued_from:
+        stmt = stmt.where(Invoice.issued_at >= issued_from)
+    if issued_before:
+        stmt = stmt.where(Invoice.issued_at < issued_before)
+    return [
+        {"name": r[0], "invoice_count": r[1], "revenue": r[2]}
+        for r in db.execute(stmt).all()
+    ]
+
+
+def get_revenue_by_service_type(db: Session) -> list[dict]:
+    """Invoice-line revenue and distinct invoice count per offer service type."""
+    from app.models.billing import InvoiceLine
+    from app.models.catalog import CatalogOffer
+
+    stmt = (
+        select(
+            CatalogOffer.service_type,
+            func.count(func.distinct(Invoice.id)).label("invoice_count"),
+            func.coalesce(func.sum(InvoiceLine.amount), 0).label("total"),
+        )
+        .select_from(InvoiceLine)
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+        .join(Subscription, Subscription.id == InvoiceLine.subscription_id, isouter=True)
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
+        .where(Invoice.is_active.is_(True))
+        .group_by(CatalogOffer.service_type)
+        .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
+    )
+    return [
+        {"service_type": r[0], "invoice_count": r[1], "total": r[2]}
+        for r in db.execute(stmt).all()
+    ]
+
+
+def get_customer_statement_totals(db: Session, *, limit: int = 200) -> list[dict]:
+    """Per-subscriber document count and lifetime invoiced total."""
+    full_name = (Subscriber.first_name + " " + Subscriber.last_name).label("full_name")
+    stmt = (
+        select(
+            full_name,
+            func.count(Invoice.id).label("doc_count"),
+            func.coalesce(func.sum(Invoice.total), 0).label("total"),
+        )
+        .join(Invoice, Invoice.account_id == Subscriber.id, isouter=True)
+        .group_by(Subscriber.id, full_name)
+        .order_by(full_name)
+        .limit(limit)
+    )
+    return [
+        {"name": r[0], "doc_count": r[1], "total": r[2]}
+        for r in db.execute(stmt).all()
+    ]

@@ -406,124 +406,24 @@ def _month_starts(months: int = 6) -> list[datetime]:
     return starts
 
 
-def _monthly_payment_series(db: Session, *, months: int = 6) -> dict[str, list]:
-    starts = _month_starts(months)
-    labels: list[str] = []
-    revenue: list[float] = []
-    collected: list[float] = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
-        label = start.strftime("%b")
-        total = db.scalar(
-            select(func.coalesce(func.sum(Payment.amount), 0)).where(
-                Payment.is_active.is_(True),
-                Payment.status == PaymentStatus.succeeded,
-                Payment.paid_at >= start,
-                Payment.paid_at < end,
-            )
-        ) or Decimal("0")
-        labels.append(label)
-        revenue.append(float(total))
-        collected.append(float(total))
-    return {"labels": labels, "revenue": revenue, "collected": collected}
-
-
-def _monthly_customer_growth_series(db: Session, *, months: int = 6) -> dict[str, list]:
-    starts = _month_starts(months)
-    labels: list[str] = []
-    totals: list[int] = []
-    new_counts: list[int] = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
-        total = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.created_at < end,
-                )
-            )
-            or 0
-        )
-        new_count = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.created_at >= start,
-                    Subscriber.created_at < end,
-                )
-            )
-            or 0
-        )
-        labels.append(start.strftime("%b"))
-        totals.append(int(total))
-        new_counts.append(int(new_count))
-    return {"labels": labels, "total": totals, "new": new_counts}
-
-
-def _monthly_churn_series(db: Session, *, months: int = 6) -> dict[str, list]:
-    starts = _month_starts(months)
-    labels: list[str] = []
-    rates: list[float] = []
-    counts: list[int] = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
-        total = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.created_at < end,
-                )
-            )
-            or 0
-        )
-        cancelled = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.status == AccountStatus.canceled,
-                    Subscriber.updated_at >= start,
-                    Subscriber.updated_at < end,
-                )
-            )
-            or 0
-        )
-        labels.append(start.strftime("%b"))
-        counts.append(int(cancelled))
-        rates.append(round((int(cancelled) / int(total) * 100) if total else 0, 1))
-    return {"labels": labels, "rate": rates, "count": counts}
-
-
 def get_revenue_report_data(db: Session) -> dict:
-    now = datetime.now(UTC)
-    current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    previous_end = current_start
-    previous_start = (
-        current_start.replace(year=current_start.year - 1, month=12)
-        if current_start.month == 1
-        else current_start.replace(month=current_start.month - 1)
-    )
-    total_revenue = db.scalar(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.is_active.is_(True),
-            Payment.status == PaymentStatus.succeeded,
-        )
-    ) or Decimal("0")
-    current_revenue = db.scalar(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.is_active.is_(True),
-            Payment.status == PaymentStatus.succeeded,
-            Payment.paid_at >= current_start,
-            Payment.paid_at < now,
-        )
-    ) or Decimal("0")
-    previous_revenue = db.scalar(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.is_active.is_(True),
-            Payment.status == PaymentStatus.succeeded,
-            Payment.paid_at >= previous_start,
-            Payment.paid_at < previous_end,
-        )
-    ) or Decimal("0")
+    """Compose the revenue report from the billing reporting read owners.
+
+    All figures (payments-basis revenue, outstanding receivables, total
+    invoiced, recurring revenue, monthly series) are owned by
+    app.services.billing.reporting; this function assembles and presents.
+    """
+    from app.services.billing import reporting as billing_reporting
+
+    revenue = billing_reporting.get_payments_revenue_summary(db)
+    outstanding = billing_reporting.get_outstanding_receivables(db)
+    total_invoiced = billing_reporting.get_total_invoiced(db)
+    try:
+        recurring_revenue = billing_reporting.get_recurring_revenue(db)
+    except Exception:
+        logger.debug("Failed to compute recurring revenue", exc_info=True)
+        recurring_revenue = Decimal("0")
+
     recent_payments = billing_service.payments.list(
         db=db,
         account_id=None,
@@ -535,58 +435,23 @@ def get_revenue_report_data(db: Session) -> dict:
         limit=10,
         offset=0,
     )
-    outstanding_statuses = {
-        InvoiceStatus.issued,
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.overdue,
-    }
-    outstanding_row = db.execute(
-        select(
-            func.coalesce(func.sum(Invoice.balance_due), 0).label("amount"),
-            func.count(Invoice.id).label("count"),
-        ).where(
-            Invoice.is_active.is_(True),
-            Invoice.status.in_(outstanding_statuses),
-            Invoice.balance_due > 0,
-        )
-    ).one()
-    outstanding_amount = outstanding_row.amount or Decimal("0")
-    outstanding_count = int(outstanding_row._mapping["count"] or 0)
-    total_invoiced = db.scalar(
-        select(func.coalesce(func.sum(Invoice.total), 0)).where(
-            Invoice.is_active.is_(True),
-            Invoice.status != InvoiceStatus.void,
-        )
-    ) or Decimal("0")
     collection_rate = (
-        (float(total_revenue) / float(total_invoiced) * 100) if total_invoiced else 0
+        (float(revenue["total"]) / float(total_invoiced) * 100) if total_invoiced else 0
     )
-    try:
-        from app.models.catalog import Subscription, SubscriptionStatus
-
-        recurring_revenue = db.scalar(
-            select(func.coalesce(func.sum(Subscription.unit_price), 0)).where(
-                Subscription.status.in_(
-                    [SubscriptionStatus.active, SubscriptionStatus.suspended]
-                )
-            )
-        ) or Decimal("0")
-    except Exception:
-        logger.debug("Failed to compute recurring revenue", exc_info=True)
-        recurring_revenue = Decimal("0")
-    revenue_data = _monthly_payment_series(db)
-    revenue_growth = _percent_change(current_revenue, previous_revenue)
-    if revenue_growth is None and current_revenue:
+    revenue_growth = _percent_change(
+        revenue["current_month"], revenue["previous_month"]
+    )
+    if revenue_growth is None and revenue["current_month"]:
         revenue_growth = 0.0
     return {
-        "total_revenue": total_revenue,
+        "total_revenue": revenue["total"],
         "revenue_growth": revenue_growth,
         "recurring_revenue": recurring_revenue,
-        "outstanding_amount": outstanding_amount,
-        "outstanding_count": outstanding_count,
+        "outstanding_amount": outstanding["amount"],
+        "outstanding_count": outstanding["count"],
         "collection_rate": collection_rate,
         "recent_payments": recent_payments,
-        "revenue_data": revenue_data,
+        "revenue_data": revenue["monthly"],
     }
 
 
