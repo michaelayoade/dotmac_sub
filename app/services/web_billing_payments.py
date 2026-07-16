@@ -813,9 +813,7 @@ def build_payments_list_data(
         status_totals = _build_status_totals(filtered_subquery)
 
         created_order = (
-            Payment.created_at.asc()
-            if sort_dir == "asc"
-            else Payment.created_at.desc()
+            Payment.created_at.asc() if sort_dir == "asc" else Payment.created_at.desc()
         )
         base_stmt = _apply_payment_filters(
             select(Payment).options(joinedload(Payment.account))

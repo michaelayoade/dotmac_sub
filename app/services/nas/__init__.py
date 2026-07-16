@@ -76,9 +76,11 @@ from app.services.nas.templates import ProvisioningTemplates
 
 # Web context builders
 from app.services.nas.web_builders import (
+    NAS_LIST_DEFINITION,
     build_nas_backup_compare_data,
     build_nas_backup_detail_data,
     build_nas_dashboard_data,
+    build_nas_list_query,
     build_nas_device_backups_page_data,
     build_nas_device_detail_data,
     build_nas_device_payload,
@@ -172,6 +174,8 @@ __all__ = [
     "create_provisioning_template_with_metadata",
     "update_provisioning_template_with_metadata",
     "build_nas_dashboard_data",
+    "build_nas_list_query",
+    "NAS_LIST_DEFINITION",
     "build_nas_device_detail_data",
     "build_nas_device_backups_page_data",
     "build_nas_backup_detail_data",
