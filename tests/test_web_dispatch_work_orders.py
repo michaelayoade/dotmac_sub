@@ -12,6 +12,35 @@ from app.services import dispatch
 from app.services import web_dispatch_work_orders as web_dispatch
 
 
+def test_work_order_list_query_defaults_come_from_the_owner():
+    query = web_dispatch.build_work_order_list_query()
+    assert query.sort_by == "created_at"
+    assert query.sort_dir == "desc"
+    assert query.page == 1
+    assert query.per_page == 25
+    assert query.search is None
+    assert query.filter_value("status") is None
+
+
+def test_work_order_list_query_normalizes_status_search_and_page_size():
+    valid_status = web_dispatch.STATUS_OPTIONS[0]
+    assert (
+        web_dispatch.build_work_order_list_query(status="bogus").filter_value("status")
+        is None
+    )
+    assert (
+        web_dispatch.build_work_order_list_query(status=valid_status).filter_value(
+            "status"
+        )
+        == valid_status
+    )
+    assert web_dispatch.build_work_order_list_query(per_page=37).per_page == 25
+    assert web_dispatch.build_work_order_list_query(per_page=50).per_page == 50
+    normalized = web_dispatch.build_work_order_list_query(search="  fibre  ", page=0)
+    assert normalized.search == "fibre"
+    assert normalized.page == 1
+
+
 def _subscriber(db_session, *, first_name: str = "Adaeze") -> Subscriber:
     sub = Subscriber(
         first_name=first_name,

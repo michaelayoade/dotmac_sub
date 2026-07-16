@@ -163,22 +163,53 @@ def _apply_filters(query, filters: WorkOrderListFilters):
     return query
 
 
-def list_work_orders(db: Session, filters: WorkOrderListFilters | None = None) -> dict:
+_SORT_COLUMNS = {
+    "status": WorkOrderMirror.status,
+    "priority": WorkOrderMirror.priority,
+    "scheduled_start": WorkOrderMirror.scheduled_start,
+    "created_at": WorkOrderMirror.created_at,
+}
+
+
+def query_work_orders(
+    db: Session,
+    filters: WorkOrderListFilters | None = None,
+    *,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+) -> tuple[list[tuple[WorkOrderMirror, Subscriber]], int]:
+    """Owner query for the work-order list.
+
+    Returns filtered, sorted, paginated ``(WorkOrderMirror, Subscriber)`` rows and
+    the total. UI list projections declare the sort/filter/pagination contract and
+    delegate the read here; they never rebuild this query. ``sort_by``/``sort_dir``
+    default to the canonical schedule-then-created ordering when unset, so existing
+    callers are unchanged.
+    """
     filters = filters or WorkOrderListFilters()
     limit = min(max(int(filters.limit or DEFAULT_LIMIT), 1), MAX_LIMIT)
     offset = max(int(filters.offset or 0), 0)
 
     filtered = _apply_filters(_base_query(db), filters)
     total = int(filtered.with_entities(func.count(WorkOrderMirror.id)).scalar() or 0)
-    rows = (
-        filtered.order_by(
+
+    column = _SORT_COLUMNS.get(sort_by or "")
+    if column is not None:
+        primary = column.desc() if str(sort_dir).lower() == "desc" else column.asc()
+        ordering = [primary.nullslast(), WorkOrderMirror.id.asc()]
+    else:
+        ordering = [
             WorkOrderMirror.scheduled_start.asc().nullslast(),
             WorkOrderMirror.created_at.desc(),
-        )
-        .limit(limit)
-        .offset(offset)
-        .all()
-    )
+            WorkOrderMirror.id.asc(),
+        ]
+    rows = filtered.order_by(*ordering).limit(limit).offset(offset).all()
+    return rows, total
+
+
+def list_work_orders(db: Session, filters: WorkOrderListFilters | None = None) -> dict:
+    filters = filters or WorkOrderListFilters()
+    rows, total = query_work_orders(db, filters)
     items = [
         row_to_item(row, subscriber=subscriber, include_internal=True)
         for row, subscriber in rows
@@ -186,8 +217,8 @@ def list_work_orders(db: Session, filters: WorkOrderListFilters | None = None) -
     return {
         "work_orders": items,
         "total": total,
-        "limit": limit,
-        "offset": offset,
+        "limit": min(max(int(filters.limit or DEFAULT_LIMIT), 1), MAX_LIMIT),
+        "offset": max(int(filters.offset or 0), 0),
         "summary": summary(db, filters),
     }
 

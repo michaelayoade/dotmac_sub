@@ -15,7 +15,13 @@ The approved cross-Dotmac presentation contract is
 1. Domain read/context services own displayed facts, status meaning,
    provenance, freshness, and business action hints.
 2. Domain command/transition services own action eligibility and execution.
-3. RBAC owns authorization; event/timeline services own official history.
+3. RBAC owns authorization. Every UI surface is granularly permission-gated:
+   each list read, each bulk action, and each form/command action is gated by
+   its own `domain:resource:action` permission projected against the principal.
+   No coarse permission may span read and write (e.g. a single
+   `operations:dispatch` covering list, create, update, and assign is a
+   violation — split it into `:read`/`:write`/`:assign`). Event/timeline
+   services own official history.
 4. UI page contracts own relevance, ordering, progressive disclosure,
    responsive depth, and interaction shape.
 5. Routes, templates, HTMX handlers, and mobile clients render the contract and
@@ -777,6 +783,14 @@ will reject.
       templates no longer assemble sort/filter/page URLs; the one-extra-row page
       estimate and silent export cap are removed. Legacy `order_by`/`order_dir`
       inputs remain only as canonicalizing compatibility aliases.
+
+14. `ui.work_order_list_projection` (`app.services.web_dispatch_work_orders`)
+    declares the admin work-order list capabilities with `ui.list_contracts` and
+    delegates the read to `work_order_views.query_work_orders`
+    (`operations.work_orders`), which owns the canonical filtered/sorted query —
+    the projection issues no SQL. Read-only: work orders are a CRM mirror with no
+    Sub-owned admin bulk command, so no selection/bulk is declared. Each dispatch
+    route is granularly gated (`operations:dispatch:read`/`:write`/`:assign`).
 
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
