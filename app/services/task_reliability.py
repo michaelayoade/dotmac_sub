@@ -104,9 +104,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.alert_evaluation.evaluate_alert_rules": _c(
         "monitoring", SWEEP, IDEMP, STATUS
     ),
-    "app.tasks.app_cache.refresh_dashboard_stats_cache": _c(
-        "cache", SWEEP, IDEMP, HEALTH
-    ),
     "app.tasks.arrangements.check_overdue_arrangements": _c(
         "billing", SWEEP, GUARDED, HEALTH
     ),
