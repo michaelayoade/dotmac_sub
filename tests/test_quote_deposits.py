@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from app.models.billing import InvoiceStatus, Payment
+from app.models.billing import Invoice, InvoiceStatus, Payment
 from app.models.quote_mirror import QuoteMirror
 from app.models.sales import SalesOrder
 from app.models.subscriber import Subscriber
@@ -322,5 +322,109 @@ def test_verify_native_flag_is_subscriber_scoped(db_session):
                 str(other.id),
                 str(quote.id),
                 reference="ref_1",
+            )
+    assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 flip flag: initiate_deposit native branch (§4.3 write flip)
+# ---------------------------------------------------------------------------
+
+
+def _paid_deposit_invoice(db, sub, quote_id) -> Invoice:
+    """A settled deposit invoice in sub's ledger — the authoritative
+    already-paid marker the native branch must key on."""
+    inv = Invoice(
+        account_id=sub.id,
+        status=InvoiceStatus.paid,
+        currency="NGN",
+        subtotal=Decimal("37500.00"),
+        total=Decimal("37500.00"),
+        balance_due=Decimal("0.00"),
+        metadata_={"quote_id": str(quote_id), "payment_flow": "quote_deposit"},
+    )
+    db.add(inv)
+    db.commit()
+    return inv
+
+
+def test_initiate_native_flag_creates_invoice_for_uuid_quote(db_session):
+    """Flag ON: the quote resolves in sub's own table by UUID (not
+    crm_quote_id) and the deposit invoice is raised off the native payload."""
+    sub = _subscriber(db_session)
+    quote = _native_quote(db_session, sub)
+    fake_invoice = SimpleNamespace(id=uuid.uuid4(), metadata_=None)
+    intent = {"provider_type": "paystack", "reference": "ref_n1", "currency": "NGN"}
+    with (
+        _flag_on(),
+        patch(
+            "app.services.quote_deposits.billing_service.invoices.create",
+            return_value=fake_invoice,
+        ),
+        patch(
+            "app.services.quote_deposits.payments.create_invoice_payment_intent",
+            return_value=intent,
+        ),
+    ):
+        out = quote_deposits.initiate_deposit(
+            db_session, _customer(sub), str(sub.id), str(quote.id)
+        )
+    assert out["quote_id"] == str(quote.id)
+    assert out["amount"] == "37500.00"
+    assert out["invoice_id"] == str(fake_invoice.id)
+    # The traceback metadata is exactly what _native_deposit_invoice_paid keys on.
+    assert fake_invoice.metadata_ == {
+        "quote_id": str(quote.id),
+        "payment_flow": "quote_deposit",
+    }
+
+
+def test_initiate_native_flag_rejects_when_ledger_deposit_paid(db_session):
+    sub = _subscriber(db_session)
+    quote = _native_quote(db_session, sub)
+    _paid_deposit_invoice(db_session, sub, quote.id)
+    with _flag_on():
+        with pytest.raises(HTTPException) as exc:
+            quote_deposits.initiate_deposit(
+                db_session, _customer(sub), str(sub.id), str(quote.id)
+            )
+    assert exc.value.status_code == 409
+
+
+def test_initiate_native_ledger_authority_beats_stale_mirror(db_session):
+    """Risk #2 regression: a stale mirror claiming the deposit is UNPAID must
+    not permit a second charge — the ledger invoice is the sole authority on
+    the native branch."""
+    sub = _subscriber(db_session)
+    quote = _native_quote(db_session, sub)
+    _paid_deposit_invoice(db_session, sub, quote.id)
+    stale = QuoteMirror(
+        crm_quote_id=str(quote.id),
+        subscriber_id=sub.id,
+        status="draft",
+        currency="NGN",
+        total="75000.00",
+        deposit_amount="37500.00",
+        deposit_paid=False,
+        payload={"id": str(quote.id), "status": "draft"},
+    )
+    db_session.add(stale)
+    db_session.commit()
+    with _flag_on():
+        with pytest.raises(HTTPException) as exc:
+            quote_deposits.initiate_deposit(
+                db_session, _customer(sub), str(sub.id), str(quote.id)
+            )
+    assert exc.value.status_code == 409
+
+
+def test_initiate_native_flag_is_subscriber_scoped(db_session):
+    sub = _subscriber(db_session)
+    other = _subscriber(db_session)
+    quote = _native_quote(db_session, sub)
+    with _flag_on():
+        with pytest.raises(HTTPException) as exc:
+            quote_deposits.initiate_deposit(
+                db_session, _customer(other), str(other.id), str(quote.id)
             )
     assert exc.value.status_code == 404

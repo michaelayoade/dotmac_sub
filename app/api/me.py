@@ -974,10 +974,24 @@ def my_quote_request(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Request a map-pinned installation quote. The dropped pin drives the CRM's
-    feasibility check (proximity to fiber) + estimate + deposit; the result is
-    mirrored locally and returned."""
+    """Request a map-pinned installation quote. The dropped pin drives the
+    feasibility check (proximity to fiber) + estimate + deposit. Behind the
+    Phase 3 ``quotes_native_write_enabled`` write-flip flag: OFF writes through
+    to the CRM and returns the mirrored item; ON creates the quote in sub's
+    native ``quotes`` table (no CRM link required, so native-only subscribers
+    can quote too) — same §2.5 payload shape either way."""
     subscriber_id = _subscriber_id(principal)
+    if selfserve_service.native_write_enabled(db):
+        quote = selfserve_service.selfserve_quotes.request_quote(
+            db,
+            subscriber_id,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            address=payload.address,
+            region=payload.region,
+            note=payload.note,
+        )
+        return selfserve_service.build_portal_quote_payload(db, quote)
     return quotes_mirror.request_quote(
         db,
         subscriber_id,
