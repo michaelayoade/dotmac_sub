@@ -97,7 +97,7 @@
                             {{ status_badge(alert.status.value|title, status_variant, size='sm') }}
                         </div>
                     </td>
-                    <td class="px-3 py-3 text-slate-600 dark:text-slate-300">{{ alert.last_seen_at.strftime('%b %d, %H:%M') if alert.last_seen_at else '' }}</td>
+                    <td class="px-3 py-3 text-slate-600 dark:text-slate-300">{{ alert.last_seen_at | app_datetime('%b %d, %H:%M', '') }}</td>
                     <td class="px-3 py-3 text-right">
                         <div class="flex justify-end gap-2">
                             {% if alert.target_url %}

@@ -115,7 +115,7 @@
                         <dt class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Member Since</dt>
                         <dd class="mt-1 text-sm font-medium text-slate-900 dark:text-white">
                             {% if account.created_at %}
-                            {{ account.created_at.strftime('%b %d, %Y') }}
+                            {{ account.created_at | app_datetime('%b %d, %Y', include_tz=False) }}
                             {% else %}
                             <span class="text-slate-400">—</span>
                             {% endif %}
@@ -201,7 +201,7 @@
                         <td class="px-6 py-4">
                             <span class="text-sm text-slate-500 dark:text-slate-400">
                                 {% if sub.start_date %}
-                                {{ sub.start_date.strftime('%b %d, %Y') }}
+                                {{ sub.start_date | app_datetime('%b %d, %Y', include_tz=False) }}
                                 {% else %}
                                 <span class="text-slate-400">—</span>
                                 {% endif %}

@@ -90,7 +90,7 @@
                             </div>
                             <div>
                                 <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Installed</dt>
-                                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.installed_at.strftime('%b %d, %Y %H:%M') if cpe.installed_at else '-' }}</dd>
+                                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.installed_at | app_datetime('%b %d, %Y %H:%M', '-') }}</dd>
                             </div>
                             {% if display_wan_ip %}
                             <div>
@@ -131,7 +131,7 @@
                             {% if identity.get('last_inform_at') %}
                             <div>
                                 <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Last Inform</dt>
-                                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ identity.get('last_inform_at').strftime('%b %d, %Y %H:%M') }}</dd>
+                                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ identity.get('last_inform_at') | app_datetime('%b %d, %Y %H:%M') }}</dd>
                             </div>
                             {% endif %}
                             {% if identity.get('oui') %}
@@ -249,11 +249,11 @@
                     <div class="space-y-4 p-6">
                         <div>
                             <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Created</p>
-                            <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.created_at.strftime('%b %d, %Y %H:%M') if cpe.created_at else '-' }}</p>
+                            <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.created_at | app_datetime('%b %d, %Y %H:%M', '-') }}</p>
                         </div>
                         <div>
                             <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Last Updated</p>
-                            <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.updated_at.strftime('%b %d, %Y %H:%M') if cpe.updated_at else '-' }}</p>
+                            <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.updated_at | app_datetime('%b %d, %Y %H:%M', '-') }}</p>
                         </div>
                     </div>
                 </div>
@@ -305,7 +305,7 @@
                         <div class="px-6 py-4">
                             <div class="text-sm text-slate-700 dark:text-slate-300">{{ activity.title }}</div>
                             {% if activity.description %}<div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>{% endif %}
-                            {% if activity.occurred_at %}<div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y %H:%M') }}</div>{% endif %}
+                            {% if activity.occurred_at %}<div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y %H:%M') }}</div>{% endif %}
                         </div>
                         {% endfor %}
                         {% else %}

@@ -134,7 +134,7 @@
                         <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">{{ customer.period_usage_gb|default(0) }}</td>
                         <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">{{ customer.period_avg_mbps|default(0) }}</td>
                         <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ customer.email }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ customer.created_at.strftime('%Y-%m-%d') if customer.created_at else '-' }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ customer.created_at | app_datetime('%Y-%m-%d', '-', include_tz=False) }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -190,7 +190,7 @@
                         <p class="text-sm font-medium text-slate-900 dark:text-white">
                             {{ sub.name if sub else 'Subscriber' }}
                         </p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ sub.created_at.strftime('%b %d, %Y') if sub.created_at else '-' }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ sub.created_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                     {{ status_badge(sub.status.value|title if sub.status else 'Active', 'active', size="sm") }}
                 </div>

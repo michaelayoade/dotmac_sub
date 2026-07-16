@@ -12,7 +12,7 @@
             </a>
             <div>
                 <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Configuration Backup</h1>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ backup.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ backup.created_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</p>
             </div>
         </div>
     </div>
@@ -92,7 +92,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}

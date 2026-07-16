@@ -90,7 +90,7 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {{ delivery.occurred_at.strftime('%b %d, %Y %H:%M') if delivery.occurred_at else 'N/A' }}
+                            {{ delivery.occurred_at | app_datetime('%b %d, %Y %H:%M', 'N/A') }}
                         </td>
                         <td class="px-6 py-4">
                             {% if delivery.provider_message_id %}

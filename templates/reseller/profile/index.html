@@ -101,7 +101,7 @@
                     <dt class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Member Since</dt>
                     <dd class="mt-1.5 text-base text-slate-900 dark:text-white">
                         {% if reseller.created_at %}
-                        {{ reseller.created_at.strftime('%b %d, %Y') }}
+                        {{ reseller.created_at | app_datetime('%b %d, %Y', include_tz=False) }}
                         {% else %}
                         <span class="text-slate-400 dark:text-slate-500">N/A</span>
                         {% endif %}

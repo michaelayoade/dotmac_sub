@@ -7,12 +7,15 @@ from types import SimpleNamespace
 from jinja2 import Environment, FileSystemLoader
 
 from app.services.topology.customer_path import CustomerPath
+from app.web.brand_globals import _app_datetime_filter
 
 PANEL = "admin/catalog/_network_path_panel.html"
 
 
 def _env():
-    return Environment(loader=FileSystemLoader("templates"), autoescape=True)
+    env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
+    env.filters["app_datetime"] = _app_datetime_filter
+    return env
 
 
 def _render(path: CustomerPath) -> str:

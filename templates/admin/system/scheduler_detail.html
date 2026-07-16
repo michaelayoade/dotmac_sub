@@ -191,7 +191,7 @@
                                 </div>
                                 {% endif %}
                                 <div>
-                                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ run.started_at.strftime('%b %d, %Y %H:%M:%S') if run.started_at else 'Unknown' }}</p>
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ run.started_at | app_datetime('%b %d, %Y %H:%M:%S', 'Unknown') }}</p>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">Duration: {{ run.duration_ms }}ms</p>
                                 </div>
                             </div>
@@ -224,7 +224,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Run</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ task.last_run_at.strftime('%B %d, %Y %H:%M') if task.last_run_at else 'Never' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ task.last_run_at | app_datetime('%B %d, %Y %H:%M', 'Never') }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Next Run</p>
@@ -232,7 +232,7 @@
                             {% if not task.enabled %}
                                 Disabled
                             {% elif next_run %}
-                                {{ next_run.strftime('%B %d, %Y %H:%M') }} UTC
+                                {{ next_run | app_datetime('%B %d, %Y %H:%M') }}
                             {% else %}
                                 On scheduler start
                             {% endif %}
@@ -244,11 +244,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ task.created_at.strftime('%B %d, %Y') if task.created_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ task.created_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ task.updated_at.strftime('%B %d, %Y %H:%M') if task.updated_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ task.updated_at | app_datetime('%B %d, %Y %H:%M', '-') }}</p>
                     </div>
                 </div>
             </div>

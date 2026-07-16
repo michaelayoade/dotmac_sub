@@ -58,7 +58,7 @@
             <li>
                 <a class="underline" href="/admin/billing/payment-proofs/{{ dup.id }}">{{ dup.id | string | truncate(8, True, '') }}</a>
                 — {{ dup.status.value | title }}, {{ dup.currency }} {{ "{:,.2f}".format(dup.amount) }},
-                submitted {{ dup.created_at.strftime('%Y-%m-%d %H:%M') if dup.created_at else 'unknown' }}
+                submitted {{ dup.created_at | app_datetime('%Y-%m-%d %H:%M', 'unknown') }}
             </li>
             {% endfor %}
         </ul>
@@ -78,8 +78,8 @@
                 {% endif %}
                 {{ info_row("Bank", proof.bank_name or "—") }}
                 {{ info_row("Reference", proof.reference or "—") }}
-                {{ info_row("Transfer Date", proof.paid_at.strftime('%Y-%m-%d %H:%M') if proof.paid_at else "Not stated") }}
-                {{ info_row("Submitted", proof.created_at.strftime('%Y-%m-%d %H:%M') if proof.created_at else "—") }}
+                {{ info_row("Transfer Date", proof.paid_at | app_datetime('%Y-%m-%d %H:%M', 'Not stated')) }}
+                {{ info_row("Submitted", proof.created_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
                 {% if proof.payment_id %}
                 {{ info_row("Payment", proof.payment_id) }}
                 {% endif %}

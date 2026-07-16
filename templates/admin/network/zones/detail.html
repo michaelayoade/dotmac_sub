@@ -89,7 +89,7 @@
                     {% endif %}
                     <div>
                         <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Created</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ zone.created_at.strftime('%Y-%m-%d %H:%M') if zone.created_at else '-' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ zone.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</dd>
                     </div>
                 </dl>
             {% endcall %}

@@ -71,11 +71,11 @@
                         <span>Version {{ document.version }}</span>
                         {% if document.effective_date %}
                         <span>&bull;</span>
-                        <span>Effective {{ document.effective_date.strftime('%B %d, %Y') }}</span>
+                        <span>Effective {{ document.effective_date | app_datetime('%B %d, %Y', include_tz=False) }}</span>
                         {% endif %}
                         {% if document.published_at %}
                         <span>&bull;</span>
-                        <span>Last updated {{ document.published_at.strftime('%B %d, %Y') }}</span>
+                        <span>Last updated {{ document.published_at | app_datetime('%B %d, %Y', include_tz=False) }}</span>
                         {% endif %}
                     </div>
                     {% if document.summary %}

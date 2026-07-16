@@ -167,7 +167,7 @@
                         <p class="text-sm font-medium text-slate-900 dark:text-white">
                             {{ sub.name if sub else 'Subscriber' }}
                         </p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Cancelled {{ sub.updated_at.strftime('%b %d, %Y') if sub.updated_at else '-' }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Cancelled {{ sub.updated_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                     {{ status_badge("Cancelled", variant="error") }}
                 </div>

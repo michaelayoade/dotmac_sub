@@ -118,7 +118,7 @@
                     {% endif %}
                     {% if item.notes %}<p class="mt-1 text-xs text-stone-600 dark:text-stone-300">{{ item.notes }}</p>{% endif %}
                     {% if item.admin_notes %}<p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Staff note: {{ item.admin_notes }}</p>{% endif %}
-                    <p class="mt-1 text-xs text-stone-400 dark:text-stone-500">{{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else '' }}</p>
+                    <p class="mt-1 text-xs text-stone-400 dark:text-stone-500">{{ item.created_at | app_datetime('%Y-%m-%d %H:%M', '') }}</p>
                 </div>
                 {% else %}
                 <p class="px-6 py-8 text-sm text-stone-500 dark:text-stone-400">No service requests yet.</p>
