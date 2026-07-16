@@ -151,7 +151,15 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    account or policy-set grace remains authoritative. Supplied snapshots are
    complete-or-error for that cohort and never fill missing accounts from a
    different balance source.
-10. `financial.prepaid_enforcement_readiness` owns the activation prerequisite.
+10. `financial.billing_reporting` (`app/services/billing/reporting.py`) owns
+   every money figure the admin reports and overview render: overview and
+   payments/collections summaries, AR aging and outstanding receivables,
+   revenue by offer/service type, statements, subscription movement, and the
+   canonical bases decided 2026-07-16 — figures labelled "Revenue" use the
+   invoice settled-value basis, the payments basis is labelled Collections,
+   and recurring revenue uses the MRR-countable basis. Report/web layers
+   compose these reads and own presentation only.
+11. `financial.prepaid_enforcement_readiness` owns the activation prerequisite.
    After the signed full-cohort opening position is materialized, it records one
    fresh plan from Sub's live currency-bound funding owner for the exact
    owner-selected cohort. It accepts no alternate funding input. Before the
@@ -168,7 +176,7 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    `collections.prepaid_activation_max_grace_days` is the activation-cohort
    policy gate; it is configured as zero for this cutover, so readiness cannot
    be recorded while an underfunded candidate resolves to a fresh grace period.
-11. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
+12. `financial.prepaid_plan_change` owns the immediate prepaid plan-change quote,
    affordability decision, confirmation fingerprint, and idempotent financial
    adjustment. It binds the human preview to a durable change request, locks the
    account and recomputes at write time, then records the exact adjustment or
@@ -178,41 +186,41 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    `financial.credit_notes`. Immediate admin bulk changes are gated until a
    batch contract can preview and confirm every subscription separately;
    next-cycle bulk scheduling produces no immediate financial transaction.
-12. `financial.account_adjustments` owns debit eligibility, preview, locked
+13. `financial.account_adjustments` owns debit eligibility, preview, locked
    confirmation, idempotency, actor audit, exact ledger evidence, and previewed
    append-only reversal. It never issues customer credits and never decides
    service-access state.
-13. `financial.addon_purchases` owns customer add-on price, subscription-state,
+14. `financial.addon_purchases` owns customer add-on price, subscription-state,
    and entitlement confirmation. A paid add-on delegates one exact debit to
    `financial.account_adjustments` and stores the structural entitlement-to-
    adjustment link; a free add-on explicitly produces no ledger transaction.
-14. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
+15. Dunning owns postpaid enforcement; prepaid enforcement owns prepaid access.
    Both submit owner-produced previews to `financial.dunning`'s shared
    financial-access consequence confirmation. It locks and rechecks billing
    profile validity, payment-arrangement/proof/extension shields, canonical
    receivables or prepaid funding, and billing enforcement health immediately
    before acting. `access.subscription_lifecycle` is the sole writer of
    enforcement locks and subscription/account access status.
-15. `financial.payment_arrangements` owns arrangement eligibility, lifecycle,
+16. `financial.payment_arrangements` owns arrangement eligibility, lifecycle,
    installment schedule, payment application, and active-arrangement shield
    state. Dunning consumes the shield; it does not reimplement arrangement
    eligibility, and an arrangement does not rewrite receivables or access.
-16. `financial.billing_health` owns monitoring snapshots and anomaly
+17. `financial.billing_health` owns monitoring snapshots and anomaly
     classification. Health signals are observations, not balances or direct
     suspension/restoration permission.
-17. Scheduled billing, collections, and payment-reconciliation services own DB
+18. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-18. `financial.payment_webhooks` owns signature-verified provider-payload
+19. `financial.payment_webhooks` owns signature-verified provider-payload
    projection and inbound dead-letter lifecycle. Replay rebuilds the same
    settlement command as live delivery; `financial.payment_provider_events`
    owns idempotent event processing, delegates the monetary write to the
    payment owner, and must resume an incomplete event rather than treating
    receipt identity as proof that money was posted.
-19. Referral rewards are account credits owned by `financial.credit_notes`;
+20. Referral rewards are account credits owned by `financial.credit_notes`;
    neither CRM nor referral services post a parallel wallet balance. Automated
    referral issuance uses the same owner-generated preview, locked confirmation,
    idempotency, audit, and exact funding-ledger evidence as other credit issuance.
-20. Every money-moving financial command is previewed by the same owner that executes it.
+21. Every money-moving financial command is previewed by the same owner that executes it.
    Execution locks and recomputes the preview, rejects stale confirmation,
    records idempotency and actor audit evidence, and structurally links the
    command result to its exact ledger transaction(s). Financial settlement may
@@ -868,6 +876,12 @@ network summary composition.
 6. `customer.usage_summary` owns customer usage windows, headline totals, and
    total provenance. An authoritative zero is a valid value, not a missing-data
    sentinel.
+7. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
+   admin subscriber growth and churn report reads: monthly growth/churn series,
+   month-over-month new counts, churn/at-risk summaries, status counts, and
+   cumulative signups. The derived-cancelled rule (explicit `canceled`, or NULL
+   status on an inactive row) lives here; report pages compose it and never
+   re-derive lifecycle in Python.
 
 Rule: admin, portal, support, and reporting views should consume context
 services instead of rebuilding customer joins. Admin routes submit explicit
@@ -1463,6 +1477,13 @@ Dependency order:
    do not create operations or decide a parallel retry policy. Delayed bootstrap
    attempts are separate immutable dispatch rows on the same child operation,
    while Inform-driven completion uses the same parent projection.
+19. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
+   owns IP-pool utilization reads — the daily utilization snapshots and the
+   live per-pool used/total counts consumed by the network report. The live
+   count (assignment-join basis) is deliberately distinct from the snapshot's
+   CIDR-capacity basis; both definitions live in this owner and are documented
+   in its docstrings. Web layers compose these reads; they do not count
+   addresses or assignments themselves.
 
 Provisioning dispatch authority migration: the retired path published Celery
 tasks from admin/API/bulk callers and created the operation inside the worker.
