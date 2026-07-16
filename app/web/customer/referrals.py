@@ -12,7 +12,7 @@ wallets are never involved).
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
@@ -69,6 +69,25 @@ def customer_refer_a_friend(
         return RedirectResponse(url=_LOGIN, status_code=303)
 
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
+    # §4.3 write flip: ON captures natively (no CRM link needed); OFF is the
+    # unchanged CRM write-through.
+    if referrals_service.native_write_enabled(db):
+        try:
+            referrals_service.referrals.refer_a_friend(
+                db,
+                subscriber_id,
+                name=name or None,
+                email=email or None,
+                phone=phone or None,
+            )
+        except HTTPException as exc:
+            return RedirectResponse(
+                url=f"/portal/refer-and-earn?error={quote(str(exc.detail))}",
+                status_code=303,
+            )
+        return RedirectResponse(
+            url="/portal/refer-and-earn?referred=1", status_code=303
+        )
     try:
         referrals_mirror.refer_a_friend(
             db,
