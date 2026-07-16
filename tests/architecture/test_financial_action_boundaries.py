@@ -300,6 +300,55 @@ def test_consolidated_settlement_reconciliation_is_an_evidence_only_adapter() ->
     assert '"none_evidence_only_no_access_decision"' in owner
 
 
+def test_consolidated_credit_consumption_reconciliation_stays_in_its_owner() -> None:
+    api = _source("app/api/billing.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+
+    base = '"/billing-accounts/{billing_account_id}/credit-consumption/evidence"'
+    assert base in api
+    assert base[:-1] + '/preview"' in api
+    assert base[:-1] + '/reconcile"' in api
+    assert "inspect_reconciliation_evidence(" in api
+    assert "preview_reconciliation(" in api
+    assert "reconcile_historical_consumption(" in api
+    assert "BillingAccountLedgerEntry(" not in api
+    assert "BillingAccountCreditAllocation(" not in api
+    assert "ConsolidatedCreditConsumptionReconciliationEvidence(" not in api
+    assert "def reconcile_historical_consumption(" in owner
+    assert 'action="reconcile_consolidated_credit_consumption"' in owner
+    assert '"billing_account_balance_changed": False' in owner
+    assert '"none_historical_evidence_reconciliation_no_access_decision"' in owner
+
+
+def test_consolidated_return_reconciliation_is_an_evidence_only_adapter() -> None:
+    api = _source("app/api/billing.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+
+    base = (
+        '"/consolidated-payments/{payment_id}/returns/'
+        '{return_type}/{return_id}/evidence"'
+    )
+    assert base in api
+    assert base[:-1] + '/preview"' in api
+    assert base[:-1] + '/reconcile"' in api
+    assert "consolidated_payment_return_reconciliations.inspect_evidence(" in api
+    assert "consolidated_payment_return_reconciliations.preview(" in api
+    assert (
+        "consolidated_payment_return_reconciliations.reconcile_historical_evidence("
+        in api
+    )
+    assert "PaymentRefund(" not in api
+    assert "PaymentReversal(" not in api
+    assert "BillingAccountLedgerEntry(" not in api
+    assert "LedgerEntry(" not in api
+    assert "ConsolidatedPaymentReturnReconciliationEvidence(" not in api
+    assert "class ConsolidatedPaymentReturnReconciliations:" in owner
+    assert 'action="reconcile_consolidated_return_evidence"' in owner
+    assert '"money_posted": False' in owner
+    assert '"billing_account_balance_changed": False' in owner
+    assert '"none_historical_return_evidence_no_access_decision"' in owner
+
+
 def test_native_credit_reconciliation_composes_the_payment_allocation_owner() -> None:
     reconciliation = _source("app/services/billing/reconcile_unposted.py")
 

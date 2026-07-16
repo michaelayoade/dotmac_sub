@@ -363,6 +363,11 @@ class BillingAccountCreditAllocation(Base):
         back_populates="allocation",
         passive_deletes=True,
     )
+    reconciliation_evidence = relationship(
+        "ConsolidatedCreditConsumptionReconciliationEvidence",
+        back_populates="allocation",
+        uselist=False,
+    )
 
 
 class BillingAccountCreditAllocationItem(Base):
@@ -424,6 +429,39 @@ class BillingAccountCreditAllocationItem(Base):
     source_billing_account_ledger_entry = relationship("BillingAccountLedgerEntry")
     payment_allocation = relationship("PaymentAllocation")
     subscriber_ledger_entry = relationship("LedgerEntry")
+
+
+class ConsolidatedCreditConsumptionReconciliationEvidence(Base):
+    """Reviewed provenance for one historical consolidated-credit transfer."""
+
+    __tablename__ = "consolidated_credit_consumption_reconciliation_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "debit_action IN ('linked_existing', 'created_missing')",
+            name="ck_consolidated_credit_recon_debit_action",
+        ),
+        UniqueConstraint(
+            "allocation_id", name="uq_consolidated_credit_recon_allocation"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_credit_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    debit_action: Mapped[str] = mapped_column(String(24), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    allocation = relationship(
+        "BillingAccountCreditAllocation", back_populates="reconciliation_evidence"
+    )
 
 
 class Invoice(Base):
@@ -1227,6 +1265,12 @@ class PaymentRefund(Base):
         back_populates="refund",
         foreign_keys="ConsolidatedPaymentReturnAllocationEvidence.refund_id",
     )
+    consolidated_reconciliation_evidence = relationship(
+        "ConsolidatedPaymentReturnReconciliationEvidence",
+        back_populates="refund",
+        foreign_keys="ConsolidatedPaymentReturnReconciliationEvidence.refund_id",
+        uselist=False,
+    )
 
 
 class PaymentReversal(Base):
@@ -1307,6 +1351,12 @@ class PaymentReversal(Base):
         back_populates="reversal",
         foreign_keys="ConsolidatedPaymentReturnAllocationEvidence.reversal_id",
     )
+    consolidated_reconciliation_evidence = relationship(
+        "ConsolidatedPaymentReturnReconciliationEvidence",
+        back_populates="reversal",
+        foreign_keys="ConsolidatedPaymentReturnReconciliationEvidence.reversal_id",
+        uselist=False,
+    )
 
 
 class ConsolidatedPaymentReturnAllocationEvidence(Base):
@@ -1372,6 +1422,82 @@ class ConsolidatedPaymentReturnAllocationEvidence(Base):
     )
     payment_allocation = relationship("PaymentAllocation")
     ledger_entry = relationship("LedgerEntry")
+
+
+class ConsolidatedPaymentReturnReconciliationEvidence(Base):
+    """Reviewed structural evidence for one historical consolidated return."""
+
+    __tablename__ = "consolidated_payment_return_reconciliation_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN refund_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN reversal_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_consolidated_return_recon_exactly_one_owner",
+        ),
+        UniqueConstraint("refund_id", name="uq_consolidated_return_recon_refund"),
+        UniqueConstraint("reversal_id", name="uq_consolidated_return_recon_reversal"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    refund_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_refunds.id", ondelete="RESTRICT")
+    )
+    reversal_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_reversals.id", ondelete="RESTRICT")
+    )
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    refund = relationship(
+        "PaymentRefund",
+        back_populates="consolidated_reconciliation_evidence",
+        foreign_keys=[refund_id],
+    )
+    reversal = relationship(
+        "PaymentReversal",
+        back_populates="consolidated_reconciliation_evidence",
+        foreign_keys=[reversal_id],
+    )
+    document_reconstruction_evidence = relationship(
+        "ConsolidatedPaymentReturnDocumentReconstructionEvidence",
+        back_populates="reconciliation_evidence",
+        uselist=False,
+    )
+
+
+class ConsolidatedPaymentReturnDocumentReconstructionEvidence(Base):
+    """Reviewed source reference for one reconstructed historical return."""
+
+    __tablename__ = "consolidated_payment_return_document_reconstruction_evidence"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    reconciliation_evidence_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "consolidated_payment_return_reconciliation_evidence.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        unique=True,
+    )
+    historical_payment_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_reference: Mapped[str] = mapped_column(String(255), nullable=False)
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    reconciliation_evidence = relationship(
+        "ConsolidatedPaymentReturnReconciliationEvidence",
+        back_populates="document_reconstruction_evidence",
+    )
 
 
 class PaymentSettlement(Base):

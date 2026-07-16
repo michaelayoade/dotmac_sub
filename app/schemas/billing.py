@@ -1894,6 +1894,306 @@ class BillingAccountCreditAllocationResultRead(BaseModel):
     idempotent_replay: bool = False
 
 
+class BillingAccountCreditConsumptionSourceCandidateRead(BaseModel):
+    billing_account_ledger_entry_id: UUID
+    payment_id: UUID
+    amount: Decimal
+    linked_consumption: Decimal
+    returned_amount: Decimal
+    available_amount: Decimal
+
+
+class BillingAccountCreditConsumptionAllocationCandidateRead(BaseModel):
+    payment_allocation_id: UUID
+    payment_id: UUID
+    payment_has_settlement: bool
+    invoice_id: UUID
+    subscriber_id: UUID
+    amount: Decimal
+    subscriber_ledger_entry_ids: list[UUID]
+
+
+class BillingAccountCreditConsumptionDebitCandidateRead(BaseModel):
+    billing_account_ledger_entry_id: UUID
+    payment_id: UUID | None = None
+    amount: Decimal
+    source: LedgerSource
+    balance_after: Decimal
+
+
+class BillingAccountCreditConsumptionEvidenceInspectionRead(BaseModel):
+    billing_account_id: UUID
+    currency: str
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    unbacked_projection_amount: Decimal
+    missing_debit_projection_amount: Decimal
+    source_candidates: list[BillingAccountCreditConsumptionSourceCandidateRead]
+    allocation_candidates: list[BillingAccountCreditConsumptionAllocationCandidateRead]
+    debit_candidates: list[BillingAccountCreditConsumptionDebitCandidateRead]
+    service_access_consequence: str
+
+
+class BillingAccountCreditConsumptionSelection(BaseModel):
+    payment_allocation_id: UUID
+    subscriber_ledger_entry_id: UUID
+    source_billing_account_ledger_entry_id: UUID
+
+
+class BillingAccountCreditConsumptionReconciliationRequest(BaseModel):
+    allocation_evidence: list[BillingAccountCreditConsumptionSelection] = Field(
+        min_length=1
+    )
+    billing_account_debit_ledger_entry_id: UUID | None = None
+    create_missing_billing_account_debit: bool = False
+    reason: str = Field(min_length=10, max_length=1000)
+
+    @model_validator(mode="after")
+    def require_exact_debit_action(self):
+        selected_existing = self.billing_account_debit_ledger_entry_id is not None
+        if selected_existing == self.create_missing_billing_account_debit:
+            raise ValueError(
+                "Select one existing billing-account debit or explicitly create "
+                "the missing debit"
+            )
+        return self
+
+
+class BillingAccountCreditConsumptionEffectRead(BaseModel):
+    payment_allocation_id: UUID
+    payment_id: UUID
+    invoice_id: UUID
+    subscriber_id: UUID
+    subscriber_ledger_entry_id: UUID
+    source_billing_account_ledger_entry_id: UUID
+    amount: Decimal
+
+
+class BillingAccountCreditConsumptionReconciliationPreviewRead(BaseModel):
+    billing_account_id: UUID
+    subscriber_id: UUID
+    currency: str
+    recorded_consolidated_credit_before: Decimal
+    recorded_consolidated_credit_after: Decimal
+    evidenced_consolidated_credit_before: Decimal
+    evidenced_consolidated_credit_after: Decimal
+    projection_drift_before: Decimal
+    projection_drift_after: Decimal
+    allocation_amount: Decimal
+    allocation_effects: list[BillingAccountCreditConsumptionEffectRead]
+    billing_account_debit_action: str
+    billing_account_debit_ledger_entry_id: UUID | None = None
+    billing_account_debit_amount: Decimal
+    billing_account_balance_changed: bool = False
+    ledger_transaction_created: bool
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountCreditConsumptionReconciliationConfirm(
+    BillingAccountCreditConsumptionReconciliationRequest
+):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+
+
+class BillingAccountCreditConsumptionReconciliationResultRead(BaseModel):
+    reconciliation_evidence_id: UUID
+    allocation_id: UUID
+    billing_account_id: UUID
+    subscriber_id: UUID
+    amount: Decimal
+    currency: str
+    billing_account_debit_action: str
+    billing_account_ledger_entry_id: UUID
+    payment_allocation_ids: list[UUID]
+    subscriber_ledger_entry_ids: list[UUID]
+    billing_account_balance_changed: bool = False
+    service_access_consequence: str
+    idempotent_replay: bool = False
+
+
+class BillingAccountPaymentReturnAllocationCandidateRead(BaseModel):
+    payment_allocation_id: UUID
+    invoice_id: UUID
+    account_id: UUID
+    amount: Decimal
+    allocation_active: bool
+    candidate_ledger_entry_ids: list[UUID]
+
+
+class BillingAccountPaymentReturnEvidenceInspectionRead(BaseModel):
+    return_type: str
+    return_id: UUID
+    payment_id: UUID
+    billing_account_id: UUID
+    payment_state: PaymentStatus
+    return_amount: Decimal
+    currency: str
+    already_reconciled: bool
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    linked_billing_account_ledger_entry_id: UUID | None = None
+    linked_allocation_evidence_ids: list[UUID]
+    linked_provider_event_id: UUID | None = None
+    billing_account_candidate_entries: list[BillingAccountLedgerEvidenceCandidateRead]
+    allocation_candidates: list[BillingAccountPaymentReturnAllocationCandidateRead]
+    provider_candidates: list[BillingAccountPaymentProvenanceCandidateRead]
+    service_access_consequence: str
+
+
+class BillingAccountPaymentReturnReconciliationRequest(BaseModel):
+    billing_account_ledger_entry_id: UUID | None = None
+    allocation_ledger_entry_ids: dict[UUID, UUID] = Field(default_factory=dict)
+    provider_event_id: UUID | None = None
+    reason: str = Field(min_length=10, max_length=1000)
+
+
+class BillingAccountPaymentReturnAllocationEvidenceRead(BaseModel):
+    payment_allocation_id: UUID
+    invoice_id: UUID
+    account_id: UUID
+    amount: Decimal
+    ledger_entry_id: UUID
+
+
+class BillingAccountPaymentReturnReconciliationPreviewRead(BaseModel):
+    return_type: str
+    return_id: UUID
+    payment_id: UUID
+    billing_account_id: UUID
+    currency: str
+    return_amount: Decimal
+    payment_state_before: PaymentStatus
+    payment_state_after: PaymentStatus
+    payment_refunded_amount_before: Decimal
+    payment_refunded_amount_after: Decimal
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    billing_account_return_amount: Decimal
+    billing_account_ledger_entry_id: UUID | None = None
+    allocation_return_amount: Decimal
+    allocation_evidence: list[BillingAccountPaymentReturnAllocationEvidenceRead]
+    provider_event_id: UUID | None = None
+    money_posted: bool = False
+    billing_account_balance_changed: bool = False
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountPaymentReturnReconciliationConfirm(
+    BillingAccountPaymentReturnReconciliationRequest
+):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+
+
+class BillingAccountPaymentReturnReconciliationResultRead(BaseModel):
+    reconciliation_evidence_id: UUID
+    return_type: str
+    return_id: UUID
+    payment_id: UUID
+    billing_account_id: UUID
+    payment_state: PaymentStatus
+    return_amount: Decimal
+    currency: str
+    billing_account_ledger_entry_id: UUID | None = None
+    allocation_evidence_ids: list[UUID]
+    subscriber_ledger_entry_ids: list[UUID]
+    provider_event_id: UUID | None = None
+    money_posted: bool = False
+    billing_account_balance_changed: bool = False
+    service_access_consequence: str
+    idempotent_replay: bool = False
+
+
+class BillingAccountMissingPaymentReturnEvidenceInspectionRead(BaseModel):
+    return_type: str
+    payment_id: UUID
+    billing_account_id: UUID
+    payment_state: PaymentStatus
+    payment_amount: Decimal
+    currency: str
+    existing_refund_ids: list[UUID]
+    existing_reversal_id: UUID | None = None
+    status_only_candidate: bool
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    billing_account_candidate_entries: list[BillingAccountLedgerEvidenceCandidateRead]
+    allocation_candidates: list[BillingAccountPaymentReturnAllocationCandidateRead]
+    provider_candidates: list[BillingAccountPaymentProvenanceCandidateRead]
+    service_access_consequence: str
+
+
+class BillingAccountPaymentReturnDocumentReconstructionRequest(
+    BillingAccountPaymentReturnReconciliationRequest
+):
+    return_amount: Decimal = Field(gt=0, lt=10000000000)
+    source_reference: str = Field(min_length=3, max_length=255)
+
+
+class BillingAccountPaymentReturnDocumentReconstructionPreviewRead(BaseModel):
+    proposed_return_id: UUID
+    return_type: str
+    payment_id: UUID
+    billing_account_id: UUID
+    currency: str
+    return_amount: Decimal
+    source_reference: str
+    payment_state_before: PaymentStatus
+    payment_state_after: PaymentStatus
+    payment_refunded_amount_before: Decimal
+    payment_refunded_amount_after: Decimal
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    billing_account_return_amount: Decimal
+    billing_account_ledger_entry_id: UUID | None = None
+    allocation_return_amount: Decimal
+    allocation_evidence: list[BillingAccountPaymentReturnAllocationEvidenceRead]
+    provider_event_id: UUID | None = None
+    return_document_created: bool = False
+    money_posted: bool = False
+    billing_account_balance_changed: bool = False
+    service_access_consequence: str
+    evidence_fingerprint: str
+    fingerprint: str
+
+
+class BillingAccountPaymentReturnDocumentReconstructionConfirm(
+    BillingAccountPaymentReturnDocumentReconstructionRequest
+):
+    proposed_return_id: UUID
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+
+
+class BillingAccountPaymentReturnDocumentReconstructionResultRead(BaseModel):
+    reconstruction_evidence_id: UUID
+    reconciliation_evidence_id: UUID
+    return_type: str
+    return_id: UUID
+    payment_id: UUID
+    billing_account_id: UUID
+    payment_state: PaymentStatus
+    return_amount: Decimal
+    currency: str
+    source_reference: str
+    billing_account_ledger_entry_id: UUID | None = None
+    allocation_evidence_ids: list[UUID]
+    subscriber_ledger_entry_ids: list[UUID]
+    provider_event_id: UUID | None = None
+    return_document_created: bool = True
+    money_posted: bool = False
+    billing_account_balance_changed: bool = False
+    service_access_consequence: str
+    idempotent_replay: bool = False
+
+
 class BillingAccountStatementSubscriberLine(BaseModel):
     subscriber_id: UUID
     subscriber_name: str
