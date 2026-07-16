@@ -124,7 +124,7 @@ def customer_branding_context(request: Request) -> dict[str, object]:
         # unauthenticated login screen; see the portal boundary architecture
         # test). brand_profiles is the canonical customer-facing brand owner.
         db = db_session_adapter.create_session()
-        stats: dict[str, object] = {}
+        stats = {}
         portal_name = ""
         try:
             from app.services import brand_profiles
