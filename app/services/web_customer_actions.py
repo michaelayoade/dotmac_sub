@@ -1964,7 +1964,7 @@ def update_person_customer(
     normalized_status, active = _normalize_status_for_customer_edit(
         status, is_active=active
     )
-    data = {
+    data: dict[str, Any] = {
         "first_name": _require_text(first_name, "First name", max_length=80),
         "last_name": _require_text(last_name, "Last name", max_length=80),
         "display_name": _normalize_optional(display_name),

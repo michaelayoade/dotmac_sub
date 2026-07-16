@@ -235,7 +235,6 @@ app.services.web_billing_reconciliation
 app.services.web_catalog_offers
 app.services.web_catalog_subscription_workflows
 app.services.web_catalog_subscriptions
-app.services.web_customer_actions
 app.services.web_customer_auth
 app.services.web_customer_details
 app.services.web_customer_user_access
