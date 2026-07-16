@@ -234,7 +234,6 @@ app.services.user_profile
 app.services.vendor_admin
 app.services.vendor_portal_operations
 app.services.vendor_purchase_invoices
-app.services.vpn_routing
 app.services.web_admin_resellers
 app.services.web_billing_invoice_batch
 app.services.web_billing_payments
@@ -294,8 +293,6 @@ app.services.web_vpn_peers
 app.services.web_vpn_servers
 app.services.webhook
 app.services.whatsapp_notification_templates
-app.services.wireguard
-app.services.wireguard_system
 app.services.wireless_mast
 app.services.work_orders_mirror
 app.services.workqueue.snooze

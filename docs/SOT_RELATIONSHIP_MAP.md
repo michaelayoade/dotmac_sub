@@ -48,6 +48,7 @@ but equivalent state and actions resolve through the same backend owners.
 19. `ui_list_projection`
 20. `ui_bulk_actions`
 21. `ui_semantic_presentation`
+22. `vpn_remote_access`
 
 Rule: each PR should finish one domain slice: define the owner service, migrate
 the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
@@ -1403,3 +1404,23 @@ sync lifecycle, and hook delivery stay inside integration services.
 The effective-state projection derives connector/webhook health from runs and
 deliveries and reads OpenBao metadata without reading secret values. It does
 not own connector, subscription, delivery, or credential decisions.
+
+## VPN / Remote Access
+
+Dependency order:
+
+1. `vpn.key_material`: owns WireGuard keypair generation and private-key
+   at-rest encryption.
+2. `vpn.system_interface`: owns the VPS-local WireGuard interface state and the
+   projection of desired peers onto the running interface.
+3. `vpn.wireguard`: owns WireGuard server and peer lifecycle and the peer config
+   and MikroTik RouterOS script generation.
+4. `vpn.routing_readiness`: resolves whether a VPN interface is ready for device
+   access.
+
+Rule: admin VPN routes and device-access callers resolve server/peer lifecycle,
+config and RouterOS script generation, key material, and interface readiness
+through these owners. `web_vpn_*` adapters and device-access code do not build
+WireGuard config, mutate peers, or write the system interface directly. The
+Redis `vpn_cache` is a rebuildable projection of server/peer configs, never a
+source of truth.
