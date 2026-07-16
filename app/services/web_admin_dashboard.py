@@ -673,14 +673,12 @@ def _resolve_dashboard_permissions(
         )
     if user:
         try:
-            from app.models.system_user import SystemUser
+            from app.services.auth_dependencies import user_role_names
 
-            sys_user = db.get(
-                SystemUser, str(user.get("subscriber_id") or user.get("id", ""))
+            role_names = user_role_names(
+                db, user.get("subscriber_id") or user.get("id", "")
             )
-            roles = getattr(sys_user, "roles", None)
-            if sys_user and roles is not None:
-                role_names = {getattr(r, "name", "") for r in roles} if roles else set()
+            if role_names is not None:
                 is_admin = "admin" in role_names or "super_admin" in role_names
                 return (
                     is_admin or "finance" in role_names or "billing" in role_names,
