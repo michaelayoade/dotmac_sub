@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card,
-    table_head, table_row, row_actions, row_action, status_badge,
+    table_head, table_row, row_actions, row_action, status_presentation_badge,
     empty_state, action_button, animation_styles,
     icon_plus, icon_view, icon_invoice
 %}
@@ -133,15 +133,8 @@
                             </a>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {% set status = account.status | default('active') %}
-                            {% set status_val = status.value if status is not string else status %}
-                            {% if status_val == 'active' %}
-                            {{ status_badge("Active", variant="active") }}
-                            {% elif status_val == 'suspended' %}
-                            {{ status_badge("Blocked", variant="warning") }}
-                            {% else %}
-                            {{ status_badge(status_val | default('Unknown') | title, variant="default") }}
-                            {% endif %}
+                            {# Status semantics from the account status presentation owner. #}
+                            {{ status_presentation_badge(account_status_presentation(account.status | default('active')), size="sm") }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% set balance = account.balance | default(0) %}

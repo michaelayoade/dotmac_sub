@@ -27,11 +27,11 @@ import logging
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func
+from sqlalchemy import BigInteger, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.models.bandwidth import BandwidthSample
-from app.models.catalog import Subscription
+from app.models.catalog import CatalogOffer, Subscription
 from app.models.subscriber import Subscriber
 from app.models.usage import (
     QuotaBucket,
@@ -751,3 +751,136 @@ async def get_usage_summary(
         "series": _series_payload(series),
         "average_bps": _avg_bps(points),
     }
+
+
+# ---------------------------------------------------------------------------
+# Admin bandwidth-report read owners
+#
+# The admin /reports bandwidth and customer pages render these aggregations;
+# the web layer (app.services.web_reports / web_reports_extended) composes
+# them and owns presentation only (rounding, labels, chart shaping). The SQL
+# was moved here verbatim from the web layer so displayed numbers do not
+# change.
+# ---------------------------------------------------------------------------
+
+
+def _bandwidth_total_bps_expr():
+    return cast(BandwidthSample.rx_bps, BigInteger) + cast(
+        BandwidthSample.tx_bps,
+        BigInteger,
+    )
+
+
+def _usage_bytes_expr(avg_bps, span_seconds: float):
+    return avg_bps / 8.0 * span_seconds
+
+
+def subscription_bandwidth_usage_subquery(
+    start: datetime, end: datetime, span_seconds: float
+):
+    """Per-subscription bandwidth usage aggregate over ``[start, end)``.
+
+    One row per subscription with avg/peak throughput per direction, the
+    combined average, and the derived usage bytes for the window.
+    """
+    total_bps = _bandwidth_total_bps_expr()
+    avg_total = func.avg(total_bps)
+    return (
+        select(
+            BandwidthSample.subscription_id.label("subscription_id"),
+            func.avg(BandwidthSample.rx_bps).label("avg_rx"),
+            func.avg(BandwidthSample.tx_bps).label("avg_tx"),
+            func.max(BandwidthSample.rx_bps).label("peak_rx"),
+            func.max(BandwidthSample.tx_bps).label("peak_tx"),
+            avg_total.label("avg_total"),
+            _usage_bytes_expr(avg_total, span_seconds).label("usage_bytes"),
+        )
+        .where(
+            BandwidthSample.sample_at >= start,
+            BandwidthSample.sample_at < end,
+        )
+        .group_by(BandwidthSample.subscription_id)
+        .subquery()
+    )
+
+
+def bandwidth_report_totals(db: Session, usage_subquery) -> dict:
+    """Window totals over the per-subscription usage subquery.
+
+    Returns raw numeric ``usage_bytes``, ``avg_rx``, ``avg_tx``, ``peak_rx``,
+    ``peak_tx``, and ``active_subs`` — unit conversion and rounding stay in
+    the web layer.
+    """
+    row = db.execute(
+        select(
+            func.coalesce(func.sum(usage_subquery.c.usage_bytes), 0).label(
+                "usage_bytes"
+            ),
+            func.coalesce(func.sum(usage_subquery.c.avg_rx), 0).label("avg_rx"),
+            func.coalesce(func.sum(usage_subquery.c.avg_tx), 0).label("avg_tx"),
+            func.max(usage_subquery.c.peak_rx).label("peak_rx"),
+            func.max(usage_subquery.c.peak_tx).label("peak_tx"),
+            func.count(usage_subquery.c.subscription_id).label("active_subs"),
+        )
+    ).first()
+    return {
+        "usage_bytes": float(row.usage_bytes or 0) if row else 0,
+        "avg_rx": float(row.avg_rx or 0) if row else 0,
+        "avg_tx": float(row.avg_tx or 0) if row else 0,
+        "peak_rx": float(row.peak_rx or 0) if row else 0,
+        "peak_tx": float(row.peak_tx or 0) if row else 0,
+        "active_subs": int(row.active_subs or 0) if row else 0,
+    }
+
+
+def bandwidth_usage_by_plan(db: Session, usage_subquery) -> list:
+    """Per-plan usage rows (name, avg_bps, usage_bytes, sub_count) for the
+    window's usage subquery, heaviest usage first."""
+    return list(
+        db.execute(
+            select(
+                CatalogOffer.name.label("name"),
+                func.coalesce(func.sum(usage_subquery.c.avg_total), 0).label("avg_bps"),
+                func.coalesce(func.sum(usage_subquery.c.usage_bytes), 0).label(
+                    "usage_bytes"
+                ),
+                func.count(usage_subquery.c.subscription_id).label("sub_count"),
+            )
+            .select_from(usage_subquery)
+            .join(
+                Subscription,
+                Subscription.id == usage_subquery.c.subscription_id,
+                isouter=True,
+            )
+            .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
+            .group_by(CatalogOffer.name)
+            .order_by(func.coalesce(func.sum(usage_subquery.c.usage_bytes), 0).desc())
+        ).all()
+    )
+
+
+def period_usage_by_subscriber(
+    db: Session,
+    subscriber_ids: list,
+    *,
+    start: datetime,
+    end: datetime,
+) -> list:
+    """Per-subscriber usage rows (subscriber_id, usage_bytes, avg_bps,
+    active_services) over ``[start, end)`` for the given subscribers."""
+    span_seconds = max(0.0, (end - start).total_seconds())
+    usage = subscription_bandwidth_usage_subquery(start, end, span_seconds)
+    return list(
+        db.execute(
+            select(
+                Subscription.subscriber_id,
+                func.coalesce(func.sum(usage.c.usage_bytes), 0).label("usage_bytes"),
+                func.coalesce(func.sum(usage.c.avg_total), 0).label("avg_bps"),
+                func.count(usage.c.subscription_id).label("active_services"),
+            )
+            .select_from(usage)
+            .join(Subscription, Subscription.id == usage.c.subscription_id)
+            .where(Subscription.subscriber_id.in_(subscriber_ids))
+            .group_by(Subscription.subscriber_id)
+        ).all()
+    )

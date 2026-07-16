@@ -622,6 +622,30 @@ def test_service_order_status_presentation_covers_canonical_set():
     assert service_order_status_presentation("weird").tone == StatusTone.neutral
 
 
+def test_provisioning_task_status_presentation_covers_canonical_set():
+    from app.models.provisioning import TaskStatus
+    from app.schemas.status_presentation import StatusTone
+    from app.services.status_presentation import (
+        provisioning_task_status_presentation,
+    )
+
+    for status in TaskStatus:
+        pres = provisioning_task_status_presentation(status)
+        assert pres.value == status.value
+        assert pres.label
+    assert (
+        provisioning_task_status_presentation(TaskStatus.completed).tone
+        == StatusTone.positive
+    )
+    assert (
+        provisioning_task_status_presentation(TaskStatus.failed).tone
+        == StatusTone.negative
+    )
+    # Unknown values fail neutral, never silently positive.
+    assert provisioning_task_status_presentation("weird").tone == StatusTone.neutral
+    assert provisioning_task_status_presentation(None).tone == StatusTone.neutral
+
+
 def test_appointment_status_presentation_covers_canonical_set():
     from app.models.provisioning import AppointmentStatus
     from app.schemas.status_presentation import StatusTone
