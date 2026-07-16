@@ -50,6 +50,7 @@ from app.tasks.dotmac_erp_outbox import (
 from app.tasks.enforcement import cleanup_subscription_block_sessions
 from app.tasks.events import (
     cleanup_old_events,
+    dispatch_pending_events,
     mark_stale_processing_events,
     retry_failed_events,
 )
@@ -253,6 +254,7 @@ __all__ = [
     "run_scheduled_export",
     "run_export_job",
     "retry_failed_events",
+    "dispatch_pending_events",
     "mark_stale_processing_events",
     "cleanup_old_events",
     "cleanup_subscription_block_sessions",

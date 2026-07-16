@@ -120,6 +120,11 @@ def _resolve_int(db, domain: SettingDomain, key: str, default: int) -> int:
         return default
 
 
+def _resolve_bool(db, domain: SettingDomain, key: str, default: bool) -> bool:
+    value = resolve_value(db, domain, key)
+    return value if isinstance(value, bool) else default
+
+
 def _effective_str(
     db, domain: SettingDomain, key: str, env_key: str, default: str | None
 ) -> str | None:
@@ -2277,6 +2282,28 @@ def build_beat_schedule() -> dict:
         _retire_scheduled_task(
             session,
             "app.tasks.ont_verification.verify_ont_provisioning_state",
+        )
+
+        # Durable event outbox recovery. The normal path dispatches immediately
+        # after commit; this runner claims rows left pending by a process crash.
+        event_dispatch_enabled = _resolve_bool(
+            session,
+            SettingDomain.scheduler,
+            "event_dispatch_enabled",
+            True,
+        )
+        event_dispatch_interval = _resolve_int(
+            session,
+            SettingDomain.scheduler,
+            "event_dispatch_interval_seconds",
+            60,
+        )
+        _sync_scheduled_task(
+            session,
+            name="event_dispatch_runner",
+            task_name="app.tasks.events.dispatch_pending_events",
+            enabled=event_dispatch_enabled,
+            interval_seconds=event_dispatch_interval,
         )
 
         # Event retry - retries failed event handlers

@@ -15,6 +15,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.event_store import EventStatus, EventStore
 from app.services import event_store as event_store_service
 from app.services.events.types import Event, EventType
 from app.services.session_hooks import run_after_commit
@@ -96,7 +97,13 @@ class EventDispatcher:
         """Register an event handler."""
         self._handlers.append(handler)
 
-    def dispatch(self, db: Session, event: Event) -> None:
+    def dispatch(
+        self,
+        db: Session,
+        event: Event,
+        *,
+        event_record: EventStore | None = None,
+    ) -> None:
         """Dispatch an event to all registered handlers.
 
         The event is persisted before dispatching to enable retry on failure.
@@ -120,22 +127,23 @@ class EventDispatcher:
         )
 
         # 1. Persist event before processing.
-        event_record = None
-        try:
-            event_record = event_store_service.create_event_record(db, event)
-        except Exception as persist_exc:
-            # If we can't persist, still try to process but log the error.
-            logger.warning(
-                "event_persist_failed",
-                extra={
-                    **_event_extra(event, handler_count=len(plan)),
-                    "error": str(persist_exc),
-                },
-            )
+        if event_record is None:
             try:
-                db.rollback()
-            except Exception:
-                logger.exception("event_persist_rollback_failed")
+                event_record = event_store_service.create_event_record(db, event)
+            except Exception as persist_exc:
+                # Legacy direct dispatch remains best-effort. ``emit_event``
+                # stages a pending row transactionally before reaching here.
+                logger.warning(
+                    "event_persist_failed",
+                    extra={
+                        **_event_extra(event, handler_count=len(plan)),
+                        "error": str(persist_exc),
+                    },
+                )
+                try:
+                    db.rollback()
+                except Exception:
+                    logger.exception("event_persist_rollback_failed")
 
         # 2. Process the event-specific plan, tracking failures and dependency blocks.
         succeeded_handlers: set[str] = set()
@@ -224,6 +232,25 @@ class EventDispatcher:
                 failed_handlers=failed_handlers,
             ),
         )
+
+    def dispatch_pending_event(self, db: Session, event_store_id: UUID) -> bool:
+        """Claim and dispatch one durable event-store outbox row."""
+        event_record = event_store_service.claim_pending_event(db, event_store_id)
+        if event_record is None:
+            return False
+        event = Event(
+            event_type=EventType(event_record.event_type),
+            payload=event_record.payload,
+            event_id=event_record.event_id,
+            actor=event_record.actor,
+            subscriber_id=event_record.subscriber_id,
+            account_id=event_record.account_id,
+            subscription_id=event_record.subscription_id,
+            invoice_id=event_record.invoice_id,
+            service_order_id=event_record.service_order_id,
+        )
+        self.dispatch(db, event, event_record=event_record)
+        return True
 
     def retry_event(self, db: Session, event_record) -> bool:
         """Retry processing a failed event.
@@ -479,8 +506,22 @@ def emit_event(
 
     dispatcher = get_dispatcher()
 
+    # Non-SQLAlchemy test/dry-run adapters preserve the legacy best-effort
+    # dispatch path. Production sessions stage the outbox row in the same
+    # transaction as the domain change that emitted it.
+    if not isinstance(db, Session):
+        dispatcher.dispatch(db, event)
+        return event
+
+    event_record = event_store_service.create_event_record(
+        db,
+        event,
+        status=EventStatus.pending,
+    )
+    event_record_id = event_record.id
+
     def _dispatch_after_commit(callback_db: Session) -> None:
-        dispatcher.dispatch(callback_db, event)
+        dispatcher.dispatch_pending_event(callback_db, event_record_id)
         if isinstance(callback_db, Session):
             try:
                 callback_db.commit()
@@ -491,7 +532,7 @@ def emit_event(
     if defer_until_commit:
         run_after_commit(db, _dispatch_after_commit)
     else:
-        dispatcher.dispatch(db, event)
+        dispatcher.dispatch_pending_event(db, event_record_id)
 
     logger.info(
         "event_emitted",
