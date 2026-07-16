@@ -778,6 +778,13 @@ will reject.
       estimate and silent export cap are removed. Legacy `order_by`/`order_dir`
       inputs remain only as canonicalizing compatibility aliases.
 
+14. `ui.reseller_list_projection` (`app.services.web_admin_resellers`) declares the
+    admin reseller list capabilities with `ui.list_contracts` — status filter, name
+    sort, pagination — so the route derives no pagination or filter rules;
+    `web_admin_resellers` owns the reseller read. The reseller admin surface is still
+    gated by `customer:read`/`customer:write`; a `reseller:read`/`:write` split is a
+    tracked follow-up pending a reseller access-policy decision.
+
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
 links, refresh, and browser history reproduce the same projection. A changed

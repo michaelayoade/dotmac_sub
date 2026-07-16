@@ -13,6 +13,20 @@ def _create_reseller(db_session, name: str = "Reseller A") -> Reseller:
     return reseller
 
 
+def test_reseller_list_query_normalizes_status_and_page_size():
+    svc = web_admin_resellers_service
+    # default + unknown status collapse to "active"; off-menu page size to default
+    assert svc.build_reseller_list_query().filter_value("status") == "active"
+    assert svc.build_reseller_list_query(status="bogus").filter_value("status") == (
+        "active"
+    )
+    assert svc.build_reseller_list_query(status="all").filter_value("status") == "all"
+    assert svc.build_reseller_list_query(per_page=37).per_page == 25
+    assert svc.build_reseller_list_query(per_page=200).per_page == 200
+    assert svc.build_reseller_list_query(page=0).page == 1
+    assert svc.build_reseller_list_query().sort_by == "name"
+
+
 def test_list_page_context_can_include_inactive_resellers(db_session):
     active = _create_reseller(db_session, "Active Reseller")
     inactive = _create_reseller(db_session, "Inactive Reseller")

@@ -1900,6 +1900,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "scope without a silent row cap."
                 ),
             ),
+            SOTService(
+                name="ui.reseller_list_projection",
+                module="app.services.web_admin_resellers",
+                owns=(
+                    "admin reseller list filter and stable sort semantics",
+                    "admin reseller list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts",),
+                notes=(
+                    "web_admin_resellers owns the reseller read; this projection "
+                    "declares the list capabilities (status filter, name sort, "
+                    "pagination) so the route derives no pagination or filter rules. "
+                    "The admin reseller surface is currently gated by customer:read/"
+                    "write; a reseller:read/write split is a tracked follow-up "
+                    "requiring a reseller access-policy decision."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",
