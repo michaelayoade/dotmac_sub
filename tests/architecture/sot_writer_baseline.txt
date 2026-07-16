@@ -244,7 +244,6 @@ app.services.web_network_core_runtime
 app.services.web_network_dns_threats
 app.services.web_network_fdh
 app.services.web_network_fiber
-app.services.web_network_ip
 app.services.web_network_monitoring
 app.services.web_network_olt_profiles
 app.services.web_network_ont_actions.config_setters

@@ -17,6 +17,7 @@ from app.web.admin import integrations as admin_integrations
 from app.web.admin import legal as admin_legal
 from app.web.admin import network_device_groups as admin_network_device_groups
 from app.web.admin import network_olts_profiles as admin_network_olts_profiles
+from app.web.admin import notifications as admin_notifications
 from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
 from app.web.admin import support_assignment_rules as admin_support_assignment_rules
@@ -122,6 +123,27 @@ def test_dispatch_work_order_routes_require_operations_dispatch_permission():
     ]:
         assert _route_has_permission(
             admin_dispatch_work_orders.router,
+            path,
+            method,
+            permission,
+        )
+
+
+def test_notification_routes_require_granular_notification_permissions():
+    # Granular notification RBAC (migration 320): read to view templates/queue/
+    # history, write to manage — replacing the coarse system:read/system:write.
+    for path, method, permission in [
+        ("/notifications/templates", "GET", "notification:read"),
+        ("/notifications/queue", "GET", "notification:read"),
+        ("/notifications/history", "GET", "notification:read"),
+        (
+            "/notifications/templates/{template_id}/toggle",
+            "POST",
+            "notification:write",
+        ),
+    ]:
+        assert _route_has_permission(
+            admin_notifications.router,
             path,
             method,
             permission,

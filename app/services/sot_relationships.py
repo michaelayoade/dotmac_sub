@@ -2126,6 +2126,52 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Read-only list: no admin bulk command declared."
                 ),
             ),
+            SOTService(
+                name="ui.notification_list_projection",
+                module="app.services.web_notifications",
+                owns=(
+                    "admin notification-template list searchable/filterable fields",
+                    "admin notification-queue list filterable fields",
+                    "admin notification-history list filterable fields",
+                    "admin notification list sort and default-order semantics",
+                    "admin notification list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts", "communications.notification_service"),
+                notes=(
+                    "One projection owner for the three admin notification lists "
+                    "(templates, queue, delivery history). "
+                    "NOTIFICATION_{TEMPLATES,QUEUE,HISTORY}_LIST_DEFINITION declare "
+                    "the per-list capabilities (search + filter channel/status, sort "
+                    "name; filter status/channel, sort created_at; filter status, "
+                    "sort occurred_at); templates_list_context / queue_context / "
+                    "history_context normalize request state and delegate the read + "
+                    "count to communications.notification_service. Gated by the "
+                    "granular notification:read/notification:write (split off the "
+                    "coarse system:read/write in migration 323). Read-only lists: "
+                    "mutations have their own routes; no bulk selection declared."
+                ),
+            ),
+            SOTService(
+                name="ui.ip_address_list_projection",
+                module="app.services.web_network_ip",
+                owns=(
+                    "admin IP-address list searchable/filterable fields",
+                    "admin IP-address list sort and default-order semantics",
+                    "admin IP-address list page-size normalization",
+                ),
+                depends_on=("ui.list_contracts",),
+                notes=(
+                    "IP_ADDRESS_LIST_DEFINITION declares the addresses-tab list "
+                    "capabilities (search, filter by pool, sort by address) and "
+                    "build_ip_address_list_query normalizes/validates request state; "
+                    "build_ip_management_data remains the read owner. Gated by the "
+                    "existing granular network:ip:read. The addresses list pages "
+                    "across the concatenated IPv4-then-IPv6 ordering: the page window "
+                    "is applied to the merged sequence (per-family offset/take), so a "
+                    "page shows at most one page size and pages align across the two "
+                    "families. Read-only list: no bulk selection declared."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",
