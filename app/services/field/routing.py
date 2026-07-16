@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import (
     OPEN_STATUSES,
     _location,
@@ -39,16 +39,16 @@ class FieldRouting:
         profile = _profile_from_principal(db, principal)
         jobs = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.status.in_(OPEN_STATUSES))
+            .filter(WorkOrder.status.in_(OPEN_STATUSES))
             .order_by(
-                WorkOrderMirror.scheduled_start.asc().nullslast(),
-                WorkOrderMirror.created_at.asc(),
+                WorkOrder.scheduled_start.asc().nullslast(),
+                WorkOrder.created_at.asc(),
             )
             .all()
         )
 
-        located: list[tuple[WorkOrderMirror, float, float]] = []
-        unlocated: list[tuple[WorkOrderMirror, None, None]] = []
+        located: list[tuple[WorkOrder, float, float]] = []
+        unlocated: list[tuple[WorkOrder, None, None]] = []
         for job in jobs:
             location = _location(job)
             if location.latitude is None or location.longitude is None:
@@ -107,7 +107,7 @@ class FieldRouting:
 
 
 def _route_stop(
-    job: WorkOrderMirror,
+    job: WorkOrder,
     *,
     sequence: int,
     distance_km: float | None,
@@ -117,7 +117,7 @@ def _route_stop(
 ) -> dict:
     return {
         "sequence": sequence,
-        "work_order_id": job.crm_work_order_id,
+        "work_order_id": job.public_id,
         "work_order_mirror_id": job.id,
         "title": job.title,
         "distance_km": distance_km,

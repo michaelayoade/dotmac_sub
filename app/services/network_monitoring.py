@@ -8,7 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, TypeVar, cast
 
 from fastapi import HTTPException
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.network import FdhCabinet, OLTDevice, OntUnit, PonPort
@@ -22,6 +22,7 @@ from app.models.network_monitoring import (
     DeviceInterface,
     DeviceMetric,
     DeviceType,
+    InterfaceStatus,
     MetricType,
     NetworkDevice,
     PopSite,
@@ -176,6 +177,155 @@ def _pon_availability_items(db: Session, window_seconds: int) -> list[UptimeRepo
             )
         )
     return items
+
+
+def bandwidth_summary(db: Session, *, window_seconds: int = 600) -> dict[str, float]:
+    """Aggregate current downstream throughput across monitored devices.
+
+    Canonical read owner for the overview's live bandwidth figure: sums the most
+    recent ``rx_bps`` device metrics within the window. Returns raw bits/second;
+    unit formatting (Gbps/Mbps/Kbps) is a presentation concern for the caller.
+    """
+    cutoff = datetime.now(UTC) - timedelta(seconds=window_seconds)
+    total_bps = db.scalar(
+        select(func.coalesce(func.sum(DeviceMetric.value), 0)).where(
+            DeviceMetric.metric_type == MetricType.rx_bps,
+            DeviceMetric.recorded_at > cutoff,
+            DeviceMetric.value > 0,
+        )
+    )
+    return {"total_bps": float(total_bps or 0)}
+
+
+_PON_NAME_PATTERNS = ("%pon%", "%gpon%", "%epon%", "%xgpon%", "%xgs%")
+
+
+def _pon_interface_clause():
+    """SQL clause classifying monitoring interfaces as PON-facing."""
+    clauses = []
+    for pattern in _PON_NAME_PATTERNS:
+        clauses.append(
+            func.lower(func.coalesce(DeviceInterface.name, "")).like(pattern)
+        )
+        clauses.append(
+            func.lower(func.coalesce(DeviceInterface.description, "")).like(pattern)
+        )
+    return or_(*clauses)
+
+
+def pon_interface_summary(db: Session) -> dict[str, int]:
+    """Canonical up/down/unknown counts for PON-facing monitoring interfaces."""
+    counts = (
+        db.query(
+            func.count(DeviceInterface.id).label("total"),
+            func.count(DeviceInterface.id)
+            .filter(DeviceInterface.status == InterfaceStatus.up)
+            .label("up"),
+            func.count(DeviceInterface.id)
+            .filter(DeviceInterface.status == InterfaceStatus.down)
+            .label("down"),
+        )
+        .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
+        .filter(NetworkDevice.is_active.is_(True))
+        .filter(_pon_interface_clause())
+        .one()
+    )
+    total = counts.total or 0
+    up = counts.up or 0
+    down = counts.down or 0
+    return {"up": up, "down": down, "unknown": total - up - down, "total": total}
+
+
+def pon_outages(db: Session, limit: int = 10) -> list[dict]:
+    """PON-facing interfaces currently down, most recently changed first."""
+    rows = (
+        db.query(
+            DeviceInterface.id,
+            DeviceInterface.name,
+            DeviceInterface.description,
+            DeviceInterface.updated_at,
+            NetworkDevice.id.label("device_id"),
+            NetworkDevice.name.label("device_name"),
+        )
+        .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
+        .filter(NetworkDevice.is_active.is_(True))
+        .filter(_pon_interface_clause())
+        .filter(DeviceInterface.status == InterfaceStatus.down)
+        .order_by(DeviceInterface.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(row.id),
+            "name": row.name,
+            "description": row.description or "",
+            "olt_id": str(row.device_id),
+            "olt_name": row.device_name or "Unknown OLT",
+            "down_since": row.updated_at,
+        }
+        for row in rows
+    ]
+
+
+def network_health_summary(
+    db: Session,
+    *,
+    warn_pct: int = 90,
+    crit_pct: int = 70,
+    fallback_stats: dict | None = None,
+) -> dict[str, object]:
+    """Fleet-level network health: OLT/ONT counts and the health-ring status.
+
+    Owns the healthy/warning/critical decision for the overview ring. When no
+    OLTs are defined, falls back to the monitoring-device stats supplied by
+    ``network_devices.get_dashboard_stats`` so a monitoring-only deployment
+    still reports health. Threshold percentages are configuration supplied by
+    the caller's settings resolution.
+    """
+    olt_total = db.query(func.count(OLTDevice.id)).scalar() or 0
+    olt_online = (
+        db.query(func.count(OLTDevice.id))
+        .filter(OLTDevice.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+    ont_total = db.query(func.count(OntUnit.id)).scalar() or 0
+    ont_active = (
+        db.query(func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
+        or 0
+    )
+
+    stats = fallback_stats or {}
+    if olt_total == 0 and (stats.get("total_count") or 0) > 0:
+        olts_total = int(stats["total_count"])
+        olts_online = int(
+            (stats.get("online_count") or 0)
+            + (stats.get("degraded_count") or 0)
+            + (stats.get("maintenance_count") or 0)
+        )
+    else:
+        olts_total = olt_total
+        olts_online = olt_online
+
+    health_pct = int((olts_online / olts_total) * 100) if olts_total > 0 else 0
+    if health_pct >= warn_pct:
+        health_status = "healthy"
+    elif health_pct >= crit_pct:
+        health_status = "warning"
+    else:
+        health_status = "critical"
+
+    return {
+        "olt_total": olt_total,
+        "olt_online": olt_online,
+        "ont_total": ont_total,
+        "ont_active": ont_active,
+        "olts_total": olts_total,
+        "olts_online": olts_online,
+        "health_pct": health_pct,
+        "health_status": health_status,
+    }
 
 
 def uptime_report(db: Session, payload: UptimeReportRequest) -> UptimeReportResponse:

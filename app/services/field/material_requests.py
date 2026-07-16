@@ -17,7 +17,7 @@ from app.models.field_material import (
     FieldMaterialRequestItem,
     FieldWorkOrderMaterial,
 )
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import (
@@ -75,7 +75,10 @@ class FieldMaterialRequests:
         offset: int = 0,
     ) -> list[dict]:
         profile = _profile_from_principal(db, principal)
-        scoped_ids = _scoped_query(db, profile).with_entities(WorkOrderMirror.id)
+        scoped = _scoped_query(db, profile)
+        if crm_work_order_id:
+            scoped = scoped.filter(WorkOrder.public_id == crm_work_order_id)
+        scoped_ids = scoped.with_entities(WorkOrder.id)
         query = (
             db.query(FieldMaterialRequest)
             .options(
@@ -87,10 +90,6 @@ class FieldMaterialRequests:
             .filter(FieldMaterialRequest.is_active.is_(True))
             .order_by(FieldMaterialRequest.created_at.desc())
         )
-        if crm_work_order_id:
-            query = query.filter(
-                FieldMaterialRequest.crm_work_order_id == crm_work_order_id
-            )
         if status:
             query = query.filter(FieldMaterialRequest.status == _status(status))
         return [
@@ -123,7 +122,7 @@ class FieldMaterialRequests:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
@@ -131,7 +130,7 @@ class FieldMaterialRequests:
         planned_items = _validate_items(db, items)
         request = FieldMaterialRequest(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.crm_work_order_id,
+            crm_work_order_id=row.public_id,
             requested_by_technician_id=profile.id,
             requested_by_person_id=profile.person_id,
             requested_by_system_user_id=profile.system_user_id,
@@ -198,8 +197,11 @@ class FieldMaterialRequests:
         if status:
             query = query.filter(FieldMaterialRequest.status == _status(status))
         if crm_work_order_id:
+            work_order_ids = db.query(WorkOrder.id).filter(
+                WorkOrder.public_id == crm_work_order_id
+            )
             query = query.filter(
-                FieldMaterialRequest.crm_work_order_id == crm_work_order_id
+                FieldMaterialRequest.work_order_mirror_id.in_(work_order_ids)
             )
         return [
             serialize_material_request(request)
@@ -277,7 +279,7 @@ def _get_scoped_request(
     material_request_id: str,
 ) -> FieldMaterialRequest:
     profile = _profile_from_principal(db, principal)
-    scoped_ids = _scoped_query(db, profile).with_entities(WorkOrderMirror.id)
+    scoped_ids = _scoped_query(db, profile).with_entities(WorkOrder.id)
     request = (
         db.query(FieldMaterialRequest)
         .options(
@@ -432,7 +434,7 @@ def _status(value: str) -> str:
     return status
 
 
-def _mark_sub_authoritative(row: WorkOrderMirror) -> None:
+def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "material_requests")
 
 

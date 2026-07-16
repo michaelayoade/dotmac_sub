@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.field_attachment import FIELD_ATTACHMENT_KINDS, FieldAttachment
 from app.models.stored_file import StoredFile
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.file_storage import FileValidationError, file_uploads
 from app.services.object_storage import ObjectNotFoundError, StreamResult
@@ -98,7 +98,7 @@ class FieldAttachments:
                 db=db,
                 domain="attachments",
                 entity_type="field_attachment",
-                entity_id=row.crm_work_order_id,
+                entity_id=row.public_id,
                 original_filename=file_name or "upload",
                 content_type=mime_type,
                 data=content,
@@ -110,7 +110,7 @@ class FieldAttachments:
 
         attachment = FieldAttachment(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.crm_work_order_id,
+            crm_work_order_id=row.public_id,
             note_id=note_id,
             stored_file_id=stored.id,
             kind=normalized_kind,
@@ -172,7 +172,11 @@ class FieldAttachments:
         if attachment is None or not attachment.is_active:
             raise HTTPException(status_code=404, detail="Attachment not found")
         _resolve_work_order(
-            db, principal, attachment.crm_work_order_id, attachment.note_id
+            db,
+            principal,
+            None,
+            None,
+            work_order_mirror_id=attachment.work_order_mirror_id,
         )
         return attachment
 
@@ -208,23 +212,25 @@ def _resolve_work_order(
     principal: dict[str, Any],
     crm_work_order_id: str | None,
     note_id: UUID | None,
-) -> WorkOrderMirror:
+    work_order_mirror_id: UUID | None = None,
+) -> WorkOrder:
     from app.models.field_note import FieldWorkOrderNote
 
-    if note_id is not None:
+    profile = _profile_from_principal(db, principal)
+    query = _scoped_query(db, profile)
+    if work_order_mirror_id is not None:
+        query = query.filter(WorkOrder.id == work_order_mirror_id)
+    elif note_id is not None:
         note = db.get(FieldWorkOrderNote, note_id)
         if note is None:
             raise HTTPException(status_code=404, detail="Note not found")
-        crm_work_order_id = note.crm_work_order_id
-    if not crm_work_order_id:
+        query = query.filter(WorkOrder.id == note.work_order_mirror_id)
+    elif crm_work_order_id:
+        query = query.filter(WorkOrder.public_id == crm_work_order_id)
+    else:
         raise HTTPException(status_code=422, detail="crm_work_order_id is required")
 
-    profile = _profile_from_principal(db, principal)
-    row = (
-        _scoped_query(db, profile)
-        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
-        .one_or_none()
-    )
+    row = query.one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return row

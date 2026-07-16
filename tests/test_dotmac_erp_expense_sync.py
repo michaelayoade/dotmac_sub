@@ -24,7 +24,7 @@ from app.models.field_erp_sync import (
 from app.models.field_expense import FieldExpenseRequest
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.dotmac_erp import expense_sync, outbox
 from app.services.field import expense_requests as expense_requests_module
 from app.services.field.expense_requests import field_expense_requests
@@ -84,8 +84,8 @@ def _subscriber(db) -> Subscriber:
     return subscriber
 
 
-def _work_order(db, subscriber: Subscriber, **overrides) -> WorkOrderMirror:
-    row = WorkOrderMirror(
+def _work_order(db, subscriber: Subscriber, **overrides) -> WorkOrder:
+    row = WorkOrder(
         crm_work_order_id=overrides.pop("crm_work_order_id", "wo-expense"),
         subscriber_id=subscriber.id,
         title=overrides.pop("title", "Field expense"),

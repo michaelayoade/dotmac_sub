@@ -50,7 +50,7 @@ class FieldExpenseRequest(Base):
     )
     work_order_mirror_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("work_order_mirror.id", ondelete="CASCADE"),
+        ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
     crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -90,7 +90,7 @@ class FieldExpenseRequest(Base):
         nullable=False,
     )
 
-    work_order_mirror = relationship("WorkOrderMirror")
+    work_order_mirror = relationship("WorkOrder")
     requested_by_technician = relationship("TechnicianProfile")
     requested_by_system_user = relationship("SystemUser")
     items = relationship(

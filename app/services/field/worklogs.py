@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.field_worklog import FieldWorkLog
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 
 _MAX_DURATION_HOURS = 16
@@ -66,7 +66,7 @@ class FieldWorkLogs:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
@@ -97,7 +97,7 @@ class FieldWorkLogs:
             duplicate = _find_duplicate(
                 db,
                 person_id=profile.person_id,
-                crm_work_order_id=row.crm_work_order_id,
+                work_order_mirror_id=row.id,
                 start_at=start_at,
                 client_ref=client_ref,
             )
@@ -114,7 +114,7 @@ class FieldWorkLogs:
             _check_overlap(db, profile.person_id, start_at, end_at)
             log = FieldWorkLog(
                 work_order_mirror_id=row.id,
-                crm_work_order_id=row.crm_work_order_id,
+                crm_work_order_id=row.public_id,
                 author_technician_id=profile.id,
                 person_id=profile.person_id,
                 system_user_id=profile.system_user_id,
@@ -132,7 +132,7 @@ class FieldWorkLogs:
                 duplicate = _find_duplicate(
                     db,
                     person_id=profile.person_id,
-                    crm_work_order_id=row.crm_work_order_id,
+                    work_order_mirror_id=row.id,
                     start_at=start_at,
                     client_ref=client_ref,
                 )
@@ -162,7 +162,7 @@ def _find_duplicate(
     db: Session,
     *,
     person_id,
-    crm_work_order_id: str,
+    work_order_mirror_id,
     start_at: datetime,
     client_ref,
 ) -> FieldWorkLog | None:
@@ -178,7 +178,7 @@ def _find_duplicate(
     return (
         db.query(FieldWorkLog)
         .filter(FieldWorkLog.person_id == person_id)
-        .filter(FieldWorkLog.crm_work_order_id == crm_work_order_id)
+        .filter(FieldWorkLog.work_order_mirror_id == work_order_mirror_id)
         .filter(FieldWorkLog.start_at == start_at)
         .filter(FieldWorkLog.is_active.is_(True))
         .first()
@@ -217,11 +217,11 @@ def _scoped_work_order(
     db: Session,
     principal: dict[str, Any],
     crm_work_order_id: str,
-) -> WorkOrderMirror:
+) -> WorkOrder:
     profile = _profile_from_principal(db, principal)
     row = (
         _scoped_query(db, profile)
-        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+        .filter(WorkOrder.public_id == crm_work_order_id)
         .one_or_none()
     )
     if row is None:

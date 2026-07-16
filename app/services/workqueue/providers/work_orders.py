@@ -20,7 +20,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.workqueue.providers import register
 from app.services.workqueue.providers.common import (
     as_utc,
@@ -50,21 +50,21 @@ class WorkOrderProvider:
         limit: int,
     ) -> list[WorkqueueItem]:
         query = (
-            db.query(WorkOrderMirror)
-            .filter(WorkOrderMirror.is_active.is_(True))
-            .filter(WorkOrderMirror.status.notin_(CLOSED_WORK_ORDER_STATUSES))
+            db.query(WorkOrder)
+            .filter(WorkOrder.is_active.is_(True))
+            .filter(WorkOrder.status.notin_(CLOSED_WORK_ORDER_STATUSES))
         )
 
         if not scope.is_org_wide or scope.service_team_filter is not None:
             query = query.filter(_visible_to_people(scope.accessible_person_ids))
 
         if snoozed_ids:
-            query = query.filter(WorkOrderMirror.id.notin_(snoozed_ids))
+            query = query.filter(WorkOrder.id.notin_(snoozed_ids))
 
         rows = (
             query.order_by(
-                WorkOrderMirror.scheduled_start.asc().nullslast(),
-                WorkOrderMirror.updated_at.desc(),
+                WorkOrder.scheduled_start.asc().nullslast(),
+                WorkOrder.updated_at.desc(),
             )
             .limit(limit)
             .all()
@@ -83,7 +83,7 @@ class WorkOrderProvider:
 
     def _to_item(
         self,
-        work_order: WorkOrderMirror,
+        work_order: WorkOrder,
         config: WorkqueueScoringConfig,
         now: datetime,
         scope: WorkqueueScope,
@@ -132,11 +132,12 @@ class WorkOrderProvider:
             service_team_id=None,
             assigned_person_id=assigned_person_id,
             url=f"/admin/work-orders/{work_order.id}",
-            # Snooze only: the mirror is CRM's record, not sub's to mutate.
+            # Snooze only: work-order mutations belong to dispatch/field
+            # transitions, not the workqueue.
             actions=(ActionKind.open, ActionKind.snooze),
             metadata={
                 "work_type": work_order.work_type,
-                "crm_work_order_id": work_order.crm_work_order_id,
+                "public_id": work_order.public_id,
                 "audience": scope.audience.value,
             },
         )
@@ -148,25 +149,23 @@ work_order_provider = register(WorkOrderProvider())
 def _visible_to_people(person_ids: frozenset[UUID]):
     """SQL predicate matching the field service assignee-resolution contract."""
     if not person_ids:
-        return WorkOrderMirror.id.is_(None)
+        return WorkOrder.id.is_(None)
 
     direct_person = (
         select(TechnicianProfile.person_id)
         .where(TechnicianProfile.is_active.is_(True))
-        .where(
-            TechnicianProfile.crm_person_id == WorkOrderMirror.assigned_to_crm_person_id
-        )
+        .where(TechnicianProfile.crm_person_id == WorkOrder.assigned_to_crm_person_id)
         .limit(1)
-        .correlate(WorkOrderMirror)
+        .correlate(WorkOrder)
         .scalar_subquery()
     )
     latest_technician = (
         select(WorkOrderAssignmentQueue.assigned_technician_id)
-        .where(WorkOrderAssignmentQueue.work_order_mirror_id == WorkOrderMirror.id)
+        .where(WorkOrderAssignmentQueue.work_order_mirror_id == WorkOrder.id)
         .where(WorkOrderAssignmentQueue.assigned_technician_id.isnot(None))
         .order_by(WorkOrderAssignmentQueue.created_at.desc())
         .limit(1)
-        .correlate(WorkOrderMirror)
+        .correlate(WorkOrder)
         .scalar_subquery()
     )
     accessible_technicians = select(TechnicianProfile.id).where(
@@ -182,7 +181,7 @@ def _visible_to_people(person_ids: frozenset[UUID]):
     )
 
 
-def _assigned_people(db: Session, rows: list[WorkOrderMirror]) -> dict[UUID, UUID]:
+def _assigned_people(db: Session, rows: list[WorkOrder]) -> dict[UUID, UUID]:
     """Resolve display assignees with the same direct-then-fallback rule."""
     if not rows:
         return {}

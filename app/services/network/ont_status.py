@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from math import ceil
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -742,3 +742,37 @@ def refresh_ont_status(
             retry_pending=True,
         )
     return get_ont_status(db, ont)
+
+
+def ont_status_summary(
+    db: Session, *, low_signal_threshold_dbm: float = -25
+) -> dict[str, int]:
+    """Fleet ONT status counts from locally persisted monitoring fields.
+
+    Canonical owner of the overview's ONT online/offline/low-signal counts:
+    applies the effective-online vocabulary this module owns, without polling
+    monitoring synchronously. The signal threshold is configuration supplied by
+    the caller's settings resolution.
+    """
+    counts = (
+        db.query(
+            func.count(OntUnit.id).label("total"),
+            func.count(OntUnit.id)
+            .filter(effective_ont_online_clause())
+            .label("online"),
+            func.count(OntUnit.id)
+            .filter(OntUnit.olt_rx_signal_dbm.is_not(None))
+            .filter(OntUnit.olt_rx_signal_dbm < low_signal_threshold_dbm)
+            .label("low_signal"),
+        )
+        .filter(OntUnit.is_active.is_(True))
+        .one()
+    )
+    total = counts.total or 0
+    online = counts.online or 0
+    return {
+        "total": total,
+        "online": online,
+        "offline": max(total - online, 0),
+        "low_signal": counts.low_signal or 0,
+    }

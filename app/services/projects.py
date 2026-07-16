@@ -75,7 +75,7 @@ from app.models.ticket_workflow import (
     SlaPolicy,
     WorkflowEntityType,
 )
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.schemas.project import (
     ProjectCommentCreate,
     ProjectCommentUpdate,
@@ -917,14 +917,10 @@ def _ensure_ticket(db: Session, ticket_id) -> None:
 
 
 def _ensure_work_order(db: Session, work_order_id) -> None:
-    """Work orders are not native until the Phase 2 flip — ids are validated
-    against the Phase 2 mirror (`work_order_mirror.crm_work_order_id`, §1.10,
-    risk #5). The CRM WO UUID is the join key either way."""
-    row = (
-        db.query(WorkOrderMirror)
-        .filter(WorkOrderMirror.crm_work_order_id == str(work_order_id))
-        .first()
-    )
+    """Validate a work-order link against Sub's native identity
+    (`work_order.public_id`, WORK_ORDER_IDENTITY_SOT). Imported rows seed
+    public_id from their CRM id, so legacy links keep resolving."""
+    row = db.query(WorkOrder).filter(WorkOrder.public_id == str(work_order_id)).first()
     if not row:
         raise HTTPException(status_code=404, detail="Work order not found")
 

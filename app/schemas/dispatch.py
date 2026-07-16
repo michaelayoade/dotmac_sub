@@ -315,7 +315,10 @@ class WorkOrderHeaderRead(WorkOrderHeaderBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
-    crm_work_order_id: str
+    public_id: str
+    # Provenance ref; equals public_id during the WORK_ORDER_IDENTITY_SOT
+    # compat window, NULL for native rows once dual-write ends (slice 5).
+    crm_work_order_id: str | None = None
     work_order_created_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

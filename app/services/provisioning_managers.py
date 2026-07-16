@@ -1086,3 +1086,33 @@ service_state_transitions = ServiceStateTransitions()
 provisioning_workflows = ProvisioningWorkflows()
 provisioning_steps = ProvisioningSteps()
 provisioning_runs = ProvisioningRuns()
+
+
+def service_order_dashboard_counts(db: Session) -> dict[str, int]:
+    """Service-order pipeline counts for the operations overview.
+
+    Canonical owner of the overview's pending/in-progress/completed order
+    figures (pending = submitted + scheduled).
+    """
+    from sqlalchemy import func as _func
+
+    row = db.query(
+        _func.count(ServiceOrder.id)
+        .filter(
+            ServiceOrder.status.in_(
+                (ServiceOrderStatus.submitted, ServiceOrderStatus.scheduled)
+            )
+        )
+        .label("pending"),
+        _func.count(ServiceOrder.id)
+        .filter(ServiceOrder.status == ServiceOrderStatus.provisioning)
+        .label("in_progress"),
+        _func.count(ServiceOrder.id)
+        .filter(ServiceOrder.status == ServiceOrderStatus.active)
+        .label("completed"),
+    ).one()
+    return {
+        "pending": int(row.pending or 0),
+        "in_progress": int(row.in_progress or 0),
+        "completed": int(row.completed or 0),
+    }

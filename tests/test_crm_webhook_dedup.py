@@ -29,7 +29,7 @@ from app.config import settings
 from app.models.crm_webhook_delivery import CrmWebhookDelivery
 from app.models.referral import ReferralMirror
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 
 SECRET = "test-webhook-secret"
 
@@ -219,10 +219,7 @@ def test_work_order_redelivery_is_deduped(db_session):
     assert first["status"] == "ok"
     assert second["status"] == "ignored" and second["reason"] == "duplicate"
     # The mirror upsert ran exactly once; the redelivery never re-applied.
-    assert (
-        db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-1").count()
-        == 1
-    )
+    assert db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").count() == 1
     assert db_session.query(CrmWebhookDelivery).count() == 1
 
 
@@ -244,6 +241,6 @@ def test_distinct_work_order_events_both_process(db_session):
             event="work_order.updated",
         )
 
-    row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-1").one()
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").one()
     assert row.status == "in_progress"
     assert db_session.query(CrmWebhookDelivery).count() == 2

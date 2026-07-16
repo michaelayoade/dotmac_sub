@@ -14,7 +14,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.field_attachment import FieldAttachment
 from app.models.field_job_event import FIELD_JOB_EVENTS, FieldJobEvent
 from app.models.field_worklog import FieldWorkLog
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.schemas.field import FieldCompletionRequirements
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
@@ -125,8 +125,7 @@ class FieldTransitions:
             .one_or_none()
         )
         if existing is not None:
-            _scoped_work_order(db, principal, existing.crm_work_order_id)
-            row = db.get(WorkOrderMirror, existing.work_order_mirror_id)
+            row = _scoped_work_order_by_pk(db, principal, existing.work_order_mirror_id)
             return {
                 "job": row,
                 "event": serialize_event(existing),
@@ -136,7 +135,7 @@ class FieldTransitions:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .with_for_update()
             .one_or_none()
         )
@@ -186,7 +185,7 @@ class FieldTransitions:
         _mark_sub_authoritative(row, event_value, client_uuid, occurred)
         event_row = FieldJobEvent(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.crm_work_order_id,
+            crm_work_order_id=row.public_id,
             author_technician_id=profile.id,
             person_id=profile.person_id,
             system_user_id=profile.system_user_id,
@@ -224,7 +223,7 @@ class FieldTransitions:
                 .one_or_none()
             )
             if replay is not None:
-                replay_row = db.get(WorkOrderMirror, replay.work_order_mirror_id)
+                replay_row = db.get(WorkOrder, replay.work_order_mirror_id)
                 return {
                     "job": replay_row,
                     "event": serialize_event(replay),
@@ -244,13 +243,25 @@ def _scoped_work_order(
     db: Session,
     principal: dict[str, Any],
     crm_work_order_id: str,
-) -> WorkOrderMirror:
+) -> WorkOrder:
     profile = _profile_from_principal(db, principal)
     row = (
         _scoped_query(db, profile)
-        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+        .filter(WorkOrder.public_id == crm_work_order_id)
         .one_or_none()
     )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return row
+
+
+def _scoped_work_order_by_pk(
+    db: Session,
+    principal: dict[str, Any],
+    work_order_pk,
+) -> WorkOrder:
+    profile = _profile_from_principal(db, principal)
+    row = _scoped_query(db, profile).filter(WorkOrder.id == work_order_pk).one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return row
@@ -273,9 +284,7 @@ def _target_status(event: str, previous_status: str) -> str | None:
     return _EVENT_TO_STATUS[event]
 
 
-def _apply_status_timestamps(
-    row: WorkOrderMirror, event: str, occurred: datetime
-) -> None:
+def _apply_status_timestamps(row: WorkOrder, event: str, occurred: datetime) -> None:
     if event == "start":
         row.started_at = row.started_at or occurred
         row.paused_at = None
@@ -318,7 +327,7 @@ def resolve_completion_requirements(db: Session) -> FieldCompletionRequirements:
 
 
 def _check_completion_gate(
-    db: Session, row: WorkOrderMirror, payload: dict[str, Any]
+    db: Session, row: WorkOrder, payload: dict[str, Any]
 ) -> None:
     requirements = resolve_completion_requirements(db)
     if not requirements.evidence_required:
@@ -351,7 +360,7 @@ def _check_completion_gate(
 
 
 def _mark_sub_authoritative(
-    row: WorkOrderMirror,
+    row: WorkOrder,
     event: str,
     client_event_id: UUID,
     occurred_at: datetime,
@@ -366,7 +375,7 @@ def _mark_sub_authoritative(
 
 def _sync_timer(
     db: Session,
-    row: WorkOrderMirror,
+    row: WorkOrder,
     profile,
     event: str,
     occurred_at: datetime,
@@ -377,7 +386,7 @@ def _sync_timer(
             db.add(
                 FieldWorkLog(
                     work_order_mirror_id=row.id,
-                    crm_work_order_id=row.crm_work_order_id,
+                    crm_work_order_id=row.public_id,
                     author_technician_id=profile.id,
                     person_id=profile.person_id,
                     system_user_id=profile.system_user_id,
@@ -414,7 +423,7 @@ def _open_timer(db: Session, person_id) -> FieldWorkLog | None:
 
 def _sync_movement(
     db: Session,
-    row: WorkOrderMirror,
+    row: WorkOrder,
     profile,
     event: str,
     client_ref: UUID,

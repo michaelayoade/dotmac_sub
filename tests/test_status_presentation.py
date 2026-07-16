@@ -576,3 +576,23 @@ def test_subscription_read_serializes_status_presentation_for_api_clients() -> N
         "tone": "warning",
         "icon": "alert",
     }
+
+
+# --- Infrastructure service status (dashboard Phase 2) ---
+
+
+def test_infrastructure_service_status_presentation_tones():
+    from app.schemas.status_presentation import StatusTone
+    from app.services.status_presentation import (
+        infrastructure_service_status_presentation as pres,
+    )
+
+    assert pres("up").tone == StatusTone.positive
+    assert pres("streaming").tone == StatusTone.positive
+    assert pres("degraded").tone == StatusTone.warning
+    assert pres("warning").tone == StatusTone.warning
+    assert pres("down").tone == StatusTone.negative
+    assert pres("failed").tone == StatusTone.negative
+    # Unknown / unmapped falls back to neutral, never silently positive.
+    assert pres("weird").tone == StatusTone.neutral
+    assert pres(None).tone == StatusTone.neutral

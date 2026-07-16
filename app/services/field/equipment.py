@@ -10,7 +10,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import (
     mark_sub_authoritative as _mark_source_authoritative,
@@ -26,7 +26,7 @@ def serialize_equipment(assignment: OntAssignment) -> dict:
         "vendor": unit.vendor if unit else None,
         "model": unit.model if unit else None,
         "subscriber_id": assignment.subscriber_id,
-        "crm_work_order_id": assignment.work_order_mirror.crm_work_order_id
+        "crm_work_order_id": assignment.work_order_mirror.public_id
         if assignment.work_order_mirror
         else None,
         "assigned_at": assignment.assigned_at,
@@ -50,7 +50,7 @@ class FieldEquipment:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .with_for_update()
             .one_or_none()
         )
@@ -112,11 +112,11 @@ def _scoped_work_order(
     db: Session,
     principal: dict[str, Any],
     crm_work_order_id: str,
-) -> WorkOrderMirror:
+) -> WorkOrder:
     profile = _profile_from_principal(db, principal)
     row = (
         _scoped_query(db, profile)
-        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+        .filter(WorkOrder.public_id == crm_work_order_id)
         .one_or_none()
     )
     if row is None:
@@ -161,7 +161,7 @@ def _get_or_create_unit(
     return unit
 
 
-def _mark_sub_authoritative(row: WorkOrderMirror, serial: str) -> None:
+def _mark_sub_authoritative(row: WorkOrder, serial: str) -> None:
     _mark_source_authoritative(
         row,
         "equipment",

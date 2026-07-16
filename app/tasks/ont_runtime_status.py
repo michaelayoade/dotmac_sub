@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
@@ -23,22 +23,28 @@ def _olt_lock_key(olt_id: str) -> int:
 @celery_app.task(name="app.tasks.ont_runtime_status.dispatch_huawei_ont_status")
 def dispatch_huawei_ont_status() -> dict[str, int]:
     """Queue one independently retryable bulk status read per active Huawei OLT."""
-    from app.models.network import DeviceStatus, OLTDevice
+    from app.models.network import OLTDevice
+    from app.services.network.ont_runtime_status import (
+        huawei_olt_status_pollable_criteria,
+        queue_huawei_olt_status_poll,
+    )
 
     with db_session_adapter.session() as db:
         olt_ids = list(
             db.scalars(
                 select(OLTDevice.id).where(
-                    OLTDevice.is_active.is_(True),
-                    OLTDevice.status == DeviceStatus.active,
-                    OLTDevice.uisp_device_id.is_(None),
-                    func.lower(OLTDevice.vendor) == "huawei",
+                    *huawei_olt_status_pollable_criteria(),
                 )
             ).all()
         )
+    queued = 0
     for olt_id in olt_ids:
-        refresh_huawei_olt_status.delay(str(olt_id))
-    return {"queued": len(olt_ids)}
+        result = queue_huawei_olt_status_poll(
+            str(olt_id), source="network.ont_runtime_status.scheduled"
+        )
+        if result.queued:
+            queued += 1
+    return {"queued": queued, "failed": len(olt_ids) - queued}
 
 
 @celery_app.task(
@@ -55,6 +61,7 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
     """Persist one bulk OLT observation; transport/parser failures retry."""
     from app.models.network import OLTDevice
     from app.services.network.ont_runtime_status import (
+        huawei_olt_status_pollable,
         record_olt_poll_failure,
         refresh_huawei_olt_status,
     )
@@ -64,8 +71,8 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
             return {"olt_id": olt_id, "skipped": "already_running"}
         with db_session_adapter.session() as db:
             olt = db.get(OLTDevice, olt_id)
-            if olt is None or not olt.is_active:
-                return {"olt_id": olt_id, "skipped": "inactive_or_missing"}
+            if olt is None or not huawei_olt_status_pollable(olt):
+                return {"olt_id": olt_id, "skipped": "not_pollable"}
             try:
                 stats = refresh_huawei_olt_status(db, olt)
             except (RuntimeError, OSError, TimeoutError) as exc:

@@ -11,7 +11,7 @@ from app.models.dispatch import DispatchQueueStatus, TechnicianProfile
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
     AvailabilityBlockCreate,
     DispatchRuleCreate,
@@ -50,9 +50,9 @@ def _subscriber(db_session) -> Subscriber:
     return sub
 
 
-def _work_order(db_session) -> WorkOrderMirror:
+def _work_order(db_session) -> WorkOrder:
     sub = _subscriber(db_session)
-    row = WorkOrderMirror(
+    row = WorkOrder(
         crm_work_order_id="wo-service-1",
         subscriber_id=sub.id,
         title="Fibre install",

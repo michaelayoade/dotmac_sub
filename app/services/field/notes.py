@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.field_note import FieldWorkOrderNote
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import (
     _profile_from_principal,
     _scoped_query,
@@ -67,7 +67,7 @@ class FieldNotes:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
@@ -77,7 +77,7 @@ class FieldNotes:
         user = _system_user(db, profile)
         note = FieldWorkOrderNote(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.crm_work_order_id,
+            crm_work_order_id=row.public_id,
             author_technician_id=profile.id,
             author_person_id=profile.person_id,
             author_system_user_id=profile.system_user_id,
@@ -101,11 +101,11 @@ def _scoped_work_order(
     db: Session,
     principal: dict[str, Any],
     crm_work_order_id: str,
-) -> WorkOrderMirror:
+) -> WorkOrder:
     profile = _profile_from_principal(db, principal)
     row = (
         _scoped_query(db, profile)
-        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+        .filter(WorkOrder.public_id == crm_work_order_id)
         .one_or_none()
     )
     if row is None:
@@ -117,7 +117,7 @@ field_notes = FieldNotes()
 
 
 def _validate_attachments(
-    db: Session, profile, row: WorkOrderMirror, attachment_ids: list[str]
+    db: Session, profile, row: WorkOrder, attachment_ids: list[str]
 ):
     from app.models.field_attachment import FieldAttachment
 

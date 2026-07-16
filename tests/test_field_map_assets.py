@@ -17,7 +17,7 @@ from app.models.network import FdhCabinet, FiberAccessPoint, FiberSpliceClosure
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.wireless_mast import WirelessMast
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.map_assets import field_map_assets
 from app.services.field.map_search import field_map_search
@@ -309,7 +309,7 @@ def test_map_search_finds_scoped_jobs_then_assets(db_session):
     _seed_assets(db_session)
     db_session.add_all(
         [
-            WorkOrderMirror(
+            WorkOrder(
                 crm_work_order_id="wo-search-visible",
                 subscriber_id=subscriber.id,
                 title="Fiber Street install",
@@ -318,7 +318,7 @@ def test_map_search_finds_scoped_jobs_then_assets(db_session):
                 address="Fiber Street",
                 metadata_={"location": {"lat": 9.071, "lng": 7.451}},
             ),
-            WorkOrderMirror(
+            WorkOrder(
                 crm_work_order_id="wo-search-hidden",
                 subscriber_id=other_subscriber.id,
                 title="Fiber Street hidden",

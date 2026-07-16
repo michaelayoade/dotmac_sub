@@ -26,7 +26,7 @@ from app.models.vendor_routes import (
     ProposedRouteRevision,
     Vendor,
 )
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services import field_maps as field_maps_service
 from app.services import vendor_routes_api
 from app.web.admin import field_maps as web_field_maps
@@ -241,7 +241,7 @@ def test_movement_points_feed_shape(db_session):
     user = _user(db_session)
     profile = _technician(db_session, user)
     subscriber = _subscriber(db_session)
-    mirror = WorkOrderMirror(
+    mirror = WorkOrder(
         crm_work_order_id="wo-map-1",
         subscriber_id=subscriber.id,
         title="Install fiber drop",
@@ -281,7 +281,7 @@ def test_movement_points_feed_shape(db_session):
     assert feed["points"][1]["latitude"] == 6.52
 
     picker = field_maps_service.list_movement_work_orders(db_session)
-    assert {"crm_work_order_id": "wo-map-1", "label": "Install fiber drop"} in picker
+    assert {"public_id": "wo-map-1", "label": "Install fiber drop"} in picker
 
 
 # ---------------------------------------------------------------------------

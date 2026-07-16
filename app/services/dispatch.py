@@ -18,7 +18,7 @@ from app.models.dispatch import (
 from app.models.service_team import ServiceTeam
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
     AvailabilityBlockCreate,
     AvailabilityBlockUpdate,
@@ -93,17 +93,17 @@ def _normalize_skill_ids(db: Session, data: dict[str, Any]) -> None:
 
 def _resolve_work_order(
     db: Session, payload: WorkOrderAssignmentQueueCreate
-) -> WorkOrderMirror:
+) -> WorkOrder:
     if payload.work_order_mirror_id is not None:
         return _get_or_404(
             db,
-            WorkOrderMirror,
+            WorkOrder,
             payload.work_order_mirror_id,
             "Work order mirror not found",
         )
     row = (
-        db.query(WorkOrderMirror)
-        .filter(WorkOrderMirror.crm_work_order_id == payload.crm_work_order_id)
+        db.query(WorkOrder)
+        .filter(WorkOrder.public_id == payload.crm_work_order_id)
         .one_or_none()
     )
     if row is None:
@@ -410,18 +410,20 @@ class DispatchRules(ListResponseMixin):
 
 class WorkOrderHeaders(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: WorkOrderHeaderCreate) -> WorkOrderMirror:
+    def create(db: Session, payload: WorkOrderHeaderCreate) -> WorkOrder:
         data = _data(payload)
         public_id = (data.pop("public_id", None) or f"sub-{uuid4().hex}").strip()
         _ensure_subscriber(db, data["subscriber_id"])
-        existing = (
-            db.query(WorkOrderMirror).filter_by(crm_work_order_id=public_id).first()
-        )
+        existing = db.query(WorkOrder).filter_by(public_id=public_id).first()
         if existing is not None:
             raise HTTPException(status_code=409, detail="Work order id already exists")
         metadata = dict(data.pop("metadata_", None) or {})
         metadata["native_source"] = "sub"
-        row = WorkOrderMirror(
+        # Compat window (WORK_ORDER_IDENTITY_SOT slice 1): field lookups and
+        # evidence rows still key on crm_work_order_id, so native rows
+        # dual-write it equal to public_id until slice 4 moves them to the FK.
+        row = WorkOrder(
+            public_id=public_id,
             crm_work_order_id=public_id,
             metadata_=metadata,
             work_order_created_at=data.get("work_order_created_at"),
@@ -433,10 +435,8 @@ class WorkOrderHeaders(ListResponseMixin):
         return row
 
     @staticmethod
-    def get(db: Session, work_order_id: str) -> WorkOrderMirror:
-        row = (
-            db.query(WorkOrderMirror).filter_by(crm_work_order_id=work_order_id).first()
-        )
+    def get(db: Session, work_order_id: str) -> WorkOrder:
+        row = db.query(WorkOrder).filter_by(public_id=work_order_id).first()
         if row is None:
             raise HTTPException(status_code=404, detail="Work order not found")
         return row
@@ -451,25 +451,23 @@ class WorkOrderHeaders(ListResponseMixin):
         is_active: bool | None = True,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[WorkOrderMirror]:
-        query = db.query(WorkOrderMirror)
+    ) -> list[WorkOrder]:
+        query = db.query(WorkOrder)
         if status:
-            query = query.filter(WorkOrderMirror.status == status)
+            query = query.filter(WorkOrder.status == status)
         if subscriber_id:
-            query = query.filter(
-                WorkOrderMirror.subscriber_id == coerce_uuid(subscriber_id)
-            )
+            query = query.filter(WorkOrder.subscriber_id == coerce_uuid(subscriber_id))
         if work_type:
-            query = query.filter(WorkOrderMirror.work_type == work_type)
+            query = query.filter(WorkOrder.work_type == work_type)
         if is_active is not None:
-            query = query.filter(WorkOrderMirror.is_active.is_(is_active))
-        query = query.order_by(WorkOrderMirror.created_at.desc())
+            query = query.filter(WorkOrder.is_active.is_(is_active))
+        query = query.order_by(WorkOrder.created_at.desc())
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
     def update(
         db: Session, work_order_id: str, payload: WorkOrderHeaderUpdate
-    ) -> WorkOrderMirror:
+    ) -> WorkOrder:
         row = WorkOrderHeaders.get(db, work_order_id)
         data = _data(payload, exclude_unset=True)
         if "subscriber_id" in data:
@@ -494,7 +492,7 @@ class AssignmentQueue(ListResponseMixin):
         work_order = _resolve_work_order(db, payload)
         data = _data(payload)
         data["work_order_mirror_id"] = work_order.id
-        data["crm_work_order_id"] = work_order.crm_work_order_id
+        data["crm_work_order_id"] = work_order.public_id
         _ensure_rule(db, data.get("dispatch_rule_id"))
         if data.get("assigned_technician_id") is not None:
             _ensure_technician(db, data["assigned_technician_id"])
@@ -518,9 +516,14 @@ class AssignmentQueue(ListResponseMixin):
         if status:
             query = query.filter(WorkOrderAssignmentQueue.status == status)
         if crm_work_order_id:
-            query = query.filter(
-                WorkOrderAssignmentQueue.crm_work_order_id == crm_work_order_id
+            wo_id = (
+                db.query(WorkOrder.id)
+                .filter(WorkOrder.public_id == crm_work_order_id)
+                .scalar()
             )
+            if wo_id is None:
+                return []
+            query = query.filter(WorkOrderAssignmentQueue.work_order_mirror_id == wo_id)
         if assigned_technician_id:
             query = query.filter(
                 WorkOrderAssignmentQueue.assigned_technician_id

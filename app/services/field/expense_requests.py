@@ -16,7 +16,7 @@ from app.models.field_expense import (
     FieldExpenseRequest,
     FieldExpenseRequestItem,
 )
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import (
@@ -80,7 +80,10 @@ class FieldExpenseRequests:
         offset: int = 0,
     ) -> list[dict]:
         profile = _profile_from_principal(db, principal)
-        scoped_ids = _scoped_query(db, profile).with_entities(WorkOrderMirror.id)
+        scoped = _scoped_query(db, profile)
+        if crm_work_order_id:
+            scoped = scoped.filter(WorkOrder.public_id == crm_work_order_id)
+        scoped_ids = scoped.with_entities(WorkOrder.id)
         query = (
             db.query(FieldExpenseRequest)
             .options(selectinload(FieldExpenseRequest.items))
@@ -88,10 +91,6 @@ class FieldExpenseRequests:
             .filter(FieldExpenseRequest.is_active.is_(True))
             .order_by(FieldExpenseRequest.created_at.desc())
         )
-        if crm_work_order_id:
-            query = query.filter(
-                FieldExpenseRequest.crm_work_order_id == crm_work_order_id
-            )
         if status:
             query = query.filter(FieldExpenseRequest.status == _status(status))
         return [
@@ -123,7 +122,7 @@ class FieldExpenseRequests:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
@@ -142,7 +141,7 @@ class FieldExpenseRequests:
         planned_items = _validate_items(db, row, items)
         request = FieldExpenseRequest(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.crm_work_order_id,
+            crm_work_order_id=row.public_id,
             requested_by_technician_id=profile.id,
             requested_by_person_id=profile.person_id,
             requested_by_system_user_id=profile.system_user_id,
@@ -269,7 +268,7 @@ def _get_scoped_request(
     db: Session, principal: dict[str, Any], expense_request_id: str
 ) -> FieldExpenseRequest:
     profile = _profile_from_principal(db, principal)
-    scoped_ids = _scoped_query(db, profile).with_entities(WorkOrderMirror.id)
+    scoped_ids = _scoped_query(db, profile).with_entities(WorkOrder.id)
     request = (
         db.query(FieldExpenseRequest)
         .options(selectinload(FieldExpenseRequest.items))
@@ -284,7 +283,7 @@ def _get_scoped_request(
 
 
 def _validate_items(
-    db: Session, row: WorkOrderMirror, items: list[dict[str, Any]]
+    db: Session, row: WorkOrder, items: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     planned: list[dict[str, Any]] = []
     for entry in items:
@@ -344,7 +343,7 @@ def _status(value: str) -> str:
     return status
 
 
-def _mark_sub_authoritative(row: WorkOrderMirror) -> None:
+def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "expense_requests")
 
 

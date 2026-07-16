@@ -175,7 +175,7 @@
                     {% call table_row(color="cyan") %}
                     <td class="px-5 py-4 align-top">
                         <div class="font-semibold text-slate-900 dark:text-white">{{ wo.title }}</div>
-                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ wo.crm_work_order_id }}</div>
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ wo.public_id }}</div>
                         <div class="mt-2 flex flex-wrap gap-2">
                             {{ wo_status(wo.status) }}
                             {% if item.queue_status %}{{ status_badge(item.queue_status|replace('_', ' ')|title, variant="info") }}{% endif %}
@@ -190,7 +190,7 @@
                         <div class="text-xs text-slate-500 dark:text-slate-400">{{ wo.estimated_duration_minutes or '—' }} min · {{ wo.work_type or 'work' }}</div>
                     </td>
                     <td class="min-w-[28rem] px-5 py-4 align-top">
-                        <form method="post" action="/admin/dispatch/work-orders/{{ wo.crm_work_order_id }}" class="grid grid-cols-2 gap-2">
+                        <form method="post" action="/admin/dispatch/work-orders/{{ wo.public_id }}" class="grid grid-cols-2 gap-2">
                             <input name="title" value="{{ wo.title }}" required maxlength="200" class="col-span-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                             <select name="status" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                                 {% for option in statuses %}
@@ -212,7 +212,7 @@
                         </form>
                     </td>
                     <td class="min-w-64 px-5 py-4 align-top">
-                        <form method="post" action="/admin/dispatch/work-orders/{{ wo.crm_work_order_id }}/queue" class="space-y-2">
+                        <form method="post" action="/admin/dispatch/work-orders/{{ wo.public_id }}/queue" class="space-y-2">
                             <select name="assigned_technician_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                                 <option value="">Technician</option>
                                 {% for option in technician_options %}

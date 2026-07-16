@@ -4,7 +4,7 @@ from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool
 
 from alembic import context
 from app.config import settings
-from app.db import Base
+from app.db import Base, resolve_migration_lock_timeout
 from app.models import (  # noqa: F401
     analytics,
     audit,
@@ -242,6 +242,23 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _set_migration_lock_timeout(connection) -> None:
+    """Bound how long a migration waits to ACQUIRE a lock, so a schema-locking
+    statement (e.g. an ``ADD COLUMN`` needing ACCESS EXCLUSIVE) fails fast
+    instead of queuing behind the live app's locks and piling every subsequent
+    query behind it (the seabone/prod lock-trap that turned a cheap DDL into a
+    20-minute stall). Bounds lock *acquisition* only, NOT statement runtime, so
+    long data migrations are unaffected. Postgres only — SQLite (the test DB)
+    has no lock_timeout. Override via ``ALEMBIC_LOCK_TIMEOUT`` (e.g. ``30s`` for
+    a maintenance window, ``0`` to disable).
+    """
+    if connection.dialect.name != "postgresql":
+        return
+    connection.exec_driver_sql(
+        f"SET lock_timeout = '{resolve_migration_lock_timeout()}'"
+    )
+
+
 def run_migrations_online() -> None:
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -251,6 +268,7 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         ensure_alembic_version_table(connection)
+        _set_migration_lock_timeout(connection)
         connection.commit()
 
         context.configure(

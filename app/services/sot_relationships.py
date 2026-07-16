@@ -657,6 +657,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
+                name="network.ont_runtime_status",
+                module="app.services.network.ont_runtime_status",
+                owns=(
+                    "Huawei ONT runtime-status poll observations",
+                    "Huawei OLT bulk-status pollability predicate",
+                    "Huawei OLT bulk-status poll task admission",
+                ),
+                depends_on=("runtime.infrastructure_polling",),
+                notes=(
+                    "Owns recurring and stale-read-triggered Huawei bulk status "
+                    "polls as retry-safe infrastructure observations. These polls "
+                    "do not create tracked device operations; operator-requested "
+                    "single-ONT commands remain owned by operation dispatch."
+                ),
+            ),
+            SOTService(
                 name="network.device_state",
                 module="app.services.device_operational_status",
                 owns=(
@@ -664,7 +680,30 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device operational status vocabulary",
                     "device retry-pending and alarm classification",
                 ),
-                depends_on=("runtime.infrastructure_polling",),
+                depends_on=(
+                    "runtime.infrastructure_polling",
+                    "network.ont_runtime_status",
+                ),
+            ),
+            SOTService(
+                name="network.ont_status_refresh",
+                module="app.services.network.ont_status_refresh",
+                owns=(
+                    "stale ONT runtime-status refresh admission",
+                    "OLT-level status refresh rate limiting",
+                    "safe background refresh request projection",
+                ),
+                depends_on=(
+                    "network.device_state",
+                    "network.ont_runtime_status",
+                ),
+                notes=(
+                    "Read surfaces may request refresh through this owner, but "
+                    "must not poll OLTs directly. Huawei refreshes are admitted "
+                    "through the infrastructure observation polling owner as "
+                    "bounded OLT-level jobs; UISP-managed ONTs remain owned by "
+                    "the UISP topology sync source."
+                ),
             ),
             SOTService(
                 name="network.device_projection",
@@ -1294,8 +1333,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="runtime.infrastructure_polling",
                 module="app.services.infrastructure_polling",
                 owns=(
-                    "native infrastructure poll observations",
-                    "pollable device predicate",
+                    "shared native reachability poll observations",
+                    "generic network-device pollable predicate",
                     "poll heartbeat result counters",
                 ),
                 depends_on=("runtime.db_sessions",),
@@ -2208,6 +2247,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "is applied to the merged sequence (per-family offset/take), so a "
                     "page shows at most one page size and pages align across the two "
                     "families. Read-only list: no bulk selection declared."
+                ),
+            ),
+            SOTService(
+                name="ui.network_device_list_projection",
+                module="app.services.web_network_core_devices_inventory",
+                owns=(
+                    "admin network-device list searchable/filterable fields",
+                    "admin network-device list sort and default-order semantics",
+                    "admin network-device list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts", "network.device_projection"),
+                notes=(
+                    "NETWORK_DEVICE_LIST_DEFINITION declares the list capabilities "
+                    "(search, filter type/status/vendor, sort name/last_seen) and "
+                    "build_network_device_list_query normalizes request state; the "
+                    "list reads the materialised device_projections table via "
+                    "device_projection_views (SQL search/filter/sort/paginate), the "
+                    "rebuildable read model owned by network.device_projection, "
+                    "instead of aggregating every device in memory. Projected "
+                    "operational_status is last-known state as of the projection's "
+                    "refreshed_at, surfaced as freshness (not live truth); live "
+                    "status stays on the monitoring/detail views. collect_devices is "
+                    "retired from the request path and remains the reconciler's "
+                    "derivation input. Gated by the existing granular "
+                    "network:device:read. Read-only list: no bulk command declared."
                 ),
             ),
         ),

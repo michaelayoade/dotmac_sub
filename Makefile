@@ -157,8 +157,18 @@ prod-logs: ## Tail production Docker logs
 prod-restart: ## Recreate prod app + worker services from the current image (APP_IMAGE)
 	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-ingestion celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
 
-prod-migrate: ## Apply DB migrations in the prod stack (alembic baked into the image)
-	$(PROD_COMPOSE) run --rm app alembic upgrade heads
+prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retries on lock_timeout)
+	@n=0; until [ $$n -ge 4 ]; do \
+	  out=$$($(PROD_COMPOSE) run --rm app alembic upgrade heads 2>&1); rc=$$?; \
+	  echo "$$out"; \
+	  [ $$rc -eq 0 ] && break; \
+	  if echo "$$out" | grep -qiE "lock timeout|canceling statement due to lock"; then \
+	    n=$$((n+1)); echo ">> prod-migrate hit lock_timeout (attempt $$n/4) — a schema-locking migration could not grab its ACCESS EXCLUSIVE lock; retrying in 10s"; sleep 10; \
+	  else \
+	    echo ">> prod-migrate failed (not a lock_timeout) — aborting; app is untouched (migrate runs before recreate)"; exit $$rc; \
+	  fi; \
+	done; \
+	[ $$n -lt 4 ] || { echo ">> prod-migrate still lock-blocked after retries — quiesce the app (stop app+workers), run migrate, then recreate. See seabone-staging-deploy-quirks."; exit 1; }
 
 # ─── GHCR deploy (RECOMMENDED) ─────────────────────────────────────────────
 # Pull the exact CI-built, CI-tested image instead of building on the host —

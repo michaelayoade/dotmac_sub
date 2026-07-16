@@ -18,7 +18,7 @@ from app.models.dispatch import (
 )
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 
 
 def _system_user(db_session) -> SystemUser:
@@ -110,7 +110,7 @@ def test_shift_availability_and_assignment_queue_reference_mirror(db_session):
     user = _system_user(db_session)
     subscriber = _subscriber(db_session)
     technician = TechnicianProfile(person_id=user.id, system_user_id=user.id)
-    work_order = WorkOrderMirror(
+    work_order = WorkOrder(
         crm_work_order_id="wo-dispatch-1",
         subscriber_id=subscriber.id,
         title="Fibre install",

@@ -22,7 +22,7 @@ from app.models.project import (
 )
 from app.models.support import Ticket
 from app.models.ticket_workflow import SlaClock, SlaClockStatus, WorkflowEntityType
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.schemas.project import (
     ProjectCreate,
     ProjectTaskCreate,
@@ -258,7 +258,7 @@ class TestTaskStateMachine:
         assert exc.value.status_code == 404
 
         db_session.add(
-            WorkOrderMirror(
+            WorkOrder(
                 crm_work_order_id=str(wo_id),
                 subscriber_id=subscriber.id,
                 title="Install",
