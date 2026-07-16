@@ -493,16 +493,24 @@ Imported-payment batch reversal is a separate migrated wrapper owner:
 
 Nonterminal invoice lifecycle transitions are owned alongside terminal closure:
 
-- Old paths: scheduled billing constructed draft/issued invoices directly and
-  temporarily flipped prepaid drafts to issued; prepaid credit reconciliation
-  and cleanup moved invoices back to draft; overdue automation, dunning, and
-  admin bulk issue assigned status and timestamps themselves. The architecture
-  allowlist normalized these parallel writers instead of enforcing one owner.
+- Old paths: scheduled billing and usage posting constructed invoice documents
+  or lines directly, scheduled billing temporarily flipped prepaid drafts to
+  issued, prepaid credit reconciliation and cleanup moved invoices back to
+  draft, and overdue automation, dunning, and admin bulk issue assigned status
+  and timestamps themselves. The architecture allowlist normalized these
+  parallel writers instead of enforcing one owner.
 - Owner: `financial.invoices` now stages automation-created invoice documents,
-  owns draft issuance, rechecks whether an untouched prepaid receivable may
-  return to draft, and owns overdue eligibility, transition, one-time
-  observation event, and audit. Automation, reconciliation, cleanup, dunning,
-  and UI services select candidates and call the owner.
+  validates and stages automation/usage invoice lines, owns stable billing-line
+  replay, owns draft issuance, rechecks whether an untouched prepaid receivable
+  may return to draft, and owns overdue eligibility, transition, one-time
+  observation event, and audit. Automation, usage, reconciliation, cleanup,
+  dunning, and UI services select candidates and call the owner.
+- Construction boundary: only `app.services.billing.invoices` may construct
+  `Invoice` or `InvoiceLine` rows. System staging accepts only draft/issued
+  documents, records the source reason and exact document amount, and rejects a
+  billing-line key reused for different facts. Document staging posts no ledger
+  transaction; the invoice source document remains the canonical receivable
+  fact and its customer-ledger projection is derived from that exact row.
 - Derived-state boundary: payment and credit settlement still derive
   `paid`/`partially_paid`/reopened status inside the invoice owner package from
   canonical settlement facts. No adapter may assign those states. Draft,
@@ -511,10 +519,11 @@ Nonterminal invoice lifecycle transitions are owned alongside terminal closure:
 - Access boundary: `invoice.overdue` is an observation. It does not create a
   dunning consequence or decide service access. Returning an unfunded prepaid
   invoice to draft likewise changes no funding and grants no access.
-- Verification boundary: the invoice lifecycle writer allowlist contains only
-  `app.services.billing.invoices` and its derived-total helper. Direct status
-  assignments in automation, reconciliation, cleanup, collections, and web
-  adapters are rejected by architecture tests.
+- Verification boundary: invoice and invoice-line constructors are restricted
+  to `app.services.billing.invoices`; the lifecycle writer allowlist contains
+  only that owner and its derived-total helper. Direct construction or status
+  assignment in automation, usage, reconciliation, cleanup, collections, and
+  web adapters is rejected by architecture tests.
 
 Invoice void and write-off are distinct terminal owner contracts:
 

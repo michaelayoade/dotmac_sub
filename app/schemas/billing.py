@@ -116,6 +116,12 @@ class InvoiceLineCreate(InvoiceLineBase):
     amount: Decimal | None = Field(default=None, ge=0)
 
 
+class SystemInvoiceLineCreate(InvoiceLineCreate):
+    """Internal automation request with a stable source-fact identity."""
+
+    billing_line_key: str | None = Field(default=None, max_length=255)
+
+
 class InvoiceLineUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     invoice_id: UUID | None = None

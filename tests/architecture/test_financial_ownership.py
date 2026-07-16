@@ -73,6 +73,8 @@ APPROVED_PAYMENT_LIFECYCLE_WRITERS = {
 
 APPROVED_INVOICE_CLOSURE_WRITERS = {Path("app/services/billing/invoices.py")}
 
+APPROVED_INVOICE_DOCUMENT_WRITERS = {Path("app/services/billing/invoices.py")}
+
 APPROVED_FINANCIAL_ACCESS_CONSEQUENCE_WRITERS = {
     Path("app/services/collections/_core.py")
 }
@@ -310,6 +312,23 @@ def test_only_the_invoice_owner_constructs_terminal_closure_evidence() -> None:
     assert not transitions, (
         "Invoice void/write-off status transitioned outside its owner:\n  "
         + "\n  ".join(transitions)
+    )
+
+
+def test_only_the_invoice_owner_constructs_invoice_documents_and_lines() -> None:
+    invoices = _violations(
+        lambda path: _constructor_lines(path, "Invoice"),
+        APPROVED_INVOICE_DOCUMENT_WRITERS,
+    )
+    lines = _violations(
+        lambda path: _constructor_lines(path, "InvoiceLine"),
+        APPROVED_INVOICE_DOCUMENT_WRITERS,
+    )
+    assert not invoices, "Invoice constructed outside its owner:\n  " + "\n  ".join(
+        invoices
+    )
+    assert not lines, "InvoiceLine constructed outside its owner:\n  " + "\n  ".join(
+        lines
     )
 
 

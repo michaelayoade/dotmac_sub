@@ -36,11 +36,11 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
-from app.schemas.billing import InvoiceCreate
+from app.schemas.billing import InvoiceCreate, SystemInvoiceLineCreate
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing._common import _calculate_tax_amount
-from app.services.billing.invoices import Invoices, next_invoice_number
+from app.services.billing.invoices import InvoiceLines, Invoices, next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import (
@@ -578,8 +578,9 @@ def _bill_recurring_addons(
         )
         if amount <= Decimal("0.00"):
             continue
-        db.add(
-            InvoiceLine(
+        InvoiceLines.stage_system_line(
+            db,
+            SystemInvoiceLineCreate(
                 invoice_id=invoice.id,
                 subscription_id=subscription.id,
                 description=(
@@ -598,7 +599,8 @@ def _bill_recurring_addons(
                     "billing_period_end": period_end.isoformat(),
                 },
                 billing_line_key=billing_line_key,
-            )
+            ),
+            reason="scheduled_recurring_addon",
         )
         added += 1
     return added
@@ -1404,26 +1406,30 @@ def run_invoice_cycle(
             continue
 
         tax_rate_id = _resolve_tax_rate_id(db, subscription)
-        line = InvoiceLine(
-            invoice_id=invoice.id,
-            subscription_id=subscription.id,
-            description=description,
-            quantity=Decimal("1.000"),
-            unit_price=round_money(line_amount),
-            amount=round_money(line_amount),
-            tax_rate_id=tax_rate_id,
-            tax_application=(
-                _default_tax_application(db) if tax_rate_id else TaxApplication.exempt
+        InvoiceLines.stage_system_line(
+            db,
+            SystemInvoiceLineCreate(
+                invoice_id=invoice.id,
+                subscription_id=subscription.id,
+                description=description,
+                quantity=Decimal("1.000"),
+                unit_price=round_money(line_amount),
+                amount=round_money(line_amount),
+                tax_rate_id=tax_rate_id,
+                tax_application=(
+                    _default_tax_application(db)
+                    if tax_rate_id
+                    else TaxApplication.exempt
+                ),
+                metadata_={
+                    "kind": "base_subscription",
+                    "billing_period_start": period_start.isoformat(),
+                    "billing_period_end": period_end.isoformat(),
+                },
+                billing_line_key=billing_line_key,
             ),
-            metadata_={
-                "kind": "base_subscription",
-                "billing_period_start": period_start.isoformat(),
-                "billing_period_end": period_end.isoformat(),
-            },
-            billing_line_key=billing_line_key,
+            reason="scheduled_base_subscription",
         )
-        db.add(line)
-        db.flush()
         summary["subscriptions_billed"] += 1
         summary["lines_created"] += 1
         # Bill active recurring add-ons (e.g. extra IP blocks) on the same invoice.
@@ -1844,17 +1850,20 @@ def generate_prorated_invoice(
         f"{offer_name} (Prorated: {activation_date.date()} - {period_end.date()})"
     )
 
-    line = InvoiceLine(
-        invoice_id=invoice.id,
-        subscription_id=subscription.id,
-        description=description,
-        quantity=Decimal("1.000"),
-        unit_price=round_money(line_amount),
-        amount=round_money(line_amount),
-        tax_rate_id=tax_rate_id,
-        tax_application=_default_tax_application(db),
+    InvoiceLines.stage_system_line(
+        db,
+        SystemInvoiceLineCreate(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description=description,
+            quantity=Decimal("1.000"),
+            unit_price=round_money(line_amount),
+            amount=round_money(line_amount),
+            tax_rate_id=tax_rate_id,
+            tax_application=_default_tax_application(db),
+        ),
+        reason="prorated_subscription_activation",
     )
-    db.add(line)
 
     # Set next billing date to the end of this prorated period
     subscription.next_billing_at = period_end

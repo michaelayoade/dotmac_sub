@@ -339,6 +339,18 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert automation_invoice_owner is not None
     assert automation_invoice_owner.name == "financial.invoices"
 
+    automation_line_owner = sot_relationships.owning_service_for(
+        "automation invoice-line construction and source-fact replay"
+    )
+    assert automation_line_owner is not None
+    assert automation_line_owner.name == "financial.invoices"
+
+    usage_invoice_owner = sot_relationships.owning_service_for(
+        "usage-charge invoice and invoice-line construction"
+    )
+    assert usage_invoice_owner is not None
+    assert usage_invoice_owner.name == "financial.invoices"
+
     overdue_invoice_owner = sot_relationships.owning_service_for(
         "overdue invoice state and observation event"
     )

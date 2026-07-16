@@ -302,6 +302,26 @@ def test_invoice_void_and_writeoff_use_owner_preview_and_exact_evidence() -> Non
     assert 'name="preview_fingerprints_json"' in bulk_confirmation
 
 
+def test_automation_and_usage_stage_invoice_documents_through_owner() -> None:
+    owner = _source("app/services/billing/invoices.py")
+    automation = _source("app/services/billing_automation.py")
+    usage = _source("app/services/usage.py")
+
+    assert "def stage_system_invoice(" in owner
+    assert "def stage_system_line(" in owner
+    assert 'action="stage_system_invoice"' in owner
+    assert 'action="stage_system_invoice_line"' in owner
+    assert '"ledger_transaction_id": None' in owner
+    assert "Invoices.stage_system_invoice(" in automation
+    assert "InvoiceLines.stage_system_line(" in automation
+    assert "Invoices.stage_system_invoice(" in usage
+    assert "InvoiceLines.stage_system_line(" in usage
+    assert "Invoice(" not in automation
+    assert "InvoiceLine(" not in automation
+    assert "Invoice(" not in usage
+    assert "InvoiceLine(" not in usage
+
+
 def test_dunning_consumes_arrangement_shields_from_the_arrangement_owner() -> None:
     dunning = _source("app/services/collections/_core.py")
 

@@ -243,6 +243,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "invoice status transitions",
                     "invoice adjustment and reversal postings",
                     "automation invoice creation and draft issuance",
+                    "automation invoice-line construction and source-fact replay",
+                    "usage-charge invoice and invoice-line construction",
                     "overdue invoice state and observation event",
                     "unfunded prepaid invoice return-to-draft eligibility",
                     "invoice-originated ledger postings",
