@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Active Services - Catalog - Admin{% endblock %}
 
@@ -120,9 +120,8 @@
                             {{ subscription.offer.name if subscription.offer else subscription.offer_id|string|truncate(8, True, '') }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            {% set sub_status = subscription.status.value if subscription.status else 'pending' %}
-                            {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
-                            {{ status_badge(sub_status_labels.get(sub_status, sub_status | replace('_', ' ') | title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
+                            {# Status semantics from the subscription status presentation owner. #}
+                            {{ status_presentation_badge(subscription_status_presentation(subscription.status), size="sm") }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
                             {{ subscription.start_at.strftime('%b %d, %Y') if subscription.start_at else '—' }}

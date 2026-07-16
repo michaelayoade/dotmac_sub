@@ -1,16 +1,8 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, card, table_head, table_row,
-    status_badge, empty_state, animation_styles
+    status_presentation_badge, empty_state, animation_styles
 %}
-
-{% set appt_variants = {
-    'proposed': 'info',
-    'confirmed': 'success',
-    'completed': 'paid',
-    'no_show': 'warning',
-    'canceled': 'inactive'
-} %}
 
 {% block title %}Appointments - Admin{% endblock %}
 
@@ -84,7 +76,8 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ appt.technician or '-' }}</td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            {{ status_badge(appt.status.value|replace('_', ' ')|title, variant=appt_variants.get(appt.status.value, 'default')) }}
+                            {# Status semantics from the appointment status presentation owner. #}
+                            {{ status_presentation_badge(appointment_status_presentation(appt.status), size="sm") }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                             {% if appt.is_self_install %}
