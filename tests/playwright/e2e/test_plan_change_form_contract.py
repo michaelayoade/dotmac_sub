@@ -64,5 +64,7 @@ class TestPlanChangeFormContract:
         with customer_page.expect_response(
             lambda r: f"/portal/services/{subscription_id}/change/quote" in r.url
         ) as quote_response:
-            radios.first.check()
+            # The radio is sr-only (the styled label is the visual control), so
+            # bypass actionability and let the change event fire the quote fetch.
+            radios.first.check(force=True)
         assert quote_response.value.status in (200, 404)
