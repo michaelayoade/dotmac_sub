@@ -214,13 +214,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         owner_module="billing",
         default=False,
         on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _C,
-                "prepaid_balance_enforcement_enabled",
-                "PREPAID_BALANCE_ENFORCEMENT_ENABLED",
-            ),
-        ),
         description="Prepaid balance/expiry suspension sweep.",
     ),
     Control(

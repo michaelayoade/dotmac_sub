@@ -61,6 +61,25 @@ def test_runtime_has_no_legacy_authority_toggle_or_fallback() -> None:
     assert "--funding-snapshot" not in planner_script
 
 
+def test_legacy_subscriber_deposit_is_not_an_api_balance_surface() -> None:
+    from app.schemas.subscriber import (
+        SubscriberCreate,
+        SubscriberRead,
+        SubscriberUpdate,
+    )
+
+    for schema in (SubscriberCreate, SubscriberUpdate, SubscriberRead):
+        assert "deposit" not in schema.model_fields
+
+
+def test_funded_inactive_audit_uses_verified_prepaid_funding() -> None:
+    audit = _read("app/services/funded_inactive_exposure.py")
+
+    assert "prepaid_available_balances" in audit
+    assert "s.deposit" not in audit
+    assert "ledger_entries" not in audit
+
+
 def test_materializer_requires_explicit_final_cutover_acknowledgement() -> None:
     script = _read("scripts/one_off/materialize_prepaid_funding_reconstruction.py")
     migration = _read_migration("prepaid_funding_reconstruction")

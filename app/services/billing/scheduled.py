@@ -338,7 +338,8 @@ def audit_funded_inactive_exposure() -> dict:
             "funded_inactive_exposure: ok=%s inactive_positive=%s/%s "
             "refund_review=%s/%s disabled=%s/%s canceled=%s/%s "
             "suspended=%s/%s blocked=%s/%s soft_deleted=%s/%s "
-            "sibling_candidates=%s material=%s",
+            "sibling_candidates=%s material=%s candidates=%s "
+            "invalid_profiles=%s non_prepaid=%s funding_source=%s",
             result.get("ok"),
             result.get("inactive_positive_count"),
             result.get("inactive_positive_total"),
@@ -356,6 +357,10 @@ def audit_funded_inactive_exposure() -> dict:
             result.get("soft_deleted_total"),
             result.get("sibling_candidate_count"),
             result.get("material_count"),
+            result.get("candidate_count"),
+            result.get("invalid_billing_profile_count"),
+            result.get("non_prepaid_candidate_count"),
+            result.get("funding_source"),
         )
         return result
     finally:

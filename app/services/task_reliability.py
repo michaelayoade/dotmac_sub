@@ -192,7 +192,6 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.collections.run_billing_enforcement": _c(
         "collections", STATE, GUARDED, HEALTH
     ),
-    "app.tasks.collections.run_dunning": _c("collections", STATE, GUARDED, HEALTH),
     "app.tasks.collections.run_bundle_reconcile": _c(
         "collections", STATE, GUARDED, HEALTH
     ),

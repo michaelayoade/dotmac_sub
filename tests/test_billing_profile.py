@@ -1,5 +1,8 @@
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
-from app.services.billing_profile import resolve_billing_profile
+from app.services.billing_profile import (
+    resolve_billing_profile,
+    resolve_billing_profiles,
+)
 from app.services.collections._core import (
     _account_has_prepaid_service,
     _effective_billing_mode_for_account,
@@ -66,3 +69,18 @@ def test_profile_falls_back_to_account_without_collectible_subscriptions(
     assert profile.effective_mode == BillingMode.postpaid
     assert profile.source == "account"
     assert profile.account_subscription_mismatch is False
+
+
+def test_batch_profiles_match_single_account_resolution(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    profiles = resolve_billing_profiles(db_session, [subscriber_account])
+
+    assert profiles[subscriber_account.id] == resolve_billing_profile(
+        db_session, subscriber_account
+    )
