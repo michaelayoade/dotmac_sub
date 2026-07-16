@@ -163,6 +163,66 @@ def test_pull_crm_ticket_is_idempotent_for_ticket_and_comments(db_session, subsc
     assert db_session.query(TicketComment).count() == 1
 
 
+def test_pull_merges_metadata_preserving_sub_owned_state(db_session, subscriber):
+    """A CRM re-pull must never wipe sub-owned ticket decision state (csat,
+    resolution confirmation, the field-visit work_order_id link): metadata is
+    merged, with CRM-derived keys updating in place."""
+    subscriber.splynx_customer_id = 201
+    db_session.commit()
+    crm_subscriber_id = str(uuid4())
+    crm_ticket_id = str(uuid4())
+    crm_ticket = {
+        "id": crm_ticket_id,
+        "subscriber_id": crm_subscriber_id,
+        "number": "20152",
+        "title": "Slow speeds",
+        "status": "open",
+        "priority": "normal",
+        "channel": "phone",
+        "is_active": True,
+    }
+    client = FakeCrmClient(
+        tickets=[crm_ticket],
+        subscribers={
+            crm_subscriber_id: {
+                "id": crm_subscriber_id,
+                "external_system": "splynx",
+                "external_id": "201",
+            }
+        },
+        comments={crm_ticket_id: []},
+    )
+    pull_tickets(db_session, client=client)
+    db_session.commit()
+
+    ticket = db_session.query(Ticket).filter(Ticket.number == "20152").one()
+    # Sub-owned decision state lands on the ticket between pulls.
+    ticket.metadata_ = {
+        **(ticket.metadata_ or {}),
+        "csat": {"rating": 5, "comment": "great"},
+        "resolution_confirmation": {"state": "pending_confirmation"},
+        "work_order_id": "sub-abc123",
+    }
+    db_session.commit()
+
+    # CRM updates its side; the re-pull must merge, not replace.
+    crm_ticket["priority"] = "high"
+    crm_ticket["updated_at"] = "2026-07-16T18:00:00+00:00"
+    pull_tickets(db_session, client=client)
+    db_session.commit()
+
+    db_session.refresh(ticket)
+    assert ticket.metadata_["csat"] == {"rating": 5, "comment": "great"}
+    assert ticket.metadata_["resolution_confirmation"] == {
+        "state": "pending_confirmation"
+    }
+    assert ticket.metadata_["work_order_id"] == "sub-abc123"
+    # CRM-derived keys still refresh.
+    assert ticket.metadata_["crm_ticket_id"] == crm_ticket_id
+    assert ticket.metadata_["crm_updated_at"] == "2026-07-16T18:00:00+00:00"
+    assert ticket.priority == "high"
+
+
 def test_pull_crm_ticket_skips_lead_only_tickets(db_session):
     client = FakeCrmClient(
         tickets=[

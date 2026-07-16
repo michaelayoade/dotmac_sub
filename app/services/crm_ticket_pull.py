@@ -351,7 +351,12 @@ def _apply_ticket_fields(
     ticket.ticket_type = crm_ticket.get("ticket_type")
     ticket.channel = _safe_channel(crm_ticket.get("channel"))
     ticket.tags = _clean_tags(crm_ticket.get("tags"))
-    ticket.metadata_ = _metadata(crm_ticket)
+    # Merge, never replace: sub-owned decision state on the ticket (csat,
+    # resolution confirmation, the field-visit work_order_id link) must
+    # survive a CRM pull. CRM-derived keys (crm_*, sync_source, and the CRM
+    # payload's own metadata) update in place; keys CRM knows nothing about
+    # are preserved.
+    ticket.metadata_ = {**(ticket.metadata_ or {}), **_metadata(crm_ticket)}
     ticket.attachments = _clean_attachments(crm_ticket.get("attachments"))
     ticket.due_at = _parse_datetime(crm_ticket.get("due_at"))
     ticket.resolved_at = _parse_datetime(crm_ticket.get("resolved_at"))
