@@ -69,15 +69,15 @@ def test_instant_change_swaps_offer_now(db_session, subscriber, monkeypatch):
     )
     db_session.commit()
 
+    confirmation = _confirmation_kwargs(db_session, subscription, target)
     result = core.bulk_change_plan(
         db_session,
         str(subscription.id),
         str(target.id),
         request=None,
         actor_id=None,
-        preview_fingerprint=_confirmation_kwargs(db_session, subscription, target)[
-            "preview_fingerprint"
-        ],
+        preview_fingerprint=confirmation["preview_fingerprint"],
+        preview_effective_at=confirmation["preview_effective_at"],
         idempotency_key="admin-instant-test",
     )
 

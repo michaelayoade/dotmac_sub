@@ -3991,6 +3991,7 @@ def bulk_change_plan(
     effective_timing: str = "instant",
     include_suspended: bool = False,
     preview_fingerprint: str | None = None,
+    preview_effective_at: datetime | None = None,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Compatibility adapter for canonical plan-change command execution.
@@ -4038,7 +4039,12 @@ def bulk_change_plan(
             raise ValueError("Plan-change idempotency key is required")
 
         subscription = catalog_service.subscriptions.get(db, subscription_ids[0])
-        decision = resolve_prepaid_plan_change(db, subscription, target_offer_id)
+        decision = resolve_prepaid_plan_change(
+            db,
+            subscription,
+            target_offer_id,
+            effective_at=preview_effective_at,
+        )
         if decision.fingerprint != preview_fingerprint:
             raise ValueError("Financial state changed after preview; preview again")
     allowed_from = {SubscriptionStatus.active}
@@ -4066,6 +4072,9 @@ def bulk_change_plan(
         reason="Bulk plan change requested from the admin catalog",
         target_offer_id=target_offer_id,
         effective_timing=timing,
+        effective_at=(
+            preview_effective_at if effective_timing == "instant" else None
+        ),
     )
     return result.as_dict()
 

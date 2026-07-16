@@ -719,7 +719,7 @@ def apply_instant_plan_change(
     notes: str | None = None,
     *,
     preview_fingerprint: str,
-    preview_effective_at: datetime | None,
+    preview_effective_at: datetime | None = None,
     idempotency_key: str,
     confirmation_origin: str,
 ) -> dict:
