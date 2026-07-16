@@ -12,6 +12,7 @@ from app.models.network_monitoring import DeviceRole, DeviceStatus, NetworkDevic
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import Ticket, TicketStatus
+from app.models.vendor_routes import VendorPurchaseInvoiceStatus
 from app.schemas.billing import InvoiceRead, PaymentRead
 from app.schemas.catalog import SubscriptionRead
 from app.schemas.network_monitoring import NetworkDeviceRead
@@ -34,6 +35,7 @@ from app.services.status_presentation import (
     payment_status_presentation,
     subscription_status_presentation,
     ticket_status_presentation,
+    vendor_purchase_invoice_status_presentation,
     withholding_tax_status_presentation,
     work_order_status_presentation,
 )
@@ -57,6 +59,18 @@ def test_credit_note_presentation_covers_authoritative_enum(
     status: CreditNoteStatus,
 ) -> None:
     presentation = credit_note_status_presentation(status)
+
+    assert presentation.value == status.value
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
+
+
+@pytest.mark.parametrize("status", list(VendorPurchaseInvoiceStatus))
+def test_vendor_purchase_invoice_presentation_covers_authoritative_enum(
+    status: VendorPurchaseInvoiceStatus,
+) -> None:
+    presentation = vendor_purchase_invoice_status_presentation(status)
 
     assert presentation.value == status.value
     assert presentation.label

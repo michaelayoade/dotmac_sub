@@ -15,6 +15,7 @@ from app.models.catalog import SubscriptionStatus
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
+from app.models.vendor_routes import VendorPurchaseInvoiceStatus
 from app.schemas.status_presentation import (
     StatusIcon,
     StatusPresentation,
@@ -496,3 +497,46 @@ def withholding_tax_status_presentation(
 ) -> StatusPresentation:
     """Project the official WHT receivable lifecycle without re-deriving it."""
     return _presentation(_status_value(status), _WITHHOLDING_TAX_PRESENTATIONS)
+
+
+_VENDOR_PURCHASE_INVOICE_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    VendorPurchaseInvoiceStatus.draft.value: (
+        "Draft",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
+    VendorPurchaseInvoiceStatus.submitted.value: (
+        "Submitted",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    VendorPurchaseInvoiceStatus.under_review.value: (
+        "Under review",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    VendorPurchaseInvoiceStatus.approved.value: (
+        "Approved",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    VendorPurchaseInvoiceStatus.rejected.value: (
+        "Rejected",
+        StatusTone.negative,
+        StatusIcon.x,
+    ),
+    VendorPurchaseInvoiceStatus.revision_requested.value: (
+        "Revision requested",
+        StatusTone.warning,
+        StatusIcon.alert,
+    ),
+}
+
+
+def vendor_purchase_invoice_status_presentation(
+    status: VendorPurchaseInvoiceStatus | str | None,
+) -> StatusPresentation:
+    """Project vendor purchase-invoice approval status without re-deriving it."""
+    return _presentation(_status_value(status), _VENDOR_PURCHASE_INVOICE_PRESENTATIONS)
