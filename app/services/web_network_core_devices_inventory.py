@@ -21,9 +21,62 @@ from app.services.device_operational_status import (
     derive_ont_operational_status,
     warmer_is_stale,
 )
+from app.services import device_projection_views
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
 from app.services.network import cpe as cpe_service
 from app.services.network.imported_service_ports import imported_service_port_summary
 from app.services.status_presentation import device_operational_status_presentation
+
+# UI page contract for the admin network-device list. The projection-boundary
+# owner: it declares the searchable/filterable/sortable fields, default order and
+# page sizes. The list reads the materialised device_projections table (via
+# device_projection_views) — the SQL-paginated read model — instead of loading
+# every device and filtering in memory. Projected operational_status is
+# last-known state as of the projection's refreshed_at.
+NETWORK_DEVICE_LIST_DEFINITION = ListDefinition(
+    key="network_devices",
+    fields=(
+        ListFieldDefinition("search", "Search", searchable=True),
+        ListFieldDefinition("type", "Type", filterable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("vendor", "Vendor", filterable=True),
+        ListFieldDefinition("name", "Name", sortable=True),
+        ListFieldDefinition("last_seen", "Last seen", sortable=True),
+    ),
+    default_sort="name",
+    default_sort_dir="asc",
+    default_per_page=25,
+)
+
+
+def build_network_device_list_query(
+    *,
+    device_type: str | None = None,
+    status: str | None = None,
+    vendor: str | None = None,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise loose device-list request params through the page contract."""
+    return NETWORK_DEVICE_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "type": device_type,
+            "status": status,
+            "vendor": vendor,
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
 
 if TYPE_CHECKING:
     from app.models.network import Port
@@ -410,53 +463,72 @@ def compute_device_stats(devices: list[dict]) -> dict[str, int]:
     }
 
 
-def devices_list_page_data(
-    db: Session,
-    *,
-    device_type: str | None = None,
-    search: str | None = None,
-    status: str | None = None,
-    vendor: str | None = None,
-) -> dict[str, object]:
-    """Return full payload for the devices index page."""
-    devices = collect_devices(db)
-    devices = filter_devices(
-        devices, device_type=device_type, search=search, status=status, vendor=vendor
+def _query_page(db: Session, list_query: ListQuery) -> tuple[list[dict], int]:
+    return device_projection_views.query_device_projections(
+        db,
+        device_type=list_query.filter_value("type"),
+        status=list_query.filter_value("status"),
+        vendor=list_query.filter_value("vendor"),
+        search=list_query.search,
+        sort_by=list_query.sort_by,
+        sort_dir=list_query.sort_dir,
+        offset=list_query.offset,
+        limit=list_query.per_page,
     )
-    stats = compute_device_stats(devices)
+
+
+def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, object]:
+    """Return full payload for the devices index page.
+
+    Reads the materialised device_projections table (SQL search/filter/sort/
+    paginate) via device_projection_views — the canonical read model — instead of
+    aggregating and filtering every device in memory. Projected status is
+    last-known as of ``devices_refreshed_at``.
+    """
+    devices, total = _query_page(db, list_query)
+    stats = device_projection_views.device_projection_stats(
+        db,
+        device_type=list_query.filter_value("type"),
+        status=list_query.filter_value("status"),
+        vendor=list_query.filter_value("vendor"),
+        search=list_query.search,
+    )
+    per_page = list_query.per_page
+    total_pages = (total + per_page - 1) // per_page if total else 1
+    device_type = list_query.filter_value("type")
     return {
         "devices": devices,
         "stats": stats,
         "device_type": device_type,
         "type": device_type,
-        "search": search or "",
-        "status": status or "",
-        "vendor": vendor or "",
+        "search": list_query.search or "",
+        "status": list_query.filter_value("status") or "",
+        "vendor": list_query.filter_value("vendor") or "",
+        # Pagination context consumed by components/data/table_pagination.html.
+        "pagination": total > per_page,
+        "offset": list_query.offset,
+        "limit": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "page": list_query.page,
+        "per_page": per_page,
+        "htmx_url": "/admin/network/devices/filter",
+        "htmx_target": "devices-table-body",
+        # Freshness: projected operational status is last-known as of this stamp.
+        "devices_refreshed_at": device_projection_views.latest_refreshed_at(db),
     }
 
 
-def devices_search_data(db: Session, search: str) -> list[dict]:
-    """Return filtered devices for HTMX search partial."""
-    devices = collect_devices(db)
-    term = search.strip().lower()
-    if term:
-        devices = [d for d in devices if _device_matches_search(d, term)]
+def devices_search_data(db: Session, list_query: ListQuery) -> list[dict]:
+    """Return one page of matching devices for the HTMX search/filter partial."""
+    devices, _total = _query_page(db, list_query)
     return devices
 
 
-def devices_filter_data(
-    db: Session,
-    *,
-    device_type: str | None = None,
-    search: str | None = None,
-    status: str | None = None,
-    vendor: str | None = None,
-) -> list[dict]:
-    """Return filtered devices for HTMX filter partial."""
-    devices = collect_devices(db)
-    return filter_devices(
-        devices, device_type=device_type, search=search, status=status, vendor=vendor
-    )
+def devices_filter_data(db: Session, list_query: ListQuery) -> list[dict]:
+    """Return one page of filtered devices for the HTMX filter partial."""
+    devices, _total = _query_page(db, list_query)
+    return devices
 
 
 def olts_list_page_data(
