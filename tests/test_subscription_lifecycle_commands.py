@@ -57,6 +57,7 @@ def _subscription(
     *,
     status: SubscriptionStatus = SubscriptionStatus.active,
 ) -> Subscription:
+    subscriber.billing_mode = BillingMode.postpaid
     item = Subscription(
         subscriber_id=subscriber.id,
         offer_id=offer.id,
