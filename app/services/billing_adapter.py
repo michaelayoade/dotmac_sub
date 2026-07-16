@@ -10,13 +10,14 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.billing import InvoiceStatus, PaymentStatus
+from app.models.billing import InvoiceStatus, PaymentStatus, TaxApplication
 from app.schemas.billing import (
     InvoiceCreate,
     InvoiceLineCreate,
     PaymentAllocationApply,
     PaymentCreate,
     PaymentProviderEventIngest,
+    SystemInvoiceLineCreate,
 )
 from app.services import display_format
 from app.services.adapters import adapter_registry
@@ -30,6 +31,8 @@ class InvoiceIntent:
     total: Decimal = Decimal("0.00")
     memo: str | None = None
     status: InvoiceStatus = InvoiceStatus.draft
+    billing_period_start: datetime | None = None
+    billing_period_end: datetime | None = None
     issued_at: datetime | None = None
     due_at: datetime | None = None
 
@@ -39,7 +42,11 @@ class InvoiceLineIntent:
     description: str
     quantity: Decimal = Decimal("1")
     unit_price: Decimal = Decimal("0.00")
+    subscription_id: UUID | None = None
     tax_rate_id: UUID | None = None
+    tax_application: TaxApplication = TaxApplication.exclusive
+    metadata: dict[str, Any] | str | None = None
+    billing_line_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +98,8 @@ class BillingAdapter:
             balance_due=intent.total,
             status=intent.status,
             memo=intent.memo,
+            billing_period_start=intent.billing_period_start,
+            billing_period_end=intent.billing_period_end,
             issued_at=intent.issued_at,
             due_at=intent.due_at,
         )
@@ -106,16 +115,34 @@ class BillingAdapter:
 
         invoice = self.create_invoice(db, intent)
         for line in lines:
-            billing_service.invoice_lines.create(
-                db,
-                InvoiceLineCreate(
-                    invoice_id=invoice.id,
-                    description=line.description,
-                    quantity=line.quantity,
-                    unit_price=line.unit_price,
-                    tax_rate_id=line.tax_rate_id,
-                ),
-            )
+            common = {
+                "invoice_id": invoice.id,
+                "subscription_id": line.subscription_id,
+                "description": line.description,
+                "quantity": line.quantity,
+                "unit_price": line.unit_price,
+                "tax_rate_id": line.tax_rate_id,
+                "tax_application": line.tax_application,
+                "metadata_": line.metadata,
+            }
+            if line.subscription_id is not None and not line.billing_line_key:
+                raise ValueError(
+                    "Subscription invoice lines require a stable billing_line_key"
+                )
+            if line.billing_line_key:
+                billing_service.invoice_lines.stage_system_line(
+                    db,
+                    SystemInvoiceLineCreate(
+                        **common,
+                        billing_line_key=line.billing_line_key,
+                    ),
+                    reason="billing_adapter",
+                )
+            else:
+                billing_service.invoice_lines.create(
+                    db,
+                    InvoiceLineCreate(**common),
+                )
         return invoice
 
     def record_payment(self, db: Session, intent: PaymentIntent):

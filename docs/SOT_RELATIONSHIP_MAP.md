@@ -581,23 +581,27 @@ Imported-payment batch reversal is a separate migrated wrapper owner:
 Nonterminal invoice lifecycle transitions are owned alongside terminal closure:
 
 - Old paths: scheduled billing and usage posting constructed invoice documents
-  or lines directly, scheduled billing temporarily flipped prepaid drafts to
-  issued, prepaid credit reconciliation and cleanup moved invoices back to
-  draft, and overdue automation, dunning, and admin bulk issue assigned status
-  and timestamps themselves. The architecture allowlist normalized these
-  parallel writers instead of enforcing one owner.
+  or lines directly, and the subscription quick-create DTO dropped the
+  subscription, billing period, and idempotency key. Scheduled billing also
+  temporarily flipped prepaid drafts to issued; prepaid credit reconciliation
+  and cleanup moved invoices back to draft; and overdue automation, dunning,
+  and admin bulk issue assigned status and timestamps themselves. These paths
+  bypassed classification, duplicate-billing, and lifecycle ownership guards.
 - Owner: `financial.invoices` now stages automation-created invoice documents,
-  validates and stages automation/usage invoice lines, owns stable billing-line
-  replay, owns draft issuance, rechecks whether an untouched prepaid receivable
-  may return to draft, and owns overdue eligibility, transition, one-time
-  observation event, and audit. Automation, usage, reconciliation, cleanup,
-  dunning, and UI services select candidates and call the owner.
+  validates and stages system invoice lines, owns stable subscription-period
+  billing identities and replay, owns draft issuance, rechecks whether an
+  untouched prepaid receivable may return to draft, and owns overdue
+  eligibility, transition, one-time observation event, and audit. Automation,
+  usage, reconciliation, cleanup, dunning, and UI adapters call the owner.
 - Construction boundary: only `app.services.billing.invoices` may construct
   `Invoice` or `InvoiceLine` rows. System staging accepts only draft/issued
-  documents, records the source reason and exact document amount, and rejects a
-  billing-line key reused for different facts. Document staging posts no ledger
-  transaction; the invoice source document remains the canonical receivable
-  fact and its customer-ledger projection is derived from that exact row.
+  documents and every system line requires a canonical `billing_line_key`;
+  replay returns the exact existing line and changed facts fail closed. The
+  subscription quick-create path delegates to the owner, preserves the
+  subscription-owned cadence, and rejects prepaid billing unless the caller
+  explicitly selects the prepaid invoice contract. Document staging records
+  source reason and exact amount but posts no ledger transaction; the invoice
+  source document remains the canonical receivable fact.
 - Derived-state boundary: payment and credit settlement still derive
   `paid`/`partially_paid`/reopened status inside the invoice owner package from
   canonical settlement facts. No adapter may assign those states. Draft,

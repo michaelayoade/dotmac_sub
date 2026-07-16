@@ -415,4 +415,22 @@ def test_create_for_subscription_blocks_prepaid(
         str(subscription.id),
         allow_prepaid=True,
     )
-    assert invoice is not None
+    db_session.refresh(invoice)
+    line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    assert invoice.billing_period_start is not None
+    assert invoice.billing_period_end is not None
+    assert line.subscription_id == subscription.id
+    assert line.billing_line_key
+
+    replay = Invoices.create_for_subscription(
+        db_session,
+        str(subscriber_account.id),
+        str(subscription.id),
+        allow_prepaid=True,
+    )
+    assert replay.id == invoice.id
+    assert (
+        db_session.query(Invoice).filter_by(account_id=subscriber_account.id).count()
+        == 1
+    )
+    assert db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).count() == 1

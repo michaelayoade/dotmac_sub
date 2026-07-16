@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -197,6 +197,20 @@ def next_invoice_number(db: Session) -> str | None:
         "invoice_number_prefix",
         "invoice_number_padding",
         "invoice_number_start",
+    )
+
+
+def system_billing_line_key(
+    subscription_id: object,
+    period_start: datetime,
+    period_end: datetime,
+    component: str,
+) -> str:
+    """Canonical identity for one subscription-period billing fact."""
+
+    return (
+        f"subscription:{subscription_id}:"
+        f"{period_start.isoformat()}:{period_end.isoformat()}:{component}"
     )
 
 
@@ -1509,9 +1523,14 @@ class Invoices(ListResponseMixin):
         )
         from app.models.subscriber import Subscriber
 
-        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+        subscription = lock_for_update(db, Subscription, subscription_id)
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
+        if str(subscription.subscriber_id) != str(subscriber_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Subscription does not belong to the selected account",
+            )
 
         if subscription.billing_mode == BillingMode.prepaid and not allow_prepaid:
             raise HTTPException(
@@ -1526,6 +1545,25 @@ class Invoices(ListResponseMixin):
         subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
+
+        from app.services.catalog.subscriptions import billing_period_for_subscription
+
+        period_start, period_end = billing_period_for_subscription(subscription)
+        billing_line_key = system_billing_line_key(
+            subscription.id,
+            period_start,
+            period_end,
+            "base",
+        )
+        existing_line = db.scalar(
+            select(InvoiceLine)
+            .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+            .where(InvoiceLine.billing_line_key == billing_line_key)
+            .where(InvoiceLine.is_active.is_(True))
+            .where(Invoice.is_active.is_(True))
+        )
+        if existing_line is not None:
+            return existing_line.invoice
 
         offer = db.get(CatalogOffer, subscription.offer_id)
         if not offer:
@@ -1564,48 +1602,55 @@ class Invoices(ListResponseMixin):
 
         total = amount + tax_total
 
-        # Create invoice
-        invoice_number = numbering.generate_number(
-            db,
-            SettingDomain.billing,
-            "invoice_number",
-            "invoice_number_enabled",
-            "invoice_number_prefix",
-            "invoice_number_padding",
-            "invoice_number_start",
-        )
-        invoice = Invoice(
-            account_id=subscriber_id,
-            invoice_number=invoice_number,
-            currency=currency,
-            subtotal=amount,
-            tax_total=tax_total,
-            total=total,
-            balance_due=total,
-            status=InvoiceStatus.issued,
-        )
-        db.add(invoice)
-        db.flush()
+        from app.services.billing_settings import resolve_payment_due_days
 
-        # Create line item
-        line = InvoiceLine(
-            invoice_id=invoice.id,
-            subscription_id=subscription_id,
-            description=(
-                f"{offer.name} — "
-                f"{billing_cycle_noun(subscription.billing_cycle or offer_price.billing_cycle)}"
-                " service"
+        issued_at = datetime.now(UTC)
+        invoice = Invoices.stage_system_invoice(
+            db,
+            InvoiceCreate(
+                account_id=coerce_uuid(subscriber_id),
+                invoice_number=next_invoice_number(db),
+                currency=currency,
+                subtotal=amount,
+                tax_total=tax_total,
+                total=total,
+                balance_due=total,
+                status=InvoiceStatus.issued,
+                billing_period_start=period_start,
+                billing_period_end=period_end,
+                issued_at=issued_at,
+                due_at=issued_at
+                + timedelta(days=resolve_payment_due_days(db, subscriber=subscriber)),
             ),
-            quantity=Decimal("1"),
-            unit_price=amount,
-            amount=amount,
-            tax_rate_id=tax_rate_id,
-            tax_application=TaxApplication.exclusive,
-            is_active=True,
+            reason="subscription_invoice_request",
         )
-        db.add(line)
-        db.commit()
-        db.refresh(invoice)
+
+        InvoiceLines.stage_system_line(
+            db,
+            SystemInvoiceLineCreate(
+                invoice_id=invoice.id,
+                subscription_id=subscription.id,
+                description=(
+                    f"{offer.name} — "
+                    f"{billing_cycle_noun(subscription.billing_cycle or offer_price.billing_cycle)}"
+                    " service"
+                ),
+                quantity=Decimal("1"),
+                unit_price=amount,
+                amount=amount,
+                tax_rate_id=tax_rate_id,
+                tax_application=(
+                    TaxApplication.exclusive if tax_rate_id else TaxApplication.exempt
+                ),
+                metadata_={
+                    "kind": "base_subscription",
+                    "billing_period_start": period_start.isoformat(),
+                    "billing_period_end": period_end.isoformat(),
+                },
+                billing_line_key=billing_line_key,
+            ),
+            reason="subscription_invoice_request",
+        )
 
         emit_event(
             db,
@@ -1620,6 +1665,8 @@ class Invoices(ListResponseMixin):
             account_id=invoice.account_id,
             invoice_id=invoice.id,
         )
+        db.commit()
+        db.refresh(invoice)
 
         logger.info(
             "Created invoice %s for subscription %s: %s %s",
@@ -1962,7 +2009,7 @@ class InvoiceLines(ListResponseMixin):
         *,
         reason: str,
     ) -> InvoiceLine:
-        """Stage one automation-produced invoice line in its caller transaction."""
+        """Stage one system-produced line using its canonical source identity."""
         invoice = lock_for_update(db, Invoice, payload.invoice_id)
         if not invoice or not invoice.is_active:
             raise HTTPException(status_code=404, detail="Invoice not found")
@@ -1977,39 +2024,37 @@ class InvoiceLines(ListResponseMixin):
             if payload.amount is not None
             else payload.quantity * payload.unit_price
         )
-        data = payload.model_dump(exclude={"amount"})
-        billing_line_key = data.pop("billing_line_key", None)
-        if billing_line_key:
-            existing = db.scalar(
-                select(InvoiceLine)
-                .where(InvoiceLine.billing_line_key == billing_line_key)
-                .where(InvoiceLine.is_active.is_(True))
-            )
-            if existing is not None:
-                expected = {
-                    "invoice_id": payload.invoice_id,
-                    "subscription_id": payload.subscription_id,
-                    "description": payload.description,
-                    "quantity": payload.quantity,
-                    "unit_price": payload.unit_price,
-                    "amount": amount,
-                    "tax_rate_id": payload.tax_rate_id,
-                    "tax_application": payload.tax_application,
-                    "metadata_": payload.metadata_,
-                }
-                if any(
-                    getattr(existing, field) != value
-                    for field, value in expected.items()
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Billing line key was used for a different invoice line",
-                    )
-                return existing
+        existing = db.scalar(
+            select(InvoiceLine)
+            .where(InvoiceLine.billing_line_key == payload.billing_line_key)
+            .where(InvoiceLine.is_active.is_(True))
+        )
+        if existing is not None:
+            expected = {
+                "invoice_id": payload.invoice_id,
+                "subscription_id": payload.subscription_id,
+                "description": payload.description,
+                "quantity": payload.quantity,
+                "unit_price": payload.unit_price,
+                "amount": amount,
+                "tax_rate_id": payload.tax_rate_id,
+                "tax_application": payload.tax_application,
+                "metadata_": payload.metadata_,
+            }
+            if any(
+                getattr(existing, field) != value for field, value in expected.items()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Billing line key was used for a different invoice line",
+                )
+            return existing
+
+        data = payload.model_dump(exclude={"amount", "billing_line_key"})
         line = InvoiceLine(
             **data,
             amount=amount,
-            billing_line_key=billing_line_key,
+            billing_line_key=payload.billing_line_key,
         )
         db.add(line)
         db.flush()

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from starlette.datastructures import FormData
 
 from app.models.audit import AuditActorType
-from app.models.billing import InvoiceStatus, TaxRate
+from app.models.billing import TaxRate
 from app.models.catalog import (
     AccessCredential,
     AddOn,
@@ -72,11 +72,6 @@ from app.services import subscriber as subscriber_service
 from app.services.audit_adapter import record_audit_event
 from app.services.audit_helpers import (
     build_changes_metadata,
-)
-from app.services.billing_adapter import (
-    InvoiceIntent,
-    InvoiceLineIntent,
-    billing_adapter,
 )
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
@@ -2938,32 +2933,15 @@ def update_subscription(
 
 
 def create_invoice_for_subscription(db: Session, created: Subscription) -> None:
-    """Generate initial invoice for subscription."""
+    """Delegate the optional first invoice to the financial invoice owner."""
     if not created.subscriber_id:
         return
-    offer = catalog_service.offers.get(db=db, offer_id=str(created.offer_id))
-    line_amount = Decimal("0.00")
-    line_description = "Subscription"
-    if offer:
-        line_description = offer.name
-        if offer.prices:
-            line_amount = offer.prices[0].amount or Decimal("0.00")
+    from app.services.billing.invoices import Invoices
 
-    billing_adapter.create_invoice_with_lines(
+    Invoices.create_for_subscription(
         db,
-        InvoiceIntent(
-            account_id=created.subscriber_id,
-            status=InvoiceStatus.issued,
-            total=line_amount,
-            issued_at=datetime.now(UTC),
-        ),
-        [
-            InvoiceLineIntent(
-                description=line_description,
-                quantity=Decimal("1"),
-                unit_price=line_amount,
-            )
-        ],
+        str(created.subscriber_id),
+        str(created.id),
     )
 
 

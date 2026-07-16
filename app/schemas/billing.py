@@ -117,9 +117,9 @@ class InvoiceLineCreate(InvoiceLineBase):
 
 
 class SystemInvoiceLineCreate(InvoiceLineCreate):
-    """Internal automation request with a stable source-fact identity."""
+    """Internal invoice-line command with a stable source-fact identity."""
 
-    billing_line_key: str | None = Field(default=None, max_length=255)
+    billing_line_key: str = Field(min_length=1, max_length=255)
 
 
 class InvoiceLineUpdate(BaseModel):

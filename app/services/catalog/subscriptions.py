@@ -785,6 +785,29 @@ def _billing_cycle_start(next_billing_at: datetime, cycle: BillingCycle) -> date
     return _add_months(next_billing_at, -1)
 
 
+def billing_period_for_subscription(
+    subscription: Subscription,
+    *,
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """Return the subscription-owned period for an immediate recurring charge.
+
+    ``next_billing_at`` is the end of the in-flight contracted period.  When it
+    is absent, derive one period from the snapshotted subscription cadence.  A
+    caller must not fall back to an offer-level cadence or invent an unrelated
+    calendar-month period.
+    """
+
+    effective_now = _ensure_utc(now) or datetime.now(UTC)
+    service_start = _ensure_utc(subscription.start_at) or effective_now
+    cycle = subscription.billing_cycle or BillingCycle.monthly
+    period_end = _ensure_utc(subscription.next_billing_at)
+    if period_end is None or period_end <= service_start:
+        return service_start, _compute_next_billing_at(service_start, cycle)
+    period_start = max(service_start, _billing_cycle_start(period_end, cycle))
+    return period_start, period_end
+
+
 def _offer_recurring_price_amount(db: Session, offer_id) -> Decimal:
     """Return the active recurring amount for an offer, or zero."""
     price = (

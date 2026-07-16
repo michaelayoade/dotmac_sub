@@ -1615,6 +1615,8 @@ class UsageCharges(ListResponseMixin):
                 unit_price=_round_money(charge.amount),
                 amount=_round_money(charge.amount),
                 tax_application=TaxApplication.exclusive,
+                metadata_={"kind": "usage_charge", "usage_charge_id": str(charge.id)},
+                billing_line_key=f"usage-charge:{charge.id}",
             ),
             reason="usage_charge_posting",
         )

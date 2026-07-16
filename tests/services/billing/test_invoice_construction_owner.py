@@ -128,6 +128,7 @@ def test_system_line_rejects_nonconstructible_invoice_state(
                 invoice_id=invoice.id,
                 description="Late usage",
                 unit_price=Decimal("10.00"),
+                billing_line_key=f"late-usage:{invoice.id}",
             ),
             reason="owner-test",
         )

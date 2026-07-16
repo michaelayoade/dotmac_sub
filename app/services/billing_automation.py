@@ -40,7 +40,12 @@ from app.schemas.billing import InvoiceCreate, SystemInvoiceLineCreate
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing._common import _calculate_tax_amount
-from app.services.billing.invoices import InvoiceLines, Invoices, next_invoice_number
+from app.services.billing.invoices import (
+    InvoiceLines,
+    Invoices,
+    next_invoice_number,
+    system_billing_line_key,
+)
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import (
@@ -612,9 +617,11 @@ def _billing_line_key(
     period_end: datetime,
     component: str,
 ) -> str:
-    return (
-        f"subscription:{subscription_id}:"
-        f"{period_start.isoformat()}:{period_end.isoformat()}:{component}"
+    return system_billing_line_key(
+        subscription_id,
+        period_start,
+        period_end,
+        component,
     )
 
 
@@ -1837,6 +1844,17 @@ def generate_prorated_invoice(
             amount=round_money(line_amount),
             tax_rate_id=tax_rate_id,
             tax_application=_default_tax_application(db),
+            metadata_={
+                "kind": "prorated_subscription",
+                "billing_period_start": period_start.isoformat(),
+                "billing_period_end": period_end.isoformat(),
+            },
+            billing_line_key=_billing_line_key(
+                subscription.id,
+                period_start,
+                period_end,
+                "proration",
+            ),
         ),
         reason="prorated_subscription_activation",
     )
