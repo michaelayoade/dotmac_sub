@@ -799,6 +799,14 @@ will reject.
     Sub-owned admin bulk command, so no selection/bulk is declared. Each dispatch
     route is granularly gated (`operations:dispatch:read`/`:write`/`:assign`).
 
+15. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
+    project list capabilities with `ui.list_contracts` — searchable name,
+    status/type/priority/region filters, name/priority/created sort, pagination —
+    and delegates the read to `projects_service.projects.list`
+    (`operations.project_lifecycle`), which owns the canonical filtered/sorted
+    query; the projection issues no query of its own. Gated by the existing
+    granular `project:read`.
+
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
 links, refresh, and browser history reproduce the same projection. A changed

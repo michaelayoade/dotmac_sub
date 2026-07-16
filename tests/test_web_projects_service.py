@@ -35,6 +35,26 @@ def _create_project(db_session, subscriber, **overrides):
     return projects.create(db_session, payload)
 
 
+def test_project_list_query_normalizes_sort_filters_and_page_size():
+    q = web_projects.build_project_list_query(
+        search="  fibre  ",
+        status="active",
+        order_by="bogus",
+        order_dir="sideways",
+        page=0,
+        per_page=37,
+    )
+    assert q.sort_by == "created_at"  # unknown sort -> default
+    assert q.sort_dir == "desc"  # unknown dir -> default
+    assert q.page == 1  # page floor
+    assert q.per_page == 25  # off-menu page size -> default
+    assert q.search == "fibre"
+    assert q.filter_value("status") == "active"
+    assert (
+        web_projects.build_project_list_query(order_by="priority").sort_by == "priority"
+    )
+
+
 class TestListContext:
     def test_list_context_shape(self, db_session, subscriber):
         project = _create_project(db_session, subscriber, region="Abuja")
