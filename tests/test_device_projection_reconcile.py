@@ -47,6 +47,11 @@ def _rows(db):
     }
 
 
+def _naive(value):
+    # SQLite drops tzinfo on read-back; normalise before comparing instants.
+    return value.replace(tzinfo=None) if value is not None else None
+
+
 def test_reconcile_inserts_one_row_per_derived_device(db_session, monkeypatch):
     _patch_collect(
         monkeypatch,
@@ -87,7 +92,7 @@ def test_reconcile_updates_changed_status_and_freshness(db_session, monkeypatch)
     early = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
     _patch_collect(monkeypatch, [_device("1", "olt", status="up")])
     reconcile_device_projections(db_session, now=early)
-    assert _rows(db_session)[("olt", "1")].refreshed_at == early
+    assert _naive(_rows(db_session)[("olt", "1")].refreshed_at) == _naive(early)
 
     later = datetime(2026, 7, 16, 9, 0, tzinfo=UTC)
     _patch_collect(
@@ -99,7 +104,7 @@ def test_reconcile_updates_changed_status_and_freshness(db_session, monkeypatch)
     row = _rows(db_session)[("olt", "1")]
     assert row.operational_status == "down"
     assert row.operational_reason == "link_down"
-    assert row.refreshed_at == later
+    assert _naive(row.refreshed_at) == _naive(later)
 
 
 def test_reconcile_prunes_orphaned_devices(db_session, monkeypatch):
