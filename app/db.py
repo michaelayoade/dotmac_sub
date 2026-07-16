@@ -1,4 +1,3 @@
-import os
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -30,11 +29,11 @@ def resolve_migration_lock_timeout(raw: str | None = None) -> str:
     the live app and piling every subsequent query behind it. Defaults to
     ``5s``; override via ``ALEMBIC_LOCK_TIMEOUT`` (e.g. ``30s`` for a
     maintenance window, ``0`` to disable). Malformed input falls back to the
-    default — an ops env var is interpolated into a ``SET`` statement.
+    default — the value is interpolated into a ``SET`` statement. The raw value
+    is owned by ``settings.alembic_lock_timeout`` (the config owner reads
+    ``ALEMBIC_LOCK_TIMEOUT``), not read here directly.
     """
-    value = (
-        raw if raw is not None else os.getenv("ALEMBIC_LOCK_TIMEOUT", "5s")
-    ).strip()
+    value = (raw if raw is not None else settings.alembic_lock_timeout).strip()
     return value if _LOCK_TIMEOUT_RE.fullmatch(value) else "5s"
 
 
