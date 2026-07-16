@@ -19,6 +19,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain, SettingValu
 from app.models.referral_native import Referral
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.referrals import referrals
+from app.services.subscriber import _default_reseller_id
 
 
 def _program(db, *, amount: str = "2500") -> None:
@@ -43,6 +44,8 @@ def _subscriber(db) -> Subscriber:
         first_name="Flow",
         last_name="Referral",
         email=f"fr-{uuid.uuid4().hex[:8]}@example.com",
+        # subscribers.reseller_id is NOT NULL (migration 116); default to House.
+        reseller_id=_default_reseller_id(db),
     )
     db.add(sub)
     db.flush()

@@ -23,6 +23,7 @@ from app.services import dispatch as dispatch_service
 from app.services.field.notes import field_notes
 from app.services.field.transitions import field_transitions
 from app.services.field.worklogs import field_worklogs
+from app.services.subscriber import _default_reseller_id
 from app.services.work_orders_mirror import is_sub_authoritative
 
 
@@ -67,6 +68,8 @@ def _subscriber(db) -> Subscriber:
         first_name="Flow",
         last_name="WorkOrder",
         email=f"fwo-{uuid4().hex[:8]}@example.com",
+        # subscribers.reseller_id is NOT NULL (migration 116); default to House.
+        reseller_id=_default_reseller_id(db),
     )
     db.add(sub)
     db.flush()

@@ -20,6 +20,7 @@ from app.models.sales import Quote, SalesOrder
 from app.models.subscriber import Subscriber
 from app.services import quote_deposits
 from app.services.sales import selfserve
+from app.services.subscriber import _default_reseller_id
 
 _FAP = SimpleNamespace(id=uuid.uuid4(), name="NAP-041")
 _PIN = {"latitude": 9.0765, "longitude": 7.3986, "address": "12 Mississippi St"}
@@ -30,6 +31,8 @@ def _subscriber(db) -> Subscriber:
         first_name="Flow",
         last_name="Quote",
         email=f"fq-{uuid.uuid4().hex[:8]}@example.com",
+        # subscribers.reseller_id is NOT NULL (migration 116); default to House.
+        reseller_id=_default_reseller_id(db),
     )
     db.add(sub)
     db.flush()
