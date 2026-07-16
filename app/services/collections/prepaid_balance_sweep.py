@@ -10,8 +10,7 @@ A resolved zero-day policy suspends on the first eligible sweep; a nonzero
 configured policy arms the timer and warning first.
 
 SAFETY: this SUSPENDS customers. It is gated OFF by default behind the
-``collections.prepaid_balance_enforcement`` control (legacy key
-``collections.prepaid_balance_enforcement_enabled``). When the control is off the
+``collections.prepaid_balance_enforcement`` control. When the control is off the
 sweep is a complete no-op — no timers armed, no notices, no suspensions. Every
 account is processed in its own committed unit so one bad row cannot abort the
 batch.

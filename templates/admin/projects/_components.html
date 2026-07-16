@@ -1,3 +1,4 @@
+{% from "components/ui/macros.html" import status_presentation_badge %}
 {% macro project_card(title="", subtitle="", icon="", actions="", padded=True, class_name="") %}
 <div class="rounded-2xl border border-slate-200/70 bg-white shadow-sm dark:border-slate-700/70 dark:bg-slate-800 {{ class_name }}">
     {% if title or subtitle or icon or actions %}
@@ -22,31 +23,11 @@
 </div>
 {% endmacro %}
 
-{% macro project_status_badge(status) %}
-{% set value = status.value if status and status.value is defined else status %}
-{% set color_classes = {
-    'open': 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300',
-    'planned': 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300',
-    'active': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
-    'on_hold': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
-    'completed': 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
-    'canceled': 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
-} %}
-<span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold uppercase tracking-wide {{ color_classes.get(value, 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200') }}">{{ (value or 'open')|replace('_', ' ') }}</span>
-{% endmacro %}
+{# Status semantics from the project presentation owner. #}
+{% macro project_status_badge(status) %}{{ status_presentation_badge(project_status_presentation(status), size="sm") }}{% endmacro %}
 
-{% macro task_status_badge(status) %}
-{% set value = status.value if status and status.value is defined else status %}
-{% set color_classes = {
-    'backlog': 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
-    'todo': 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300',
-    'in_progress': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
-    'blocked': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
-    'done': 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200',
-    'canceled': 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
-} %}
-<span class="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold uppercase tracking-wide {{ color_classes.get(value, 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200') }}">{{ (value or 'todo')|replace('_', ' ') }}</span>
-{% endmacro %}
+{# Status semantics from the project-task presentation owner. #}
+{% macro task_status_badge(status) %}{{ status_presentation_badge(project_task_status_presentation(status), size="sm") }}{% endmacro %}
 
 {% macro project_priority_badge(priority) %}
 {% set value = priority.value if priority and priority.value is defined else priority %}

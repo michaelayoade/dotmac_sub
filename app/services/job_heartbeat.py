@@ -31,7 +31,6 @@ MONEY_JOB_TASKS = (
     "app.tasks.billing.run_billing_notifications",
     "app.tasks.collections.run_billing_enforcement",
     "app.tasks.collections.run_bundle_reconcile",
-    "app.tasks.collections.run_dunning",
 )
 
 

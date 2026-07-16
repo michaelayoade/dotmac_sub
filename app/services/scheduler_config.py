@@ -365,7 +365,6 @@ def get_celery_config() -> dict:
             # limit can kill a catch-up billing or dunning pass mid-run.
             "app.tasks.billing.run_invoice_cycle": long_limits,
             "app.tasks.collections.run_billing_enforcement": long_limits,
-            "app.tasks.collections.run_dunning": long_limits,
         }
     )
     config["task_annotations"] = annotations
