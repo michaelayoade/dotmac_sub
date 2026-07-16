@@ -1,4 +1,5 @@
 {% extends "layouts/customer.html" %}
+{% from "components/ui/macros.html" import status_presentation_badge %}
 
 {% block title %}Installations - Customer Portal{% endblock %}
 
@@ -70,15 +71,8 @@
                         </div>
                     </div>
                     <div class="flex items-center gap-3">
-                        <span class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold
-                            {% if appt_status == 'completed' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                            {% elif appt_status == 'confirmed' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400
-                            {% elif appt_status == 'proposed' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400
-                            {% elif appt_status == 'no_show' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
-                            {% elif appt_status == 'canceled' %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400
-                            {% else %}bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-400{% endif %}">
-                            {{ appt_status | replace('_', ' ') | capitalize if appt_status else 'Unknown' }}
-                        </span>
+                        {# Status semantics from the appointment presentation owner. #}
+                        {{ status_presentation_badge(appointment_status_presentation(appt_status), size="sm") }}
                         <svg class="h-5 w-5 text-stone-400 transition group-hover:text-[var(--color-brand-600)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                         </svg>

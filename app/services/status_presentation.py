@@ -13,6 +13,7 @@ from enum import Enum
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import SubscriptionStatus
 from app.models.payment_proof import WithholdingTaxStatus
+from app.models.provisioning import AppointmentStatus, ServiceOrderStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
 from app.models.vendor_routes import VendorPurchaseInvoiceStatus
@@ -382,6 +383,53 @@ _INFRASTRUCTURE_SERVICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIc
 }
 
 
+_SERVICE_ORDER_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    ServiceOrderStatus.draft.value: ("Draft", StatusTone.neutral, StatusIcon.archive),
+    ServiceOrderStatus.submitted.value: (
+        "Submitted",
+        StatusTone.warning,
+        StatusIcon.clock,
+    ),
+    ServiceOrderStatus.scheduled.value: (
+        "Scheduled",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    ServiceOrderStatus.provisioning.value: (
+        "Provisioning",
+        StatusTone.info,
+        StatusIcon.info,
+    ),
+    ServiceOrderStatus.active.value: ("Active", StatusTone.positive, StatusIcon.check),
+    ServiceOrderStatus.canceled.value: ("Canceled", StatusTone.neutral, StatusIcon.x),
+    ServiceOrderStatus.failed.value: ("Failed", StatusTone.negative, StatusIcon.x),
+}
+
+_APPOINTMENT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    AppointmentStatus.proposed.value: (
+        "Proposed",
+        StatusTone.warning,
+        StatusIcon.clock,
+    ),
+    AppointmentStatus.confirmed.value: (
+        "Confirmed",
+        StatusTone.info,
+        StatusIcon.check,
+    ),
+    AppointmentStatus.completed.value: (
+        "Completed",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    AppointmentStatus.no_show.value: ("No show", StatusTone.negative, StatusIcon.x),
+    AppointmentStatus.canceled.value: (
+        "Canceled",
+        StatusTone.neutral,
+        StatusIcon.x,
+    ),
+}
+
+
 def _status_value(status: object | None) -> str:
     if isinstance(status, Enum):
         return str(status.value).strip().lower()
@@ -420,6 +468,20 @@ def infrastructure_service_status_presentation(
     fall back to a neutral tone.
     """
     return _presentation(_status_value(status), _INFRASTRUCTURE_SERVICE_PRESENTATIONS)
+
+
+def service_order_status_presentation(
+    status: ServiceOrderStatus | str | None,
+) -> StatusPresentation:
+    """Project a provisioning service-order status without changing workflow."""
+    return _presentation(_status_value(status), _SERVICE_ORDER_PRESENTATIONS)
+
+
+def appointment_status_presentation(
+    status: AppointmentStatus | str | None,
+) -> StatusPresentation:
+    """Project an install-appointment status without changing workflow."""
+    return _presentation(_status_value(status), _APPOINTMENT_PRESENTATIONS)
 
 
 def account_status_presentation(
