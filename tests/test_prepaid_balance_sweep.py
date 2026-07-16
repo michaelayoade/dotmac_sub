@@ -40,8 +40,7 @@ def _enable_control(
 ) -> None:
     settings = [
         # Canonical feature control (effective-state SOT): modules-domain row keyed
-        # by the control's dotted key with dots→underscores. The legacy
-        # collections/prepaid_balance_enforcement_enabled setting is ignored.
+        # by the control's dotted key with dots→underscores.
         DomainSetting(
             domain=SettingDomain.modules,
             key="collections_prepaid_balance_enforcement",

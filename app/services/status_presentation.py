@@ -11,9 +11,11 @@ from __future__ import annotations
 from enum import Enum
 
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
-from app.models.catalog import SubscriptionStatus
+from app.models.catalog import OfferStatus, SubscriptionStatus
 from app.models.payment_proof import WithholdingTaxStatus
+from app.models.project import ProjectStatus, ProjectTaskStatus
 from app.models.provisioning import AppointmentStatus, ServiceOrderStatus, TaskStatus
+from app.models.sales import QuoteStatus, SalesOrderStatus
 from app.models.subscriber import SubscriberStatus
 from app.models.support import TicketStatus
 from app.models.vendor_routes import VendorPurchaseInvoiceStatus
@@ -450,6 +452,62 @@ _APPOINTMENT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
 }
 
 
+_OFFER_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    OfferStatus.active.value: ("Active", StatusTone.positive, StatusIcon.check),
+    OfferStatus.inactive.value: ("Inactive", StatusTone.neutral, StatusIcon.minus),
+    OfferStatus.archived.value: ("Archived", StatusTone.neutral, StatusIcon.archive),
+}
+
+_QUOTE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    QuoteStatus.draft.value: ("Draft", StatusTone.neutral, StatusIcon.archive),
+    QuoteStatus.sent.value: ("Sent", StatusTone.info, StatusIcon.clock),
+    QuoteStatus.accepted.value: ("Accepted", StatusTone.positive, StatusIcon.check),
+    QuoteStatus.rejected.value: ("Rejected", StatusTone.negative, StatusIcon.x),
+    QuoteStatus.expired.value: ("Expired", StatusTone.warning, StatusIcon.clock),
+}
+
+_SALES_ORDER_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    SalesOrderStatus.draft.value: ("Draft", StatusTone.neutral, StatusIcon.archive),
+    SalesOrderStatus.confirmed.value: ("Confirmed", StatusTone.info, StatusIcon.check),
+    SalesOrderStatus.paid.value: ("Paid", StatusTone.positive, StatusIcon.check),
+    SalesOrderStatus.fulfilled.value: (
+        "Fulfilled",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    SalesOrderStatus.cancelled.value: ("Cancelled", StatusTone.neutral, StatusIcon.x),
+}
+
+_PROJECT_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    ProjectStatus.open.value: ("Open", StatusTone.info, StatusIcon.info),
+    ProjectStatus.planned.value: ("Planned", StatusTone.info, StatusIcon.clock),
+    ProjectStatus.active.value: ("Active", StatusTone.positive, StatusIcon.check),
+    ProjectStatus.on_hold.value: ("On hold", StatusTone.warning, StatusIcon.alert),
+    ProjectStatus.completed.value: (
+        "Completed",
+        StatusTone.positive,
+        StatusIcon.check,
+    ),
+    ProjectStatus.canceled.value: ("Canceled", StatusTone.neutral, StatusIcon.x),
+}
+
+_PROJECT_TASK_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    ProjectTaskStatus.backlog.value: (
+        "Backlog",
+        StatusTone.neutral,
+        StatusIcon.archive,
+    ),
+    ProjectTaskStatus.todo.value: ("To do", StatusTone.info, StatusIcon.clock),
+    ProjectTaskStatus.in_progress.value: (
+        "In progress",
+        StatusTone.info,
+        StatusIcon.clock,
+    ),
+    ProjectTaskStatus.blocked.value: ("Blocked", StatusTone.warning, StatusIcon.alert),
+    ProjectTaskStatus.done.value: ("Done", StatusTone.positive, StatusIcon.check),
+}
+
+
 def _status_value(status: object | None) -> str:
     if isinstance(status, Enum):
         return str(status.value).strip().lower()
@@ -509,6 +567,37 @@ def appointment_status_presentation(
 ) -> StatusPresentation:
     """Project an install-appointment status without changing workflow."""
     return _presentation(_status_value(status), _APPOINTMENT_PRESENTATIONS)
+
+
+def offer_status_presentation(status: OfferStatus | str | None) -> StatusPresentation:
+    """Project a catalog offer status without changing catalog state."""
+    return _presentation(_status_value(status), _OFFER_PRESENTATIONS)
+
+
+def quote_status_presentation(status: QuoteStatus | str | None) -> StatusPresentation:
+    """Project a sales quote status without changing sales workflow."""
+    return _presentation(_status_value(status), _QUOTE_PRESENTATIONS)
+
+
+def sales_order_status_presentation(
+    status: SalesOrderStatus | str | None,
+) -> StatusPresentation:
+    """Project a sales order status without changing sales workflow."""
+    return _presentation(_status_value(status), _SALES_ORDER_PRESENTATIONS)
+
+
+def project_status_presentation(
+    status: ProjectStatus | str | None,
+) -> StatusPresentation:
+    """Project a project status without changing project workflow."""
+    return _presentation(_status_value(status), _PROJECT_PRESENTATIONS)
+
+
+def project_task_status_presentation(
+    status: ProjectTaskStatus | str | None,
+) -> StatusPresentation:
+    """Project a CRM project-task status without changing task workflow."""
+    return _presentation(_status_value(status), _PROJECT_TASK_PRESENTATIONS)
 
 
 def account_status_presentation(

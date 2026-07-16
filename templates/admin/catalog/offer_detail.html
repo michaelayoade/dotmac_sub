@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, status_presentation_badge %}
 
 {% block title %}{{ offer.name }} - Tariffs - Admin{% endblock %}
 
@@ -129,14 +129,8 @@
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Status</dt>
                             <dd class="mt-1">
-                                {% set offer_status = offer.status.value %}
-                                {% if offer_status == 'active' %}
-                                {{ status_badge("Active", "active", size="sm") }}
-                                {% elif offer_status == 'inactive' %}
-                                {{ status_badge("Inactive", "inactive", size="sm") }}
-                                {% else %}
-                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ offer_status | title }}</span>
-                                {% endif %}
+                                {# Status semantics from the offer presentation owner. #}
+                                {{ status_presentation_badge(offer_status_presentation(offer.status), size="sm") }}
                             </dd>
                         </div>
                         {% if offer_clean_description %}

@@ -13,12 +13,6 @@ def run_bundle_reconcile() -> dict[str, int]:
     return scheduled_collections.run_bundle_reconcile()
 
 
-@celery_app.task(name="app.tasks.collections.run_dunning")
-def run_dunning() -> dict[str, int | str]:
-    """Backward-compatible task alias for the unified billing enforcer."""
-    return run_billing_enforcement()
-
-
 @celery_app.task(name="app.tasks.collections.prepaid_balance_sweep")
 def prepaid_balance_sweep() -> dict[str, int | str]:
     """Balance/expiry-based prepaid enforcement (arm timers, warn, suspend).
