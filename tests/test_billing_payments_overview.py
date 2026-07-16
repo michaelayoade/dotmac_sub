@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.models.billing import (
     Invoice,
     InvoiceStatus,
@@ -15,7 +17,9 @@ from app.models.billing import (
 from app.models.subscriber import Reseller, Subscriber
 from app.services import display_format
 from app.services.web_billing_payments import (
+    PAYMENTS_LIST_DEFINITION,
     build_payments_list_data,
+    build_payments_list_query,
     render_payments_csv,
 )
 
@@ -397,3 +401,87 @@ def test_build_payments_list_data_groups_status_totals_by_currency(
     assert succeeded["count"] == 2
     assert succeeded["amounts"] == {"NGN": Decimal("10.00"), "USD": Decimal("20.00")}
     assert succeeded["display"] == "NGN 10.00, USD 20.00"
+
+
+# --- Payments list-projection contract (ui.payments_list_projection) ---
+
+
+def test_payments_list_definition_declares_expected_capabilities():
+    definition = PAYMENTS_LIST_DEFINITION
+    assert definition.filterable_keys == (
+        "customer_ref",
+        "partner_id",
+        "status",
+        "method",
+        "date_range",
+        "unallocated_only",
+    )
+    assert definition.sortable_keys == ("created_at",)
+    assert definition.default_sort == "created_at"
+    assert definition.default_sort_dir == "desc"
+    assert definition.default_per_page == 25
+
+
+def test_build_payments_list_query_normalizes_filters_and_flag():
+    query = build_payments_list_query(
+        status="succeeded",
+        customer_ref=" ",
+        unallocated_only=True,
+        page=3,
+    )
+    assert query.filter_value("status") == "succeeded"
+    assert query.filter_value("customer_ref") is None  # blank dropped
+    assert query.filter_value("unallocated_only") == "true"
+    assert query.sort_by == "created_at"
+    assert query.sort_dir == "desc"
+    assert query.page == 3
+    assert query.per_page == 25
+
+
+def test_build_payments_list_query_rejects_out_of_contract_params():
+    with pytest.raises(ValueError):
+        build_payments_list_query(sort_by="amount")
+    with pytest.raises(ValueError):
+        build_payments_list_query(per_page=30)
+
+
+def test_build_payments_list_data_respects_sort_dir(db_session, subscriber):
+    card = _create_payment_method(db_session, subscriber.id, PaymentMethodType.card)
+    older = datetime.now(UTC) - timedelta(days=2)
+    newer = datetime.now(UTC)
+    _create_payment(
+        db_session,
+        account_id=subscriber.id,
+        amount="10",
+        status=PaymentStatus.succeeded,
+        created_at=older,
+        memo="older",
+        payment_method_id=card.id,
+    )
+    _create_payment(
+        db_session,
+        account_id=subscriber.id,
+        amount="20",
+        status=PaymentStatus.succeeded,
+        created_at=newer,
+        memo="newer",
+        payment_method_id=card.id,
+    )
+
+    desc = build_payments_list_data(
+        db_session,
+        page=1,
+        per_page=25,
+        customer_ref=None,
+        sort_dir="desc",
+    )
+    asc = build_payments_list_data(
+        db_session,
+        page=1,
+        per_page=25,
+        customer_ref=None,
+        sort_dir="asc",
+    )
+
+    assert [p.narration for p in desc["payments"]] == ["newer", "older"]
+    assert [p.narration for p in asc["payments"]] == ["older", "newer"]

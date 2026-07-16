@@ -1934,6 +1934,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ui.payments_list_projection",
+                module="app.services.web_billing_payments",
+                owns=(
+                    "admin payments searchable fields",
+                    "admin payments filter semantics",
+                    "admin payments stable sort and default-order semantics",
+                    "admin payments list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts", "financial.payments"),
+                notes=(
+                    "PAYMENTS_LIST_DEFINITION declares the list capabilities and "
+                    "build_payments_list_query normalizes/validates request state; "
+                    "build_payments_list_data remains the read owner that issues the "
+                    "SQL, status totals, and enrichment. The route validates through "
+                    "the contract and delegates. The CSV export intentionally reuses "
+                    "the read owner without a page cap (same canonical filter scope, "
+                    "no pagination). Gated by the existing granular "
+                    "billing:payment:read. Read-only: no admin bulk command declared, "
+                    "so no selection or bulk. Follow-up: decompose the read owner so "
+                    "list and export share a hoisted filter helper."
+                ),
+            ),
+            SOTService(
                 name="ui.support_ticket_list_projection",
                 module="app.services.web_support_tickets",
                 owns=(

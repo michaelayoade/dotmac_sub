@@ -49,6 +49,11 @@ from app.services import display_format, settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import build_changes_metadata, log_audit_event
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
 from app.services.status_presentation import payment_status_presentation
 
 logger = logging.getLogger(__name__)
@@ -533,6 +538,67 @@ def import_payments(
     return imported_count, errors
 
 
+# UI page contract for the admin payments list. The projection-boundary owner:
+# it declares which fields are searchable/filterable/sortable, the default order
+# and the allowed page sizes. The route validates and normalises request state
+# through this contract; build_payments_list_data remains the read owner that
+# issues the SQL. Only created_at is sortable because that is the ordering the
+# read owner supports today.
+PAYMENTS_LIST_DEFINITION = ListDefinition(
+    key="payments",
+    fields=(
+        ListFieldDefinition("reference", "Reference", searchable=True),
+        ListFieldDefinition("customer_ref", "Customer", filterable=True),
+        ListFieldDefinition("partner_id", "Partner", filterable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("method", "Method", filterable=True),
+        ListFieldDefinition("date_range", "Date range", filterable=True),
+        ListFieldDefinition("unallocated_only", "Unallocated only", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+    default_per_page=25,
+)
+
+
+def build_payments_list_query(
+    *,
+    customer_ref: str | None = None,
+    partner_id: str | None = None,
+    status: str | None = None,
+    method: str | None = None,
+    search: str | None = None,
+    date_range: str | None = None,
+    unallocated_only: bool = False,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise loose payments-list request params through the page contract.
+
+    Drops blank filters and rejects unsupported sort fields / page sizes, so the
+    read owner receives an already-validated query. ``unallocated_only`` is
+    carried as a filter value so it round-trips through the contract.
+    """
+    return PAYMENTS_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "customer_ref": customer_ref,
+            "partner_id": partner_id,
+            "status": status,
+            "method": method,
+            "date_range": date_range,
+            "unallocated_only": "true" if unallocated_only else None,
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
 def build_payments_list_data(
     db: Session,
     *,
@@ -545,8 +611,14 @@ def build_payments_list_data(
     search: str | None = None,
     date_range: str | None = None,
     unallocated_only: bool = False,
+    sort_dir: str = "desc",
 ) -> dict[str, object]:
-    """Build list/stat data for payments page."""
+    """Build list/stat data for payments page.
+
+    Read owner for the payments list. ``sort_dir`` orders the (contract-only
+    sortable) ``created_at`` column; the route supplies it from the validated
+    ListQuery. Other filters keep their existing semantics.
+    """
 
     default_currency = display_format.default_currency(db)
 
@@ -740,9 +812,14 @@ def build_payments_list_data(
         total = db.scalar(select(func.count()).select_from(filtered_subquery)) or 0
         status_totals = _build_status_totals(filtered_subquery)
 
+        created_order = (
+            Payment.created_at.asc()
+            if sort_dir == "asc"
+            else Payment.created_at.desc()
+        )
         base_stmt = _apply_payment_filters(
             select(Payment).options(joinedload(Payment.account))
-        ).order_by(Payment.created_at.desc())
+        ).order_by(created_order)
         payments = list(db.scalars(base_stmt.offset(offset).limit(per_page)).all())
         for payment in payments:
             _enrich_payment_row(payment)
