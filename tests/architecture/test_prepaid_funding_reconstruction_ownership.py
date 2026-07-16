@@ -51,7 +51,11 @@ def test_runtime_has_no_legacy_authority_toggle_or_fallback() -> None:
     assert "SplynxBillingTransaction" not in owner
     assert "native_customer_financial_balances_by_currency" in owner
     assert "list_customer_financial_events" not in owner
-    assert "include_legacy=False" in ledger
+    assert "SplynxBillingTransaction" not in ledger
+    assert "include_legacy_mirror" not in ledger
+    assert "_has_legacy_mirror" not in ledger
+    assert "INTERNAL_MEMO_PREFIXES" not in ledger
+    assert "affects_customer_position" in ledger
     assert "PrepaidFundingSnapshot" not in planner
     assert "funding_snapshot" not in planner
     assert "--funding-snapshot" not in planner_script

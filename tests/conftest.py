@@ -319,6 +319,12 @@ def db_session(engine):
         session.add(
             PrepaidFundingReconstructionBatch(
                 manifest_sha256="0" * 64,
+                manifest_payload_sha256="0" * 64,
+                attestation_sha256="0" * 64,
+                attestation_key_fingerprint_sha256="0" * 64,
+                attestation_signed_at=bootstrap_at,
+                blocker_manifest_sha256="0" * 64,
+                candidate_cohort_sha256="0" * 64,
                 source="pytest-empty-native-install-cutover",
                 evidence_ref="pytest:native-install",
                 position_at=bootstrap_at,

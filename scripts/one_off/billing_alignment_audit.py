@@ -105,9 +105,23 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.subscriber import Subscriber
-from app.services.customer_financial_ledger import PAYMENT_ACTIVITY_AT
 
 ZERO = Decimal("0.00")
+LEGACY_LEDGER_CUTOVER = datetime(2026, 3, 15, 23, 59, 59, tzinfo=UTC)
+PAYMENT_ACTIVITY_AT = datetime(2026, 6, 16, tzinfo=UTC)
+SERVICE_ACTIVITY_AT = datetime(2026, 6, 16, 9, 8, tzinfo=UTC)
+INTERNAL_MEMO_EXACT = {"Prepaid opening balance @ cutover"}
+INTERNAL_MEMO_PREFIXES = (
+    "Correction:",
+    "Partial cutover opening balance construction adjustment",
+    "Reversal of phantom",
+    "Reversal of prepaid opening",
+    "Data repair 2026-06-29:",
+    "Validated account credit consumed",
+    "Payment refund account-credit consumption:",
+    "Payment reversal account-credit consumption:",
+    "Payment allocation account-credit consumption:",
+)
 LEGACY_FINANCIAL_FINAL_DATE = date(2026, 6, 17)
 LEGACY_FINANCIAL_REPLAY_AT = datetime.combine(
     LEGACY_FINANCIAL_FINAL_DATE + timedelta(days=1), time.min, tzinfo=UTC
@@ -278,13 +292,6 @@ def _batch_customer_positions(
     balance owner. Tests compare it with the canonical per-account function.
     """
     from app.models.splynx_transaction import SplynxBillingTransaction
-    from app.services.customer_financial_ledger import (
-        INTERNAL_MEMO_EXACT,
-        INTERNAL_MEMO_PREFIXES,
-        LEGACY_LEDGER_CUTOVER,
-        PAYMENT_ACTIVITY_AT,
-        SERVICE_ACTIVITY_AT,
-    )
     from app.services.invoice_classification import (
         collectible_ar_invoice_filter,
     )

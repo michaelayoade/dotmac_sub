@@ -969,12 +969,11 @@ billing default.
 Apply aggressive collections settings only after confirming payment posting latency. If payment imports or webhook confirmation are delayed, customers can be suspended incorrectly.
 
 Before enabling prepaid enforcement, generate the side-effect-free production
-plan from a complete independent funding snapshot and review every action bucket:
+plan from the materialized funding owner and review every action bucket:
 
 ```bash
 docker compose exec -T -e PYTHONPATH=/app app \
   python scripts/one_off/plan_prepaid_balance_sweep.py \
-  --funding-snapshot /secure-local/prepaid-funding.json \
   --activation-at 2026-07-20T08:00:00+01:00 \
   --out /tmp/prepaid-balance-sweep-plan.json
 ```
@@ -987,6 +986,15 @@ then apply the exact full-cohort manifest before starting the enforcement
 release. Missing pre-cutover opening balances fail closed; never enter zero for
 an unknown balance.
 
+The audit exporter must seal the clean full-cohort manifest with an Ed25519
+private key resolved from an audit-only OpenBao reference. Configure
+`billing.prepaid_reconstruction_attestation_public_key_ref` with a separate
+OpenBao reference to the public key before dry-run or apply. The application
+must not have access to the private-key path. Unsigned or modified manifests,
+non-zero blocker manifests, and a second seal for an existing reviewed manifest
+are rejected. The artifact contains funding facts only; required balance and
+grace policy continue to resolve from live configuration.
+
 The report runs even while the control is disabled. It includes account IDs,
 available and required balances, lifecycle projection drift, safety shields,
 enforcement lock/timer drift, and infrastructure outage/ticket notice
@@ -997,7 +1005,6 @@ control only after reviewing the complete plan and recording exact parity:
 ```bash
 docker compose exec -T -e PYTHONPATH=/app app \
   python scripts/one_off/plan_prepaid_balance_sweep.py \
-  --funding-snapshot /secure-local/prepaid-funding.json \
   --activation-at 2026-07-20T08:00:00+01:00 \
   --record-readiness \
   --evidence-ref reconciliation-run:prepaid-cutover \
@@ -1005,6 +1012,9 @@ docker compose exec -T -e PYTHONPATH=/app app \
 ```
 
 The evidence reference must not contain bank credentials or statement data.
+The planner accepts no external funding snapshot. Dry-run, readiness, and the
+executable sweep all read `financial.prepaid_funding_reconstruction`, so an
+operator report cannot diverge from execution by selecting another balance.
 With the configured prepaid grace default of zero, an eligible underfunded
 account is suspended on the first sweep; an explicit account or policy-set
 grace override remains authoritative and appears in the plan.

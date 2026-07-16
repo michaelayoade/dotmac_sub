@@ -1,4 +1,4 @@
-"""Prepaid enforcement cannot outrun independently reconciled funding data."""
+"""Prepaid enforcement cannot outrun signed materialized funding authority."""
 
 from __future__ import annotations
 
@@ -9,14 +9,13 @@ import pytest
 
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
+from app.models.prepaid_funding import (
+    PrepaidFundingBaseline,
+    PrepaidFundingReconstructionBatch,
+)
 from app.models.subscriber import SubscriberStatus
 from app.services import control_registry
-from app.services.access_resolution import (
-    PrepaidFundingDecision,
-    resolve_prepaid_funding,
-)
 from app.services.control_relationships import ControlRelationshipError
-from app.services.prepaid_enforcement_planner import PrepaidFundingSnapshot
 from app.services.prepaid_enforcement_readiness import (
     prepaid_enforcement_readiness_block_reason,
     record_prepaid_enforcement_readiness,
@@ -51,23 +50,6 @@ def _set_activation(db, activation_at):
     db.commit()
 
 
-def _snapshot(db, account, captured_at, *, available_delta=Decimal("0.00")):
-    live = resolve_prepaid_funding(db, account, now=captured_at)
-    return PrepaidFundingSnapshot(
-        captured_at=captured_at,
-        source="bank-statements-plus-cutover-ledger:2026-07",
-        currency=live.currency,
-        decisions=(
-            PrepaidFundingDecision(
-                account_id=str(account.id),
-                available_balance=live.available_balance + available_delta,
-                required_balance=live.required_balance,
-                currency=live.currency,
-            ),
-        ),
-    )
-
-
 def test_feature_control_rejects_enable_without_funding_readiness(db_session):
     with pytest.raises(ControlRelationshipError, match="funding readiness"):
         control_registry.update_canonical_feature_controls(
@@ -86,10 +68,10 @@ def test_full_cohort_parity_record_allows_control_enable(
 
     record = record_prepaid_enforcement_readiness(
         db_session,
-        _snapshot(db_session, subscriber_account, captured_at),
         activation_at=activation_at,
         evidence_ref="reconciliation-run:prepaid-2026-07-16",
         verified_by="billing-operations",
+        now=captured_at,
     )
     db_session.commit()
 
@@ -103,7 +85,7 @@ def test_full_cohort_parity_record_allows_control_enable(
     assert changes[0]["effective"]["to"] is True
 
 
-def test_funding_variance_cannot_be_recorded_as_ready(
+def test_missing_materialized_authority_cannot_be_recorded_as_ready(
     db_session, subscriber_account, subscription
 ):
     _prepare(db_session, subscriber_account, subscription)
@@ -111,18 +93,17 @@ def test_funding_variance_cannot_be_recorded_as_ready(
     activation_at = captured_at + timedelta(minutes=10)
     _set_activation(db_session, activation_at)
 
-    with pytest.raises(ValueError, match="available_balance_mismatch"):
+    db_session.query(PrepaidFundingBaseline).delete()
+    db_session.query(PrepaidFundingReconstructionBatch).delete()
+    db_session.commit()
+
+    with pytest.raises(ValueError, match="authority_cutover_missing"):
         record_prepaid_enforcement_readiness(
             db_session,
-            _snapshot(
-                db_session,
-                subscriber_account,
-                captured_at,
-                available_delta=Decimal("1.00"),
-            ),
             activation_at=activation_at,
-            evidence_ref="reconciliation-run:prepaid-variance",
+            evidence_ref="reconciliation-run:prepaid-missing-authority",
             verified_by="billing-operations",
+            now=captured_at,
         )
 
 
@@ -139,10 +120,10 @@ def test_configured_activation_grace_limit_blocks_fresh_free_service(
     with pytest.raises(ValueError, match="activation_grace_exceeds_configured_max"):
         record_prepaid_enforcement_readiness(
             db_session,
-            _snapshot(db_session, subscriber_account, captured_at),
             activation_at=activation_at,
             evidence_ref="reconciliation-run:prepaid-grace-check",
             verified_by="billing-operations",
+            now=captured_at,
         )
 
 
@@ -155,10 +136,10 @@ def test_unactivated_readiness_expires_from_snapshot_capture(
     _set_activation(db_session, activation_at)
     record_prepaid_enforcement_readiness(
         db_session,
-        _snapshot(db_session, subscriber_account, captured_at),
         activation_at=activation_at,
         evidence_ref="reconciliation-run:prepaid-expiry-check",
         verified_by="billing-operations",
+        now=captured_at,
     )
     db_session.commit()
 
@@ -179,10 +160,10 @@ def test_cutover_config_change_invalidates_unactivated_readiness(
     _set_activation(db_session, activation_at)
     record_prepaid_enforcement_readiness(
         db_session,
-        _snapshot(db_session, subscriber_account, captured_at),
         activation_at=activation_at,
         evidence_ref="reconciliation-run:prepaid-config-check",
         verified_by="billing-operations",
+        now=captured_at,
     )
     db_session.add(
         DomainSetting(

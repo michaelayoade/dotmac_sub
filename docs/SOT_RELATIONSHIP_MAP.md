@@ -115,8 +115,13 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    `financial.prepaid_funding_reconstruction`: one reviewed opening position at
    the final authority-cutover timestamp plus canonical native events strictly
    after that timestamp. There is no Splynx/legacy fallback or authority toggle.
+   The opening-position manifest is full-cohort, blocker-free, and Ed25519
+   sealed against an OpenBao-owned public trust reference before materialization.
    A pre-cutover account without an approved opening balance fails closed; an
    account created after cutover starts at zero and accumulates native events.
+   Customer statements and scalar funding previews use that reviewed position
+   as their opening event and include only later native events in its currency;
+   they never replay the archived mirror or older duplicate projections.
    Portal outstanding-balance views consume its collection-blocking
    value; a capped invoice display list never caps or redefines the amount.
    Billing reporting applies the same collectible/non-proforma boundary and
@@ -146,16 +151,17 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    account or policy-set grace remains authoritative. Supplied snapshots are
    complete-or-error for that cohort and never fill missing accounts from a
    different balance source.
-10. `financial.prepaid_enforcement_readiness` owns the cutover comparison and
-   activation prerequisite. It records parity between complete independent
-   funding evidence and Sub's live currency-bound funding decisions for the
-   exact owner-selected cohort. The feature-control writer and runtime adverse
+10. `financial.prepaid_enforcement_readiness` owns the activation prerequisite.
+   After the signed full-cohort opening position is materialized, it records one
+   fresh plan from Sub's live currency-bound funding owner for the exact
+   owner-selected cohort. It accepts no alternate funding input. The feature-control writer and runtime adverse
    path fail closed without current evidence bound to the configured activation
    and currency. The readiness record is evidence, not money: after activation,
    every suspend and restore resolves the live Sub ledger again. Bank statements
    may close missing source evidence through normal reconciliation, but never
    become a parallel runtime balance. Live enforcement consumes only the
    reviewed opening balance plus native post-cutover events.
+   Dry-run, readiness, and execution therefore consume the same funding owner.
    `collections.prepaid_activation_max_grace_days` is the activation-cohort
    policy gate; it is configured as zero for this cutover, so readiness cannot
    be recorded while an underfunded candidate resolves to a fresh grace period.

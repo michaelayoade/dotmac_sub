@@ -37,6 +37,11 @@ def ephemeral_private_signing_key_pem() -> str:
     return _PRIVATE_KEY_PEM
 
 
+def ephemeral_public_signing_key_pem() -> str:
+    """Return the matching process-local public test key."""
+    return _PUBLIC_KEY_PEM
+
+
 def trust_test_reconstruction_signer(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setattr(
         prepaid_funding_attestation,
@@ -73,7 +78,7 @@ def sealed_reconstruction_payload(
         "schema": "dotmac.prepaid_funding_blockers.v1",
         "source": source,
         "captured_at": position_at.isoformat().replace("+00:00", "Z"),
-        "financial_handoff_at": "2026-06-30T23:59:59Z",
+        "financial_handoff_at": position_at.isoformat().replace("+00:00", "Z"),
         "currency": currency,
         "candidate_accounts": len(account_ids),
         "candidate_cohort_sha256": cohort_hash,

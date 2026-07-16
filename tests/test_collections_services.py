@@ -12,36 +12,17 @@ from app.schemas.collections import (
 )
 from app.services import billing as billing_service
 from app.services import collections as collections_service
-from app.services.prepaid_funding_reconstruction import (
-    apply_prepaid_funding_reconstruction,
-    parse_reconstruction_manifest,
-)
+from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
 
 def _materialize_funding(db_session, account, amount: str = "0.00") -> datetime:
     position_at = datetime.now(UTC) - timedelta(seconds=1)
-    payload = {
-        "source": "reviewed-test-reconstruction",
-        "captured_at": position_at.isoformat(),
-        "currency": "NGN",
-        "accounts": [
-            {
-                "account_id": str(account.id),
-                "available_balance": amount,
-            }
-        ],
-    }
-    digest = parse_reconstruction_manifest(payload).manifest_sha256
-    apply_prepaid_funding_reconstruction(
+    materialize_test_prepaid_opening_balance(
         db_session,
-        payload,
-        expected_manifest_sha256=digest,
-        evidence_ref="finance-review:test",
-        approved_by="test-suite",
-        expected_account_ids={account.id},
-        now=datetime.now(UTC),
+        account.id,
+        amount,
+        position_at=position_at,
     )
-    db_session.commit()
     return position_at
 
 
