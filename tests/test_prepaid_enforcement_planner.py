@@ -56,7 +56,7 @@ def _enable(db) -> None:
             ),
             PrepaidEnforcementReadiness(
                 intended_activation_at=activation_at,
-                snapshot_captured_at=activation_at,
+                funding_observed_at=activation_at,
                 source="test-reconciled-funding",
                 evidence_ref="test:prepaid-readiness",
                 currency="NGN",
@@ -64,6 +64,7 @@ def _enable(db) -> None:
                 candidate_account_ids_hash="0" * 64,
                 configuration_hash="1" * 64,
                 funding_decisions_hash="2" * 64,
+                reconstruction_evidence_sha256="3" * 64,
                 blocker_count=0,
                 verified_by="pytest",
                 verified_at=activation_at,

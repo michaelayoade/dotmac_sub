@@ -154,9 +154,12 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
 10. `financial.prepaid_enforcement_readiness` owns the activation prerequisite.
    After the signed full-cohort opening position is materialized, it records one
    fresh plan from Sub's live currency-bound funding owner for the exact
-   owner-selected cohort. It accepts no alternate funding input. The feature-control writer and runtime adverse
-   path fail closed without current evidence bound to the configured activation
-   and currency. The readiness record is evidence, not money: after activation,
+   owner-selected cohort. It accepts no alternate funding input. Before the
+   first sweep seals activation, any cohort, policy, live-funding decision, or
+   active reconstruction-evidence change invalidates readiness. The
+   feature-control writer and runtime adverse path fail closed without current
+   evidence bound to the configured activation and currency. The readiness
+   record is evidence, not money: after activation,
    every suspend and restore resolves the live Sub ledger again. Bank statements
    may close missing source evidence through normal reconciliation, but never
    become a parallel runtime balance. Live enforcement consumes only the

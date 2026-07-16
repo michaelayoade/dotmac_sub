@@ -27,7 +27,7 @@ class PrepaidEnforcementReadiness(Base):
     intended_activation_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    snapshot_captured_at: Mapped[datetime] = mapped_column(
+    funding_observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
     source: Mapped[str] = mapped_column(String(240), nullable=False)
@@ -37,6 +37,9 @@ class PrepaidEnforcementReadiness(Base):
     candidate_account_ids_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     funding_decisions_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    reconstruction_evidence_sha256: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
     blocker_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     verified_by: Mapped[str] = mapped_column(String(120), nullable=False)
     verified_at: Mapped[datetime] = mapped_column(

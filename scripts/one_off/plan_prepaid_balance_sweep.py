@@ -156,6 +156,7 @@ def main() -> int:
                 activation_at=activation_at,
                 evidence_ref=args.evidence_ref,
                 verified_by=args.verified_by,
+                now=plan.generated_at,
             )
             db.commit()
             print(

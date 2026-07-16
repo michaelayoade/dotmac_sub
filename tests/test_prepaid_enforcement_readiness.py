@@ -7,6 +7,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.prepaid_funding import (
@@ -20,7 +21,10 @@ from app.services.prepaid_enforcement_readiness import (
     prepaid_enforcement_readiness_block_reason,
     record_prepaid_enforcement_readiness,
 )
-from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
+from tests.prepaid_funding_helpers import (
+    TEST_PREPAID_POSITION_AT,
+    materialize_test_prepaid_opening_balance,
+)
 
 
 def _prepare(db, account, subscription):
@@ -77,6 +81,7 @@ def test_full_cohort_parity_record_allows_control_enable(
 
     assert record.candidate_account_count == 1
     assert record.blocker_count == 0
+    assert len(record.reconstruction_evidence_sha256) == 64
     assert prepaid_enforcement_readiness_block_reason(db_session) is None
     changes = control_registry.update_canonical_feature_controls(
         db_session,
@@ -179,4 +184,72 @@ def test_cutover_config_change_invalidates_unactivated_readiness(
     assert (
         prepaid_enforcement_readiness_block_reason(db_session)
         == "prepaid_funding_readiness_configuration_changed"
+    )
+
+
+def test_live_funding_change_invalidates_unactivated_readiness(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    observed_at = datetime.now(UTC)
+    activation_at = observed_at + timedelta(minutes=10)
+    _set_activation(db_session, activation_at)
+    record_prepaid_enforcement_readiness(
+        db_session,
+        activation_at=activation_at,
+        evidence_ref="reconciliation-run:prepaid-funding-change",
+        verified_by="billing-operations",
+        now=observed_at,
+    )
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber_account.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("125.00"),
+            currency="NGN",
+            memo="Approved post-readiness customer credit",
+            effective_date=observed_at + timedelta(minutes=1),
+            affects_customer_position=True,
+        )
+    )
+    db_session.commit()
+
+    assert (
+        prepaid_enforcement_readiness_block_reason(
+            db_session, now=observed_at + timedelta(minutes=1)
+        )
+        == "prepaid_funding_readiness_funding_changed"
+    )
+
+
+def test_reconstruction_supersession_invalidates_unactivated_readiness(
+    db_session, subscriber_account, subscription
+):
+    _prepare(db_session, subscriber_account, subscription)
+    observed_at = datetime.now(UTC)
+    activation_at = observed_at + timedelta(minutes=10)
+    _set_activation(db_session, activation_at)
+    record = record_prepaid_enforcement_readiness(
+        db_session,
+        activation_at=activation_at,
+        evidence_ref="reconciliation-run:prepaid-reconstruction-change",
+        verified_by="billing-operations",
+        now=observed_at,
+    )
+    original_hash = record.reconstruction_evidence_sha256
+    db_session.commit()
+
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber_account.id,
+        Decimal("0.00"),
+        position_at=TEST_PREPAID_POSITION_AT + timedelta(days=1),
+    )
+    db_session.refresh(record)
+
+    assert record.reconstruction_evidence_sha256 == original_hash
+    assert (
+        prepaid_enforcement_readiness_block_reason(db_session, now=observed_at)
+        == "prepaid_funding_readiness_reconstruction_changed"
     )

@@ -118,11 +118,13 @@ phantom-ledger cleanups). Separate one-off script, run after Item 1 lands.
    debits, service extensions, and credit notes. Resolve every blocker, then
    materialize that named, timestamped full-cohort position through
    `financial.prepaid_funding_reconstruction` using the reviewed content hash.
-   This is the final authority cutover: runtime has no Splynx fallback. Feed a
-   fresh independent snapshot to `plan_prepaid_balance_sweep.py` only to verify
-   the materialized native position and owner decision. Then record parity with
+   This is the final authority cutover: runtime has no Splynx fallback. Use the
+   independent evidence to verify the materialized native position, then run
+   `plan_prepaid_balance_sweep.py` to review the owner decision. Record parity with
    `--record-readiness --evidence-ref ... --verified-by ...`. Any missing or
-   mismatched account blocks the record and therefore blocks activation. Bank
+   mismatched account blocks the record and therefore blocks activation. Any
+   pre-activation cohort, policy, live-funding, or reconstruction-evidence
+   change invalidates the record and requires a fresh review. Bank
    statements and Splynx exports can reconcile missing historical evidence
    through the one-time opening-balance owner; they are not runtime enforcement
    inputs.

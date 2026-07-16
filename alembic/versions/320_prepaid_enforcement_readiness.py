@@ -76,7 +76,7 @@ def upgrade() -> None:
         "prepaid_enforcement_readiness",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("intended_activation_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("snapshot_captured_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("funding_observed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("source", sa.String(length=240), nullable=False),
         sa.Column("evidence_ref", sa.Text(), nullable=False),
         sa.Column("currency", sa.String(length=3), nullable=False),
@@ -84,6 +84,9 @@ def upgrade() -> None:
         sa.Column("candidate_account_ids_hash", sa.String(length=64), nullable=False),
         sa.Column("configuration_hash", sa.String(length=64), nullable=False),
         sa.Column("funding_decisions_hash", sa.String(length=64), nullable=False),
+        sa.Column(
+            "reconstruction_evidence_sha256", sa.String(length=64), nullable=False
+        ),
         sa.Column("blocker_count", sa.Integer(), nullable=False),
         sa.Column("verified_by", sa.String(length=120), nullable=False),
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=False),

@@ -1015,6 +1015,9 @@ The evidence reference must not contain bank credentials or statement data.
 The planner accepts no external funding snapshot. Dry-run, readiness, and the
 executable sweep all read `financial.prepaid_funding_reconstruction`, so an
 operator report cannot diverge from execution by selecting another balance.
+Until the first eligible sweep seals activation, a candidate-cohort, policy,
+live-funding, or active reconstruction-evidence change invalidates the record;
+rerun the complete review and record fresh readiness.
 With the configured prepaid grace default of zero, an eligible underfunded
 account is suspended on the first sweep; an explicit account or policy-set
 grace override remains authoritative and appears in the plan.

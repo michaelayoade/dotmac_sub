@@ -33,6 +33,8 @@ def test_readiness_is_a_gate_not_a_runtime_balance_source():
     readiness = _read("app/services/prepaid_enforcement_readiness.py")
     sweep = _read("app/services/collections/prepaid_balance_sweep.py")
     assert "record_prepaid_enforcement_readiness" in readiness
+    assert "reconstruction_evidence_sha256" in readiness
+    assert "funding_decisions_hash" in readiness
     assert "prepaid_enforcement_readiness_block_reason" in sweep
     assert "available_balance=record" not in sweep
     assert "required_balance=record" not in sweep
