@@ -1261,7 +1261,13 @@ def _report_month_starts(months: int = 6) -> list[datetime]:
 
 
 def get_payments_revenue_summary(db: Session, *, months: int = 6) -> dict:
-    """Payments-basis revenue: lifetime, current/previous month, monthly series."""
+    """Collections (payments received): lifetime, current/previous month, series.
+
+    Finance decision (Michael, 2026-07-16): figures labelled "Revenue" use the
+    invoice settled-value basis (get_overview_stats); this payments basis is
+    COLLECTIONS — cash received, including unallocated prepaid float — and must
+    be labelled as such on every surface.
+    """
     now = datetime.now(UTC)
     current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     previous_start = (
@@ -1332,19 +1338,16 @@ def get_total_invoiced(db: Session) -> Decimal:
 
 
 def get_recurring_revenue(db: Session) -> Decimal:
-    """Recurring revenue as the sum of active/suspended subscription prices.
+    """Recurring revenue on the canonical MRR-countable basis.
 
-    NOTE: unit_price basis, kept for report continuity. The dashboard's MRR
-    trend uses mrr_countable_service_filters — consolidating the two bases is a
-    pending finance decision.
+    Finance decision (Michael, 2026-07-16): MRR counts only currently-earning
+    subscriptions (mrr_countable_service_filters — the same basis as the MRR
+    trend and snapshots). The former unit_price(active+suspended) basis
+    overstated MRR by suspended, non-earning subscriptions and is retired.
     """
-    from app.models.catalog import SubscriptionStatus
-
     return db.scalar(
         select(func.coalesce(func.sum(Subscription.unit_price), 0)).where(
-            Subscription.status.in_(
-                [SubscriptionStatus.active, SubscriptionStatus.suspended]
-            )
+            *mrr_countable_service_filters(Subscription)
         )
     ) or Decimal("0")
 
