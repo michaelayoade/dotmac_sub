@@ -247,38 +247,17 @@ def get_upcoming_charges_data(db: Session) -> dict:
 def get_revenue_per_plan_data(
     db: Session, date_from: str | None = None, date_to: str | None = None
 ) -> dict:
-    """Revenue aggregated by plan."""
+    """Revenue aggregated by plan (read owner: billing.reporting)."""
+    from app.services.billing import reporting as billing_reporting
+
     try:
-        from app.models.billing import Invoice, InvoiceLine
-        from app.models.catalog import CatalogOffer, Subscription
-
-        stmt = (
-            select(
-                CatalogOffer.name,
-                func.count(func.distinct(Invoice.id)).label("invoice_count"),
-                func.coalesce(func.sum(InvoiceLine.amount), 0).label("total_revenue"),
-            )
-            .select_from(CatalogOffer)
-            .join(Subscription, Subscription.offer_id == CatalogOffer.id, isouter=True)
-            .join(
-                InvoiceLine,
-                InvoiceLine.subscription_id == Subscription.id,
-                isouter=True,
-            )
-            .join(Invoice, Invoice.id == InvoiceLine.invoice_id, isouter=True)
-            .group_by(CatalogOffer.id, CatalogOffer.name)
-            .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
-        )
-
         d_from = _parse_date(date_from)
         d_to = _parse_date(date_to)
-        if d_from:
-            stmt = stmt.where(Invoice.issued_at >= d_from)
-        if d_to:
-            stmt = stmt.where(Invoice.issued_at < d_to + timedelta(days=1))
-
-        rows = db.execute(stmt).all()
-        plans = [{"name": r[0], "invoice_count": r[1], "revenue": r[2]} for r in rows]
+        plans = billing_reporting.get_revenue_by_offer(
+            db,
+            issued_from=d_from,
+            issued_before=(d_to + timedelta(days=1)) if d_to else None,
+        )
     except Exception as exc:
         logger.warning("Could not query revenue per plan: %s", exc)
         plans = []
@@ -290,11 +269,6 @@ def get_revenue_per_plan_data(
         "chart_labels": [p["name"] for p in plans[:20]],
         "chart_values": [float(p["revenue"]) for p in plans[:20]],
     }
-
-
-# ---------------------------------------------------------------------------
-# 4.30 Invoice Report
-# ---------------------------------------------------------------------------
 
 
 def get_invoice_report_data(
@@ -341,29 +315,11 @@ def get_invoice_report_data(
 
 
 def get_statements_data(db: Session) -> dict:
-    """Customer financial summaries."""
-    try:
-        from app.models.billing import Invoice
-        from app.models.subscriber import Subscriber
+    """Customer financial summaries (read owner: billing.reporting)."""
+    from app.services.billing import reporting as billing_reporting
 
-        stmt = (
-            select(
-                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"),
-                func.count(Invoice.id).label("doc_count"),
-                func.coalesce(func.sum(Invoice.total), 0).label("total"),
-            )
-            .join(Invoice, Invoice.account_id == Subscriber.id, isouter=True)
-            .group_by(
-                Subscriber.id,
-                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"),
-            )
-            .order_by(
-                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name")
-            )
-            .limit(200)
-        )
-        rows = db.execute(stmt).all()
-        statements = [{"name": r[0], "doc_count": r[1], "total": r[2]} for r in rows]
+    try:
+        statements = billing_reporting.get_customer_statement_totals(db)
     except Exception as exc:
         logger.warning("Could not query statements: %s", exc)
         statements = []
@@ -741,40 +697,20 @@ def build_bandwidth_report_export_csv(data: dict) -> str:
 
 
 def get_revenue_categories_data(db: Session) -> dict:
-    """Revenue segmented by offer service type and plan category."""
-    try:
-        from app.models.billing import Invoice, InvoiceLine
-        from app.models.catalog import CatalogOffer, Subscription
+    """Revenue segmented by offer service type (read owner: billing.reporting)."""
+    from app.services.billing import reporting as billing_reporting
 
-        # Revenue by service_type
-        stmt_service = (
-            select(
-                CatalogOffer.service_type,
-                func.count(func.distinct(Invoice.id)).label("invoice_count"),
-                func.coalesce(func.sum(InvoiceLine.amount), 0).label("total"),
-            )
-            .select_from(InvoiceLine)
-            .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
-            .join(
-                Subscription,
-                Subscription.id == InvoiceLine.subscription_id,
-                isouter=True,
-            )
-            .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
-            .where(Invoice.is_active.is_(True))
-            .group_by(CatalogOffer.service_type)
-            .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
-        )
-        rows = db.execute(stmt_service).all()
+    try:
+        rows = billing_reporting.get_revenue_by_service_type(db)
         categories = [
             {
                 "name": (
-                    r[0].value
-                    if hasattr(r[0], "value")
-                    else str(r[0] or "Uncategorized")
+                    r["service_type"].value
+                    if hasattr(r["service_type"], "value")
+                    else str(r["service_type"] or "Uncategorized")
                 ),
-                "invoice_count": r[1],
-                "revenue": float(r[2] or 0),
+                "invoice_count": r["invoice_count"],
+                "revenue": float(r["total"] or 0),
             }
             for r in rows
         ]
@@ -790,11 +726,6 @@ def get_revenue_categories_data(db: Session) -> dict:
         "chart_labels": [c["name"] for c in categories],
         "chart_values": [c["revenue"] for c in categories],
     }
-
-
-# ---------------------------------------------------------------------------
-# Custom Pricing & Discounts (subscription add-ons and unit price overrides)
-# ---------------------------------------------------------------------------
 
 
 def get_custom_pricing_data(db: Session) -> dict:

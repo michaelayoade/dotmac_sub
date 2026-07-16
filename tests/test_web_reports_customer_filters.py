@@ -57,7 +57,11 @@ def test_customer_report_is_visible_from_reports_hub():
     assert '"name": "Customer Report"' in route_source
     assert '"url": "/admin/reports/customers"' in route_source
     assert '"/customers"' in route_source
-    assert '@router.get("/customers/export")' in route_source
+    # The export is gated with the same permission as the page (customer:read).
+    assert (
+        '"/customers/export", '
+        'dependencies=[Depends(require_permission("customer:read"))]' in route_source
+    )
     assert "Customer Report - Admin" in page_template
     assert 'action="/admin/reports/customers"' in page_template
     assert 'action="/admin/reports/customers/export"' in page_template
