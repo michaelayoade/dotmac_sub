@@ -836,7 +836,8 @@ def bandwidth_report_totals(db: Session, usage_subquery) -> dict:
 def bandwidth_usage_by_plan(db: Session, usage_subquery) -> list:
     """Per-plan usage rows (name, avg_bps, usage_bytes, sub_count) for the
     window's usage subquery, heaviest usage first."""
-    return db.execute(
+    return list(
+        db.execute(
         select(
             CatalogOffer.name.label("name"),
             func.coalesce(func.sum(usage_subquery.c.avg_total), 0).label("avg_bps"),
@@ -854,7 +855,8 @@ def bandwidth_usage_by_plan(db: Session, usage_subquery) -> list:
         .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
         .group_by(CatalogOffer.name)
         .order_by(func.coalesce(func.sum(usage_subquery.c.usage_bytes), 0).desc())
-    ).all()
+        ).all()
+    )
 
 
 def period_usage_by_subscriber(
@@ -868,7 +870,8 @@ def period_usage_by_subscriber(
     active_services) over ``[start, end)`` for the given subscribers."""
     span_seconds = max(0.0, (end - start).total_seconds())
     usage = subscription_bandwidth_usage_subquery(start, end, span_seconds)
-    return db.execute(
+    return list(
+        db.execute(
         select(
             Subscription.subscriber_id,
             func.coalesce(func.sum(usage.c.usage_bytes), 0).label("usage_bytes"),
@@ -879,4 +882,5 @@ def period_usage_by_subscriber(
         .join(Subscription, Subscription.id == usage.c.subscription_id)
         .where(Subscription.subscriber_id.in_(subscriber_ids))
         .group_by(Subscription.subscriber_id)
-    ).all()
+        ).all()
+    )

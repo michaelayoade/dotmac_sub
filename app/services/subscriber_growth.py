@@ -10,6 +10,8 @@ displayed numbers do not change.
 
 from __future__ import annotations
 
+from typing import Any
+
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -255,7 +257,7 @@ def daily_cumulative_signups(db: Session, *, days: int = 30) -> dict:
     end = datetime.now(UTC)
     start = end - timedelta(days=days)
 
-    visible_subscribers = [
+    visible_subscribers: list[Any] = [
         SimpleNamespace(
             metadata_=row.metadata_,
             splynx_customer_id=row.splynx_customer_id,
@@ -275,14 +277,11 @@ def daily_cumulative_signups(db: Session, *, days: int = 30) -> dict:
 
     # New this month
     month_start = end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    new_this_month = sum(
-        1
-        for row in visible_subscribers
-        if (
-            (created_at := subscriber_service.get_effective_created_at(row)) is not None
-            and created_at >= month_start
-        )
-    )
+    new_this_month = 0
+    for row in visible_subscribers:
+        created_at = subscriber_service.get_effective_created_at(row)
+        if created_at is not None and created_at >= month_start:
+            new_this_month += 1
 
     # Daily chart data — cumulative subscriber count per day
     chart_labels = []
@@ -290,15 +289,11 @@ def daily_cumulative_signups(db: Session, *, days: int = 30) -> dict:
     for i in range(days):
         day = start + timedelta(days=i)
         chart_labels.append(day.strftime("%Y-%m-%d"))
-        day_count = sum(
-            1
-            for row in visible_subscribers
-            if (
-                (created_at := subscriber_service.get_effective_created_at(row))
-                is not None
-                and created_at <= day
-            )
-        )
+        day_count = 0
+        for row in visible_subscribers:
+            created_at = subscriber_service.get_effective_created_at(row)
+            if created_at is not None and created_at <= day:
+                day_count += 1
         chart_data.append(day_count)
 
     return {
