@@ -32,6 +32,10 @@ class Settings:
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
     db_statement_timeout_ms: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000"))
     db_lock_timeout_ms: int = int(os.getenv("DB_LOCK_TIMEOUT_MS", "10000"))
+    # Postgres lock_timeout for the ALEMBIC MIGRATION connection (env.py), so a
+    # schema-locking migration fails fast instead of piling up behind the live
+    # app. Sanitized in app.db.resolve_migration_lock_timeout; "0" disables.
+    alembic_lock_timeout: str = os.getenv("ALEMBIC_LOCK_TIMEOUT", "5s")
     db_idle_in_transaction_session_timeout_ms: int = int(
         os.getenv("DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS", "60000")
     )

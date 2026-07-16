@@ -1375,20 +1375,28 @@ Dependency order:
    owns the `up/degraded/down/maintenance` vocabulary. Retry-pending gaps stay
    binary but are non-alarming; presentation renders retry-pending `down` as
    warning/clock rather than a confirmed negative failure.
-6. `network.outage_impact`: resolves affected customers from topology.
-7. `network.device_groups`: owns device-group mutations, membership, and bulk
+6. `network.ont_status_refresh`: owns admission of stale ONT runtime-status
+   refresh requests from read surfaces. ONT inventory may request a refresh when
+   displayed evidence is stale, but it must not poll OLTs directly. Huawei ONTs
+   are refreshed through bounded OLT-level background jobs with per-OLT
+   cooldown/admission; UISP-managed ONTs remain refreshed by the UISP topology
+   sync source. `Status refresh pending` means the displayed value is retained
+   or derived and needs asynchronous confirmation, not that the page performed a
+   live check.
+7. `network.outage_impact`: resolves affected customers from topology.
+8. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
-8. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
+9. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
    incident transitions, escalation planning, and outage event emission.
-9. `network.connection_health`: combines authoritative path, live-session,
+10. `network.connection_health`: combines authoritative path, live-session,
    last-mile, impact, and active-incident inputs into the customer-safe
    `connected/trouble/outage` verdict plus headline/message/advice. It does not
    own device operational state or raw online-session observations.
-10. `network.control_plane_intent`: owns the shared desired-state delivery
+11. `network.control_plane_intent`: owns the shared desired-state delivery
    lifecycle, control-plane target/revision identity, and vendor status
    projections. Vendor adapters project through this one
    desired-to-readback lifecycle.
-11. `network.huawei_cli_response`: owns Huawei CLI response classification,
+12. `network.huawei_cli_response`: owns Huawei CLI response classification,
    stable error codes, expected-absence predicates, unsupported-command
    detection, and idempotent response semantics. Huawei SSH sessions, protocol
    adapters, readback verification, and web workflows consume these projections
@@ -1397,11 +1405,11 @@ Dependency order:
    still require the control-plane intent readback contract. Protocol adapter,
    authorization, provisioning, and reconcile history persist the sanitized
    classifier projection as operation evidence; raw CLI output is not retained.
-12. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+13. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
    and it projects through `network.control_plane_intent`.
-13. `network.operation_ledger`: owns the tracked device operation lifecycle and
+14. `network.operation_ledger`: owns the tracked device operation lifecycle and
    status vocabulary, the terminal-transition guard, correlation-key duplicate
    suppression, stale-active reclamation, parent/child rollup, and whether an
    operation may run, resume, or be re-executed. Celery is transport: tasks
@@ -1419,7 +1427,7 @@ Dependency order:
    The initial handler covers observation-only ONT status refresh. Firmware,
    configuration, lifecycle, and other device writes remain ineligible until
    their owning service provides current-state validation and replay safety.
-13. `network.operation_dispatch`: owns transactional staging and transport for
+15. `network.operation_dispatch`: owns transactional staging and transport for
    operation-backed network commands. The operation and its exact versioned
    command are committed together in `network_operation_dispatches`; request
    handlers never commit an operation and then publish its device task. The
@@ -1435,12 +1443,12 @@ Dependency order:
    and OLT-triggered ONT desired-state reconciliation. Firmware verification/
    readback continuations retain their own state machines and are not parallel
    command-origination paths.
-14. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
+16. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
    for ONT authorization, baseline repair, and bootstrap verification commands.
    It commits each operation and typed dispatch atomically. Admin, API, and bulk
    callers receive operation/dispatch identifiers and never publish the device
    task themselves.
-15. `network.ont_provisioning_execution`: owns the tracked authorization,
+17. `network.ont_provisioning_execution`: owns the tracked authorization,
    baseline-repair, DB-only baseline preview, bootstrap retry, parent rollup,
    and bulk-item transitions.
    Celery workers claim an existing dispatch and delegate execution here; they
