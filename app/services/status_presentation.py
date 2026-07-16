@@ -368,6 +368,22 @@ _WITHHOLDING_TAX_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = 
 }
 
 
+_INFRASTRUCTURE_SERVICE_PRESENTATIONS: dict[
+    str, tuple[str, StatusTone, StatusIcon]
+] = {
+    "up": ("Up", StatusTone.positive, StatusIcon.check),
+    "healthy": ("Healthy", StatusTone.positive, StatusIcon.check),
+    "ok": ("OK", StatusTone.positive, StatusIcon.check),
+    "streaming": ("Streaming", StatusTone.positive, StatusIcon.check),
+    "degraded": ("Degraded", StatusTone.warning, StatusIcon.alert),
+    "partial": ("Partial", StatusTone.warning, StatusIcon.alert),
+    "warning": ("Warning", StatusTone.warning, StatusIcon.alert),
+    "down": ("Down", StatusTone.negative, StatusIcon.x),
+    "critical": ("Critical", StatusTone.negative, StatusIcon.x),
+    "failed": ("Failed", StatusTone.negative, StatusIcon.x),
+}
+
+
 def _status_value(status: object | None) -> str:
     if isinstance(status, Enum):
         return str(status.value).strip().lower()
@@ -393,6 +409,21 @@ def _presentation(
         return _fallback(value)
     label, tone, icon = definition
     return StatusPresentation(value=value, label=label, tone=tone, icon=icon)
+
+
+def infrastructure_service_status_presentation(
+    status: str | None,
+) -> StatusPresentation:
+    """Project an infrastructure service/worker health status.
+
+    Canonical vocabulary for the up/degraded/down/unknown status strings emitted
+    by infrastructure_health and worker health, so the dashboard service and its
+    templates stop each carrying their own status→colour mapping. Unknown values
+    fall back to a neutral tone.
+    """
+    return _presentation(
+        _status_value(status), _INFRASTRUCTURE_SERVICE_PRESENTATIONS
+    )
 
 
 def account_status_presentation(

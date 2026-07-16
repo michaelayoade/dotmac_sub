@@ -1063,6 +1063,11 @@ def _load_dashboard_infrastructure_health(
 def _build_infrastructure_service_summary(
     services: Sequence[object],
 ) -> dict[str, int]:
+    from app.schemas.status_presentation import StatusTone
+    from app.services.status_presentation import (
+        infrastructure_service_status_presentation,
+    )
+
     summary = {
         "total": len(services),
         "up": 0,
@@ -1070,16 +1075,16 @@ def _build_infrastructure_service_summary(
         "down": 0,
         "unknown": 0,
     }
+    _tone_bucket = {
+        StatusTone.positive: "up",
+        StatusTone.warning: "degraded",
+        StatusTone.negative: "down",
+    }
     for service in services:
-        status = str(getattr(service, "status", "unknown") or "unknown").lower()
-        if status in {"up", "healthy", "ok", "streaming"}:
-            summary["up"] += 1
-        elif status in {"degraded", "partial", "warning"}:
-            summary["degraded"] += 1
-        elif status in {"down", "critical", "failed"}:
-            summary["down"] += 1
-        else:
-            summary["unknown"] += 1
+        tone = infrastructure_service_status_presentation(
+            getattr(service, "status", None)
+        ).tone
+        summary[_tone_bucket.get(tone, "unknown")] += 1
     return summary
 
 
