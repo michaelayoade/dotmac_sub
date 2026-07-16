@@ -9,6 +9,7 @@ import pytest
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import SubscriptionStatus
 from app.models.field_expense import FIELD_EXPENSE_STATUSES
+from app.models.field_material import FIELD_MATERIAL_REQUEST_STATUSES
 from app.models.network_monitoring import DeviceRole, DeviceStatus, NetworkDevice
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.subscriber import SubscriberStatus
@@ -32,10 +33,12 @@ from app.services.status_presentation import (
     credit_note_status_presentation,
     device_operational_status_presentation,
     field_expense_status_presentation,
+    field_material_request_status_presentation,
     invoice_status_presentation,
     outage_status_presentation,
     payment_status_presentation,
     subscription_status_presentation,
+    system_job_status_presentation,
     ticket_status_presentation,
     vendor_purchase_invoice_status_presentation,
     withholding_tax_status_presentation,
@@ -85,6 +88,30 @@ def test_field_expense_presentation_covers_authoritative_statuses(
     status: str,
 ) -> None:
     presentation = field_expense_status_presentation(status)
+
+    assert presentation.value == status
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
+
+
+@pytest.mark.parametrize("status", list(FIELD_MATERIAL_REQUEST_STATUSES))
+def test_field_material_request_presentation_covers_authoritative_statuses(
+    status: str,
+) -> None:
+    presentation = field_material_request_status_presentation(status)
+
+    assert presentation.value == status
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
+
+
+@pytest.mark.parametrize(
+    "status", ["queued", "running", "completed", "failed", "canceled"]
+)
+def test_system_job_presentation_covers_lifecycle(status: str) -> None:
+    presentation = system_job_status_presentation(status)
 
     assert presentation.value == status
     assert presentation.label

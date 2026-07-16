@@ -554,3 +554,36 @@ _FIELD_EXPENSE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
 def field_expense_status_presentation(status: str | None) -> StatusPresentation:
     """Project field-expense claim status without re-deriving the workflow."""
     return _presentation(_status_value(status), _FIELD_EXPENSE_PRESENTATIONS)
+
+
+_FIELD_MATERIAL_REQUEST_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "draft": ("Draft", StatusTone.neutral, StatusIcon.archive),
+    "submitted": ("Submitted", StatusTone.info, StatusIcon.clock),
+    "approved": ("Approved", StatusTone.positive, StatusIcon.check),
+    "rejected": ("Rejected", StatusTone.negative, StatusIcon.x),
+    "issued": ("Issued", StatusTone.info, StatusIcon.info),
+    "fulfilled": ("Fulfilled", StatusTone.positive, StatusIcon.check),
+    "canceled": ("Canceled", StatusTone.negative, StatusIcon.x),
+}
+
+
+def field_material_request_status_presentation(
+    status: str | None,
+) -> StatusPresentation:
+    """Project field material-request status without re-deriving the workflow."""
+    return _presentation(_status_value(status), _FIELD_MATERIAL_REQUEST_PRESENTATIONS)
+
+
+_SYSTEM_JOB_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "queued": ("Queued", StatusTone.info, StatusIcon.clock),
+    "running": ("Running", StatusTone.info, StatusIcon.clock),
+    "completed": ("Completed", StatusTone.positive, StatusIcon.check),
+    "failed": ("Failed", StatusTone.negative, StatusIcon.x),
+    "canceled": ("Canceled", StatusTone.neutral, StatusIcon.minus),
+    "cancelled": ("Canceled", StatusTone.neutral, StatusIcon.minus),
+}
+
+
+def system_job_status_presentation(status: str | None) -> StatusPresentation:
+    """Project a system/background job run status without re-deriving it."""
+    return _presentation(_status_value(status), _SYSTEM_JOB_PRESENTATIONS)
