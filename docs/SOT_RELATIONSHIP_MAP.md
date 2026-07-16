@@ -1335,7 +1335,14 @@ in forms, or rotate key material directly.
    contact-linking, widget writes, inbound-channel ingestion, collaboration,
    and admin mutation transactions. `app.services.team_inbox_commands` is the
    committed admin command boundary; `app.web.admin.inbox` only translates HTTP
-   inputs and outcomes.
+   inputs and outcomes. Named sub-owners inside the family:
+   `team_inbox_channel_receive`/`team_inbox_smtp_inbound`/`team_inbox_receive`
+   own inbound ingestion (webhook adapters build payloads and call their
+   `*_committed` entrypoints, never the ORM); `team_inbox_outbound` and
+   `team_outbound` own sends; `team_inbox_routing` owns conversation routing
+   and auto-assignment; `team_inbox_assignment`/`team_inbox_operations`
+   decide lifecycle and are invoked through the command boundary. Inbox ORM
+   rows have no writer outside the `team_inbox_*` family.
 9. Campaign services own marketing audience, sequence, and content decisions.
    They request a canonical sender key; email delivery alone resolves that key
    to SMTP identity and credentials.
