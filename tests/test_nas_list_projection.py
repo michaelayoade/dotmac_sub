@@ -87,8 +87,8 @@ def test_sql_path_paginates_and_counts_in_db(db_session):
         _nas(db_session, name)
 
     first = _dashboard(db_session, page=1, limit=2)
-    assert first["total"] == 3
-    assert first["total_pages"] == 2
+    assert first["pagination"]["total"] == 3
+    assert first["pagination"]["total_pages"] == 2
     assert [d.name for d in first["devices"]] == ["nas-a", "nas-b"]
 
     second = _dashboard(db_session, page=2, limit=2)
@@ -109,5 +109,5 @@ def test_post_query_partner_filter_scopes_and_counts(db_session):
     _nas(db_session, "nas-other", tags=["partner_org:other"])
 
     result = _dashboard(db_session, page=1, limit=10, partner_org_id="acme")
-    assert result["total"] == 1
+    assert result["pagination"]["total"] == 1
     assert [d.name for d in result["devices"]] == ["nas-acme"]
