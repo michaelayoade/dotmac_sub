@@ -25,9 +25,26 @@ _STATS = (
 
 
 def _registered_paths() -> set[str]:
-    from app.main import app
+    import asyncio
 
-    return {route.path for route in app.routes if isinstance(route, APIRoute)}
+    from app.main import _load_deferred_api_routers, app
+
+    # Admin web routers are deferred to app startup; run just the deferred
+    # router loader (import + include only — no DB) so the full route table
+    # is registered before checking.
+    asyncio.run(_load_deferred_api_routers(app))
+
+    paths: set[str] = set()
+
+    def _collect(routes, prefix: str = "") -> None:
+        for route in routes:
+            if isinstance(route, APIRoute):
+                paths.add(prefix + route.path)
+            elif hasattr(route, "routes"):
+                _collect(route.routes, prefix + getattr(route, "path", ""))
+
+    _collect(app.routes)
+    return paths
 
 
 def _kpi_hrefs() -> list[str]:
