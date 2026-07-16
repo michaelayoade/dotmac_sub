@@ -101,8 +101,10 @@ def test_vendor_route_routes_registered():
     ],
 )
 def test_field_map_routes_require_dispatch_permission(path):
+    # Granular dispatch RBAC (#1329): live-map/playback reads require
+    # operations:dispatch:read (was the coarse operations:dispatch).
     assert _route_has_permission(
-        web_field_maps.router, path, "GET", "operations:dispatch"
+        web_field_maps.router, path, "GET", "operations:dispatch:read"
     )
 
 
