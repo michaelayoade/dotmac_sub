@@ -781,9 +781,10 @@ will reject.
 14. `ui.reseller_list_projection` (`app.services.web_admin_resellers`) declares the
     admin reseller list capabilities with `ui.list_contracts` — status filter, name
     sort, pagination — so the route derives no pagination or filter rules;
-    `web_admin_resellers` owns the reseller read. The reseller admin surface is still
-    gated by `customer:read`/`customer:write`; a `reseller:read`/`:write` split is a
-    tracked follow-up pending a reseller access-policy decision.
+    `web_admin_resellers` owns the reseller read. The reseller admin surface is
+    granularly gated by `reseller:read` (list) and `reseller:write` (create/edit),
+    split off the shared `customer:read`/`customer:write`; migration preserves access
+    by granting the reseller permissions to current customer-permission holders.
 
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep

@@ -13,6 +13,21 @@ def _create_reseller(db_session, name: str = "Reseller A") -> Reseller:
     return reseller
 
 
+def test_reseller_permissions_are_seeded_and_role_builder_assignable():
+    """reseller:read/write must be seeded and buildable into new roles."""
+    from scripts.seed.seed_rbac import (
+        ADMIN_ONLY_PERMISSION_KEYS,
+        DEFAULT_PERMISSIONS,
+    )
+
+    seeded = {key for key, _ in DEFAULT_PERMISSIONS}
+    for perm in ("reseller:read", "reseller:write"):
+        assert perm in seeded, f"{perm} must be seeded"
+        assert perm not in ADMIN_ONLY_PERMISSION_KEYS, (
+            f"{perm} must be role-builder-assignable"
+        )
+
+
 def test_reseller_list_query_normalizes_status_and_page_size():
     svc = web_admin_resellers_service
     # default + unknown status collapse to "active"; off-menu page size to default
