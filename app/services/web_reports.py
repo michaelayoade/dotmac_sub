@@ -406,6 +406,71 @@ def _month_starts(months: int = 6) -> list[datetime]:
     return starts
 
 
+def _monthly_customer_growth_series(db: Session, *, months: int = 6) -> dict[str, list]:
+    starts = _month_starts(months)
+    labels: list[str] = []
+    totals: list[int] = []
+    new_counts: list[int] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
+        total = (
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    subscriber_service.visible_subscriber_clause(),
+                    Subscriber.created_at < end,
+                )
+            )
+            or 0
+        )
+        new_count = (
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    subscriber_service.visible_subscriber_clause(),
+                    Subscriber.created_at >= start,
+                    Subscriber.created_at < end,
+                )
+            )
+            or 0
+        )
+        labels.append(start.strftime("%b"))
+        totals.append(int(total))
+        new_counts.append(int(new_count))
+    return {"labels": labels, "total": totals, "new": new_counts}
+
+
+def _monthly_churn_series(db: Session, *, months: int = 6) -> dict[str, list]:
+    starts = _month_starts(months)
+    labels: list[str] = []
+    rates: list[float] = []
+    counts: list[int] = []
+    for idx, start in enumerate(starts):
+        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
+        total = (
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    subscriber_service.visible_subscriber_clause(),
+                    Subscriber.created_at < end,
+                )
+            )
+            or 0
+        )
+        cancelled = (
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    subscriber_service.visible_subscriber_clause(),
+                    Subscriber.status == AccountStatus.canceled,
+                    Subscriber.updated_at >= start,
+                    Subscriber.updated_at < end,
+                )
+            )
+            or 0
+        )
+        labels.append(start.strftime("%b"))
+        counts.append(int(cancelled))
+        rates.append(round((int(cancelled) / int(total) * 100) if total else 0, 1))
+    return {"labels": labels, "rate": rates, "count": counts}
+
+
 def get_revenue_report_data(db: Session) -> dict:
     """Compose the revenue report from the billing reporting read owners.
 
