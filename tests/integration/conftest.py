@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
+from app.services import control_registry
 
 
 @pytest.fixture(autouse=True)
@@ -28,15 +29,27 @@ def _require_postgres(engine):
 
 @pytest.fixture
 def enable_flags(db_session: Session):
-    """Flip Phase 3 flags for the duration of a test (rows roll back with the
-    session)."""
+    """Flip Phase 3 controls for one test (rows roll back with the session).
 
-    def _enable(*keys: str, domain: SettingDomain = SettingDomain.projects) -> None:
+    Controls resolve exclusively from their canonical ``modules.<feature>``
+    row (``control_registry._resolve_own_flag`` — retired legacy aliases are
+    deliberately ignored), so that is what we write. Accepts either the
+    control key ("quotes.native_write") or its legacy setting name
+    ("quotes_native_write_enabled") for readability at call sites.
+    """
+
+    def _enable(*keys: str) -> None:
         for key in keys:
+            control = control_registry._CONTROLS.get(key)
+            if control is None:
+                # legacy-name convenience: find the control by alias
+                dotted = key.removesuffix("_enabled").replace("_native_", ".native_")
+                control = control_registry._CONTROLS.get(dotted)
+            assert control is not None, f"unknown control for {key!r}"
             db_session.add(
                 DomainSetting(
-                    domain=domain,
-                    key=key,
+                    domain=SettingDomain.modules,
+                    key=control_registry.canonical_setting_key(control),
                     value_type=SettingValueType.boolean,
                     value_text="true",
                     is_active=True,
