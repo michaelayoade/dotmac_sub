@@ -1,7 +1,7 @@
 """Tests for the notification list-projection contracts + granular RBAC.
 
 See app/services/web_notifications.py (ui.notification_{templates,queue,history}
-_list_projection) and migration 320 (notification:read/write split off the
+_list_projection) and migration 323 (notification:read/write split off the
 coarse system:read/write).
 """
 
@@ -71,7 +71,7 @@ def test_build_queries_normalize_and_reject():
         build_queue_list_query(per_page=30)  # not an allowed size
 
 
-# --- Granular RBAC (migration 320) ---
+# --- Granular RBAC (migration 323) ---
 
 
 def test_notification_permissions_are_seeded_and_ui_assignable():

@@ -9,8 +9,8 @@ system:read/write are unchanged (still used for other system admin). The new
 permissions are ui-assignable, so admins can build roles that scope notification
 access via the role builder.
 
-Revision ID: 320_notification_granular_permissions
-Revises: 319_device_projection_table
+Revision ID: 323_notification_granular_permissions
+Revises: 322_ledger_customer_position_effect
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "320_notification_granular_permissions"
-down_revision = "319_device_projection_table"
+revision = "323_notification_granular_permissions"
+down_revision = "322_ledger_customer_position_effect"
 branch_labels = None
 depends_on = None
 

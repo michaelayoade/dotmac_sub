@@ -2101,7 +2101,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "history_context normalize request state and delegate the read + "
                     "count to communications.notification_service. Gated by the "
                     "granular notification:read/notification:write (split off the "
-                    "coarse system:read/write in migration 320). Read-only lists: "
+                    "coarse system:read/write in migration 323). Read-only lists: "
                     "mutations have their own routes; no bulk selection declared."
                 ),
             ),
