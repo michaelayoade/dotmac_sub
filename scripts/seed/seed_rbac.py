@@ -304,7 +304,6 @@ DEFAULT_ROLES = [
     ("auditor", "Audit read-only access"),
     ("operator", "Network and provisioning operations"),
     ("support", "Subscriber and billing support"),
-    ("technical_support", "Technical support service access"),
     ("finance_manager", "Full billing and finance access"),
 ]
 
@@ -409,11 +408,6 @@ ROLE_PERMISSIONS = {
         "crm:conversation:read",
         "crm:conversation:write",
         "reports:subscribers",
-    ],
-    "technical_support": [
-        "customer:read",
-        "subscription:read",
-        "subscription:suspend",
     ],
     "finance_manager": [
         "billing:invoice:read",
