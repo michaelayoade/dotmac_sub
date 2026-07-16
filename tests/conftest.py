@@ -355,10 +355,17 @@ def _unique_email() -> str:
 @pytest.fixture()
 def subscriber(db_session):
     """Unified subscriber fixture - combines identity, account, and billing."""
+    from app.services.subscriber import _default_reseller_id
+
     subscriber = Subscriber(
         first_name="Test",
         last_name="User",
         email=_unique_email(),
+        # subscribers.reseller_id is NOT NULL on Postgres (migration 116). On
+        # SQLite no House reseller is seeded so this resolves to None (the
+        # column is nullable there); on the PG integration job it resolves to
+        # House, keeping the shared fixture usable by flow tests.
+        reseller_id=_default_reseller_id(db_session),
     )
     db_session.add(subscriber)
     db_session.commit()
