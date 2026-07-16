@@ -5,6 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 FIELD_ROOTS = (Path("app/api/field"), Path("app/services/field"))
+# Work-order EXECUTION code that the original FIELD_ROOTS scan was blind to — the
+# workqueue, dispatch, and the work-order mirror service are where CRM write-back
+# would actually re-enter, so the writeback / CRM-authority / sales-entry checks
+# must cover them too (2026-07-14 audit finding).
+WORK_EXECUTION_PATHS = (
+    Path("app/services/workqueue"),
+    Path("app/services/dispatch.py"),
+    Path("app/services/work_orders_mirror.py"),
+)
 FIELD_AUTHORITY_PATHS = FIELD_ROOTS + (
     Path("app/models/work_order_mirror.py"),
     Path("app/schemas/field.py"),
@@ -75,12 +84,11 @@ def test_field_service_does_not_expose_sales_or_project_entry_modules():
 
 def test_field_modules_do_not_depend_on_sales_or_project_entry_domains():
     offenders: list[str] = []
-    for root in FIELD_ROOTS:
-        for path in root.rglob("*.py"):
-            text = path.read_text()
-            for pattern in FORBIDDEN_PATTERNS:
-                if pattern in text:
-                    offenders.append(f"{path}: contains {pattern!r}")
+    for path in _python_files(FIELD_ROOTS + WORK_EXECUTION_PATHS):
+        text = path.read_text()
+        for pattern in FORBIDDEN_PATTERNS:
+            if pattern in text:
+                offenders.append(f"{path}: contains {pattern!r}")
     assert not offenders, (
         "Field modules should process work orders only. Create a sales/CRM "
         "workflow, vendor-project workflow, or work-order follow-up instead of "
@@ -90,7 +98,7 @@ def test_field_modules_do_not_depend_on_sales_or_project_entry_domains():
 
 def test_field_modules_do_not_reintroduce_crm_writeback():
     offenders: list[str] = []
-    for path in _python_files(FIELD_ROOTS):
+    for path in _python_files(FIELD_ROOTS + WORK_EXECUTION_PATHS):
         text = path.read_text().casefold()
         for pattern in FORBIDDEN_WRITEBACK_PATTERNS:
             if pattern in text:
@@ -103,7 +111,7 @@ def test_field_modules_do_not_reintroduce_crm_writeback():
 
 def test_field_work_order_docs_do_not_present_crm_as_authoritative():
     offenders: list[str] = []
-    for path in _python_files(FIELD_AUTHORITY_PATHS):
+    for path in _python_files(FIELD_AUTHORITY_PATHS + WORK_EXECUTION_PATHS):
         text = path.read_text().casefold()
         for pattern in FORBIDDEN_CRM_AUTHORITY_PATTERNS:
             if pattern in text:
