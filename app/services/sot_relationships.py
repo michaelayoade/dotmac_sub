@@ -161,6 +161,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "consolidated payment settlement preview and confirmation",
                     "consolidated payment idempotency and actor audit evidence",
+                    "historical consolidated settlement evidence reconciliation",
+                    "exact consolidated settlement cash provenance links",
                     "exact member-invoice allocation ledger links",
                     "exact consolidated-credit ledger links",
                     "consolidated-credit allocation preview and confirmation",

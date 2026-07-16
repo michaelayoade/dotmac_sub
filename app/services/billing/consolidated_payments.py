@@ -29,6 +29,7 @@ from app.models.billing import (
     BillingAccountCreditAllocationItem,
     BillingAccountLedgerEntry,
     ConsolidatedPaymentReturnAllocationEvidence,
+    ConsolidatedPaymentSettlementReconciliationEvidence,
     Invoice,
     InvoiceStatus,
     LedgerEntry,
@@ -36,6 +37,9 @@ from app.models.billing import (
     LedgerSource,
     Payment,
     PaymentAllocation,
+    PaymentProviderEvent,
+    PaymentProviderEventFinancialEffect,
+    PaymentProviderEventStatus,
     PaymentRefund,
     PaymentRefundOrigin,
     PaymentReversal,
@@ -43,8 +47,10 @@ from app.models.billing import (
     PaymentSettlement,
     PaymentSettlementOrigin,
     PaymentStatus,
+    TopupIntent,
 )
 from app.models.idempotency import IdempotencyKey
+from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
@@ -54,17 +60,25 @@ from app.schemas.billing import (
     BillingAccountCreditAllocationResultRead,
     BillingAccountCreditInvoiceEffectRead,
     BillingAccountCreditSourceEffectRead,
+    BillingAccountLedgerEvidenceCandidateRead,
     BillingAccountPaymentAllocationEffectRead,
     BillingAccountPaymentConfirm,
     BillingAccountPaymentPreviewRead,
     BillingAccountPaymentPreviewRequest,
+    BillingAccountPaymentProvenanceCandidateRead,
     BillingAccountPaymentRefundPreviewRead,
     BillingAccountPaymentRefundRequest,
     BillingAccountPaymentReturnInvoiceEffectRead,
     BillingAccountPaymentReversalPreviewRead,
     BillingAccountPaymentReversalRequest,
+    BillingAccountPaymentSettlementAllocationEvidenceRead,
+    BillingAccountPaymentSettlementEvidenceInspectionRead,
+    BillingAccountPaymentSettlementReconciliationConfirm,
+    BillingAccountPaymentSettlementReconciliationPreviewRead,
+    BillingAccountPaymentSettlementReconciliationRequest,
     PaymentRefundPreviewRequest,
     PaymentReversalPreviewRequest,
+    PaymentSettlementEvidenceCandidateRead,
 )
 from app.services.audit import AuditEvents
 from app.services.billing._common import (
@@ -89,6 +103,7 @@ from app.services.events.types import EventType
 from app.services.locking import lock_for_update
 
 _IDEMPOTENCY_SCOPE = "consolidated_payment_settlement"
+_RECONCILIATION_IDEMPOTENCY_SCOPE = "consolidated_settlement_reconciliation"
 _CREDIT_ALLOCATION_IDEMPOTENCY_SCOPE = "consolidated_credit_allocation"
 _REFUND_IDEMPOTENCY_SCOPE = "consolidated_payment_refund"
 _REVERSAL_IDEMPOTENCY_SCOPE = "consolidated_payment_reversal"
@@ -111,6 +126,14 @@ class ConsolidatedPaymentSettlementResult:
     payment: Payment
     settlement: PaymentSettlement
     preview: BillingAccountPaymentPreviewRead | None
+    idempotent_replay: bool = False
+
+
+@dataclass(frozen=True)
+class ConsolidatedPaymentSettlementReconciliationResult:
+    settlement: PaymentSettlement
+    evidence: ConsolidatedPaymentSettlementReconciliationEvidence
+    preview: BillingAccountPaymentSettlementReconciliationPreviewRead | None
     idempotent_replay: bool = False
 
 
@@ -762,6 +785,33 @@ def _fingerprint_payload(
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _proof_gross_amount(proof: PaymentProof) -> Decimal | None:
+    if proof.gross_amount is not None:
+        return round_money(to_decimal(proof.gross_amount))
+    if proof.verified_amount is None:
+        return None
+    return round_money(
+        to_decimal(proof.verified_amount) + to_decimal(proof.wht_amount or 0)
+    )
+
+
+def _reconciliation_fingerprint(
+    request: BillingAccountPaymentSettlementReconciliationRequest,
+    values: dict[str, object],
+) -> str:
+    canonical = json.dumps(
+        {
+            "kind": "historical_consolidated_payment_settlement_evidence",
+            "request": request.model_dump(mode="json"),
+            **values,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 class ConsolidatedPaymentSettlements:
     """Single writer for confirmed consolidated payment money effects."""
 
@@ -1144,6 +1194,673 @@ class ConsolidatedPaymentSettlements:
                 return replay
             raise HTTPException(
                 status_code=409, detail="Consolidated payment is already recorded"
+            ) from exc
+        except Exception:
+            db.rollback()
+            raise
+
+    @staticmethod
+    def _provenance_candidates(
+        db: Session,
+        payment: Payment,
+        *,
+        lock: bool = False,
+    ) -> list[BillingAccountPaymentProvenanceCandidateRead]:
+        amount = round_money(to_decimal(payment.amount))
+        candidates: list[BillingAccountPaymentProvenanceCandidateRead] = []
+
+        event_query = (
+            db.query(PaymentProviderEvent)
+            .filter(PaymentProviderEvent.payment_id == payment.id)
+            .order_by(
+                PaymentProviderEvent.received_at.asc(), PaymentProviderEvent.id.asc()
+            )
+        )
+        if lock:
+            event_query = event_query.with_for_update()
+        for event in event_query.all():
+            if (
+                event.status == PaymentProviderEventStatus.processed
+                and event.financial_effect == PaymentProviderEventFinancialEffect.none
+                and payment.provider_id is not None
+                and event.provider_id == payment.provider_id
+                and event.amount is not None
+                and round_money(to_decimal(event.amount)) == amount
+                and event.currency == payment.currency
+                and not event.refunds
+                and not event.reversals
+            ):
+                candidates.append(
+                    BillingAccountPaymentProvenanceCandidateRead(
+                        provenance_type="provider_event",
+                        provenance_id=event.id,
+                        status=event.status.value,
+                        amount=amount,
+                        currency=payment.currency,
+                    )
+                )
+
+        proof_query = (
+            db.query(PaymentProof)
+            .filter(PaymentProof.payment_id == payment.id)
+            .order_by(PaymentProof.created_at.asc(), PaymentProof.id.asc())
+        )
+        if lock:
+            proof_query = proof_query.with_for_update()
+        for proof in proof_query.all():
+            gross = _proof_gross_amount(proof)
+            if (
+                proof.status == PaymentProofStatus.verified
+                and proof.account_id is None
+                and proof.billing_account_id == payment.billing_account_id
+                and gross == amount
+                and proof.currency == payment.currency
+            ):
+                candidates.append(
+                    BillingAccountPaymentProvenanceCandidateRead(
+                        provenance_type="payment_proof",
+                        provenance_id=proof.id,
+                        status=proof.status.value,
+                        amount=amount,
+                        currency=payment.currency,
+                    )
+                )
+
+        topup_query = (
+            db.query(TopupIntent)
+            .filter(TopupIntent.completed_payment_id == payment.id)
+            .order_by(TopupIntent.created_at.asc(), TopupIntent.id.asc())
+        )
+        if lock:
+            topup_query = topup_query.with_for_update()
+        for topup in topup_query.all():
+            if (
+                topup.status == "completed"
+                and topup.account_id is None
+                and topup.billing_account_id == payment.billing_account_id
+                and topup.actual_amount is not None
+                and round_money(to_decimal(topup.actual_amount)) == amount
+                and topup.currency == payment.currency
+            ):
+                candidates.append(
+                    BillingAccountPaymentProvenanceCandidateRead(
+                        provenance_type="topup_intent",
+                        provenance_id=topup.id,
+                        status=topup.status,
+                        amount=amount,
+                        currency=payment.currency,
+                    )
+                )
+        return candidates
+
+    @staticmethod
+    def inspect_reconciliation_evidence(
+        db: Session,
+        payment_id: str,
+    ) -> BillingAccountPaymentSettlementEvidenceInspectionRead:
+        """List exact candidates without selecting evidence or changing state."""
+        payment = get_by_id(db, Payment, payment_id)
+        if payment is None:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if payment.billing_account_id is None or payment.account_id is not None:
+            raise HTTPException(status_code=409, detail="Payment is not consolidated")
+        account = get_by_id(db, BillingAccount, payment.billing_account_id)
+        if account is None:
+            raise HTTPException(status_code=409, detail="Billing account is missing")
+
+        allocation_entries = (
+            db.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.entry_type == LedgerEntryType.credit)
+            .filter(LedgerEntry.source == LedgerSource.payment)
+            .filter(LedgerEntry.currency == payment.currency)
+            .filter(LedgerEntry.is_active.is_(True))
+            .order_by(LedgerEntry.created_at.asc(), LedgerEntry.id.asc())
+            .all()
+        )
+        billing_entries = (
+            db.query(BillingAccountLedgerEntry)
+            .filter(BillingAccountLedgerEntry.payment_id == payment.id)
+            .filter(BillingAccountLedgerEntry.billing_account_id == account.id)
+            .filter(BillingAccountLedgerEntry.entry_type == LedgerEntryType.credit)
+            .filter(BillingAccountLedgerEntry.source == LedgerSource.payment)
+            .filter(BillingAccountLedgerEntry.currency == payment.currency)
+            .filter(BillingAccountLedgerEntry.is_active.is_(True))
+            .order_by(
+                BillingAccountLedgerEntry.created_at.asc(),
+                BillingAccountLedgerEntry.id.asc(),
+            )
+            .all()
+        )
+        recorded = round_money(to_decimal(account.balance))
+        evidenced = _billing_account_evidenced_balance(db, account)
+        return BillingAccountPaymentSettlementEvidenceInspectionRead(
+            payment_id=payment.id,
+            billing_account_id=account.id,
+            payment_state=payment.status,
+            payment_amount=round_money(to_decimal(payment.amount)),
+            currency=payment.currency,
+            already_reconciled=payment.settlement is not None,
+            recorded_consolidated_credit=recorded,
+            evidenced_consolidated_credit=evidenced,
+            projection_drift=round_money(recorded - evidenced),
+            active_allocation_ids=[
+                allocation.id
+                for allocation in payment.allocations
+                if allocation.is_active
+            ],
+            allocation_candidate_entries=[
+                PaymentSettlementEvidenceCandidateRead(
+                    ledger_entry_id=entry.id,
+                    invoice_id=entry.invoice_id,
+                    entry_type=entry.entry_type,
+                    source=entry.source,
+                    amount=round_money(to_decimal(entry.amount)),
+                    currency=entry.currency,
+                )
+                for entry in allocation_entries
+            ],
+            billing_account_candidate_entries=[
+                BillingAccountLedgerEvidenceCandidateRead(
+                    billing_account_ledger_entry_id=entry.id,
+                    entry_type=entry.entry_type,
+                    source=entry.source,
+                    amount=round_money(to_decimal(entry.amount)),
+                    currency=entry.currency,
+                    balance_after=round_money(to_decimal(entry.balance_after)),
+                )
+                for entry in billing_entries
+            ],
+            provenance_candidates=ConsolidatedPaymentSettlements._provenance_candidates(
+                db, payment
+            ),
+        )
+
+    @classmethod
+    def _build_reconciliation_preview(
+        cls,
+        db: Session,
+        payment_id: str,
+        request: BillingAccountPaymentSettlementReconciliationRequest,
+        *,
+        lock: bool = False,
+    ) -> BillingAccountPaymentSettlementReconciliationPreviewRead:
+        initial = get_by_id(db, Payment, payment_id)
+        if initial is None:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if initial.billing_account_id is None or initial.account_id is not None:
+            raise HTTPException(status_code=409, detail="Payment is not consolidated")
+
+        if lock:
+            account = lock_for_update(db, BillingAccount, initial.billing_account_id)
+            payment = lock_for_update(db, Payment, initial.id)
+        else:
+            account = get_by_id(db, BillingAccount, initial.billing_account_id)
+            payment = initial
+        if account is None or payment is None:
+            raise HTTPException(status_code=409, detail="Payment ownership is missing")
+        if payment.billing_account_id != account.id or payment.account_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Payment ownership changed after evidence selection",
+            )
+        if not payment.is_active or payment.status != PaymentStatus.succeeded:
+            raise HTTPException(
+                status_code=409,
+                detail="Only an active historical succeeded payment can be reconciled",
+            )
+        if payment.settlement is not None:
+            raise HTTPException(
+                status_code=409, detail="Payment already has settlement evidence"
+            )
+        if payment.refunds or payment.reversal is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Refunded or reversed payment evidence requires separate review",
+            )
+
+        allocation_query = (
+            db.query(PaymentAllocation)
+            .filter(PaymentAllocation.payment_id == payment.id)
+            .order_by(PaymentAllocation.created_at.asc(), PaymentAllocation.id.asc())
+        )
+        if lock:
+            allocation_query = allocation_query.with_for_update()
+        all_allocations = allocation_query.all()
+        if any(not allocation.is_active for allocation in all_allocations):
+            raise HTTPException(
+                status_code=409,
+                detail="Inactive historical allocations require separate review",
+            )
+        allocations = [
+            allocation for allocation in all_allocations if allocation.is_active
+        ]
+        expected_ids = {allocation.id for allocation in allocations}
+        if set(request.allocation_ledger_entry_ids) != expected_ids:
+            raise HTTPException(
+                status_code=409,
+                detail="Every active allocation requires one explicit ledger selection",
+            )
+        selected_ids = list(request.allocation_ledger_entry_ids.values())
+        if len(selected_ids) != len(set(selected_ids)):
+            raise HTTPException(
+                status_code=409, detail="A ledger entry cannot prove two allocations"
+            )
+
+        effects: list[BillingAccountPaymentSettlementAllocationEvidenceRead] = []
+        allocated = Decimal("0.00")
+        for allocation in allocations:
+            if allocation.consumption_ledger_entry_id is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Later consolidated-credit allocations cannot be reclassified",
+                )
+            if (
+                db.query(BillingAccountCreditAllocationItem.id)
+                .filter(
+                    BillingAccountCreditAllocationItem.payment_allocation_id
+                    == allocation.id
+                )
+                .first()
+                is not None
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Later consolidated-credit allocations cannot be reclassified",
+                )
+            entry_id = request.allocation_ledger_entry_ids[allocation.id]
+            entry = (
+                lock_for_update(db, LedgerEntry, entry_id)
+                if lock
+                else get_by_id(db, LedgerEntry, entry_id)
+            )
+            invoice = get_by_id(db, Invoice, allocation.invoice_id)
+            expected_amount = round_money(to_decimal(allocation.amount))
+            if (
+                entry is None
+                or not entry.is_active
+                or invoice is None
+                or entry.payment_id != payment.id
+                or entry.invoice_id != allocation.invoice_id
+                or entry.account_id != invoice.account_id
+                or entry.entry_type != LedgerEntryType.credit
+                or entry.source != LedgerSource.payment
+                or entry.currency != payment.currency
+                or round_money(to_decimal(entry.amount)) != expected_amount
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Selected allocation ledger entry is not an exact match",
+                )
+            existing_claim = (
+                db.query(PaymentAllocation.id)
+                .filter(PaymentAllocation.ledger_entry_id == entry.id)
+                .filter(PaymentAllocation.id != allocation.id)
+                .first()
+            )
+            if existing_claim is not None or (
+                allocation.ledger_entry_id is not None
+                and allocation.ledger_entry_id != entry.id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Selected allocation evidence is already claimed",
+                )
+            effects.append(
+                BillingAccountPaymentSettlementAllocationEvidenceRead(
+                    payment_allocation_id=allocation.id,
+                    invoice_id=allocation.invoice_id,
+                    account_id=invoice.account_id,
+                    amount=expected_amount,
+                    ledger_entry_id=entry.id,
+                )
+            )
+            allocated = round_money(allocated + expected_amount)
+
+        payment_amount = round_money(to_decimal(payment.amount))
+        unallocated = round_money(payment_amount - allocated)
+        if unallocated < Decimal("0.00"):
+            raise HTTPException(
+                status_code=409, detail="Historical allocations exceed payment amount"
+            )
+
+        billing_entry: BillingAccountLedgerEntry | None = None
+        if unallocated > Decimal("0.00"):
+            if request.billing_account_ledger_entry_id is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Unallocated remainder requires billing-account ledger evidence",
+                )
+            billing_entry = (
+                lock_for_update(
+                    db,
+                    BillingAccountLedgerEntry,
+                    request.billing_account_ledger_entry_id,
+                )
+                if lock
+                else get_by_id(
+                    db,
+                    BillingAccountLedgerEntry,
+                    request.billing_account_ledger_entry_id,
+                )
+            )
+            if (
+                billing_entry is None
+                or not billing_entry.is_active
+                or billing_entry.billing_account_id != account.id
+                or billing_entry.payment_id != payment.id
+                or billing_entry.entry_type != LedgerEntryType.credit
+                or billing_entry.source != LedgerSource.payment
+                or billing_entry.currency != payment.currency
+                or round_money(to_decimal(billing_entry.amount)) != unallocated
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Selected billing-account ledger entry is not an exact match",
+                )
+            existing_settlement = (
+                db.query(PaymentSettlement.id)
+                .filter(
+                    PaymentSettlement.billing_account_ledger_entry_id
+                    == billing_entry.id
+                )
+                .first()
+            )
+            if existing_settlement is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Selected billing-account evidence is already claimed",
+                )
+        elif request.billing_account_ledger_entry_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Fully allocated payment cannot select billing-account evidence",
+            )
+
+        provenance = cls._provenance_candidates(db, payment, lock=lock)
+        if len(provenance) != 1:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Historical consolidated payment requires exactly one matching "
+                    "cash provenance record"
+                ),
+            )
+        selected_provenance = provenance[0]
+        if (
+            selected_provenance.provenance_type != request.provenance_type
+            or selected_provenance.provenance_id != request.provenance_id
+        ):
+            raise HTTPException(
+                status_code=409, detail="Selected cash provenance is not an exact match"
+            )
+        evidence_claim = db.query(
+            ConsolidatedPaymentSettlementReconciliationEvidence.id
+        )
+        if request.provenance_type == "provider_event":
+            evidence_claim = evidence_claim.filter(
+                ConsolidatedPaymentSettlementReconciliationEvidence.provider_event_id
+                == request.provenance_id
+            )
+        elif request.provenance_type == "payment_proof":
+            evidence_claim = evidence_claim.filter(
+                ConsolidatedPaymentSettlementReconciliationEvidence.payment_proof_id
+                == request.provenance_id
+            )
+        else:
+            evidence_claim = evidence_claim.filter(
+                ConsolidatedPaymentSettlementReconciliationEvidence.topup_intent_id
+                == request.provenance_id
+            )
+        if evidence_claim.first() is not None:
+            raise HTTPException(
+                status_code=409, detail="Selected cash provenance is already claimed"
+            )
+
+        recorded = round_money(to_decimal(account.balance))
+        evidenced = _billing_account_evidenced_balance(db, account)
+        values: dict[str, object] = {
+            "payment_id": str(payment.id),
+            "billing_account_id": str(account.id),
+            "payment_state": payment.status.value,
+            "payment_amount": str(payment_amount),
+            "currency": payment.currency,
+            "recorded_consolidated_credit": str(recorded),
+            "evidenced_consolidated_credit": str(evidenced),
+            "projection_drift": str(round_money(recorded - evidenced)),
+            "allocated_amount": str(allocated),
+            "unallocated_amount": str(unallocated),
+            "allocation_evidence": [
+                effect.model_dump(mode="json") for effect in effects
+            ],
+            "billing_account_ledger_entry_id": (
+                str(billing_entry.id) if billing_entry is not None else None
+            ),
+            "billing_account_ledger_balance_after": (
+                str(round_money(to_decimal(billing_entry.balance_after)))
+                if billing_entry is not None
+                else None
+            ),
+            "provenance_type": selected_provenance.provenance_type,
+            "provenance_id": str(selected_provenance.provenance_id),
+            "provenance_status": selected_provenance.status,
+            "money_posted": False,
+            "service_access_consequence": "none_evidence_only_no_access_decision",
+        }
+        return BillingAccountPaymentSettlementReconciliationPreviewRead(
+            payment_id=payment.id,
+            billing_account_id=account.id,
+            payment_state=payment.status,
+            payment_amount=payment_amount,
+            currency=payment.currency,
+            recorded_consolidated_credit=recorded,
+            evidenced_consolidated_credit=evidenced,
+            projection_drift=round_money(recorded - evidenced),
+            allocated_amount=allocated,
+            unallocated_amount=unallocated,
+            allocation_evidence=effects,
+            billing_account_ledger_entry_id=(
+                billing_entry.id if billing_entry is not None else None
+            ),
+            provenance_type=selected_provenance.provenance_type,
+            provenance_id=selected_provenance.provenance_id,
+            money_posted=False,
+            service_access_consequence=str(values["service_access_consequence"]),
+            fingerprint=_reconciliation_fingerprint(request, values),
+        )
+
+    @classmethod
+    def preview_reconciliation(
+        cls,
+        db: Session,
+        payment_id: str,
+        request: BillingAccountPaymentSettlementReconciliationRequest,
+    ) -> BillingAccountPaymentSettlementReconciliationPreviewRead:
+        return cls._build_reconciliation_preview(db, payment_id, request)
+
+    @staticmethod
+    def _reconciliation_replay(
+        db: Session,
+        *,
+        key: str,
+        fingerprint: str,
+    ) -> ConsolidatedPaymentSettlementReconciliationResult | None:
+        reservation = (
+            db.query(IdempotencyKey)
+            .filter(IdempotencyKey.scope == _RECONCILIATION_IDEMPOTENCY_SCOPE)
+            .filter(IdempotencyKey.key == key)
+            .first()
+        )
+        if reservation is None:
+            return None
+        if not reservation.ref_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Consolidated settlement reconciliation is in progress",
+            )
+        settlement = get_by_id(db, PaymentSettlement, reservation.ref_id)
+        if (
+            settlement is None
+            or settlement.consolidated_reconciliation_evidence is None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Consolidated settlement reconciliation evidence is incomplete",
+            )
+        if settlement.preview_fingerprint != fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency key was used with a different reconciliation",
+            )
+        return ConsolidatedPaymentSettlementReconciliationResult(
+            settlement=settlement,
+            evidence=settlement.consolidated_reconciliation_evidence,
+            preview=None,
+            idempotent_replay=True,
+        )
+
+    @classmethod
+    def reconcile_historical_evidence(
+        cls,
+        db: Session,
+        payment_id: str,
+        command: BillingAccountPaymentSettlementReconciliationConfirm,
+        *,
+        actor_type: AuditActorType = AuditActorType.system,
+        actor_id: str | None = None,
+        commit: bool = True,
+    ) -> ConsolidatedPaymentSettlementReconciliationResult:
+        """Confirm reviewed historical structure without posting or deciding access."""
+        key = _normalize_key(command.idempotency_key)
+        replay = cls._reconciliation_replay(
+            db, key=key, fingerprint=command.preview_fingerprint
+        )
+        if replay is not None:
+            return replay
+        request = BillingAccountPaymentSettlementReconciliationRequest(
+            **command.model_dump(exclude={"preview_fingerprint", "idempotency_key"})
+        )
+        preview = cls._build_reconciliation_preview(db, payment_id, request, lock=True)
+        if preview.fingerprint != command.preview_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="Financial evidence changed after preview; preview again",
+            )
+        replay = cls._reconciliation_replay(
+            db, key=key, fingerprint=command.preview_fingerprint
+        )
+        if replay is not None:
+            return replay
+
+        reservation = IdempotencyKey(scope=_RECONCILIATION_IDEMPOTENCY_SCOPE, key=key)
+        db.add(reservation)
+        try:
+            payment = lock_for_update(db, Payment, preview.payment_id)
+            if payment is None:
+                raise HTTPException(status_code=404, detail="Payment not found")
+            allocations = {
+                allocation.id: allocation
+                for allocation in (
+                    db.query(PaymentAllocation)
+                    .filter(PaymentAllocation.payment_id == payment.id)
+                    .with_for_update()
+                    .all()
+                )
+            }
+            for effect in preview.allocation_evidence:
+                allocations[
+                    effect.payment_allocation_id
+                ].ledger_entry_id = effect.ledger_entry_id
+            settlement = PaymentSettlement(
+                payment_id=payment.id,
+                billing_account_ledger_entry_id=(
+                    preview.billing_account_ledger_entry_id
+                ),
+                amount=preview.payment_amount,
+                unallocated_amount=preview.unallocated_amount,
+                prepaid_amount=Decimal("0.00"),
+                currency=preview.currency,
+                origin=PaymentSettlementOrigin.system,
+                preview_fingerprint=preview.fingerprint,
+                idempotency_key=key,
+            )
+            db.add(settlement)
+            db.flush()
+            evidence_values: dict[str, object] = {
+                "settlement_id": settlement.id,
+                "reason": command.reason.strip(),
+            }
+            evidence_values[f"{command.provenance_type}_id"] = command.provenance_id
+            evidence = ConsolidatedPaymentSettlementReconciliationEvidence(
+                **evidence_values
+            )
+            db.add(evidence)
+            db.flush()
+            AuditEvents.stage(
+                db,
+                AuditEventCreate(
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    action="reconcile_consolidated_settlement_evidence",
+                    entity_type="payment",
+                    entity_id=str(payment.id),
+                    metadata_={
+                        "billing_account_id": str(preview.billing_account_id),
+                        "settlement_id": str(settlement.id),
+                        "reconciliation_evidence_id": str(evidence.id),
+                        "reason": command.reason.strip(),
+                        "preview_fingerprint": preview.fingerprint,
+                        "allocation_ledger_entry_ids": {
+                            str(effect.payment_allocation_id): str(
+                                effect.ledger_entry_id
+                            )
+                            for effect in preview.allocation_evidence
+                        },
+                        "billing_account_ledger_entry_id": (
+                            str(preview.billing_account_ledger_entry_id)
+                            if preview.billing_account_ledger_entry_id
+                            else None
+                        ),
+                        "provenance_type": preview.provenance_type,
+                        "provenance_id": str(preview.provenance_id),
+                        "payment_amount": str(preview.payment_amount),
+                        "allocated_amount": str(preview.allocated_amount),
+                        "unallocated_amount": str(preview.unallocated_amount),
+                        "recorded_consolidated_credit": str(
+                            preview.recorded_consolidated_credit
+                        ),
+                        "evidenced_consolidated_credit": str(
+                            preview.evidenced_consolidated_credit
+                        ),
+                        "projection_drift": str(preview.projection_drift),
+                        "money_posted": False,
+                        "service_access_consequence": (
+                            preview.service_access_consequence
+                        ),
+                    },
+                ),
+            )
+            reservation.ref_id = str(settlement.id)
+            db.flush()
+            if commit:
+                db.commit()
+                db.refresh(settlement)
+                db.refresh(evidence)
+            return ConsolidatedPaymentSettlementReconciliationResult(
+                settlement=settlement,
+                evidence=evidence,
+                preview=preview,
+            )
+        except IntegrityError as exc:
+            db.rollback()
+            replay = cls._reconciliation_replay(
+                db, key=key, fingerprint=command.preview_fingerprint
+            )
+            if replay is not None:
+                return replay
+            raise HTTPException(
+                status_code=409,
+                detail="Consolidated settlement evidence is already reconciled",
             ) from exc
         except Exception:
             db.rollback()

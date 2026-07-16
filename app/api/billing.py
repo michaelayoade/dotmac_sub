@@ -27,6 +27,11 @@ from app.schemas.billing import (
     BillingAccountPaymentRefundRequest,
     BillingAccountPaymentReversalPreviewRead,
     BillingAccountPaymentReversalRequest,
+    BillingAccountPaymentSettlementEvidenceInspectionRead,
+    BillingAccountPaymentSettlementReconciliationConfirm,
+    BillingAccountPaymentSettlementReconciliationPreviewRead,
+    BillingAccountPaymentSettlementReconciliationRequest,
+    BillingAccountPaymentSettlementReconciliationResultRead,
     BillingAccountRead,
     BillingAccountStatement,
     BillingAccountUpdate,
@@ -1719,6 +1724,89 @@ def reconcile_payment_settlement_evidence(
     return billing_service.payments.reconcile_settlement_evidence(
         db, payment_id, payload
     )
+
+
+@router.get(
+    "/consolidated-payments/{payment_id}/settlement/evidence",
+    response_model=BillingAccountPaymentSettlementEvidenceInspectionRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:read"))],
+)
+def inspect_consolidated_payment_settlement_evidence(
+    payment_id: str,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_settlements.inspect_reconciliation_evidence(
+            db, payment_id
+        ),
+    )
+
+
+@router.post(
+    "/consolidated-payments/{payment_id}/settlement/evidence/preview",
+    response_model=BillingAccountPaymentSettlementReconciliationPreviewRead,
+    tags=["payments"],
+    dependencies=[Depends(require_permission("billing:ledger:write"))],
+)
+def preview_consolidated_payment_settlement_evidence(
+    payment_id: str,
+    payload: BillingAccountPaymentSettlementReconciliationRequest,
+    db: Session = Depends(get_db),
+):
+    return finish_read_response(
+        db,
+        billing_service.consolidated_payment_settlements.preview_reconciliation(
+            db, payment_id, payload
+        ),
+    )
+
+
+@router.post(
+    "/consolidated-payments/{payment_id}/settlement/evidence/reconcile",
+    response_model=BillingAccountPaymentSettlementReconciliationResultRead,
+    status_code=status.HTTP_201_CREATED,
+    tags=["payments"],
+)
+def reconcile_consolidated_payment_settlement_evidence(
+    payment_id: str,
+    payload: BillingAccountPaymentSettlementReconciliationConfirm,
+    db: Session = Depends(get_db),
+    principal: dict = Depends(require_permission("billing:ledger:write")),
+):
+    actor_type, actor_id = _financial_actor(principal)
+    result = (
+        billing_service.consolidated_payment_settlements.reconcile_historical_evidence(
+            db,
+            payment_id,
+            payload,
+            actor_type=actor_type,
+            actor_id=actor_id,
+        )
+    )
+    evidence = result.evidence
+    if evidence.provider_event_id is not None:
+        provenance_type = "provider_event"
+        provenance_id = evidence.provider_event_id
+    elif evidence.payment_proof_id is not None:
+        provenance_type = "payment_proof"
+        provenance_id = evidence.payment_proof_id
+    else:
+        if evidence.topup_intent_id is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Consolidated settlement provenance evidence is incomplete",
+            )
+        provenance_type = "topup_intent"
+        provenance_id = evidence.topup_intent_id
+    return {
+        "settlement": result.settlement,
+        "reconciliation_evidence_id": evidence.id,
+        "provenance_type": provenance_type,
+        "provenance_id": provenance_id,
+        "idempotent_replay": result.idempotent_replay,
+    }
 
 
 # --- Customer-initiated online payment (hosted checkout) ------------------

@@ -1455,6 +1455,69 @@ class PaymentSettlement(Base):
         "BillingAccountLedgerEntry",
         foreign_keys=[billing_account_ledger_entry_id],
     )
+    consolidated_reconciliation_evidence = relationship(
+        "ConsolidatedPaymentSettlementReconciliationEvidence",
+        back_populates="settlement",
+        uselist=False,
+    )
+
+
+class ConsolidatedPaymentSettlementReconciliationEvidence(Base):
+    """Reviewed provenance for one historical consolidated settlement."""
+
+    __tablename__ = "consolidated_payment_settlement_reconciliation_evidence"
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN provider_event_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN payment_proof_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "CASE WHEN topup_intent_id IS NOT NULL THEN 1 ELSE 0 END) = 1",
+            name="ck_consolidated_settle_recon_exactly_one_provenance",
+        ),
+        UniqueConstraint(
+            "settlement_id", name="uq_consolidated_settle_recon_settlement"
+        ),
+        UniqueConstraint(
+            "provider_event_id", name="uq_consolidated_settle_recon_provider_event"
+        ),
+        UniqueConstraint(
+            "payment_proof_id", name="uq_consolidated_settle_recon_payment_proof"
+        ),
+        UniqueConstraint(
+            "topup_intent_id", name="uq_consolidated_settle_recon_topup_intent"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    settlement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_settlements.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    provider_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_provider_events.id", ondelete="RESTRICT"),
+    )
+    payment_proof_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_proofs.id", ondelete="RESTRICT"),
+    )
+    topup_intent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("topup_intents.id", ondelete="RESTRICT"),
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    settlement = relationship(
+        "PaymentSettlement", back_populates="consolidated_reconciliation_evidence"
+    )
+    provider_event = relationship("PaymentProviderEvent")
+    payment_proof = relationship("PaymentProof")
+    topup_intent = relationship("TopupIntent")
 
 
 class TopupIntent(Base):

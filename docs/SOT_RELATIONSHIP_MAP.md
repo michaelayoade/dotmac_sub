@@ -418,11 +418,25 @@ Consolidated payment settlement has a separate scoped owner contract:
   proof approval treat their verified fact or human approval as confirmation
   but still bind it to the owner-produced fingerprint and stable idempotency
   key.
+- Historical boundary: revision
+  `316_consolidated_settlement_reconciliation` adds reviewed structural
+  provenance for historical consolidated settlements. Inspection lists exact
+  subscriber-ledger, billing-account-ledger, and original-cash candidates;
+  preview requires the complete payment partition plus exactly one matching
+  processed provider event, verified payment proof, or completed top-up intent.
+  Confirmation locks and rechecks those rows, links them to one settlement,
+  records actor audit and idempotency evidence, and posts no new money. Missing
+  or ambiguous cash provenance is refused, so a legacy synthesized succeeded
+  payment cannot become trusted merely because its allocations add up.
+- Drift boundary: recorded `BillingAccount.balance`, ledger-evidenced
+  consolidated credit, and their projection drift are shown separately in the
+  inspection and preview. Historical settlement reconciliation does not repair
+  that drift, change access, or infer any restoration amount, eligibility, or
+  billing date.
 - Cutover gate: read-only preview, exact dual-ledger evidence, stale-preview
   rejection, idempotent replay, pending/no-money behavior, generic-writer gate,
-  provider replay, admin/API boundary, and owner-registry tests remain green.
-  Historical succeeded consolidated payments are not guessed into evidence;
-  they require a later explicit reconciliation slice.
+  provider replay, historical provenance refusal, admin/API boundary, and
+  owner-registry tests remain green.
 
 Consolidated-credit allocation is a separate transfer owned by the same scoped
 financial service:

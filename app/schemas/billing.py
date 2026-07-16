@@ -601,6 +601,92 @@ class PaymentSettlementReconciliationRequest(BaseModel):
     reason: str = Field(min_length=8, max_length=500)
 
 
+class BillingAccountLedgerEvidenceCandidateRead(BaseModel):
+    billing_account_ledger_entry_id: UUID
+    entry_type: LedgerEntryType
+    source: LedgerSource
+    amount: Decimal
+    currency: str
+    balance_after: Decimal
+
+
+class BillingAccountPaymentProvenanceCandidateRead(BaseModel):
+    provenance_type: str
+    provenance_id: UUID
+    status: str
+    amount: Decimal
+    currency: str
+
+
+class BillingAccountPaymentSettlementEvidenceInspectionRead(BaseModel):
+    payment_id: UUID
+    billing_account_id: UUID
+    payment_state: PaymentStatus
+    payment_amount: Decimal
+    currency: str
+    already_reconciled: bool
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    active_allocation_ids: list[UUID]
+    allocation_candidate_entries: list[PaymentSettlementEvidenceCandidateRead]
+    billing_account_candidate_entries: list[BillingAccountLedgerEvidenceCandidateRead]
+    provenance_candidates: list[BillingAccountPaymentProvenanceCandidateRead]
+
+
+class BillingAccountPaymentSettlementReconciliationRequest(BaseModel):
+    allocation_ledger_entry_ids: dict[UUID, UUID]
+    billing_account_ledger_entry_id: UUID | None = None
+    provenance_type: str = Field(
+        pattern="^(provider_event|payment_proof|topup_intent)$"
+    )
+    provenance_id: UUID
+    reason: str = Field(min_length=8, max_length=500)
+
+
+class BillingAccountPaymentSettlementAllocationEvidenceRead(BaseModel):
+    payment_allocation_id: UUID
+    invoice_id: UUID
+    account_id: UUID
+    amount: Decimal
+    ledger_entry_id: UUID
+
+
+class BillingAccountPaymentSettlementReconciliationPreviewRead(BaseModel):
+    payment_id: UUID
+    billing_account_id: UUID
+    payment_state: PaymentStatus
+    payment_amount: Decimal
+    currency: str
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    allocated_amount: Decimal
+    unallocated_amount: Decimal
+    allocation_evidence: list[BillingAccountPaymentSettlementAllocationEvidenceRead]
+    billing_account_ledger_entry_id: UUID | None = None
+    provenance_type: str
+    provenance_id: UUID
+    money_posted: bool
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountPaymentSettlementReconciliationConfirm(
+    BillingAccountPaymentSettlementReconciliationRequest
+):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+
+
+class BillingAccountPaymentSettlementReconciliationResultRead(BaseModel):
+    settlement: PaymentSettlementRead
+    reconciliation_evidence_id: UUID
+    provenance_type: str
+    provenance_id: UUID
+    idempotent_replay: bool = False
+
+
 class PaymentUpdate(BaseModel):
     account_id: UUID | None = None
     billing_account_id: UUID | None = None

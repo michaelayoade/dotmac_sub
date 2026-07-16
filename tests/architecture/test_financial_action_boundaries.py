@@ -282,6 +282,24 @@ def test_consolidated_credit_allocation_uses_owner_preview_and_confirmation() ->
     assert "Service access is not decided by this screen" in confirmation
 
 
+def test_consolidated_settlement_reconciliation_is_an_evidence_only_adapter() -> None:
+    api = _source("app/api/billing.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+
+    assert '"/consolidated-payments/{payment_id}/settlement/evidence"' in api
+    assert '"/consolidated-payments/{payment_id}/settlement/evidence/preview"' in api
+    assert '"/consolidated-payments/{payment_id}/settlement/evidence/reconcile"' in api
+    assert "inspect_reconciliation_evidence(" in api
+    assert "preview_reconciliation(" in api
+    assert "reconcile_historical_evidence(" in api
+    assert "PaymentSettlement(" not in api
+    assert "ConsolidatedPaymentSettlementReconciliationEvidence(" not in api
+    assert "def reconcile_historical_evidence(" in owner
+    assert 'action="reconcile_consolidated_settlement_evidence"' in owner
+    assert '"money_posted": False' in owner
+    assert '"none_evidence_only_no_access_decision"' in owner
+
+
 def test_native_credit_reconciliation_composes_the_payment_allocation_owner() -> None:
     reconciliation = _source("app/services/billing/reconcile_unposted.py")
 

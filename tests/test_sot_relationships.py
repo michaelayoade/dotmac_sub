@@ -381,6 +381,18 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert consolidated_settlement_owner is not None
     assert consolidated_settlement_owner.name == "financial.consolidated_payments"
 
+    consolidated_reconciliation_owner = sot_relationships.owning_service_for(
+        "historical consolidated settlement evidence reconciliation"
+    )
+    assert consolidated_reconciliation_owner is not None
+    assert consolidated_reconciliation_owner.name == "financial.consolidated_payments"
+
+    consolidated_provenance_owner = sot_relationships.owning_service_for(
+        "exact consolidated settlement cash provenance links"
+    )
+    assert consolidated_provenance_owner is not None
+    assert consolidated_provenance_owner.name == "financial.consolidated_payments"
+
     consolidated_ledger_owner = sot_relationships.owning_service_for(
         "exact consolidated-credit ledger links"
     )

@@ -33,6 +33,7 @@ from app.models.billing import (  # noqa: F401
     BillingRun,
     BillingRunSchedule,
     BillingRunStatus,
+    ConsolidatedPaymentSettlementReconciliationEvidence,
     CreditNote,
     CreditNoteApplication,
     CreditNoteLine,

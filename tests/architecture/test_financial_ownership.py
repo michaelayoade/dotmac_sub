@@ -73,6 +73,10 @@ APPROVED_CONSOLIDATED_RETURN_EVIDENCE_WRITERS = {
     Path("app/services/billing/consolidated_payments.py")
 }
 
+APPROVED_CONSOLIDATED_SETTLEMENT_RECONCILIATION_WRITERS = {
+    Path("app/services/billing/consolidated_payments.py")
+}
+
 APPROVED_PAYMENT_IMPORT_BATCH_REVERSAL_WRITERS = {
     Path("app/services/financial_import_batch_reversals.py")
 }
@@ -286,6 +290,19 @@ def test_only_consolidated_credit_owner_constructs_allocation_evidence() -> None
     assert not items, (
         "BillingAccountCreditAllocationItem constructed outside its owner:\n  "
         + "\n  ".join(items)
+    )
+
+
+def test_only_consolidated_owner_constructs_reconciliation_evidence() -> None:
+    violations = _violations(
+        lambda path: _constructor_lines(
+            path, "ConsolidatedPaymentSettlementReconciliationEvidence"
+        ),
+        APPROVED_CONSOLIDATED_SETTLEMENT_RECONCILIATION_WRITERS,
+    )
+    assert not violations, (
+        "Consolidated settlement reconciliation evidence constructed outside "
+        "its owner:\n  " + "\n  ".join(violations)
     )
 
 
