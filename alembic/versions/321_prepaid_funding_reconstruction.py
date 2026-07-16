@@ -1,7 +1,7 @@
 """Add reviewed prepaid funding reconstruction authority.
 
-Revision ID: 320_prepaid_funding_reconstruction
-Revises: 319_prepaid_enforcement_readiness
+Revision ID: 321_prepaid_funding_reconstruction
+Revises: 320_prepaid_enforcement_readiness
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "320_prepaid_funding_reconstruction"
-down_revision = "319_prepaid_enforcement_readiness"
+revision = "321_prepaid_funding_reconstruction"
+down_revision = "320_prepaid_enforcement_readiness"
 branch_labels = None
 depends_on = None
 

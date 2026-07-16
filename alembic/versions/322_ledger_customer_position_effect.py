@@ -1,7 +1,7 @@
 """Classify ledger rows that affect the customer financial position.
 
-Revision ID: 321_ledger_customer_position_effect
-Revises: 320_prepaid_funding_reconstruction
+Revision ID: 322_ledger_customer_position_effect
+Revises: 321_prepaid_funding_reconstruction
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "321_ledger_customer_position_effect"
-down_revision = "320_prepaid_funding_reconstruction"
+revision = "322_ledger_customer_position_effect"
+down_revision = "321_prepaid_funding_reconstruction"
 branch_labels = None
 depends_on = None
 
