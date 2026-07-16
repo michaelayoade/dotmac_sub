@@ -229,7 +229,6 @@ app.services.user_profile
 app.services.vendor_admin
 app.services.vendor_portal_operations
 app.services.vendor_purchase_invoices
-app.services.web_admin_resellers
 app.services.web_billing_invoice_batch
 app.services.web_billing_payments
 app.services.web_billing_reconciliation
