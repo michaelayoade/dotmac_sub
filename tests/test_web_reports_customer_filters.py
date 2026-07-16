@@ -60,8 +60,7 @@ def test_customer_report_is_visible_from_reports_hub():
     # The export is gated with the same permission as the page (customer:read).
     assert (
         '"/customers/export", '
-        'dependencies=[Depends(require_permission("customer:read"))]'
-        in route_source
+        'dependencies=[Depends(require_permission("customer:read"))]' in route_source
     )
     assert "Customer Report - Admin" in page_template
     assert 'action="/admin/reports/customers"' in page_template
