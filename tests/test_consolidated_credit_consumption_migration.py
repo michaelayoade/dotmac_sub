@@ -7,9 +7,9 @@ from pathlib import Path
 def _load_migration():
     path = (
         Path(__file__).resolve().parents[1]
-        / "alembic/versions/323_consolidated_credit_consumption_reconciliation.py"
+        / "alembic/versions/325_consolidated_credit_consumption_reconciliation.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_323", path)
+    spec = importlib.util.spec_from_file_location("migration_325", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -19,8 +19,8 @@ def _load_migration():
 def test_consolidated_credit_consumption_revision_is_linear_and_structural():
     migration = _load_migration()
 
-    assert migration.revision == "323_consolidated_credit_consumption_reconciliation"
-    assert migration.down_revision == "322_ledger_customer_position_effect"
+    assert migration.revision == "325_consolidated_credit_consumption_reconciliation"
+    assert migration.down_revision == "324_connectivity_backup_radius_targets"
     source = Path(migration.__file__).read_text(encoding="utf-8")
     assert "consolidated_credit_consumption_reconciliation_evidence" in source
     assert "billing_account_credit_allocations.id" in source

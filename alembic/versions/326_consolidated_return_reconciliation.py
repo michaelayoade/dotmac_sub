@@ -1,7 +1,7 @@
 """Add reviewed consolidated refund/reversal reconciliation evidence.
 
-Revision ID: 324_consolidated_return_reconciliation
-Revises: 323_consolidated_credit_consumption_reconciliation
+Revision ID: 326_consolidated_return_reconciliation
+Revises: 325_consolidated_credit_consumption_reconciliation
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "324_consolidated_return_reconciliation"
-down_revision = "323_consolidated_credit_consumption_reconciliation"
+revision = "326_consolidated_return_reconciliation"
+down_revision = "325_consolidated_credit_consumption_reconciliation"
 branch_labels = None
 depends_on = None
 
