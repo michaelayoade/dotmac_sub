@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.catalog import BillingMode, Subscription
+from app.models.catalog import BillingMode, CatalogOffer, Subscription
 from app.models.subscriber import Subscriber
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 
@@ -62,6 +62,22 @@ class BillingModeTransitionDecision:
     reason: str | None
     requires_subscription_alignment: bool
     profile: BillingProfile
+
+
+@dataclass(frozen=True)
+class SubscriptionBillingModeWriteDecision:
+    account_mode: BillingMode | None
+    offer_mode: BillingMode | None
+    requested_mode: BillingMode | None
+    resolved_mode: BillingMode | None
+    allowed: bool
+    reason: str | None = None
+
+
+class BillingModeWriteRejected(ValueError):
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason.replace("_", " "))
 
 
 def resolve_billing_profile(db: Session, account: Subscriber) -> BillingProfile:
@@ -134,6 +150,21 @@ def plan_billing_mode_transition(
             profile=profile,
         )
 
+    if (
+        profile.effective_mode == target_mode
+        and profile.account_subscription_mismatch
+        and not profile.has_mixed_subscription_modes
+    ):
+        return BillingModeTransitionDecision(
+            account_id=profile.account_id,
+            current_mode=profile.account_mode,
+            target_mode=target_mode,
+            allowed=True,
+            reason="align_account_to_collectible_subscriptions",
+            requires_subscription_alignment=False,
+            profile=profile,
+        )
+
     if profile.has_mixed_subscription_modes and not allow_mixed_subscription_modes:
         return BillingModeTransitionDecision(
             account_id=profile.account_id,
@@ -165,3 +196,74 @@ def plan_billing_mode_transition(
         requires_subscription_alignment=profile.has_collectible_subscriptions,
         profile=profile,
     )
+
+
+def plan_subscription_billing_mode_write(
+    *,
+    account_mode: BillingMode | None,
+    offer_mode: BillingMode | None,
+    requested_mode: BillingMode | None,
+) -> SubscriptionBillingModeWriteDecision:
+    if (
+        account_mode is not None
+        and offer_mode is not None
+        and account_mode != offer_mode
+    ):
+        return SubscriptionBillingModeWriteDecision(
+            account_mode=account_mode,
+            offer_mode=offer_mode,
+            requested_mode=requested_mode,
+            resolved_mode=None,
+            allowed=False,
+            reason="account_offer_billing_mode_mismatch",
+        )
+
+    resolved_mode = offer_mode or account_mode or requested_mode
+    if resolved_mode is None:
+        return SubscriptionBillingModeWriteDecision(
+            account_mode=account_mode,
+            offer_mode=offer_mode,
+            requested_mode=requested_mode,
+            resolved_mode=None,
+            allowed=False,
+            reason="billing_mode_unresolved",
+        )
+    if requested_mode is not None and requested_mode != resolved_mode:
+        return SubscriptionBillingModeWriteDecision(
+            account_mode=account_mode,
+            offer_mode=offer_mode,
+            requested_mode=requested_mode,
+            resolved_mode=resolved_mode,
+            allowed=False,
+            reason="requested_billing_mode_mismatch",
+        )
+    return SubscriptionBillingModeWriteDecision(
+        account_mode=account_mode,
+        offer_mode=offer_mode,
+        requested_mode=requested_mode,
+        resolved_mode=resolved_mode,
+        allowed=True,
+    )
+
+
+def resolve_subscription_billing_mode_for_write(
+    db: Session,
+    *,
+    account_id: UUID | str,
+    offer_id: UUID | str,
+    requested_mode: BillingMode | None = None,
+) -> BillingMode:
+    account = db.get(Subscriber, account_id)
+    if account is None:
+        raise BillingModeWriteRejected("subscriber_not_found")
+    offer = db.get(CatalogOffer, offer_id)
+    if offer is None:
+        raise BillingModeWriteRejected("offer_not_found")
+    decision = plan_subscription_billing_mode_write(
+        account_mode=account.billing_mode,
+        offer_mode=offer.billing_mode,
+        requested_mode=requested_mode,
+    )
+    if not decision.allowed or decision.resolved_mode is None:
+        raise BillingModeWriteRejected(decision.reason or "billing_mode_unresolved")
+    return decision.resolved_mode

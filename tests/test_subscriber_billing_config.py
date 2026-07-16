@@ -1,5 +1,9 @@
 from decimal import Decimal
 
+import pytest
+from fastapi import HTTPException
+
+from app.models.catalog import BillingMode, SubscriptionStatus
 from app.schemas.subscriber import SubscriberUpdate
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
@@ -47,6 +51,42 @@ def test_subscriber_detail_includes_billing_config_snapshot(db_session, subscrib
     assert "deactivation_period_days" not in cfg
     assert "next_block_at" not in cfg
     assert "next_block_label" not in cfg
+
+
+def test_generic_account_update_rejects_mode_change_with_collectible_service(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        subscriber_service.subscribers.update(
+            db_session,
+            str(subscriber_account.id),
+            SubscriberUpdate(billing_mode=BillingMode.postpaid),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "collectible" in exc_info.value.detail
+
+
+def test_generic_account_update_can_repair_mode_to_collectible_service(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    updated = subscriber_service.subscribers.update(
+        db_session,
+        str(subscriber_account.id),
+        SubscriberUpdate(billing_mode=BillingMode.prepaid),
+    )
+
+    assert updated.billing_mode == BillingMode.prepaid
 
 
 def test_billing_defaults_do_not_materialize_inherited_grace(

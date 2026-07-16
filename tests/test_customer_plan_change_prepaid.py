@@ -1788,6 +1788,8 @@ def test_postpaid_plan_change_applies_when_no_arrears(
 ):
     """With no overdue balance, a postpaid change still auto-applies."""
     _stub_plan_change_side_effects(monkeypatch)
+    subscriber.billing_mode = BillingMode.postpaid
+    db_session.commit()
     current_offer = _make_offer(
         db_session,
         name="Unlimited Basic",

@@ -887,6 +887,28 @@ class Subscribers(ListResponseMixin):
         requested_is_active = data.pop("is_active", None)
         category = data.pop("category", None)
         data.pop("organization_id", None)
+        requested_billing_mode = data.get("billing_mode")
+        if requested_billing_mode is not None:
+            from app.services.billing_profile import (
+                plan_billing_mode_transition,
+                resolve_billing_profile,
+            )
+
+            decision = plan_billing_mode_transition(
+                resolve_billing_profile(db, subscriber),
+                requested_billing_mode,
+            )
+            if not decision.allowed or decision.requires_subscription_alignment:
+                reason = (
+                    decision.reason or "collectible_subscriptions_require_alignment"
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Billing mode cannot be changed through a generic account "
+                        f"update: {reason}"
+                    ),
+                )
         for key, value in data.items():
             setattr(subscriber, key, value)
         if category is not None:
