@@ -19,6 +19,7 @@ def _patch(
     skip_weekends=False,
     skip_holidays=None,
     tz="UTC",
+    mode="audit",
 ):
     def fake(db, domain, key):
         if domain == SettingDomain.scheduler and key == "timezone":
@@ -29,6 +30,7 @@ def _patch(
                 "enforcement_window_end": end,
                 "enforcement_skip_weekends": skip_weekends,
                 "enforcement_skip_holidays": skip_holidays,
+                "enforcement_window_mode": mode,
             }.get(key)
         return None
 
@@ -68,3 +70,24 @@ def test_skip_holidays(monkeypatch):
     _patch(monkeypatch, skip_holidays=["2026-01-05"])
     assert ew.within_enforcement_window(object(), MON_NOON) is False
     assert ew.within_enforcement_window(object(), SAT_NOON) is True
+
+
+def test_audit_mode_reports_closed_without_deferring(monkeypatch):
+    _patch(monkeypatch, start="09:00", end="17:00", mode="audit")
+
+    decision = ew.resolve_enforcement_window_decision(object(), MON_8PM)
+
+    assert decision.inside_window is False
+    assert decision.block_reason == "outside_window"
+    assert decision.enforced is False
+    assert decision.should_defer is False
+
+
+def test_enforce_mode_defers_outside_window(monkeypatch):
+    _patch(monkeypatch, start="09:00", end="17:00", mode="enforce")
+
+    decision = ew.resolve_enforcement_window_decision(object(), MON_8PM)
+
+    assert decision.inside_window is False
+    assert decision.enforced is True
+    assert decision.should_defer is True

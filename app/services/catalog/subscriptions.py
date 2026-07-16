@@ -63,6 +63,32 @@ def _ensure_utc(value: datetime | None) -> datetime | None:
     return value
 
 
+def _subscription_billing_mode_for_write(
+    db: Session,
+    *,
+    subscriber_id: str,
+    offer_id: str,
+    requested_mode: BillingMode | None,
+) -> BillingMode:
+    from app.services.billing_profile import (
+        BillingModeWriteRejected,
+        resolve_subscription_billing_mode_for_write,
+    )
+
+    try:
+        return resolve_subscription_billing_mode_for_write(
+            db,
+            account_id=subscriber_id,
+            offer_id=offer_id,
+            requested_mode=requested_mode,
+        )
+    except BillingModeWriteRejected as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Subscription billing mode is not aligned: {exc.reason}",
+        ) from exc
+
+
 def _add_months(value: datetime, months: int) -> datetime:
     total = value.month - 1 + months
     year = value.year + total // 12
@@ -1168,20 +1194,14 @@ class Subscriptions(ListResponseMixin):
                 data["contract_term"] = validate_enum(
                     default_contract_term, ContractTerm, "contract_term"
                 )
-        if "billing_mode" not in fields_set:
-            # Inherit from subscriber first, then fall back to offer
-            from app.models.subscriber import Subscriber
-
-            subscriber = db.get(Subscriber, str(payload.subscriber_id))
-            if subscriber and subscriber.billing_mode:
-                data["billing_mode"] = subscriber.billing_mode
-            else:
-                offer = db.get(CatalogOffer, str(payload.offer_id))
-                data["billing_mode"] = (
-                    offer.billing_mode
-                    if offer and offer.billing_mode
-                    else BillingMode.prepaid
-                )
+        data["billing_mode"] = _subscription_billing_mode_for_write(
+            db,
+            subscriber_id=str(payload.subscriber_id),
+            offer_id=str(payload.offer_id),
+            requested_mode=(
+                data.get("billing_mode") if "billing_mode" in fields_set else None
+            ),
+        )
         if (
             "start_at" not in fields_set
             and data.get("status") == SubscriptionStatus.active
@@ -1461,6 +1481,14 @@ class Subscriptions(ListResponseMixin):
         )
         catalog_validators.validate_offer_active(db, offer_id)
 
+        if {"subscriber_id", "offer_id", "billing_mode"}.intersection(data):
+            data["billing_mode"] = _subscription_billing_mode_for_write(
+                db,
+                subscriber_id=subscriber_id,
+                offer_id=offer_id,
+                requested_mode=data.get("billing_mode"),
+            )
+
         # Plan change validation and proration
         offer_changing = (
             "offer_id" in data
@@ -1597,21 +1625,6 @@ class Subscriptions(ListResponseMixin):
             data["unit_price"] = _offer_recurring_price_amount(
                 db, str(data["offer_id"])
             )
-
-        # Re-derive billing_mode from the new offer on an offer change (unless one
-        # was supplied), so it can't drift out of sync — only Subscription.billing_mode
-        # gates invoicing, and a stale mode silently leaves a sub on the wrong
-        # billing path. For active subs _validate_plan_change already rejects a
-        # cross-mode change, so this is a no-op there; it closes the gap for
-        # non-active subs whose offer is switched without that guard.
-        if (
-            "offer_id" in data
-            and str(data["offer_id"]) != str(previous_offer_id)
-            and "billing_mode" not in data
-        ):
-            new_offer = db.get(CatalogOffer, str(data["offer_id"]))
-            if new_offer and new_offer.billing_mode:
-                data["billing_mode"] = new_offer.billing_mode
 
         status = data.get("status", subscription.status)
         # State-machine guard: the raw form/CRUD write path must not resurrect a

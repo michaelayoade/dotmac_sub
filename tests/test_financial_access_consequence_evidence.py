@@ -41,6 +41,7 @@ from app.services.collections._core import (
     preview_financial_access_consequence,
     preview_financial_access_restoration,
 )
+from app.services.enforcement_window import EnforcementWindowDecision
 
 
 def _prepare_postpaid(db, account, subscription) -> Invoice:
@@ -185,6 +186,81 @@ def test_suspend_confirmation_rejects_stale_preview(
 
     assert db_session.query(EnforcementLock).count() == 0
     assert db_session.query(FinancialAccessConsequence).count() == 0
+
+
+def test_postpaid_enforcement_is_evidenced_and_deferred_outside_window(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    _prepare_postpaid(db_session, subscriber_account, subscription)
+    monkeypatch.setattr(
+        "app.services.collections._core.enforcement_window."
+        "resolve_enforcement_window_decision",
+        lambda db: EnforcementWindowDecision(
+            mode="enforce",
+            inside_window=False,
+            block_reason="outside_window",
+        ),
+    )
+
+    preview = preview_financial_access_consequence(
+        db_session,
+        str(subscriber_account.id),
+        action=FinancialAccessAction.suspend,
+        reason=EnforcementReason.overdue,
+        origin=FinancialAccessOrigin.dunning,
+        overdue_days=7,
+    )
+
+    assert preview.eligible is False
+    assert preview.outcome == "outside_enforcement_window"
+    assert preview.decision_inputs["enforcement_window_mode"] == "enforce"
+    assert preview.decision_inputs["enforcement_window_block_reason"] == (
+        "outside_window"
+    )
+
+    result = confirm_financial_access_consequence(
+        db_session,
+        str(subscriber_account.id),
+        action=FinancialAccessAction.suspend,
+        reason=EnforcementReason.overdue,
+        origin=FinancialAccessOrigin.dunning,
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key=f"outside-window-{subscriber_account.id}",
+        source="test:outside_window",
+        overdue_days=7,
+    )
+
+    assert result.consequence.eligible is False
+    assert result.consequence.outcome == "outside_enforcement_window"
+    assert db_session.query(EnforcementLock).count() == 0
+
+
+def test_postpaid_enforcement_audit_mode_does_not_defer(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    _prepare_postpaid(db_session, subscriber_account, subscription)
+    monkeypatch.setattr(
+        "app.services.collections._core.enforcement_window."
+        "resolve_enforcement_window_decision",
+        lambda db: EnforcementWindowDecision(
+            mode="audit",
+            inside_window=False,
+            block_reason="outside_window",
+        ),
+    )
+
+    preview = preview_financial_access_consequence(
+        db_session,
+        str(subscriber_account.id),
+        action=FinancialAccessAction.suspend,
+        reason=EnforcementReason.overdue,
+        origin=FinancialAccessOrigin.dunning,
+        overdue_days=7,
+    )
+
+    assert preview.eligible is True
+    assert preview.outcome == "suspend_ready"
+    assert preview.decision_inputs["enforcement_window_mode"] == "audit"
 
 
 def test_restore_confirmation_links_lock_case_and_exact_profile(

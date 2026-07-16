@@ -1,6 +1,6 @@
 # Billing / dunning enforcement time-of-day window
 
-Status: in progress (Phase 1 landed). Owner: billing.
+Status: enforcement gate implemented; rollout defaults to audit. Owner: billing.
 
 ## Problem
 
@@ -91,14 +91,11 @@ in the deploy note (it shifts when existing daily jobs fire).
    now; the admin UI is phase 4.
 4. **Cron admin UI** *(landed)* — edit type/cron/interval, server-side cron validation, active-TZ + next-run preview.
 5. **Unify timezone** — celery app TZ ← `scheduler.timezone`.
-6. **Enforcement gating** *(6a audit landed)* — `within_enforcement_window`
-   (`collections.enforcement_window_start`/`_end` + skip weekends/holidays, local
-   tz) instruments the postpaid overdue-suspend (`enforcement.py
-   _handle_invoice_overdue`) and dunning (`_execute_dunning_action`) paths:
-   when an enforcing action fires outside the configured window it logs
-   `enforcement_window_audit would_gate=true` WITHOUT skipping. **6b (follow-up):**
-   flip to actually deferring (flag-gated) once the would_gate logs confirm the
-   window config.
+6. **Enforcement gating** — `collections.enforcement_window_mode` selects
+   `audit` or `enforce`. Audit records a closed-window decision without changing
+   eligibility. Enforce makes the canonical financial-access preview ineligible
+   with `outside_enforcement_window`; confirmation recomputes and fingerprints
+   the same decision before recording the deferred consequence.
 
 ## Risks / rollout
 

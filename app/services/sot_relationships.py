@@ -41,6 +41,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="customer.profile_commands",
+                module="app.services.web_customer_actions",
+                owns=(
+                    "admin customer profile edits",
+                    "person-to-business customer conversion",
+                ),
+                depends_on=("customer.identity_scope",),
+                notes=(
+                    "Business conversion is an explicit command. Generic "
+                    "person edits and form category controls must not change "
+                    "the customer account type."
+                ),
+            ),
+            SOTService(
                 name="customer.network_context",
                 module="app.services.customer_network_context",
                 owns=(

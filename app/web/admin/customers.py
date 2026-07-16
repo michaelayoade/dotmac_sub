@@ -1558,6 +1558,81 @@ def business_update(
 
 
 @router.post(
+    "/person/{customer_id}/convert-to-business",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
+def person_convert_to_business(
+    request: Request,
+    customer_id: str,
+    company_name: str = Form(...),
+    legal_name: str | None = Form(None),
+    tax_id: str | None = Form(None),
+    domain: str | None = Form(None),
+    website: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Convert an individual customer into a business customer."""
+    try:
+        before, after = (
+            web_customer_actions_service.convert_person_to_business_customer(
+                db=db,
+                customer_id=customer_id,
+                company_name=company_name,
+                legal_name=legal_name,
+                tax_id=tax_id,
+                domain=domain,
+                website=website,
+            )
+        )
+        metadata_payload = build_changes_metadata(before, after)
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="convert_to_business",
+            entity_type="subscriber",
+            entity_id=str(customer_id),
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata=metadata_payload,
+        )
+        return RedirectResponse(
+            url=f"/admin/customers/person/{customer_id}",
+            status_code=303,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        from app.web.admin import get_current_user, get_sidebar_stats
+
+        sidebar_stats = get_sidebar_stats(db)
+        current_user = get_current_user(request)
+        try:
+            customer = _get_subscriber(db=db, subscriber_id=customer_id)
+        except Exception:
+            customer = None
+        return templates.TemplateResponse(
+            "admin/customers/form.html",
+            {
+                "request": request,
+                "customer": customer,
+                "customer_type": "person",
+                "action": "edit",
+                "error": _safe_form_error(e),
+                "tax_rates": _load_tax_rates(db),
+                "billing_form": _billing_form_defaults(db, "person", customer),
+                "customer_audit_items": _customer_audit_items(db, customer),
+                "current_user": current_user,
+                "sidebar_stats": sidebar_stats,
+            },
+            status_code=400,
+        )
+
+
+@router.post(
     "/person/{customer_id}/deactivate",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:write"))],
