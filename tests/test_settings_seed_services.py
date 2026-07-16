@@ -564,6 +564,32 @@ class TestSeedSchedulerSettings:
         assert setting is not None
         assert setting.value_text == "America/New_York"
 
+    def test_seeds_event_outbox_dispatch_settings(self, db_session, monkeypatch):
+        monkeypatch.setenv("EVENT_DISPATCH_ENABLED", "true")
+        monkeypatch.setenv("EVENT_DISPATCH_INTERVAL_SECONDS", "30")
+        monkeypatch.setenv("EVENT_DISPATCH_BATCH_SIZE", "250")
+
+        settings_seed.seed_scheduler_settings(db_session)
+
+        rows = {
+            row.key: row
+            for row in db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.scheduler,
+                DomainSetting.key.in_(
+                    {
+                        "event_dispatch_enabled",
+                        "event_dispatch_interval_seconds",
+                        "event_dispatch_batch_size",
+                    }
+                ),
+            )
+            .all()
+        }
+        assert rows["event_dispatch_enabled"].value_json is True
+        assert rows["event_dispatch_interval_seconds"].value_text == "30"
+        assert rows["event_dispatch_batch_size"].value_text == "250"
+
 
 # =============================================================================
 # Radius Settings Tests

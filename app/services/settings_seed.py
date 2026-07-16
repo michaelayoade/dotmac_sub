@@ -1295,6 +1295,26 @@ def seed_scheduler_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("CELERY_BEAT_REFRESH_MINUTES", "5"),
     )
+    event_dispatch_enabled = os.getenv("EVENT_DISPATCH_ENABLED", "true")
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=event_dispatch_enabled,
+        value_json=event_dispatch_enabled.lower() in {"1", "true", "yes", "on"},
+    )
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_interval_seconds",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("EVENT_DISPATCH_INTERVAL_SECONDS", "60"),
+    )
+    scheduler_settings.ensure_by_key(
+        db,
+        key="event_dispatch_batch_size",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("EVENT_DISPATCH_BATCH_SIZE", "100"),
+    )
     for key, env_name, default in [
         ("crm_ticket_pull_interval_minutes", "CRM_TICKET_PULL_INTERVAL_MINUTES", "5"),
         ("crm_cache_list_seconds", "CRM_CACHE_LIST_SECONDS", "60"),
