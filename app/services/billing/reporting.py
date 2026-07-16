@@ -29,7 +29,8 @@ from app.models.billing import (
 from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services import settings_spec
+from app.services import display_format, settings_spec
+from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.subscription_lifecycle_policy import mrr_countable_service_filters
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,7 @@ class BillingReporting:
 
         Returns:
             Dictionary with keys:
-            - total_revenue: Sum of paid invoice totals
+            - total_revenue: Settled value of collectible invoices
             - pending_amount: Sum of pending/sent invoice totals
             - overdue_amount: Sum of overdue invoice totals
             - total_invoices: Total invoice count
@@ -176,20 +177,39 @@ class BillingReporting:
             - overdue_count: Number of overdue invoices
             - draft_count: Number of draft invoices
         """
+        customer_facing_statuses = (
+            InvoiceStatus.issued,
+            InvoiceStatus.partially_paid,
+            InvoiceStatus.overdue,
+            InvoiceStatus.paid,
+        )
+        settled_value = case(
+            (
+                and_(
+                    Invoice.status.in_(customer_facing_statuses),
+                    Invoice.total > Invoice.balance_due,
+                ),
+                Invoice.total - Invoice.balance_due,
+            ),
+            else_=Decimal("0"),
+        )
         stmt = select(
             func.coalesce(
-                func.sum(
-                    case(
-                        (Invoice.status == InvoiceStatus.paid, Invoice.total),
-                        else_=Decimal("0"),
-                    )
-                ),
+                func.sum(settled_value),
                 Decimal("0"),
             ).label("total_revenue"),
             func.coalesce(
                 func.sum(
                     case(
-                        (Invoice.status == InvoiceStatus.issued, Invoice.total),
+                        (
+                            Invoice.status.in_(
+                                (
+                                    InvoiceStatus.issued,
+                                    InvoiceStatus.partially_paid,
+                                )
+                            ),
+                            Invoice.balance_due,
+                        ),
                         else_=Decimal("0"),
                     )
                 ),
@@ -198,26 +218,59 @@ class BillingReporting:
             func.coalesce(
                 func.sum(
                     case(
-                        (Invoice.status == InvoiceStatus.overdue, Invoice.total),
+                        (Invoice.status == InvoiceStatus.overdue, Invoice.balance_due),
                         else_=Decimal("0"),
                     )
                 ),
                 Decimal("0"),
             ).label("overdue_amount"),
             func.count().label("total_invoices"),
-            func.count(case((Invoice.status == InvoiceStatus.paid, 1))).label(
-                "paid_count"
-            ),
-            func.count(case((Invoice.status == InvoiceStatus.issued, 1))).label(
-                "pending_count"
-            ),
-            func.count(case((Invoice.status == InvoiceStatus.overdue, 1))).label(
-                "overdue_count"
-            ),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Invoice.status.in_(customer_facing_statuses),
+                            Invoice.balance_due <= Decimal("0"),
+                        ),
+                        1,
+                    )
+                )
+            ).label("paid_count"),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Invoice.status.in_(
+                                (
+                                    InvoiceStatus.issued,
+                                    InvoiceStatus.partially_paid,
+                                )
+                            ),
+                            Invoice.balance_due > Decimal("0"),
+                        ),
+                        1,
+                    )
+                )
+            ).label("pending_count"),
+            func.count(
+                case(
+                    (
+                        and_(
+                            Invoice.status == InvoiceStatus.overdue,
+                            Invoice.balance_due > Decimal("0"),
+                        ),
+                        1,
+                    )
+                )
+            ).label("overdue_count"),
             func.count(case((Invoice.status == InvoiceStatus.draft, 1))).label(
                 "draft_count"
             ),
-        ).where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.is_proforma.is_(False),
+            collectible_ar_invoice_filter(),
+        )
         if partner_id or location:
             stmt = stmt.join(Subscriber, Invoice.account_id == Subscriber.id)
             if partner_id:
@@ -252,14 +305,11 @@ class BillingReporting:
 
         Returns:
             Dictionary with keys:
-            - total_balance: Sum of all account min_balance values
+            - total_balance: Collectible AR in the configured display currency
             - active_count: Number of active accounts
             - suspended_count: Number of suspended accounts
         """
-        stmt = select(
-            func.coalesce(func.sum(Subscriber.min_balance), Decimal("0")).label(
-                "total_balance"
-            ),
+        account_stmt = select(
             func.count(case((Subscriber.status == SubscriberStatus.active, 1))).label(
                 "active_count"
             ),
@@ -267,16 +317,45 @@ class BillingReporting:
                 case((Subscriber.status == SubscriberStatus.suspended, 1))
             ).label("suspended_count"),
         )
+        default_currency = display_format.default_currency(db)
+        balance_stmt = select(
+            func.coalesce(func.sum(Invoice.balance_due), Decimal("0")).label(
+                "total_balance"
+            )
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.is_proforma.is_(False),
+            Invoice.status.in_(
+                (
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                )
+            ),
+            Invoice.balance_due > Decimal("0"),
+            Invoice.currency == default_currency,
+            collectible_ar_invoice_filter(),
+        )
+        if partner_id or location:
+            balance_stmt = balance_stmt.join(
+                Subscriber, Invoice.account_id == Subscriber.id
+            )
         if partner_id:
-            stmt = stmt.where(cast(Subscriber.reseller_id, String) == partner_id)
+            partner_filter = cast(Subscriber.reseller_id, String) == partner_id
+            account_stmt = account_stmt.where(partner_filter)
+            balance_stmt = balance_stmt.where(partner_filter)
         if location:
-            stmt = stmt.where(_subscriber_location_expr() == location.lower())
-        row = db.execute(stmt).one()
+            location_filter = _subscriber_location_expr() == location.lower()
+            account_stmt = account_stmt.where(location_filter)
+            balance_stmt = balance_stmt.where(location_filter)
+        account_row = db.execute(account_stmt).one()
+        balance_row = db.execute(balance_stmt).one()
 
         return {
-            "total_balance": float(row.total_balance),
-            "active_count": row.active_count,
-            "suspended_count": row.suspended_count,
+            "total_balance": float(balance_row.total_balance),
+            "total_balance_currency": default_currency,
+            "active_count": account_row.active_count,
+            "suspended_count": account_row.suspended_count,
         }
 
     @staticmethod
@@ -301,7 +380,10 @@ class BillingReporting:
         stmt = (
             select(Invoice)
             .where(Invoice.is_active.is_(True))  # exclude soft-deleted invoices
+            .where(Invoice.is_proforma.is_(False))
             .where(Invoice.status.in_(unpaid_statuses))
+            .where(Invoice.balance_due > Decimal("0"))
+            .where(collectible_ar_invoice_filter())
             .order_by(Invoice.due_at.asc())
         )
         invoices = db.scalars(stmt).all()
@@ -463,7 +545,13 @@ class BillingReporting:
         unpaid_stmt = select(
             func.count().label("count"),
             func.coalesce(func.sum(Invoice.balance_due), Decimal("0")).label("total"),
-        ).where(Invoice.status.in_(unpaid_statuses))
+        ).where(
+            Invoice.is_active.is_(True),
+            Invoice.is_proforma.is_(False),
+            Invoice.status.in_(unpaid_statuses),
+            Invoice.balance_due > Decimal("0"),
+            collectible_ar_invoice_filter(),
+        )
         if period_start is not None:
             unpaid_stmt = unpaid_stmt.where(Invoice.created_at >= period_start)
         if period_end is not None:
