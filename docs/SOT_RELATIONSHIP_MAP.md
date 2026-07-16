@@ -49,6 +49,7 @@ but equivalent state and actions resolve through the same backend owners.
 20. `ui_bulk_actions`
 21. `ui_semantic_presentation`
 22. `vpn_remote_access`
+23. `geospatial`
 
 Rule: each PR should finish one domain slice: define the owner service, migrate
 the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
@@ -1424,3 +1425,14 @@ through these owners. `web_vpn_*` adapters and device-access code do not build
 WireGuard config, mutate peers, or write the system interface directly. The
 Redis `vpn_cache` is a rebuildable projection of server/peer configs, never a
 source of truth.
+
+## Geospatial
+
+1. `gis.geocoding`: owns address and coordinate resolution, geocode lookup, and
+   result caching.
+2. `gis.spatial_sync`: owns GIS/spatial data synchronization and spatial feature
+   import and projection.
+
+Rule: address/coordinate resolution and spatial data synchronization resolve
+through these owners. API, web, and task callers request a geocode or a sync
+outcome; they do not embed their own geocode lookups or spatial write logic.
