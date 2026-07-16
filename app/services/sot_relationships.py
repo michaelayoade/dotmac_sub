@@ -1922,6 +1922,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "(operations:dispatch:read/write/assign)."
                 ),
             ),
+            SOTService(
+                name="ui.project_list_projection",
+                module="app.services.web_projects",
+                owns=(
+                    "admin project searchable fields",
+                    "admin project filter and stable sort semantics",
+                    "admin project list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "operations.project_lifecycle",
+                ),
+                notes=(
+                    "projects_service.projects.list (operations.project_lifecycle) "
+                    "owns the canonical filtered/sorted project query; this "
+                    "projection declares the list capabilities and normalizes "
+                    "request state, then delegates the read. It issues no query of "
+                    "its own. Gated by the existing granular project:read."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",
