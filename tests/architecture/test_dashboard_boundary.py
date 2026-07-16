@@ -13,10 +13,7 @@ import re
 from pathlib import Path
 
 _SOURCE = (
-    Path(__file__).resolve().parents[2]
-    / "app"
-    / "services"
-    / "web_admin_dashboard.py"
+    Path(__file__).resolve().parents[2] / "app" / "services" / "web_admin_dashboard.py"
 )
 
 # Config/identity imports the dashboard may keep: settings resolution and the
