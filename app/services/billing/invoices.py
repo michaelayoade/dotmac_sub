@@ -42,6 +42,7 @@ from app.schemas.billing import (
     InvoiceLineUpdate,
     InvoiceUpdate,
     LedgerEntryCreate,
+    SystemInvoiceLineCreate,
 )
 from app.services import numbering, settings_spec
 from app.services.audit import AuditEvents
@@ -1910,6 +1911,87 @@ class Invoices(ListResponseMixin):
 
 
 class InvoiceLines(ListResponseMixin):
+    @staticmethod
+    def stage_system_line(
+        db: Session,
+        payload: SystemInvoiceLineCreate,
+        *,
+        reason: str,
+    ) -> InvoiceLine:
+        """Stage one automation-produced invoice line in its caller transaction."""
+        invoice = lock_for_update(db, Invoice, payload.invoice_id)
+        if not invoice or not invoice.is_active:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        if invoice.status not in {InvoiceStatus.draft, InvoiceStatus.issued}:
+            raise HTTPException(
+                status_code=409,
+                detail="System lines may be added only to draft or issued invoices",
+            )
+        _resolve_tax_rate(db, str(payload.tax_rate_id) if payload.tax_rate_id else None)
+        amount = round_money(
+            payload.amount
+            if payload.amount is not None
+            else payload.quantity * payload.unit_price
+        )
+        data = payload.model_dump(exclude={"amount"})
+        billing_line_key = data.pop("billing_line_key", None)
+        if billing_line_key:
+            existing = db.scalar(
+                select(InvoiceLine)
+                .where(InvoiceLine.billing_line_key == billing_line_key)
+                .where(InvoiceLine.is_active.is_(True))
+            )
+            if existing is not None:
+                expected = {
+                    "invoice_id": payload.invoice_id,
+                    "subscription_id": payload.subscription_id,
+                    "description": payload.description,
+                    "quantity": payload.quantity,
+                    "unit_price": payload.unit_price,
+                    "amount": amount,
+                    "tax_rate_id": payload.tax_rate_id,
+                    "tax_application": payload.tax_application,
+                    "metadata_": payload.metadata_,
+                }
+                if any(
+                    getattr(existing, field) != value
+                    for field, value in expected.items()
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Billing line key was used for a different invoice line",
+                    )
+                return existing
+        line = InvoiceLine(
+            **data,
+            amount=amount,
+            billing_line_key=billing_line_key,
+        )
+        db.add(line)
+        db.flush()
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                action="stage_system_invoice_line",
+                entity_type="invoice_line",
+                entity_id=str(line.id),
+                metadata_={
+                    "invoice_id": str(invoice.id),
+                    "account_id": str(invoice.account_id),
+                    "subscription_id": (
+                        str(line.subscription_id) if line.subscription_id else None
+                    ),
+                    "amount": str(line.amount),
+                    "currency": invoice.currency,
+                    "billing_line_key": line.billing_line_key,
+                    "reason": reason,
+                    "financial_effect": "invoice_document_staged",
+                    "ledger_transaction_id": None,
+                },
+            ),
+        )
+        return line
+
     @staticmethod
     def create(db: Session, payload: InvoiceLineCreate):
         invoice = get_by_id(db, Invoice, payload.invoice_id)

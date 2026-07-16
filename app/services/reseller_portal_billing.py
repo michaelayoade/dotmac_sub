@@ -8,6 +8,7 @@ subscribers receive allocations.
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -22,7 +23,11 @@ from app.models.billing import (
     TopupIntent,
 )
 from app.models.subscriber import Reseller, Subscriber
-from app.schemas.billing import BillingAccountPaymentPreviewRequest
+from app.schemas.billing import (
+    BillingAccountCreditAllocationConfirm,
+    BillingAccountCreditAllocationPreviewRequest,
+    BillingAccountPaymentPreviewRequest,
+)
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services.billing.consolidated_payments import consolidated_settlement_key
@@ -50,9 +55,21 @@ def get_billing_account_summary(
         db, str(ba.id), subscriber_search=subscriber_search
     )
     transfer_settings = customer_payments.direct_bank_transfer_settings(db)
+    subscriber_rows: list[dict] = []
+    for subscriber_line in statement.subscribers:
+        row = subscriber_line.model_dump()
+        capability = billing_service.consolidated_credit_allocations.capability(
+            db, str(ba.id), str(subscriber_line.subscriber_id)
+        )
+        row.update(
+            allocation_allowed=bool(capability["allowed"]),
+            allocation_max=capability["maximum"],
+            allocation_reason=capability["reason"],
+        )
+        subscriber_rows.append(row)
     return {
         "billing_account": statement.billing_account,
-        "subscribers": [s.model_dump() for s in statement.subscribers],
+        "subscribers": subscriber_rows,
         "recent_payments": [p.model_dump() for p in statement.recent_payments],
         "total_outstanding": statement.total_outstanding,
         "unallocated_balance": statement.unallocated_balance,
@@ -323,13 +340,58 @@ def allocate_unallocated_to_subscriber(
     subscriber_id: str,
     amount: Decimal | int | float | str | None = None,
 ) -> dict:
-    """Apply reseller unallocated credit to one selected subscriber."""
+    """Reject the retired one-step consolidated allocation adapter."""
+    del db, reseller_id, subscriber_id, amount
+    raise ValueError("Preview and explicitly confirm consolidated credit allocation")
+
+
+def preview_unallocated_to_subscriber(
+    db: Session,
+    reseller_id: str,
+    subscriber_id: str,
+    amount: Decimal | int | float | str | None = None,
+):
+    """Return the owner preview for one reseller credit allocation."""
     from fastapi import HTTPException
 
     ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
     try:
-        return billing_service.payments.allocate_consolidated_balance_to_subscriber(
-            db, str(ba.id), subscriber_id, amount=amount
+        preview = billing_service.consolidated_credit_allocations.preview(
+            db,
+            str(ba.id),
+            subscriber_id,
+            BillingAccountCreditAllocationPreviewRequest(
+                amount=to_decimal(amount) if amount is not None else None
+            ),
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else "Allocation unavailable"
+        raise ValueError(detail) from exc
+    return {
+        "preview": preview,
+        "idempotency_key": f"reseller-credit-allocation-{uuid.uuid4()}",
+    }
+
+
+def confirm_unallocated_to_subscriber(
+    db: Session,
+    reseller_id: str,
+    subscriber_id: str,
+    command: BillingAccountCreditAllocationConfirm,
+    *,
+    actor_id: str | None = None,
+):
+    """Confirm one owner preview and return exact resulting evidence."""
+    from fastapi import HTTPException
+
+    ba = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+    try:
+        return billing_service.consolidated_credit_allocations.confirm(
+            db,
+            str(ba.id),
+            subscriber_id,
+            command,
+            actor_id=actor_id,
         )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, str) else "Allocation failed"
@@ -561,6 +623,8 @@ __all__ = [
     "list_payment_methods",
     "payment_method_api_dict",
     "allocate_unallocated_to_subscriber",
+    "confirm_unallocated_to_subscriber",
+    "preview_unallocated_to_subscriber",
     "remove_payment_method",
     "set_default_payment_method",
     "start_consolidated_payment",

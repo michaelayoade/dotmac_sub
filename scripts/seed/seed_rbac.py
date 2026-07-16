@@ -79,6 +79,8 @@ DEFAULT_PERMISSIONS = [
     ("customer:impersonate", "Impersonate customer accounts"),
     ("customer:write", "Manage customers through compatibility endpoints"),
     ("reseller:impersonate", "Impersonate reseller portal principals"),
+    ("reseller:read", "View resellers"),
+    ("reseller:write", "Manage resellers"),
     # Billing - Invoices
     ("billing:invoice:read", "View invoices"),
     ("billing:invoice:create", "Create invoices"),
@@ -209,10 +211,6 @@ DEFAULT_PERMISSIONS = [
     ("operations:dispatch:read", "View dispatch work orders and maps"),
     ("operations:dispatch:write", "Create and edit dispatch work orders"),
     ("operations:dispatch:assign", "Queue and assign dispatch work orders"),
-    # Coarse router-level guard for the app.api.dispatch API. Retained until the
-    # API is split into per-endpoint granular gates (follow-up); the admin web
-    # dispatch surface is granular (read/write/assign above).
-    ("operations:dispatch", "Dispatch API access (coarse, pending API split)"),
     ("operations:material_request:read", "View material requests"),
     ("operations:material_request:write", "Manage material requests"),
     # Support - Tickets
@@ -326,6 +324,7 @@ ROLE_PERMISSIONS = {
         "billing:batch:read",
         "billing_account:read",
         "customer:read",
+        "reseller:read",
         "reports:billing",
         "reports:subscribers",
     ],
@@ -377,6 +376,7 @@ ROLE_PERMISSIONS = {
         "provisioning:read",
         "provisioning:write",
         "customer:read",
+        "reseller:read",
         "subscription:read",
         "operations:work_order:read",
         "operations:work_order:update",
@@ -387,6 +387,7 @@ ROLE_PERMISSIONS = {
     ],
     "support": [
         "customer:read",
+        "reseller:read",
         "customer:update",
         "billing:invoice:read",
         "billing:payment:read",
@@ -444,6 +445,7 @@ ROLE_PERMISSIONS = {
         "billing_account:distribute",
         "reports:billing",
         "customer:read",
+        "reseller:read",
     ],
 }
 

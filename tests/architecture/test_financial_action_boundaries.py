@@ -128,6 +128,9 @@ def test_payment_refund_adapters_require_owner_preview_and_exact_evidence() -> N
     edit = _source("templates/admin/billing/payment_form.html")
     confirmation = _source("templates/admin/billing/payment_refund_confirm.html")
     provider = _source("app/services/billing/providers.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+    web_service = _source("app/services/web_billing_payments.py")
+    generic_api = _source("app/api/billing.py")
 
     assert '"/payments/{payment_id:uuid}/refund/preview"' in route
     assert "preview_fingerprint: str = Form(...)" in route
@@ -143,6 +146,16 @@ def test_payment_refund_adapters_require_owner_preview_and_exact_evidence() -> N
     assert "Exact evidence and access consequence" in confirmation
     assert "does not promise a particular service-access state" in confirmation
     assert "Refunds.process_provider_event_refund" in provider
+    assert "ConsolidatedPaymentRefunds.process_provider_event" in provider
+    assert "consolidated_payment_refunds.preview" in web_service
+    assert "consolidated_payment_refunds.confirm" in web_service
+    assert "consolidated_payment_refunds.preview" in generic_api
+    assert "consolidated_payment_refunds.confirm" in generic_api
+    assert "class ConsolidatedPaymentRefunds" in owner
+    assert 'action="refund_consolidated_payment"' in owner
+    assert "ConsolidatedPaymentReturnAllocationEvidence(" in owner
+    assert "Consolidated credit" in confirmation
+    assert "subscriber allocation-reversal ledger row(s)" in confirmation
     assert "Payments.mark_status(" in provider
     assert "origin=PaymentSettlementOrigin.provider_event" in provider
 
@@ -155,6 +168,8 @@ def test_payment_reversal_adapters_require_owner_preview_and_exact_evidence() ->
     provider = _source("app/services/billing/providers.py")
     verified_webhook = _source("app/services/api_billing_webhooks.py")
     generic_api = _source("app/api/billing.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+    web_service = _source("app/services/web_billing_payments.py")
 
     assert '"/payments/{payment_id:uuid}/reversal/preview"' in route
     assert "preview_fingerprint: str = Form(...)" in route
@@ -169,6 +184,15 @@ def test_payment_reversal_adapters_require_owner_preview_and_exact_evidence() ->
     assert "Exact evidence and access consequence" in confirmation
     assert "does not contact a bank or provider" in confirmation
     assert "PaymentReversals.process_provider_event_reversal" in provider
+    assert "ConsolidatedPaymentReversals.process_provider_event" in provider
+    assert "consolidated_payment_reversals.preview" in web_service
+    assert "consolidated_payment_reversals.confirm" in web_service
+    assert "consolidated_payment_reversals.preview" in generic_api
+    assert "consolidated_payment_reversals.confirm" in generic_api
+    assert "class ConsolidatedPaymentReversals" in owner
+    assert 'action="reverse_consolidated_payment"' in owner
+    assert "Consolidated credit" in confirmation
+    assert "subscriber allocation-reversal ledger row(s)" in confirmation
     assert "trusted_financial_effects=True" in verified_webhook
     assert "trusted_financial_effects=True" not in generic_api
 
@@ -230,6 +254,64 @@ def test_payment_creation_settlement_and_allocation_use_owner_confirmation() -> 
     assert "Exact account-credit ledger" in allocation
 
 
+def test_consolidated_credit_allocation_uses_owner_preview_and_confirmation() -> None:
+    web_route = _source("app/web/reseller/routes.py")
+    api = _source("app/api/reseller.py")
+    adapter = _source("app/services/reseller_portal_billing.py")
+    index = _source("templates/reseller/billing/index.html")
+    confirmation = _source("templates/reseller/billing/allocation_confirm.html")
+
+    assert '"/billing/subscribers/{subscriber_id}/allocate/preview"' in web_route
+    assert '"/billing/subscribers/{subscriber_id}/allocate/confirm"' in web_route
+    assert "preview_fingerprint: str = Form(...)" in web_route
+    assert "idempotency_key: str = Form(...)" in web_route
+    assert '"/billing/subscribers/{subscriber_id}/allocation/preview"' in api
+    assert '"/billing/subscribers/{subscriber_id}/allocation/confirm"' in api
+    assert "BillingAccountCreditAllocationConfirm" in api
+    assert "consolidated_credit_allocations.preview(" in adapter
+    assert "consolidated_credit_allocations.confirm(" in adapter
+    assert "allocate_consolidated_balance_to_subscriber(" not in adapter
+    assert "[s.open_balance, unallocated_balance] | min" not in index
+    assert "s.allocation_allowed" in index
+    assert "s.allocation_max" in index
+    assert "onsubmit=" not in index
+    assert 'name="preview_fingerprint"' in confirmation
+    assert 'name="idempotency_key"' in confirmation
+    assert "Consolidated prepaid credit" in confirmation
+    assert "Subscriber postpaid receivable" in confirmation
+    assert "Service access is not decided by this screen" in confirmation
+
+
+def test_consolidated_settlement_reconciliation_is_an_evidence_only_adapter() -> None:
+    api = _source("app/api/billing.py")
+    owner = _source("app/services/billing/consolidated_payments.py")
+
+    assert '"/consolidated-payments/{payment_id}/settlement/evidence"' in api
+    assert '"/consolidated-payments/{payment_id}/settlement/evidence/preview"' in api
+    assert '"/consolidated-payments/{payment_id}/settlement/evidence/reconcile"' in api
+    assert "inspect_reconciliation_evidence(" in api
+    assert "preview_reconciliation(" in api
+    assert "reconcile_historical_evidence(" in api
+    assert "PaymentSettlement(" not in api
+    assert "ConsolidatedPaymentSettlementReconciliationEvidence(" not in api
+    assert "def reconcile_historical_evidence(" in owner
+    assert 'action="reconcile_consolidated_settlement_evidence"' in owner
+    assert '"money_posted": False' in owner
+    assert '"none_evidence_only_no_access_decision"' in owner
+
+
+def test_native_credit_reconciliation_composes_the_payment_allocation_owner() -> None:
+    reconciliation = _source("app/services/billing/reconcile_unposted.py")
+
+    assert "PaymentAllocations.preview(" in reconciliation
+    assert "PaymentAllocations.confirm(" in reconciliation
+    assert "PaymentAllocationConfirm(" in reconciliation
+    assert "preview_fingerprint=preview.fingerprint" in reconciliation
+    assert "reconcile-unposted-" in reconciliation
+    assert "_apply_payment_allocation(" not in reconciliation
+    assert "LedgerEntry(" not in reconciliation
+
+
 def test_invoice_void_and_writeoff_use_owner_preview_and_exact_evidence() -> None:
     route = _source("app/web/admin/billing_invoice_actions.py")
     bulk_route = _source("app/web/admin/billing_invoice_bulk.py")
@@ -262,6 +344,26 @@ def test_invoice_void_and_writeoff_use_owner_preview_and_exact_evidence() -> Non
     assert 'name="preview_fingerprints_json"' in bulk_confirmation
 
 
+def test_automation_and_usage_stage_invoice_documents_through_owner() -> None:
+    owner = _source("app/services/billing/invoices.py")
+    automation = _source("app/services/billing_automation.py")
+    usage = _source("app/services/usage.py")
+
+    assert "def stage_system_invoice(" in owner
+    assert "def stage_system_line(" in owner
+    assert 'action="stage_system_invoice"' in owner
+    assert 'action="stage_system_invoice_line"' in owner
+    assert '"ledger_transaction_id": None' in owner
+    assert "Invoices.stage_system_invoice(" in automation
+    assert "InvoiceLines.stage_system_line(" in automation
+    assert "Invoices.stage_system_invoice(" in usage
+    assert "InvoiceLines.stage_system_line(" in usage
+    assert "Invoice(" not in automation
+    assert "InvoiceLine(" not in automation
+    assert "Invoice(" not in usage
+    assert "InvoiceLine(" not in usage
+
+
 def test_dunning_consumes_arrangement_shields_from_the_arrangement_owner() -> None:
     dunning = _source("app/services/collections/_core.py")
 
@@ -287,6 +389,8 @@ def test_dunning_and_restore_use_one_evidenced_access_consequence_owner() -> Non
     assert "has_overdue_balance(" not in event_adapter
     assert "_suspension_shield_reason" not in event_adapter
     assert "suspension_warning_sent_at" not in event_adapter
+    assert "restore_account_services(" not in billing_automation
+    assert "has_overdue_balance(" not in billing_automation
     assert "_emit_dunning_escalations" not in billing_automation
     assert "_emit_post_grace_suspension_escalation" not in billing_automation
     assert "post_grace_suspension" not in billing_automation

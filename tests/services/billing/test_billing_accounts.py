@@ -88,34 +88,35 @@ def test_update_renames(db_session):
     assert updated.name == "Renamed"
 
 
-def test_credit_and_debit_balance(db_session):
+def test_projection_only_balance_writers_are_retired(db_session):
     reseller = _make_reseller(db_session, name="Balance")
     ba = billing_service.billing_accounts.create_default_for_reseller(
         db_session, str(reseller.id)
     )
-    billing_service.billing_accounts.credit_balance(
-        db_session, str(ba.id), Decimal("250.00")
-    )
+    with pytest.raises(HTTPException, match="settlement owner") as credit_exc:
+        billing_service.billing_accounts.credit_balance(
+            db_session, str(ba.id), Decimal("250.00")
+        )
+    assert credit_exc.value.status_code == 409
+    with pytest.raises(HTTPException, match="allocation owner") as debit_exc:
+        billing_service.billing_accounts.debit_balance(
+            db_session, str(ba.id), Decimal("100.00")
+        )
+    assert debit_exc.value.status_code == 409
     db_session.refresh(ba)
-    assert ba.balance == Decimal("250.00")
-
-    billing_service.billing_accounts.debit_balance(
-        db_session, str(ba.id), Decimal("100.00")
-    )
-    db_session.refresh(ba)
-    assert ba.balance == Decimal("150.00")
+    assert ba.balance == Decimal("0.00")
 
 
-def test_debit_balance_insufficient(db_session):
+def test_legacy_one_step_credit_allocation_is_gated(db_session):
     reseller = _make_reseller(db_session, name="Insufficient")
     ba = billing_service.billing_accounts.create_default_for_reseller(
         db_session, str(reseller.id)
     )
-    with pytest.raises(HTTPException) as exc:
-        billing_service.billing_accounts.debit_balance(
-            db_session, str(ba.id), Decimal("1.00")
+    with pytest.raises(HTTPException, match="preview") as exc:
+        billing_service.payments.allocate_consolidated_balance_to_subscriber(
+            db_session, str(ba.id), "00000000-0000-0000-0000-000000000000"
         )
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 409
 
 
 def test_list_filters_by_reseller(db_session):

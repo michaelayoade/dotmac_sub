@@ -161,8 +161,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "consolidated payment settlement preview and confirmation",
                     "consolidated payment idempotency and actor audit evidence",
+                    "historical consolidated settlement evidence reconciliation",
+                    "exact consolidated settlement cash provenance links",
                     "exact member-invoice allocation ledger links",
                     "exact consolidated-credit ledger links",
+                    "consolidated-credit allocation preview and confirmation",
+                    "exact source-credit consumption and subscriber-ledger links",
+                    "consolidated-credit allocation idempotency and actor audit",
+                    "consolidated payment refund eligibility and preview",
+                    "billing-account refund confirmation and exact ledger evidence",
+                    "consolidated payment reversal eligibility and preview",
+                    "billing-account reversal confirmation and exact ledger evidence",
+                    "consolidated return idempotency and actor audit evidence",
                     "consolidated payment access-reconciliation handoff",
                 ),
                 depends_on=(
@@ -174,7 +184,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Subscriber invoice receivable credits remain subscriber "
                     "ledger rows; reseller-held surplus is recorded in the "
                     "billing-account ledger and never assigned to a fake "
-                    "subscriber. Payment state and access state remain separate."
+                    "subscriber. Moving held credit to a member receivable is a "
+                    "separate preview-bound transfer with exact source and result "
+                    "links. Payment state and access state remain separate."
                 ),
             ),
             SOTService(
@@ -189,6 +201,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "previewed prepaid renewal consequence and exact debit link",
                     "settled account-credit allocation preview and confirmation",
                     "exact invoice-credit and account-credit-consumption links",
+                    "native unallocated-credit reconciliation transactions",
                     "historical payment settlement evidence reconciliation",
                     "payment settlement access-reconciliation handoff",
                     "payment-originated ledger postings",
@@ -237,6 +250,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "invoice status transitions",
                     "invoice adjustment and reversal postings",
                     "automation invoice creation and draft issuance",
+                    "automation invoice-line construction and source-fact replay",
+                    "usage-charge invoice and invoice-line construction",
                     "overdue invoice state and observation event",
                     "unfunded prepaid invoice return-to-draft eligibility",
                     "invoice-originated ledger postings",
@@ -1926,6 +1941,23 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ui.reseller_list_projection",
+                module="app.services.web_admin_resellers",
+                owns=(
+                    "admin reseller list filter and stable sort semantics",
+                    "admin reseller list pagination normalization",
+                ),
+                depends_on=("ui.list_contracts",),
+                notes=(
+                    "web_admin_resellers owns the reseller read; this projection "
+                    "declares the list capabilities (status filter, name sort, "
+                    "pagination) so the route derives no pagination or filter rules. "
+                    "The admin reseller surface is granularly gated by reseller:read "
+                    "(list) and reseller:write (create/edit), split off the shared "
+                    "customer:read/write."
+                ),
+            ),
+            SOTService(
                 name="ui.work_order_list_projection",
                 module="app.services.web_dispatch_work_orders",
                 owns=(
@@ -1945,6 +1977,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "mirror with no Sub-owned admin bulk command, so no selection or "
                     "bulk is declared. Each dispatch route is granularly gated "
                     "(operations:dispatch:read/write/assign)."
+                ),
+            ),
+            SOTService(
+                name="ui.project_list_projection",
+                module="app.services.web_projects",
+                owns=(
+                    "admin project searchable fields",
+                    "admin project filter and stable sort semantics",
+                    "admin project list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "operations.project_lifecycle",
+                ),
+                notes=(
+                    "projects_service.projects.list (operations.project_lifecycle) "
+                    "owns the canonical filtered/sorted project query; this "
+                    "projection declares the list capabilities and normalizes "
+                    "request state, then delegates the read. It issues no query of "
+                    "its own. Gated by the existing granular project:read."
                 ),
             ),
         ),
