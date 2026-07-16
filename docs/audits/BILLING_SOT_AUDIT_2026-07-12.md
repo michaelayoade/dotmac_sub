@@ -9,7 +9,7 @@ No code was changed. Every finding below carries a `file:line`.
 
 ---
 
-## 0. Post-audit status overlay — 2026-07-14
+## 0. Post-audit status overlay — through 2026-07-16
 
 This document preserves the 2026-07-12 static evidence and measured staging
 incidence. It is **not** a claim that every finding remains live on current
@@ -27,6 +27,7 @@ incidence. It is **not** a claim that every finding remains live on current
 | Refund owner + F17 | `f94e5341`, `ab69f413` | exact balance movement; partial refund preserves invoice state |
 | F16 reseller proof | `8b235d9c` | locked, idempotent single credit |
 | F18 reseller bulk settlement | `150a6d71` | member invoices settle through the owner |
+| F4 credit-note authority | `8b08acf2` | issuance/application/void own exact ledger evidence; customer position counts the document once |
 | Access/lifecycle strays | `88abb7d3`, `8472a588` | precise reversible enforcement/lifecycle transitions |
 | Prepaid activation safety | `f45f4979` | independent funding required; incomplete provenance blocks export |
 | F22 CRM billing push | `b6d1accd` | writer deleted; finding struck |
@@ -195,7 +196,7 @@ wasn't looking.
 > | F24 paid-with-balance | 23 invoices, ₦411,821 | Fires today. |
 > | F19 orphan payment | **1 native payment** | Real but tiny (3,116 "orphans" were splynx-imported by design). |
 > | F15 NULL `paid_at` | 1 payment | The earlier fix largely held. |
-> | F4 unapplied credit notes | 339, ₦2,290,830 | The drift mechanism is populated. |
+> | F4 issued notes without funding evidence | 339, ₦2,290,830.01 | Historical cohort requiring reviewed reconciliation; funded unapplied notes are normal. |
 > | F18, F6-void, opening debits | **0** | Zero-result. Opening-debit cohort already remediated. |
 > | D7 reconstructed deposit drift | **589 accounts, ₦73,041,254.69** | Complete source replay only; 321 overcredited and 268 understated. Projection gaps are reported separately. |
 > | D12 access/enforcement drift | **0 funded+locked; 2,533 unfunded+served** | Current production replay; 2,166 unrestricted RADIUS auth and 492 recent open sessions. Enforcement control is deliberately off. |
@@ -269,6 +270,20 @@ the target's `balance_due`; and the account-status/service restore. The old invo
 to the old invoice while the allocation points at the new one — a double-count.
 
 ### F4 — Credit notes visible to one balance, invisible to the other
+
+> **Forward disposition (merged in `8b08acf2`).** This section preserves the
+> original 2026-07-12 evidence. `financial.credit_notes` now exclusively owns
+> draft issuance, application and voiding. Issuance posts one exact unallocated
+> ledger credit and records it in `CreditNote.funding_ledger_entry_id`;
+> application records both the invoice settlement entry and, for funded notes,
+> the account-credit consumption entry; voiding reverses the linked funding
+> entry append-only. All operations lock and re-check the affected financial
+> state and carry preview, idempotency and audit evidence. The issued document
+> owns the customer-position effect, while those linked ledger rows own
+> operational spendability/evidence and are excluded from that projection.
+> Architecture tests reject new document, line and status writers outside the
+> owner. The measured 339-note / ₦2,290,830.01 historical cohort is **not**
+> silently backfilled; it remains a dry-run-first reviewed reconciliation scope.
 
 `catalog/subscriptions.py:1037` and `billing_automation.py:2301` create issued `CreditNote`
 rows with **no ledger entry** (only `CreditNotes.apply()` posts one, `credit_notes.py:278`).
@@ -617,9 +632,14 @@ uses*, not by collapsing them into one number. `financial.access_resolution` mus
 quantity it suspends on and which it restores on — F6/F8 exist because it currently uses one to
 suspend and a different, structurally-unfailable one to restore.
 
-**The ADR must explicitly decide when an issued credit note becomes spendable.** F4 is
-unresolvable without that decision: today an issued credit note is spendable against one balance
-definition and invisible to the other.
+**The spendability decision is now explicit.** An issued credit note becomes
+spendable only when `financial.credit_notes` atomically posts and links its
+unallocated funding credit after final totals are confirmed. Applying it consumes
+that operational pool under the account lock; voiding reverses the exact linked
+funding row. The customer-position projection counts the authoritative credit-note
+document and excludes the funding/application-transfer/reversal evidence rows, so
+the same value is not counted twice. Historical notes without reviewed evidence do
+not acquire inferred links from amount or memo.
 
 ## 11. Cross-system synchronization contract
 
@@ -709,6 +729,7 @@ marked confirmed.
 | **F15** | — | Reuse `mark_status`'s transition table + `paid_at` stamp in `update()` | Find `succeeded` payments with NULL `paid_at` | `PATCH` pending→succeeded; assert `paid_at` set + event emitted |
 | **F17** | — | `_recalculate_invoice_totals` must count `partially_refunded` net of refund | Find invoices reverted to overdue by a partial refund | Partial-refund a paid invoice; assert it stays paid less the refund |
 | **F16** | — | Lock + status re-check in `_verify_consolidated_proof`; stamp `provider_id` so the unique index bites | Find duplicate reseller payments by proof reference | Concurrent double-verify → assert one payment |
+| **F4** | Reject issued-document construction outside `financial.credit_notes` | Confirm totals, then atomically create and link issuance funding; pair application settlement with account-credit consumption; reverse exact funding on void; exclude operational evidence from customer position | Review the 339-note / ₦2,290,830.01 cohort against exact source evidence; link an operator-selected ledger row or explicitly create missing remaining funding; never infer by memo/amount | Issue/apply/void through the owner; assert operational credit moves once, customer position counts the document once, idempotent replay holds, and the audit batch equals the canonical projection |
 | **F5** | — | GL-post eligible synchronized invoices idempotently before dependent payments | Backfill + reversal/adjustment journals in ERP | Sync invoice+payment; assert AR control nets to zero |
 | **F22** | — | Send only fields the projection owns; CRM must never derive `status` from a billing payload | Re-sync CRM subscriber status from Sub | Billing push → assert CRM `status` unchanged |
 
