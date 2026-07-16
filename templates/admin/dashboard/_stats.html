@@ -69,11 +69,11 @@
     {% endif %}
     {% if show_financials %}
     {{ kpi_tile(
-        "Revenue This Month",
+        "Collections This Month",
         "₦%s" | format("{:,.0f}".format(stats.monthly_revenue)),
         "/admin/billing",
         "emerald",
-        "Paid invoices in current billing period"
+        "Payments received this month"
     ) }}
     {{ kpi_tile(
         "Overdue",
