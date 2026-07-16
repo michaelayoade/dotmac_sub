@@ -39,9 +39,7 @@ class TestPlanChangeFormContract:
         expect(consequences).to_be_visible()
         expect(consequences).to_contain_text("What happens when you switch")
         for key in ("proration", "reprovision", "cross_family"):
-            expect(
-                consequences.locator(f'[data-consequence="{key}"]')
-            ).to_be_visible()
+            expect(consequences.locator(f'[data-consequence="{key}"]')).to_be_visible()
 
     def test_prerequisites_shown_only_when_unmet(
         self, customer_page: Page, settings, test_identities
@@ -50,9 +48,9 @@ class TestPlanChangeFormContract:
         # The provisioned e2e customer has an active, arrears-free subscription
         # with available offers — all prerequisites met, so the block is absent
         # (prerequisite disclosure appears only when something blocks submit).
-        expect(
-            customer_page.get_by_test_id("plan-change-prerequisites")
-        ).to_have_count(0)
+        expect(customer_page.get_by_test_id("plan-change-prerequisites")).to_have_count(
+            0
+        )
 
     def test_offer_selection_fetches_impact_quote(
         self, customer_page: Page, settings, test_identities

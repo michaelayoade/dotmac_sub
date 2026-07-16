@@ -15,11 +15,6 @@ from app.models.subscription_change import (
     SubscriptionChangeStatus,
 )
 from app.services import catalog as catalog_service
-from app.services.form_contracts import (
-    FormConsequence,
-    FormContract,
-    FormPrerequisite,
-)
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
 from app.services.customer_context import (
@@ -34,6 +29,11 @@ from app.services.customer_portal_context import get_available_portal_offers
 from app.services.customer_portal_flow_common import (
     _compute_total_pages,
     _resolve_next_billing_date,
+)
+from app.services.form_contracts import (
+    FormConsequence,
+    FormContract,
+    FormPrerequisite,
 )
 
 logger = logging.getLogger(__name__)
@@ -381,9 +381,7 @@ def get_change_plan_page(
         "arrears_amount": _to_float(arrears_amount),
         "in_arrears": arrears_amount > Decimal("0.00"),
         "form_contract": PLAN_CHANGE_FORM.state(
-            _plan_change_prerequisites(
-                subscription, available_offers, arrears_amount
-            )
+            _plan_change_prerequisites(subscription, available_offers, arrears_amount)
         ),
         **copy,
     }

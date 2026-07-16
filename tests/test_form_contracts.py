@@ -13,9 +13,7 @@ from app.services.form_contracts import FormContract, FormPrerequisite
 
 
 def test_contract_state_shape_and_submittability():
-    contract = FormContract(
-        key="t", title="T", entity="thing", command_owner="svc.cmd"
-    )
+    contract = FormContract(key="t", title="T", entity="thing", command_owner="svc.cmd")
     ok = FormPrerequisite(key="a", label="A", met=True)
     bad = FormPrerequisite(key="b", label="B", met=False, reason="nope")
     state = contract.state([ok, bad])
