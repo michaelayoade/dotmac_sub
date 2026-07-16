@@ -30,6 +30,7 @@ def test_domain_sot_relationships_cover_expected_domains():
         "ui_display_formatting",
         "ui_action_forms",
         "ui_semantic_presentation",
+        "vpn_remote_access",
     ]
 
 
