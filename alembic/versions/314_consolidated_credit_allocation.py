@@ -1,7 +1,7 @@
 """Add exact consolidated-credit allocation evidence.
 
-Revision ID: 311_consolidated_credit_allocation
-Revises: 310_subscription_billing_cycle
+Revision ID: 314_consolidated_credit_allocation
+Revises: 313_dispatch_granular_permissions
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "311_consolidated_credit_allocation"
-down_revision = "310_subscription_billing_cycle"
+revision = "314_consolidated_credit_allocation"
+down_revision = "313_dispatch_granular_permissions"
 branch_labels = None
 depends_on = None
 

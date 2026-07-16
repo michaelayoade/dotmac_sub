@@ -442,7 +442,7 @@ financial service:
   service-access consequence remain separate. Projection drift or historical
   allocation without exact source-consumption evidence fails closed; no
   synthetic payment repairs it.
-- Exact evidence: revision `311_consolidated_credit_allocation` records one
+- Exact evidence: revision `314_consolidated_credit_allocation` records one
   allocation decision linked to its billing-account debit and item rows linking
   each source billing-account credit to the exact `PaymentAllocation` and
   subscriber `LedgerEntry` it produced. `BillingAccount.balance` is updated only
@@ -481,7 +481,7 @@ Consolidated refunds and payment reversals remain under that scoped owner:
   request but does not decide suspension or restoration. Trusted normalized
   provider events dispatch to the same consolidated owner; untrusted API
   callers cannot claim provider evidence.
-- Cutover gate: revision `312_consolidated_payment_returns.py`, partial-surplus,
+- Cutover gate: revision `315_consolidated_payment_returns.py`, partial-surplus,
   full-refund, reversal, stale-preview, replay, dual-ledger, provider dispatch,
   admin/API dispatch, and sole-writer tests must remain green. Historical
   consolidated refund/reversal rows without exact structural evidence remain a
