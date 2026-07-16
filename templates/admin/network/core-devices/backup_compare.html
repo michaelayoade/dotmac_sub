@@ -7,7 +7,7 @@
     <div>
         <a href="/admin/network/core-devices/{{ device.id }}/backups" class="text-sm text-primary-600 hover:text-primary-700">Back to Backups</a>
         <h1 class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">Backup Compare</h1>
-        <p class="text-sm text-slate-500 dark:text-slate-400">{{ backup1.created_at.strftime('%Y-%m-%d %H:%M:%S') if backup1.created_at else '-' }} vs {{ backup2.created_at.strftime('%Y-%m-%d %H:%M:%S') if backup2.created_at else '-' }}</p>
+        <p class="text-sm text-slate-500 dark:text-slate-400">{{ backup1.created_at | app_datetime('%Y-%m-%d %H:%M:%S', '-') }} vs {{ backup2.created_at | app_datetime('%Y-%m-%d %H:%M:%S', '-') }}</p>
     </div>
 
     <div class="grid gap-4 sm:grid-cols-2">

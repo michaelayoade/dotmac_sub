@@ -70,7 +70,7 @@
                         {{ status_badge(notification.status.value|capitalize, notif_status_map.get(notification.status.value, 'neutral'), size="sm") }}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
-                        {{ notification.send_at.strftime('%b %d, %H:%M') if notification.send_at else 'Immediate' }}
+                        {{ notification.send_at | app_datetime('%b %d, %H:%M', 'Immediate') }}
                     </td>
                 {% endcall %}
                 {% endfor %}

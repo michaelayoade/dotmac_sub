@@ -7,7 +7,7 @@
     {# Metadata #}
     <div class="flex items-center justify-between">
         <div>
-            <p class="text-lg font-semibold text-slate-900 dark:text-white">{{ snapshot.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+            <p class="text-lg font-semibold text-slate-900 dark:text-white">{{ snapshot.created_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</p>
             <p class="text-sm text-slate-500 dark:text-slate-400">
                 Source: {{ snapshot.source }}{% if snapshot.label %} &middot; {{ snapshot.label }}{% endif %}
             </p>

@@ -149,7 +149,7 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ account.created_at.strftime('%b %d, %Y') if account.created_at else 'N/A' }}</span>
+                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ account.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-right">
                             <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">

@@ -92,7 +92,7 @@
                             {% else %}<span class="rounded-full bg-blue-100 px-2 py-1 font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">Unknown</span>{% endif %}
                         </td>
                         <td class="min-w-40 px-4 py-3 text-slate-500 dark:text-slate-400">
-                            {% if entry.last_change %}{{ entry.last_change.strftime('%Y-%m-%d %H:%M') if entry.last_change.strftime is defined else entry.last_change }}{% else %}Registry default{% endif %}
+                            {% if entry.last_change %}{{ entry.last_change | app_datetime('%Y-%m-%d %H:%M') if entry.last_change.strftime is defined else entry.last_change }}{% else %}Registry default{% endif %}
                         </td>
                     </tr>
                     {% else %}
@@ -112,7 +112,7 @@
                 <div class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900">
                     <div class="flex items-center justify-between gap-3">
                         <span class="font-medium text-slate-800 dark:text-slate-200">{{ event.action }}</span>
-                        <span class="text-slate-400">{{ event.occurred_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                        <span class="text-slate-400">{{ event.occurred_at | app_datetime('%Y-%m-%d %H:%M') }}</span>
                     </div>
                     <p class="mt-1 text-slate-500">{{ event.entity_type }} · {{ event.actor }} · {{ 'success' if event.success else 'failed' }}</p>
                 </div>
@@ -124,7 +124,7 @@
     </section>
     {% endfor %}
 
-    <p class="text-right text-xs text-slate-400">Snapshot generated {{ generated_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}</p>
+    <p class="text-right text-xs text-slate-400">Snapshot generated {{ generated_at | app_datetime('%Y-%m-%d %H:%M:%S %Z') }}</p>
 </div>
 
 <script>

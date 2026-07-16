@@ -449,11 +449,11 @@
     {% if value %}
     <span class="text-sm text-slate-600 dark:text-slate-300">
         {% if format == "short" %}
-        {{ value.strftime('%b %d, %Y') }}
+        {{ value | app_datetime('%b %d, %Y', include_tz=False) }}
         {% elif format == "datetime" %}
-        {{ value.strftime('%b %d, %Y %H:%M') }}
+        {{ value | app_datetime('%b %d, %Y %H:%M') }}
         {% elif format == "iso" %}
-        {{ value.strftime('%Y-%m-%d') }}
+        {{ value | app_datetime('%Y-%m-%d', include_tz=False) }}
         {% else %}
         {{ value.strftime(format) }}
         {% endif %}

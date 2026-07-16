@@ -25,7 +25,7 @@
         <div><dt class="text-slate-500 dark:text-slate-400">Status</dt><dd class="mt-1">{% set variant = {"pending": "warning", "applied": "active", "canceled": "inactive"} %}{{ status_badge(extension.status.value | title, variant.get(extension.status.value, "default"), size="sm") }}</dd></div>
         <div><dt class="text-slate-500 dark:text-slate-400">Days extended</dt><dd class="mt-1 font-semibold tabular-nums">{{ extension.days }}</dd></div>
         <div><dt class="text-slate-500 dark:text-slate-400">Scope</dt><dd class="mt-1">{{ extension.scope_type.value | replace("_", " ") | title }}</dd></div>
-        <div><dt class="text-slate-500 dark:text-slate-400">Outage window</dt><dd class="mt-1">{{ extension.window_start.strftime("%Y-%m-%d %H:%M") }} → {{ extension.window_end.strftime("%Y-%m-%d %H:%M") }}</dd></div>
+        <div><dt class="text-slate-500 dark:text-slate-400">Outage window</dt><dd class="mt-1">{{ extension.window_start | app_datetime('%Y-%m-%d %H:%M', include_tz=False) }} → {{ extension.window_end | app_datetime('%Y-%m-%d %H:%M') }}</dd></div>
     </dl>
     {% endcall %}
 
@@ -77,7 +77,7 @@
     {% endcall %}
     {% elif extension.status.value == "applied" %}
     <div class="rounded-xl bg-emerald-50 p-4 text-sm text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300">
-        Applied {{ extension.applied_at.strftime("%Y-%m-%d %H:%M") }} — {{ extension.affected_count }} subscription(s) extended{% if extension.skipped_count %}, {{ extension.skipped_count }} skipped{% endif %}.
+        Applied {{ extension.applied_at | app_datetime('%Y-%m-%d %H:%M') }} — {{ extension.affected_count }} subscription(s) extended{% if extension.skipped_count %}, {{ extension.skipped_count }} skipped{% endif %}.
     </div>
     {% endif %}
 
@@ -95,7 +95,7 @@
                 <tr>
                     <td class="px-4 py-3">{{ sub.subscriber.display_name if sub.subscriber else "—" }}</td>
                     <td class="px-4 py-3 font-mono text-xs">{{ sub.login or "—" }}</td>
-                    <td class="px-4 py-3">{{ sub.next_billing_at.strftime("%Y-%m-%d") if sub.next_billing_at else "—" }}</td>
+                    <td class="px-4 py-3">{{ sub.next_billing_at | app_datetime('%Y-%m-%d', '—', include_tz=False) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

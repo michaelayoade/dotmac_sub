@@ -44,7 +44,7 @@
             <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                 {% for record in records %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
-                    <td class="whitespace-nowrap py-4 pl-6 pr-3 text-sm text-slate-900 dark:text-white">{{ record.recorded_at.strftime('%Y-%m-%d %H:%M') if record.recorded_at else '-' }}</td>
+                    <td class="whitespace-nowrap py-4 pl-6 pr-3 text-sm text-slate-900 dark:text-white">{{ record.recorded_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                     <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400 font-mono">{{ record.subscription_id|string|truncate(8, True, '') }}</td>
                     <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">{{ "%.4f"|format(record.upload_gb or 0) }}</td>
                     <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">{{ "%.4f"|format(record.download_gb or 0) }}</td>

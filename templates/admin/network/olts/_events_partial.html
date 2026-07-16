@@ -57,7 +57,7 @@
                 </div>
             </div>
             <span class="flex-shrink-0 text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
-                {{ event.created_at.strftime('%b %d, %H:%M') if event.created_at else '' }}
+                {{ event.created_at | app_datetime('%b %d, %H:%M', '') }}
             </span>
         </div>
         {% endfor %}

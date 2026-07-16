@@ -48,8 +48,8 @@
                 {{ info_row("Referred", referred_html) }}
                 {{ info_row("Referral code", code or "—") }}
                 {{ info_row("Source", (row.source | replace('_', ' ') | title) if row.source != '—' else "—") }}
-                {{ info_row("Captured", row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else "—") }}
-                {{ info_row("Qualified", row.qualified_at.strftime('%Y-%m-%d %H:%M') if row.qualified_at else "—") }}
+                {{ info_row("Captured", row.created_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
+                {{ info_row("Qualified", row.qualified_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
                 {{ info_row("Attributed lead", lead_id or "—") }}
             {% endcall %}
         {% endcall %}
@@ -75,7 +75,7 @@
             {% call info_grid() %}
                 {{ info_row("Amount", row.reward) }}
                 {{ info_row("Reward status", row.reward_status | replace('_', ' ') | title) }}
-                {{ info_row("Issued at", referral.reward_issued_at.strftime('%Y-%m-%d %H:%M') if referral.reward_issued_at else "—") }}
+                {{ info_row("Issued at", referral.reward_issued_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
                 {% if reward_credit_id %}
                 {{ info_row("Account credit evidence", reward_credit_id) }}
                 {% endif %}

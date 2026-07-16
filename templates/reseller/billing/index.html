@@ -261,7 +261,7 @@
       <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
         {% for p in recent_payments %}
         <tr>
-          <td class="px-6 py-3 text-slate-700 dark:text-slate-200">{{ p.paid_at.strftime("%Y-%m-%d %H:%M") ~ " UTC" if p.paid_at else "—" }}</td>
+          <td class="px-6 py-3 text-slate-700 dark:text-slate-200">{{ p.paid_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
           <td class="px-6 py-3 text-slate-700 dark:text-slate-200">{{ p.memo or "" }}</td>
           <td class="px-6 py-3 text-right tabular-nums">{{ p.currency }} {{ "{:,.2f}".format(p.amount) }}</td>
           <td class="px-6 py-3 text-right tabular-nums">{{ p.currency }} {{ "{:,.2f}".format(p.allocated_total) }}</td>
@@ -294,7 +294,7 @@
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ entry.title }}</p>
           <p class="text-xs text-slate-500 dark:text-slate-400">
-            {{ entry.occurred_at.strftime('%b %d, %Y · %H:%M') ~ ' UTC' if entry.occurred_at else 'Date unavailable' }}
+            {{ entry.occurred_at | app_datetime('%b %d, %Y · %H:%M', 'Date unavailable') }}
           </p>
           {% if entry.description and entry.description != entry.title %}
           <p class="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{{ entry.description }}</p>

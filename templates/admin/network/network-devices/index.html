@@ -223,7 +223,7 @@
                                 {% set latest_ping = ping_history[0] if ping_history else none %}
                                 {% set ping_tone = 'positive' if latest_ping and latest_ping.ok else 'negative' if latest_ping else 'neutral' %}
                                 <span class="status-tone status-tone-{{ ping_tone }} inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
-                                    {% if latest_ping and latest_ping.recorded_at %}title="Last checked: {{ latest_ping.recorded_at.strftime('%Y-%m-%d %H:%M') }}"{% endif %}>
+                                    {% if latest_ping and latest_ping.recorded_at %}title="Last checked: {{ latest_ping.recorded_at | app_datetime('%Y-%m-%d %H:%M') }}"{% endif %}>
                                     <span class="status-tone-dot status-tone-dot-{{ ping_tone }} h-1.5 w-1.5 shrink-0 rounded-full"></span>
                                     <span class="truncate">{{ latest_ping.label if latest_ping else '-' }}</span>
                                 </span>

@@ -193,8 +193,8 @@
                         <td class="px-6 py-4">
                             {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </td>
-                        <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</td>
-                        <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</td>
+                        <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">{{ invoice.issued_at | portal_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
+                        <td class="px-6 py-4 text-sm text-stone-500 dark:text-stone-400">{{ invoice.due_at | portal_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
                         <td class="px-6 py-4 text-right">
                             <a href="/portal/billing/invoices/{{ invoice.id }}" class="inline-flex items-center gap-1 text-sm font-semibold text-[var(--color-brand-600)] hover:text-[var(--color-brand-700)] dark:text-[var(--color-brand-400)] transition-colors">
                                 View
@@ -281,7 +281,7 @@
                         {{ entry.title }}
                     </p>
                     <p class="text-xs text-stone-500 dark:text-stone-400">
-                        {{ entry.occurred_at.strftime('%b %d, %Y · %H:%M') if entry.occurred_at else 'Date unavailable' }}
+                        {{ entry.occurred_at | portal_datetime('%b %d, %Y · %H:%M', 'Date unavailable') }}
                         {% if entry.reference %} · {{ entry.reference }}{% endif %}
                     </p>
                     {% if entry.description and entry.description != entry.title %}

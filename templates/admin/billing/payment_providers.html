@@ -157,7 +157,7 @@
                             </form>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {{ provider.created_at.strftime('%Y-%m-%d') if provider.created_at else 'N/A' }}
+                            {{ provider.created_at | app_datetime('%Y-%m-%d', 'N/A', include_tz=False) }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-right">
                             <div class="flex items-center justify-end gap-2 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100">

@@ -171,7 +171,7 @@
                 <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                     {% for execution in executions %}
                     <tr>
-                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ execution.created_at.strftime('%Y-%m-%d %H:%M:%S') if execution.created_at else '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ execution.created_at | app_datetime('%Y-%m-%d %H:%M:%S', '-') }}</td>
                         <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ execution.event_type }}</td>
                         <td class="px-6 py-4">
                             {% if execution.status.value == 'success' %}

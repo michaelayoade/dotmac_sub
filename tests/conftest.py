@@ -38,6 +38,14 @@ os.environ["RADIUS_SYNC_DB_URL"] = ""
 import sqlite3
 import uuid
 from datetime import UTC
+
+# Template filters/globals (app_datetime, presentations, brand) are attached by
+# a Jinja2Templates __init__ patch that app.main installs at import. Tests that
+# render templates with their own Jinja2Templates need the same patch.
+from app.web.brand_globals import install_brand_jinja_global  # noqa: E402
+
+install_brand_jinja_global()
+
 from typing import Any
 
 import pytest

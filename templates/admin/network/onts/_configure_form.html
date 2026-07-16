@@ -40,7 +40,7 @@
             {% if has_tr069 %}
             <span class="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                 <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                Informed{% if acs_last_inform %} · {{ acs_last_inform.strftime('%b %d %H:%M') }}{% endif %}
+                Informed{% if acs_last_inform %} · {{ acs_last_inform | app_datetime('%b %d %H:%M') }}{% endif %}
             </span>
             {% else %}
             <span class="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">

@@ -119,7 +119,7 @@
                         {% endif %}
                     </td>
                     <td class="pr-4 text-slate-500">
-                        {{ row.last_seen_at.strftime('%Y-%m-%d %H:%M') if row.last_seen_at else '-' }}
+                        {{ row.last_seen_at | app_datetime('%Y-%m-%d %H:%M', '-') }}
                     </td>
                 </tr>
             {% else %}

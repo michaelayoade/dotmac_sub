@@ -209,7 +209,7 @@
                             <dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Seen</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                                 {% if resolved_last_seen_at %}
-                                {{ resolved_last_seen_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                                {{ resolved_last_seen_at | app_datetime('%Y-%m-%d %H:%M:%S') }}
                                 {% else %}
                                 <span class="text-slate-400">Never</span>
                                 {% endif %}
@@ -290,7 +290,7 @@
                                 </div>
                                 <div>
                                     <p class="text-sm font-medium text-slate-900 dark:text-white">
-                                        {{ backup.created_at.strftime('%Y-%m-%d %H:%M') }}
+                                        {{ backup.created_at | app_datetime('%Y-%m-%d %H:%M') }}
                                     </p>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">
                                         {{ backup.backup_method.value | upper if backup.backup_method else 'Manual' }} &middot; {{ backup.triggered_by or 'System' }}
@@ -600,7 +600,7 @@
                                         {{ log.command_sent or (log.action.value.replace('_', ' ') | title) }}
                                     </p>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">
-                                        {{ log.created_at.strftime('%Y-%m-%d %H:%M') }} &middot; {{ log.triggered_by or 'System' }}
+                                        {{ log.created_at | app_datetime('%Y-%m-%d %H:%M') }} &middot; {{ log.triggered_by or 'System' }}
                                     </p>
                                     {% if log.error_message %}
                                     <p class="text-xs text-red-600 dark:text-red-400">{{ log.error_message }}</p>
@@ -667,7 +667,7 @@
                         </div>
                         {% if resolved_last_health_check_at %}
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Last check: {{ resolved_last_health_check_at.strftime('%Y-%m-%d %H:%M') }}
+                            Last check: {{ resolved_last_health_check_at | app_datetime('%Y-%m-%d %H:%M') }}
                         </p>
                         {% endif %}
                     </div>
@@ -804,7 +804,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}
@@ -845,7 +845,7 @@
                         {% endif %}
                         {% if device.last_backup_at %}
                         <p class="text-slate-600 dark:text-slate-300">
-                            <span class="text-slate-400">Last:</span> {{ device.last_backup_at.strftime('%Y-%m-%d %H:%M') }}
+                            <span class="text-slate-400">Last:</span> {{ device.last_backup_at | app_datetime('%Y-%m-%d %H:%M') }}
                         </p>
                         {% endif %}
                     </div>

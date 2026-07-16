@@ -45,8 +45,8 @@
                         <td class="py-2 text-slate-500">{{ (row.classification or '—').replace('_', ' ') }}</td>
                         <td class="py-2 font-semibold text-slate-900 dark:text-white">{{ row.affected_count }}</td>
                         <td class="py-2 text-slate-500">{% if row.confidence is not none %}{{ row.confidence }}{% else %}—{% endif %}</td>
-                        <td class="py-2 text-slate-500">{{ row.suspected_at.strftime('%Y-%m-%d %H:%M') if row.suspected_at else '—' }}</td>
-                        <td class="py-2 text-slate-500">{{ row.confirmed_at.strftime('%Y-%m-%d %H:%M') if row.confirmed_at else '—' }}</td>
+                        <td class="py-2 text-slate-500">{{ row.suspected_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
+                        <td class="py-2 text-slate-500">{{ row.confirmed_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
                         <td class="py-2 text-slate-500">{% if row.mttr_so_far_seconds is not none %}{{ (row.mttr_so_far_seconds // 60) }} min{% else %}—{% endif %}</td>
                         <td class="py-2 whitespace-nowrap">
                             {% if row.state in ['confirmed', 'clearing'] %}

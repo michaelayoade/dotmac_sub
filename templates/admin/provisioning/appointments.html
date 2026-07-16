@@ -58,7 +58,7 @@
                     {% for appt in appointments %}
                     {% call table_row(color="amber") %}
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-900 dark:text-white">
-                            {{ appt.scheduled_start.strftime('%Y-%m-%d %H:%M') }} - {{ appt.scheduled_end.strftime('%H:%M') }}
+                            {{ appt.scheduled_start | app_datetime('%Y-%m-%d %H:%M', include_tz=False) }} - {{ appt.scheduled_end | app_datetime('%H:%M') }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm">
                             <a href="/admin/provisioning/orders/{{ appt.service_order_id }}" class="font-mono font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">

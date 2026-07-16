@@ -83,10 +83,10 @@
                     <td data-column="site_coordinator" class="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ staff_lookup.get(ticket.site_coordinator_person_id|string, ticket.site_coordinator_person_id or '-') if staff_lookup is defined else (ticket.site_coordinator_person_id or '-') }}</td>
                     <td data-column="channel" class="px-3 py-2.5 text-slate-700 dark:text-slate-300">{{ ticket.channel.value if ticket.channel else '-' }}</td>
                     <td data-column="due_at" class="px-3 py-2.5 text-xs font-medium {% if sla_states.get(ticket.id|string, {}).get('breached') %}status-foreground status-tone-negative{% else %}text-slate-700 dark:text-slate-200{% endif %}">
-                        {{ ticket.due_at.strftime('%Y-%m-%d %H:%M UTC') if ticket.due_at else '-' }}
+                        {{ ticket.due_at | app_datetime('%Y-%m-%d %H:%M', '-') }}
                         {% if sla_states.get(ticket.id|string, {}).get('breached') %}<span class="status-tone status-tone-negative ml-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase">breached</span>{% endif %}
                     </td>
-                    <td data-column="created_at" class="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ ticket.created_at.strftime('%Y-%m-%d %H:%M UTC') if ticket.created_at else '-' }}</td>
+                    <td data-column="created_at" class="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ ticket.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                 </tr>
                 {% else %}
                 <tr>
