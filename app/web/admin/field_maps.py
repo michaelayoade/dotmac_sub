@@ -4,7 +4,7 @@ UI-only ports of the CRM ``operations/field-live-map`` and
 ``operations/field-movement-playback`` pages onto sub's native Phase-2 field
 tracking data (``field_tech_presence`` / ``field_work_order_movements``). The
 JSON feeds live under the same ``/dispatch`` prefix and share the
-``operations:dispatch`` guard with the dispatch work-orders page.
+``operations:dispatch:read`` guard, matching the dispatch work-orders page.
 """
 
 from __future__ import annotations
