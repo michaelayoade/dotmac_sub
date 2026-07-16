@@ -500,11 +500,28 @@ financial service:
   each source billing-account credit to the exact `PaymentAllocation` and
   subscriber `LedgerEntry` it produced. `BillingAccount.balance` is updated only
   alongside the canonical ledger transaction.
+- Historical boundary: revision
+  `320_consolidated_credit_consumption_reconciliation` adds reviewed provenance
+  for a legacy transfer that changed a member receivable without recording the
+  exact source-consumption structure. Inspection keeps the recorded balance,
+  ledger-evidenced credit, projection drift, valid source credits, unlinked
+  member allocations, and unclaimed debit candidates separate. Preview and
+  confirmation require operator-selected exact source credit, payment
+  allocation, subscriber ledger result, and either one exact existing
+  billing-account debit or explicit approval to append the missing debit.
+  Confirmation locks and recomputes the evidence, is fingerprint-bound and
+  idempotent, records actor audit, and never changes `BillingAccount.balance`.
+- Repair boundary: a missing debit may be appended only up to the exact negative
+  projection drift and only for allocations carried by a payment with an exact
+  consolidated settlement. Positive/unbacked projection value, an allocation
+  without an exact subscriber ledger result, an unsettled or synthesized carrier,
+  cross-reseller evidence, and ambiguous source consumption remain fail-closed.
+  Neither inspection nor confirmation changes or promises service access.
 - Cutover gate: the projection-only balance credit/debit helpers and legacy
   one-step allocation command remain gated. Read-only preview, stale rejection,
-  cross-reseller scope, partial allocation, exact dual-ledger links, replay,
-  audit, UI/API preview-confirm, and sole-writer architecture tests must remain
-  green.
+  cross-reseller scope, partial allocation, historical existing/missing-debit
+  reconciliation, unbacked-credit refusal, exact dual-ledger links, replay,
+  audit, API preview-confirm, and sole-writer architecture tests must remain green.
 
 Consolidated refunds and payment reversals remain under that scoped owner:
 
@@ -536,9 +553,24 @@ Consolidated refunds and payment reversals remain under that scoped owner:
   callers cannot claim provider evidence.
 - Cutover gate: revision `317_consolidated_payment_returns.py`, partial-surplus,
   full-refund, reversal, stale-preview, replay, dual-ledger, provider dispatch,
-  admin/API dispatch, and sole-writer tests must remain green. Historical
-  consolidated refund/reversal rows without exact structural evidence remain a
-  separate explicit reconciliation task.
+  admin/API dispatch, and sole-writer tests must remain green.
+- Historical boundary: revision `321_consolidated_return_reconciliation` adds
+  read-only inspection, fingerprint-bound preview, locked confirmation,
+  idempotent replay, actor audit, and one reviewed provenance row for an
+  existing historical consolidated `PaymentRefund` or `PaymentReversal`.
+  Confirmation requires the return amount to be exactly partitioned across the
+  selected billing-account debit and selected inactive allocation debits, and a
+  provider-backed return additionally requires its exact processed normalized
+  event. It links those existing rows and may correct the payment's derived
+  refund/reversal state from the exact return documents; it creates no return
+  document or ledger transaction, does not change `BillingAccount.balance`, and
+  makes no service-access decision.
+- Refusal boundary: recorded and ledger-evidenced consolidated credit must
+  agree before return evidence is linked. Active allocations, incomplete or
+  reused evidence, subscriber-wallet or generic return carriers, owner-confirmed
+  rows with missing evidence, and status-only history without a refund/reversal
+  document remain fail-closed rather than being reconstructed from a UI value,
+  memo, current eligibility, or inferred billing state.
 
 Imported-payment batch reversal is a separate migrated wrapper owner:
 

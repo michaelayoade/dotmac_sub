@@ -31,6 +31,7 @@ from app.services.billing.billing_accounts import BillingAccounts
 from app.services.billing.consolidated_payments import (
     ConsolidatedCreditAllocations,
     ConsolidatedPaymentRefunds,
+    ConsolidatedPaymentReturnReconciliations,
     ConsolidatedPaymentReversals,
     ConsolidatedPaymentSettlements,
 )
@@ -82,6 +83,7 @@ consolidated_payment_settlements = ConsolidatedPaymentSettlements()
 consolidated_credit_allocations = ConsolidatedCreditAllocations()
 consolidated_payment_refunds = ConsolidatedPaymentRefunds()
 consolidated_payment_reversals = ConsolidatedPaymentReversals()
+consolidated_payment_return_reconciliations = ConsolidatedPaymentReturnReconciliations()
 account_adjustments = AccountAdjustments()
 
 __all__ = [
@@ -90,6 +92,7 @@ __all__ = [
     "ConsolidatedPaymentSettlements",
     "ConsolidatedCreditAllocations",
     "ConsolidatedPaymentRefunds",
+    "ConsolidatedPaymentReturnReconciliations",
     "ConsolidatedPaymentReversals",
     "AccountAdjustments",
     "Invoices",
@@ -136,6 +139,7 @@ __all__ = [
     "consolidated_payment_settlements",
     "consolidated_credit_allocations",
     "consolidated_payment_refunds",
+    "consolidated_payment_return_reconciliations",
     "consolidated_payment_reversals",
     "account_adjustments",
     "billing_reporting",
