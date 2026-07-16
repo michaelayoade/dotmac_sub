@@ -24,7 +24,7 @@
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700/60">
                 <h2 class="text-sm font-bold text-slate-900 dark:text-white">Billing Signals</h2>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Generated {{ generated_at.strftime('%Y-%m-%d %H:%M UTC') if generated_at else '' }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Generated {{ generated_at | app_datetime('%Y-%m-%d %H:%M', '') }}</p>
             </div>
             <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
                 {% set signals = [
@@ -74,7 +74,7 @@
                         {{ status_badge("Disabled", variant="draft") }}
                     {% endif %}
                 </div>
-                <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Last success: {{ autopay.task.last_success.strftime('%Y-%m-%d %H:%M UTC') if autopay.task.last_success else 'No heartbeat' }}</p>
+                <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">Last success: {{ autopay.task.last_success | app_datetime('%Y-%m-%d %H:%M', 'No heartbeat') }}</p>
             </div>
         </div>
     </section>
@@ -114,12 +114,12 @@
                 <div class="flex items-center justify-between gap-4 px-5 py-3">
                     <div class="min-w-0">
                         <p class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ runner.task_name }}</p>
-                        <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ runner.interval_seconds or "No interval" }} sec interval; {{ runner.last_success.strftime('%Y-%m-%d %H:%M UTC') if runner.last_success else "No heartbeat" }}</p>
+                        <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ runner.interval_seconds or "No interval" }} sec interval; {{ runner.last_success | app_datetime('%Y-%m-%d %H:%M', 'No heartbeat') }}</p>
                         {% set _lr_status = runner.last_result_status %}
                         <p class="mt-0.5 truncate text-xs {{ 'text-rose-600 dark:text-rose-400' if _lr_status == 'error' else 'text-slate-500 dark:text-slate-400' }}">
                             Last result:
                             {% if runner.last_result_at %}
-                                <span class="font-medium text-slate-600 dark:text-slate-300">{{ runner.last_result_at.strftime('%Y-%m-%d %H:%M UTC') }}</span> —
+                                <span class="font-medium text-slate-600 dark:text-slate-300">{{ runner.last_result_at | app_datetime('%Y-%m-%d %H:%M') }}</span> —
                             {% endif %}
                             {{ runner.last_result_summary }}
                         </p>
@@ -158,7 +158,7 @@
                     <tr>
                         <td class="px-5 py-3 font-semibold text-slate-900 dark:text-white">{{ item.account_name }}<span class="block text-xs font-normal text-slate-500">{{ item.account_id }}</span></td>
                         <td class="px-5 py-3 font-mono tabular-nums">{{ item.failure_count }}</td>
-                        <td class="px-5 py-3 text-slate-600 dark:text-slate-300">{{ item.last_failure_at.strftime('%Y-%m-%d %H:%M UTC') if item.last_failure_at else "Unknown" }}</td>
+                        <td class="px-5 py-3 text-slate-600 dark:text-slate-300">{{ item.last_failure_at | app_datetime('%Y-%m-%d %H:%M', 'Unknown') }}</td>
                         <td class="max-w-md px-5 py-3 text-slate-600 dark:text-slate-300">{{ item.last_failure_reason or "Not recorded" }}</td>
                         <td class="px-5 py-3">{% if item.suspended %}{{ status_badge("Suspended", variant="overdue") }}{% else %}{{ status_badge("Retrying", variant="pending") }}{% endif %}</td>
                     </tr>

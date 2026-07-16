@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.orm import Session
 
+from app.models.catalog import BillingMode
+from app.models.subscriber import Subscriber
+from app.services.billing_profile import resolve_billing_profiles
 from app.services.common import round_money
+from app.services.customer_financial_position import prepaid_available_balances
 
 INACTIVE_STATUSES = ("blocked", "disabled", "suspended", "canceled")
 REFUND_REVIEW_STATUSES = ("disabled", "suspended", "canceled")
@@ -29,30 +34,21 @@ def _isoformat(value: object) -> str | None:
     return str(value)
 
 
-def _rows(db: Session, *, min_amount: Decimal = TOLERANCE):
+def _candidate_account_ids(db: Session) -> list[UUID]:
+    return list(
+        db.scalars(
+            select(Subscriber.id).where(Subscriber.status.in_(INACTIVE_STATUSES))
+        ).all()
+    )
+
+
+def _rows(db: Session, account_ids: list[UUID]):
+    if not account_ids:
+        return ()
     return db.execute(
         text(
             """
-            WITH ledger_net AS (
-                SELECT le.account_id,
-                       COALESCE(SUM(CASE WHEN le.entry_type = 'credit'
-                                         THEN le.amount ELSE -le.amount END), 0) AS net
-                FROM ledger_entries le
-                WHERE le.is_active
-                  AND le.invoice_id IS NULL
-                  AND le.currency = 'NGN'
-                GROUP BY le.account_id
-            ),
-            open_ar AS (
-                SELECT i.account_id, COALESCE(SUM(i.balance_due), 0) AS due
-                FROM invoices i
-                WHERE i.is_active
-                  AND i.balance_due > 0
-                  AND i.status IN ('issued', 'partially_paid', 'overdue')
-                  AND i.currency = 'NGN'
-                GROUP BY i.account_id
-            ),
-            ticket_counts AS (
+            WITH ticket_counts AS (
                 SELECT st.subscriber_id, COUNT(*) AS ticket_count
                 FROM support_tickets st
                 WHERE st.is_active
@@ -74,34 +70,21 @@ def _rows(db: Session, *, min_amount: Decimal = TOLERANCE):
                        s.splynx_customer_id,
                        s.email,
                        s.phone,
-                       COALESCE(s.deposit, 0) AS deposit,
-                       COALESCE(ln.net, 0) - COALESCE(oa.due, 0)
-                         AS current_available,
-                       COALESCE(oa.due, 0) AS open_ar,
                        COALESCE(tc.ticket_count, 0) AS ticket_count,
                        COALESCE(se.status_event_count, 0) AS status_event_count,
                        se.latest_status_event_at,
                        s.updated_at
                 FROM subscribers s
-                LEFT JOIN ledger_net ln ON ln.account_id = s.id
-                LEFT JOIN open_ar oa ON oa.account_id = s.id
                 LEFT JOIN ticket_counts tc ON tc.subscriber_id = s.id
                 LEFT JOIN status_events se ON se.subscriber_id = s.id
                 WHERE s.status IN ('blocked', 'disabled', 'suspended', 'canceled')
-            ),
-            funded_exposure AS (
-                SELECT *
-                FROM exposure
-                WHERE current_available > :min_amount
+                  AND s.id IN :account_ids
             )
             SELECT fe.account_id,
                    fe.subscriber_name,
                    fe.subscriber_status,
                    fe.subscriber_is_active,
                    fe.splynx_customer_id,
-                   fe.deposit,
-                   fe.current_available,
-                   fe.open_ar,
                    fe.ticket_count,
                    fe.status_event_count,
                    fe.latest_status_event_at,
@@ -109,7 +92,7 @@ def _rows(db: Session, *, min_amount: Decimal = TOLERANCE):
                    sc.active_sibling_account_ids,
                    sc.active_sibling_names,
                    fe.updated_at
-            FROM funded_exposure fe
+            FROM exposure fe
             LEFT JOIN LATERAL (
                 WITH sibling_matches AS (
                     SELECT sib.id,
@@ -156,11 +139,39 @@ def _rows(db: Session, *, min_amount: Decimal = TOLERANCE):
                          FROM sibling_sample
                        ) AS active_sibling_names
             ) sc ON TRUE
-            ORDER BY fe.current_available DESC, fe.subscriber_name ASC
+            ORDER BY fe.subscriber_name ASC
             """
-        ),
-        {"min_amount": min_amount, "sibling_sample_limit": SIBLING_SAMPLE_LIMIT},
+        ).bindparams(bindparam("account_ids", expanding=True)),
+        {
+            "account_ids": account_ids,
+            "sibling_sample_limit": SIBLING_SAMPLE_LIMIT,
+        },
     ).mappings()
+
+
+def _canonical_prepaid_balances(
+    db: Session, account_ids: list[UUID]
+) -> tuple[dict[UUID, Decimal], int, int]:
+    accounts = list(
+        db.scalars(select(Subscriber).where(Subscriber.id.in_(account_ids))).all()
+    )
+    profiles = resolve_billing_profiles(db, accounts)
+    prepaid_ids: list[UUID] = []
+    invalid_profile_count = 0
+    non_prepaid_count = 0
+    for account_id in account_ids:
+        profile = profiles.get(account_id)
+        if profile is None or not profile.is_valid:
+            invalid_profile_count += 1
+        elif profile.effective_mode == BillingMode.prepaid:
+            prepaid_ids.append(account_id)
+        else:
+            non_prepaid_count += 1
+    return (
+        prepaid_available_balances(db, prepaid_ids),
+        invalid_profile_count,
+        non_prepaid_count,
+    )
 
 
 def _empty_status_summary() -> dict[str, dict[str, Any]]:
@@ -177,7 +188,7 @@ def funded_inactive_exposure(
     min_amount: Decimal = TOLERANCE,
     material_amount: Decimal = MATERIAL_AMOUNT,
 ) -> dict[str, Any]:
-    """Summarize inactive accounts still carrying customer-positive balance."""
+    """Summarize inactive prepaid accounts with verified positive funding."""
 
     totals: dict[str, Decimal] = {
         status: Decimal("0.00") for status in INACTIVE_STATUSES
@@ -188,14 +199,23 @@ def funded_inactive_exposure(
     soft_deleted_total = Decimal("0.00")
     sibling_candidate_count = 0
     rows: list[dict[str, Any]] = []
+    account_ids = _candidate_account_ids(db)
+    balances, invalid_profile_count, non_prepaid_count = _canonical_prepaid_balances(
+        db, account_ids
+    )
+    funded_account_ids = [
+        account_id for account_id, balance in balances.items() if balance > min_amount
+    ]
+    candidate_rows = list(_rows(db, funded_account_ids))
 
-    for row in _rows(db, min_amount=min_amount):
+    for row in candidate_rows:
         status = str(row["subscriber_status"] or "")
         if status not in counts:
             continue
-        current_available = _money(row["current_available"])
-        deposit = _money(row["deposit"])
-        open_ar = _money(row["open_ar"])
+        current_available = balances.get(UUID(str(row["account_id"])))
+        if current_available is None:
+            continue
+        current_available = _money(current_available)
         subscriber_is_active = bool(row["subscriber_is_active"])
         counts[status] += 1
         totals[status] += current_available
@@ -218,8 +238,7 @@ def funded_inactive_exposure(
                     else str(row["splynx_customer_id"])
                 ),
                 "current_available": str(current_available),
-                "deposit": str(deposit),
-                "open_ar": str(open_ar),
+                "funding_source": "verified_prepaid_funding",
                 "ticket_count": int(row["ticket_count"] or 0),
                 "status_event_count": int(row["status_event_count"] or 0),
                 "active_sibling_count": int(row["active_sibling_count"] or 0),
@@ -263,6 +282,10 @@ def funded_inactive_exposure(
         "soft_deleted_count": soft_deleted_count,
         "soft_deleted_total": str(round_money(soft_deleted_total)),
         "sibling_candidate_count": sibling_candidate_count,
+        "candidate_count": len(account_ids),
+        "invalid_billing_profile_count": invalid_profile_count,
+        "non_prepaid_candidate_count": non_prepaid_count,
+        "funding_source": "verified_prepaid_funding",
         "sibling_sample_limit": SIBLING_SAMPLE_LIMIT,
         "material_amount": str(material_amount),
         "material_count": sum(material_counts.values()),

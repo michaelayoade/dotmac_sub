@@ -70,7 +70,7 @@
             </div>
             <div>
                 <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Run</dt>
-                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ job.last_run_at.strftime('%b %d, %Y %H:%M') if job.last_run_at else 'Never' }}</dd>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ job.last_run_at | app_datetime('%b %d, %Y %H:%M', 'Never') }}</dd>
             </div>
         </dl>
     </div>
@@ -94,7 +94,7 @@
                     {% for run in runs %}
                     {% set status_val = run.status.value if run.status else 'running' %}
                     <tr>
-                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ run.started_at.strftime('%b %d %H:%M:%S') if run.started_at else '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ run.started_at | app_datetime('%b %d %H:%M:%S', '-') }}</td>
                         <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                             {% if run.finished_at and run.started_at %}
                             {{ ((run.finished_at - run.started_at).total_seconds()) | int }}s

@@ -31,7 +31,7 @@ from app.tasks.catalog import (
     apply_due_subscription_status_commands,
     expire_subscriptions,
 )
-from app.tasks.collections import prepaid_balance_sweep, run_dunning
+from app.tasks.collections import prepaid_balance_sweep
 from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
 from app.tasks.crm_ticket_pull import (
     pull_crm_tickets,
@@ -239,7 +239,6 @@ __all__ = [
     "expire_subscriptions",
     "apply_due_subscription_changes",
     "apply_due_subscription_status_commands",
-    "run_dunning",
     "prepaid_balance_sweep",
     "audit_cutover_balance_invariant_task",
     "audit_funded_inactive_exposure_task",

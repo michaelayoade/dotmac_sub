@@ -11,7 +11,7 @@
     <div class="text-xs text-slate-500 dark:text-slate-400">
         Status: {{ bundle.drift_status or "pending" }}
         {% if bundle.last_applied_at %}
-        · Applied {{ bundle.last_applied_at.strftime("%Y-%m-%d %H:%M") }}
+        · Applied {{ bundle.last_applied_at | app_datetime('%Y-%m-%d %H:%M') }}
         {% endif %}
     </div>
     {% endif %}

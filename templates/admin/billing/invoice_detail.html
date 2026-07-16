@@ -161,8 +161,8 @@
                     {% endcall %}
                     {% endif %}
                     {% call info_row("Dates") %}
-                        Issued: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</span><br>
-                        Due: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</span>
+                        Issued: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.issued_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span><br>
+                        Due: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.due_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>
                     {% endcall %}
                 {% endcall %}
 
@@ -338,7 +338,7 @@
             {{ timeline_item(
                 title=activity.title,
                 description=activity.description|default(''),
-                time=activity.occurred_at.strftime('%b %d, %Y at %H:%M') if activity.occurred_at else '',
+                time=activity.occurred_at | app_datetime('%b %d, %Y at %H:%M', ''),
                 color="emerald",
                 is_last=loop.last and (loop.index is odd or loop.length == 1)
             ) }}

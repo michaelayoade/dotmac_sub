@@ -44,16 +44,24 @@ def _money_filter(amount: object, currency: str | None = None) -> str:
     return format_money(amount, currency=currency)
 
 
-def _app_datetime_filter(value: object) -> str:
+def _app_datetime_filter(
+    value: object,
+    fmt: str | None = None,
+    fallback: str = "-",
+    include_tz: bool = True,
+) -> str:
     """Admin/reseller sibling of the customer ``portal_datetime`` filter.
 
     Formats an aware / naive-UTC datetime in the fixed display timezone
-    (Africa/Lagos / WAT) with a tz label, reusing the customer portal impl so
-    both surfaces stay identical.
+    (Africa/Lagos / WAT), reusing the customer portal impl so both surfaces
+    stay identical. ``fmt`` defaults to the portal's standard layout; pass
+    ``include_tz=False`` for date-only formats where a timezone label is noise.
     """
     from app.web.customer.branding import _format_portal_datetime
 
-    return _format_portal_datetime(value)
+    if fmt is None:
+        return _format_portal_datetime(value, fallback=fallback, include_tz=include_tz)
+    return _format_portal_datetime(value, fmt, fallback, include_tz)
 
 
 def _attach_globals(templates: Jinja2Templates) -> None:
@@ -62,14 +70,23 @@ def _attach_globals(templates: Jinja2Templates) -> None:
     from app.services.status_presentation import (
         account_status_presentation,
         appointment_status_presentation,
+        device_operational_status_presentation,
         infrastructure_service_status_presentation,
         invoice_status_presentation,
+        offer_status_presentation,
         payment_status_presentation,
+        project_status_presentation,
+        project_task_status_presentation,
         provisioning_task_status_presentation,
+        quote_status_presentation,
+        sales_order_status_presentation,
         service_order_status_presentation,
         subscription_status_presentation,
+        system_job_status_presentation,
         ticket_status_presentation,
+        work_order_status_presentation,
     )
+    from app.web.customer.branding import _format_portal_datetime
 
     templates.env.globals.setdefault(
         "infra_service_status_presentation",
@@ -80,6 +97,31 @@ def _attach_globals(templates: Jinja2Templates) -> None:
     )
     templates.env.globals.setdefault(
         "appointment_status_presentation", appointment_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "work_order_status_presentation", work_order_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "system_job_status_presentation", system_job_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "device_operational_status_presentation",
+        device_operational_status_presentation,
+    )
+    templates.env.globals.setdefault(
+        "offer_status_presentation", offer_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "quote_status_presentation", quote_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "sales_order_status_presentation", sales_order_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "project_status_presentation", project_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "project_task_status_presentation", project_task_status_presentation
     )
     templates.env.globals.setdefault(
         "subscription_status_presentation", subscription_status_presentation
@@ -107,6 +149,7 @@ def _attach_globals(templates: Jinja2Templates) -> None:
     templates.env.globals.setdefault("currency_symbol", currency_symbol)
     templates.env.filters.setdefault("money", _money_filter)
     templates.env.filters.setdefault("app_datetime", _app_datetime_filter)
+    templates.env.filters.setdefault("portal_datetime", _format_portal_datetime)
 
 
 def _backfill_loaded_template_instances() -> None:

@@ -52,11 +52,11 @@
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Started</dt>
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ case.started_at.strftime('%Y-%m-%d %H:%M') if case.started_at else '-' }}</dd>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ case.started_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</dd>
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Resolved</dt>
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ case.resolved_at.strftime('%Y-%m-%d %H:%M') if case.resolved_at else '-' }}</dd>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ case.resolved_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</dd>
                 </div>
                 {% if case.notes %}
                 <div class="sm:col-span-2">
@@ -109,7 +109,7 @@
                 <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                     {% for action in actions %}
                     <tr>
-                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ action.executed_at.strftime('%Y-%m-%d %H:%M') if action.executed_at else '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ action.executed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                         <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ action.action.value|replace('_', ' ')|title if action.action else '-' }}</td>
                         <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ action.step_day if action.step_day is not none else '-' }}</td>
                         <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ action.outcome or action.notes or '-' }}</td>

@@ -396,7 +396,7 @@
                                 <tr>
                                     <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ doc.filename }}</td>
                                     <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">{{ doc.category_label }}</td>
-                                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">{{ doc.created_at.strftime('%Y-%m-%d %H:%M') if doc.created_at else '-' }}</td>
+                                    <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">{{ doc.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                                     <td class="px-4 py-3">
                                         <div class="flex items-center justify-end gap-3">
                                             <a href="/admin/network/pop-sites/{{ pop_site.id }}/files/{{ doc.id }}/download" class="text-xs text-primary-600 hover:text-primary-700">Download</a>
@@ -494,11 +494,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.created_at.strftime('%B %d, %Y') if pop_site.created_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.created_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.updated_at.strftime('%B %d, %Y') if pop_site.updated_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ pop_site.updated_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                 </div>
             </div>
@@ -529,7 +529,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}

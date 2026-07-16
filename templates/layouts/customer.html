@@ -288,7 +288,7 @@
                                                     {{ notification.entity_type | replace('_', ' ') | title }}
                                                 </p>
                                                 <span class="flex-shrink-0 text-xs text-stone-400 dark:text-stone-500">
-                                                    {{ notification.created_at.strftime('%b %d') if notification.created_at else '' }}
+                                                    {{ notification.created_at | portal_datetime('%b %d', '', include_tz=False) }}
                                                 </span>
                                             </div>
                                             <p class="mt-1 line-clamp-2 text-sm text-stone-600 dark:text-stone-300">

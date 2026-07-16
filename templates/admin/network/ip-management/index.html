@@ -626,7 +626,7 @@
                                 {% else %}-{% endif %}
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                                {{ assignment.created_at.strftime('%b %d, %Y') if assignment.created_at else '-' }}
+                                {{ assignment.created_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}
                             </td>
                         </tr>
                         {% else %}
@@ -741,7 +741,7 @@
             <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
             {% endif %}
             {% if activity.occurred_at %}
-            <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+            <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
             {% endif %}
         </div>
         {% endfor %}

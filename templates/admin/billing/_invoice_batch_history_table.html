@@ -20,7 +20,7 @@
             {% if recent_runs %}
             {% for run in recent_runs %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ run.run_at.strftime('%b %d, %Y %H:%M') if run.run_at else 'N/A' }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ run.run_at | app_datetime('%b %d, %Y %H:%M', 'N/A') }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ run.billing_cycle|upper }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ run.subscriptions_scanned }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-slate-900 dark:text-white">{{ run.subscriptions_billed }}</td>

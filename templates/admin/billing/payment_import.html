@@ -259,7 +259,7 @@
                             {% if import_history %}
                             {% for row in import_history %}
                             <tr>
-                                <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.occurred_at.strftime('%b %d, %Y %I:%M %p') if row.occurred_at else '-' }}</td>
+                                <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.occurred_at | app_datetime('%b %d, %Y %I:%M %p', '-') }}</td>
                                 <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row.file_name }}</td>
                                 <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{{ row.handler }}</td>
                                 <td class="px-4 py-3 text-sm">

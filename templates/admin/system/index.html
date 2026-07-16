@@ -112,7 +112,7 @@
                     {{ status_badge("Failed", "error", size="sm") }}
                     {% endif %}
                     <span class="text-xs text-slate-400 dark:text-slate-500">
-                        {{ event.occurred_at.strftime('%Y-%m-%d %H:%M') if event.occurred_at else '' }}
+                        {{ event.occurred_at | app_datetime('%Y-%m-%d %H:%M', '') }}
                     </span>
                 </div>
             </div>

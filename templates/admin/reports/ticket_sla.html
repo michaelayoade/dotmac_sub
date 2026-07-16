@@ -116,8 +116,8 @@
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-700 dark:text-slate-300">{{ row.service_team }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-700 dark:text-slate-300">{{ row.assignee }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-xs text-slate-500 dark:text-slate-400">{{ row.due_at.strftime('%Y-%m-%d %H:%M') if row.due_at else '-' }}</td>
-                <td class="whitespace-nowrap px-6 py-4 text-xs text-slate-500 dark:text-slate-400">{{ row.breached_at.strftime('%Y-%m-%d %H:%M') if row.breached_at else '-' }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-xs text-slate-500 dark:text-slate-400">{{ row.due_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
+                <td class="whitespace-nowrap px-6 py-4 text-xs text-slate-500 dark:text-slate-400">{{ row.breached_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm font-semibold text-red-700 dark:text-red-300">{{ row.breach_duration }}</td>
                 {% endcall %}
                 {% endfor %}

@@ -30,8 +30,8 @@
                 <td class="px-3 py-2.5">{{ project_status_badge(project.status) }}</td>
                 <td class="px-3 py-2.5">{{ project_priority_badge(project.priority) }}</td>
                 <td class="px-3 py-2.5 text-xs text-slate-600 dark:text-slate-300">{{ staff_name(staff_lookup, project.manager_person_id or project.project_manager_person_id) }}</td>
-                <td class="px-3 py-2.5 text-xs text-slate-700 dark:text-slate-200">{{ project.due_at.strftime('%Y-%m-%d') if project.due_at else '-' }}</td>
-                <td class="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ project.created_at.strftime('%Y-%m-%d %H:%M UTC') if project.created_at else '-' }}</td>
+                <td class="px-3 py-2.5 text-xs text-slate-700 dark:text-slate-200">{{ project.due_at | app_datetime('%Y-%m-%d', '-', include_tz=False) }}</td>
+                <td class="px-3 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ project.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
             </tr>
             {% else %}
             <tr>

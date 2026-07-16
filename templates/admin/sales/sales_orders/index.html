@@ -129,7 +129,7 @@
                         {% if order.quote_id %}Quote{% else %}Manual{% endif %}
                         {% if order.source %}<span class="block text-xs text-slate-500 dark:text-slate-400">{{ order.source }}</span>{% endif %}
                     </td>
-                    <td class="px-4 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ order.created_at.strftime('%Y-%m-%d %H:%M') if order.created_at else '-' }}</td>
+                    <td class="px-4 py-2.5 text-xs text-slate-500 dark:text-slate-400">{{ order.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                 </tr>
                 {% else %}
                 <tr>

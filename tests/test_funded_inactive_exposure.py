@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import UUID
 
 from app.services import funded_inactive_exposure as exposure
 
@@ -10,8 +11,6 @@ def _row(
     *,
     status: str,
     current: str,
-    deposit: str = "0.00",
-    open_ar: str = "0.00",
     is_active: bool = True,
     active_sibling_count: int = 0,
 ) -> dict[str, object]:
@@ -22,8 +21,6 @@ def _row(
         "subscriber_is_active": is_active,
         "splynx_customer_id": "123",
         "current_available": current,
-        "deposit": deposit,
-        "open_ar": open_ar,
         "ticket_count": 1,
         "status_event_count": 2,
         "active_sibling_count": active_sibling_count,
@@ -36,11 +33,35 @@ def _row(
     }
 
 
-def test_funded_inactive_exposure_groups_statuses(monkeypatch):
+def _stub_rows(monkeypatch, rows, *, invalid_profiles=0, non_prepaid=0):
+    account_ids = [UUID(str(row["account_id"])) for row in rows]
+    monkeypatch.setattr(exposure, "_candidate_account_ids", lambda _db: account_ids)
     monkeypatch.setattr(
         exposure,
         "_rows",
-        lambda _db, *, min_amount: [
+        lambda _db, funded_ids: [
+            row for row in rows if UUID(str(row["account_id"])) in funded_ids
+        ],
+    )
+    balances = {
+        UUID(str(row["account_id"])): Decimal(str(row["current_available"]))
+        for row in rows
+    }
+    monkeypatch.setattr(
+        exposure,
+        "_canonical_prepaid_balances",
+        lambda _db, account_ids: (
+            {account_id: balances[account_id] for account_id in account_ids},
+            invalid_profiles,
+            non_prepaid,
+        ),
+    )
+
+
+def test_funded_inactive_exposure_groups_statuses(monkeypatch):
+    _stub_rows(
+        monkeypatch,
+        [
             _row(
                 "11111111-1111-4111-8111-111111111111",
                 status="blocked",
@@ -50,8 +71,6 @@ def test_funded_inactive_exposure_groups_statuses(monkeypatch):
                 "22222222-2222-4222-8222-222222222222",
                 status="disabled",
                 current="125.50",
-                deposit="150.00",
-                open_ar="24.50",
             ),
             _row(
                 "33333333-3333-4333-8333-333333333333",
@@ -83,10 +102,9 @@ def test_funded_inactive_exposure_groups_statuses(monkeypatch):
 
 
 def test_blocked_only_exposure_is_reported_but_ok(monkeypatch):
-    monkeypatch.setattr(
-        exposure,
-        "_rows",
-        lambda _db, *, min_amount: [
+    _stub_rows(
+        monkeypatch,
+        [
             _row(
                 "11111111-1111-4111-8111-111111111111",
                 status="blocked",
@@ -105,10 +123,9 @@ def test_blocked_only_exposure_is_reported_but_ok(monkeypatch):
 
 
 def test_sample_limit_truncates_largest_rows(monkeypatch):
-    monkeypatch.setattr(
-        exposure,
-        "_rows",
-        lambda _db, *, min_amount: [
+    _stub_rows(
+        monkeypatch,
+        [
             _row(
                 "11111111-1111-4111-8111-111111111111",
                 status="blocked",
@@ -136,10 +153,9 @@ def test_sample_limit_truncates_largest_rows(monkeypatch):
 
 
 def test_soft_deleted_funded_accounts_are_reported(monkeypatch):
-    monkeypatch.setattr(
-        exposure,
-        "_rows",
-        lambda _db, *, min_amount: [
+    _stub_rows(
+        monkeypatch,
+        [
             _row(
                 "11111111-1111-4111-8111-111111111111",
                 status="disabled",
@@ -165,10 +181,9 @@ def test_soft_deleted_funded_accounts_are_reported(monkeypatch):
 
 
 def test_canceled_funded_accounts_require_refund_review(monkeypatch):
-    monkeypatch.setattr(
-        exposure,
-        "_rows",
-        lambda _db, *, min_amount: [
+    _stub_rows(
+        monkeypatch,
+        [
             _row(
                 "11111111-1111-4111-8111-111111111111",
                 status="canceled",
@@ -183,3 +198,28 @@ def test_canceled_funded_accounts_require_refund_review(monkeypatch):
     assert result["canceled_count"] == 1
     assert result["refund_review_count"] == 1
     assert result["refund_review_total"] == "50.00"
+
+
+def test_non_prepaid_and_invalid_profiles_are_not_reported_as_funded(monkeypatch):
+    rows = [
+        _row(
+            "11111111-1111-4111-8111-111111111111",
+            status="disabled",
+            current="125.00",
+        )
+    ]
+    account_ids = [UUID(str(row["account_id"])) for row in rows]
+    monkeypatch.setattr(exposure, "_candidate_account_ids", lambda _db: account_ids)
+    monkeypatch.setattr(exposure, "_rows", lambda _db, _funded_ids: [])
+    monkeypatch.setattr(
+        exposure,
+        "_canonical_prepaid_balances",
+        lambda _db, _account_ids: ({}, 1, 0),
+    )
+
+    result = exposure.funded_inactive_exposure(object())
+
+    assert result["inactive_positive_count"] == 0
+    assert result["candidate_count"] == 1
+    assert result["invalid_billing_profile_count"] == 1
+    assert result["non_prepaid_candidate_count"] == 0

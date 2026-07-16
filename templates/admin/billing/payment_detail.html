@@ -83,8 +83,8 @@
                 {% call info_grid() %}
                     {{ info_row("Transaction ID", payment.id) }}
                     {{ info_row("External Reference", payment.external_id | default("—")) }}
-                    {{ info_row("Paid At", payment.paid_at.strftime('%b %d, %Y %H:%M') if payment.paid_at else '—') }}
-                    {{ info_row("Created", payment.created_at.strftime('%b %d, %Y %H:%M') if payment.created_at else '—') }}
+                    {{ info_row("Paid At", payment.paid_at | app_datetime('%b %d, %Y %H:%M', '—')) }}
+                    {{ info_row("Created", payment.created_at | app_datetime('%b %d, %Y %H:%M', '—')) }}
                 {% endcall %}
                 {% if payment.memo %}
                 <div class="mt-4 border-t border-slate-200 pt-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">
@@ -110,7 +110,7 @@
                                     <a href="/admin/billing/invoices/{{ alloc.invoice_id }}" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">{{ alloc.invoice_id | string | truncate(8, True, '') }}</a>
                                 </td>
                                 <td class="whitespace-nowrap px-6 py-4 text-right text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ payment_currency }} {{ "{:,.2f}".format(alloc.amount or 0) }}</td>
-                                <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400">{{ alloc.created_at.strftime('%b %d, %Y') if alloc.created_at else '—' }}</td>
+                                <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400">{{ alloc.created_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
                             {% endcall %}
                             {% endfor %}
                         </tbody>
@@ -148,7 +148,7 @@
                                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-900 dark:text-white font-mono">{{ entry.id | string | truncate(8, True, '') }}</td>
                                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ entry.entry_type.value if entry.entry_type else '—' }}</td>
                                 <td class="whitespace-nowrap px-6 py-4 text-right text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ entry_currency }} {{ "{:,.2f}".format(entry.amount or 0) }}</td>
-                                <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400">{{ entry.created_at.strftime('%b %d, %Y') if entry.created_at else '—' }}</td>
+                                <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400">{{ entry.created_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
                             {% endcall %}
                             {% endfor %}
                         </tbody>
@@ -213,7 +213,7 @@
                 {{ timeline_item(
                     title=activity.title,
                     description=activity.description|default(''),
-                    time=activity.occurred_at.strftime('%b %d, %Y at %H:%M') if activity.occurred_at else '',
+                    time=activity.occurred_at | app_datetime('%b %d, %Y at %H:%M', ''),
                     color="emerald",
                     is_last=loop.last
                 ) }}

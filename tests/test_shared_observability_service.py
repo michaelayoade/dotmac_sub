@@ -107,7 +107,7 @@ def test_record_celery_task_success_skips_non_money_result(monkeypatch):
 
 def test_record_celery_task_failure_records_money_job_error(monkeypatch):
     calls: dict[str, object] = {}
-    task_name = "app.tasks.collections.run_dunning"
+    task_name = "app.tasks.collections.run_billing_enforcement"
 
     monkeypatch.setattr(
         "app.services.observability.job_heartbeat.record_result",

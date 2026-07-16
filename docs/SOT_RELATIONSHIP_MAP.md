@@ -1335,7 +1335,17 @@ in forms, or rotate key material directly.
    contact-linking, widget writes, inbound-channel ingestion, collaboration,
    and admin mutation transactions. `app.services.team_inbox_commands` is the
    committed admin command boundary; `app.web.admin.inbox` only translates HTTP
-   inputs and outcomes.
+   inputs and outcomes. Named sub-owners inside the family:
+   `team_inbox_channel_receive`/`team_inbox_smtp_inbound`/`team_inbox_receive`
+   own inbound ingestion (webhook adapters build payloads and call their
+   `*_committed` entrypoints, never the ORM); `team_inbox_outbound` and
+   `team_outbound` own sends; `team_inbox_routing` owns conversation routing
+   and auto-assignment; `team_inbox_assignment`/`team_inbox_operations`
+   decide lifecycle and are invoked through the command boundary;
+   `communications.team_inbox_campaigns` owns campaign-sourced conversation
+   and outbound-message materialization. Inbox ORM rows have no writer
+   outside the `team_inbox_*` family — campaigns and other domains request
+   materialization from it rather than constructing inbox rows themselves.
 9. Campaign services own marketing audience, sequence, and content decisions.
    They request a canonical sender key; email delivery alone resolves that key
    to SMTP identity and credentials.
@@ -1610,6 +1620,34 @@ reinterpret its presentation.
 Rule: support routes and jobs translate requests and delegate ticket decisions
 to `app.services.support`. Events and notifications are consequences requested
 by that owner, not alternate ticket writers.
+
+## AI Control Plane
+
+AI is advisory: it observes, derives, and recommends; it never decides domain
+state (`docs/designs/AI_SOT.md`).
+
+1. `ai.gateway` owns LLM provider calls, redaction, prompt-injection defence,
+   and provider/latency/token telemetry. It is a **transport**, like a
+   payment or SMS provider — it holds no business rule and owns no domain
+   state. Credentials resolve through `secrets` (OpenBao), never settings
+   rows.
+2. `ai.personas` owns candidate-insight derivation: each persona builds
+   bounded context from the owning domain's read surface and returns a
+   title, summary, structured output, recommendations, and confidence.
+   Personas read; they never write.
+3. `ai.insights` (`app.services.ai_operations`) is the canonical writer of
+   `AIInsight` rows and owns insight lifecycle — create, acknowledge,
+   expire. Generated insights land here and nowhere else.
+4. `ai.intake` (`AiIntakeConfig`) owns the per-scope, per-channel decision to
+   run AI at all: enablement, confidence threshold, clarification limits,
+   and escalation timing. This is AI's only decision.
+
+Rule: an insight never mutates domain state. Acting on a recommendation means
+calling the domain's declared owner (`support.tickets`,
+`operations.work_orders`, `operations.project_lifecycle`,
+`communications.team_inbox`), which applies its own guards, events, and audit.
+No module under `app/services/ai*` may construct or session-write a non-AI ORM
+row; `tests/architecture/test_ai_boundaries.py` enforces it.
 
 ## Control Planes
 

@@ -114,7 +114,7 @@
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                     {% for item in activity_log %}
                     <tr>
-                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.timestamp.strftime('%Y-%m-%d %H:%M:%S') if item.timestamp else '-' }}</td>
+                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.timestamp | app_datetime('%Y-%m-%d %H:%M:%S', '-') }}</td>
                         <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.connector_name or item.connector_id }}</td>
                         <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.event_type }}</td>
                         <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.status }}</td>

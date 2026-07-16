@@ -118,23 +118,26 @@ def customer_branding_context(request: Request) -> dict[str, object]:
     if cached is not None:
         stats, portal_name, favicon = cached
     else:
+        # Brand assets only — the customer portal must never receive admin
+        # operational data (a previous admin-service call injected unscoped
+        # system-wide counts into every portal page, including the
+        # unauthenticated login screen; see the portal boundary architecture
+        # test). brand_profiles is the canonical customer-facing brand owner.
         db = db_session_adapter.create_session()
-        try:
-            from app.services import web_admin as web_admin_service
-
-            stats = web_admin_service.get_sidebar_stats(db)
-        except Exception:
-            logger.debug("Failed to load sidebar stats for branding context")
-            stats = {}
-
+        stats = {}
         portal_name = ""
         try:
-            from app.services.web_system_company_info import get_company_info
+            from app.services import brand_profiles
 
-            info = get_company_info(db)
-            portal_name = info.get("company_name") or ""
+            brand = brand_profiles.resolve_brand(db)
+            stats = {
+                "sidebar_logo_url": brand.logo_url,
+                "sidebar_logo_dark_url": brand.dark_logo_url,
+                "favicon_url": brand.favicon_url,
+            }
+            portal_name = brand.legal_name or brand.product_name or ""
         except Exception:
-            logger.debug("Failed to load company name for portal branding")
+            logger.debug("Failed to resolve brand for portal branding")
         finally:
             db.close()
 

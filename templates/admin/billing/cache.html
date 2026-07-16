@@ -26,7 +26,7 @@
             <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.cache_size_label }}</p>
         {% endcall %}
         {% call card("Oldest cache", color="emerald") %}
-            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.oldest_cached_at.strftime('%Y-%m-%d %H:%M') if stats.oldest_cached_at else 'N/A' }}</p>
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ stats.oldest_cached_at | app_datetime('%Y-%m-%d %H:%M', 'N/A') }}</p>
         {% endcall %}
         {% call card("Hit rate", color="emerald") %}
             <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ '%.2f'|format(stats.hit_rate_pct) }}%</p>
@@ -55,7 +55,7 @@
                         <tr>
                             <td class="px-4 py-3 text-sm text-slate-900 dark:text-white">{{ row.invoice_number }}</td>
                             <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ row.account_name }}</td>
-                            <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-300">{{ row.cached_at.strftime('%Y-%m-%d %H:%M') if row.cached_at else '-' }}</td>
+                            <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-300">{{ row.cached_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                             <td class="px-4 py-3 text-xs text-slate-600 dark:text-slate-300">{{ row.cache_size_label }}</td>
                             <td class="px-4 py-3 text-right">
                                 <a href="/admin/billing/invoices/{{ row.invoice_id }}" class="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">View</a>

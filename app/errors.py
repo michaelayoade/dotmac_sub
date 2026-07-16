@@ -14,9 +14,15 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.services.unit_of_work import ConcurrencyConflict
 from app.web.auth.dependencies import AuthenticationRequired
+from app.web.customer.branding import register_customer_portal_filters
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
+# Error pages extend layouts/customer.html, which uses the customer-portal
+# display filters (portal_datetime, currency_amount). Those are registered
+# per-Templates-instance, so this standalone error-handler instance needs them
+# too — without this a 404/403 on any portal path 500s on an unknown filter.
+register_customer_portal_filters(templates)
 _TEMPLATES_ROOT = Path("templates")
 
 _FRIENDLY_DEFAULT_BAD_REQUEST = "Some required information is missing or invalid. Please check the form and try again."

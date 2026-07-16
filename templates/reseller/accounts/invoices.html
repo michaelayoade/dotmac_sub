@@ -64,7 +64,7 @@
                         <td class="whitespace-nowrap px-6 py-4">
                             <span class="text-sm text-slate-600 dark:text-slate-400">
                                 {% if invoice.issued_at %}
-                                {{ invoice.issued_at.strftime('%b %d, %Y') }}
+                                {{ invoice.issued_at | app_datetime('%b %d, %Y', include_tz=False) }}
                                 {% else %}
                                 <span class="text-slate-400">--</span>
                                 {% endif %}
@@ -73,7 +73,7 @@
                         <td class="whitespace-nowrap px-6 py-4">
                             {% if invoice.due_at %}
                             <span class="text-sm text-slate-600 dark:text-slate-400">
-                                {{ invoice.due_at.strftime('%b %d, %Y') }}
+                                {{ invoice.due_at | app_datetime('%b %d, %Y', include_tz=False) }}
                             </span>
                             {% else %}
                             <span class="text-sm text-slate-400 dark:text-slate-500">--</span>

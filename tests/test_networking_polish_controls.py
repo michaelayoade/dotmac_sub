@@ -187,7 +187,7 @@ def test_freshness_labels_match_snapshot_data():
 
     assert "Live RADIUS active sessions" not in sessions
     assert "RADIUS active-session snapshot" in sessions
-    assert "snapshot_at.strftime" in sessions
+    assert "snapshot_at | app_datetime" in sessions
     assert "Current ONU Status Snapshot" in monitoring
     assert "ONU Status Trend (24h)" not in monitoring
     assert "Single snapshot" in monitoring

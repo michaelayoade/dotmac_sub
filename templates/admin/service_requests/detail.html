@@ -48,8 +48,8 @@
                 {{ info_row("Address", req.address or "—") }}
                 {% set sa = req.serviceability.value if req.serviceability else 'unknown' %}
                 {{ info_row("Serviceability", sa | replace('_', ' ') | title) }}
-                {{ info_row("Submitted", req.created_at.strftime('%Y-%m-%d %H:%M') if req.created_at else "—") }}
-                {{ info_row("Last updated", req.updated_at.strftime('%Y-%m-%d %H:%M') if req.updated_at else "—") }}
+                {{ info_row("Submitted", req.created_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
+                {{ info_row("Last updated", req.updated_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
             {% endcall %}
             {% if req.latitude is not none and req.longitude is not none %}
             <div class="mt-4">

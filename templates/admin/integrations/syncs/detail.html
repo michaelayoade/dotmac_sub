@@ -208,7 +208,7 @@
                     {% set status_val = run.status.value if run.status else 'running' %}
                     {% set metrics = run.metrics or {} %}
                     <tr>
-                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ run.started_at.strftime('%b %d %H:%M:%S') if run.started_at else '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ run.started_at | app_datetime('%b %d %H:%M:%S', '-') }}</td>
                         <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ (run.trigger or '-') | title }}</td>
                         <td class="px-6 py-4">
                             {% if status_val == 'success' and metrics.get('partial_success') %}

@@ -132,7 +132,7 @@
                             {{ credit.currency }} {{ '{:,.2f}'.format(credit.applied_total) }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">
-                            {{ credit.created_at.strftime('%b %d, %Y') if credit.created_at else 'N/A' }}
+                            {{ credit.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
                         </td>
                     {% endcall %}
                     {% endfor %}

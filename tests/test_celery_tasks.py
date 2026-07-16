@@ -472,44 +472,6 @@ class TestCollectionsTask:
                         "credit_applied": "0.00",
                     }
 
-    def test_run_dunning_alias_uses_unified_enforcer(self):
-        """Legacy task name remains an alias for the unified enforcer."""
-        from datetime import UTC, datetime
-
-        from app.schemas.collections import BillingEnforcementRunResponse
-
-        mock_session = MagicMock()
-
-        with patch(
-            "app.services.collections.scheduled.SessionLocal",
-            return_value=mock_session,
-        ):
-            with patch(
-                "app.services.collections.scheduled.billing_enabled",
-                return_value=True,
-            ):
-                with patch(
-                    "app.services.collections.scheduled."
-                    "billing_enforcement_reconciler.run"
-                ) as mock_run:
-                    mock_run.return_value = BillingEnforcementRunResponse(
-                        run_at=datetime.now(UTC),
-                        accounts_scanned=1,
-                        cases_created=0,
-                        actions_created=0,
-                        skipped=0,
-                        dunning_accounts_scanned=1,
-                        dunning_cases_created=0,
-                        dunning_actions_created=0,
-                        dunning_skipped=0,
-                    )
-                    from app.tasks.collections import run_dunning
-
-                    result = run_dunning()
-
-                    mock_run.assert_called_once()
-                    assert result["accounts_scanned"] == 1
-
     def test_run_billing_enforcement_exception_closes_session(self):
         """Test exception still closes session."""
         mock_session = MagicMock()
@@ -543,7 +505,7 @@ class TestBillingMasterSwitchGates:
     is flipped on, even though the queue consumes them and they are scheduled.
     """
 
-    def test_dunning_skipped_when_billing_disabled(self):
+    def test_billing_enforcement_skipped_when_billing_disabled(self):
         mock_session = MagicMock()
         with patch(
             "app.services.collections.scheduled.SessionLocal",
@@ -557,9 +519,9 @@ class TestBillingMasterSwitchGates:
                     "app.services.collections.scheduled."
                     "billing_enforcement_reconciler.run"
                 ) as mock_run:
-                    from app.tasks.collections import run_dunning
+                    from app.tasks.collections import run_billing_enforcement
 
-                    result = run_dunning()
+                    result = run_billing_enforcement()
 
                     mock_run.assert_not_called()
                     assert result == {"skipped": "billing_disabled"}
@@ -908,7 +870,6 @@ class TestDailyRunnerQueueRouting:
         for task in (
             "app.tasks.billing.run_invoice_cycle",
             "app.tasks.collections.run_billing_enforcement",
-            "app.tasks.collections.run_dunning",
             "app.tasks.catalog.expire_subscriptions",
             "app.tasks.enforcement.cleanup_subscription_block_sessions",
             "app.tasks.usage.run_usage_rating",
@@ -928,7 +889,6 @@ class TestDailyRunnerQueueRouting:
         for task in (
             "app.tasks.billing.run_invoice_cycle",
             "app.tasks.collections.run_billing_enforcement",
-            "app.tasks.collections.run_dunning",
         ):
             assert annotations[task]["time_limit"] >= 1800, task
 
