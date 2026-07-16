@@ -98,6 +98,12 @@
     </form>
     {% endcall %}
 
+    {% if devices_refreshed_at %}
+    <p class="mb-3 text-xs text-slate-400 dark:text-slate-500">
+        Operational status as of {{ devices_refreshed_at | app_datetime }} (last inventory refresh) — open a device for live status.
+    </p>
+    {% endif %}
+
     {# Devices Table #}
     <div id="devices-content" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 200ms;">
         <div class="overflow-x-auto">

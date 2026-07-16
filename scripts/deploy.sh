@@ -17,7 +17,8 @@
 # upgrade heads` still leaves the schema half-applied.
 #
 # Procedure:
-#   verify image on GHCR -> DB backup -> pin APP_IMAGE in .env -> pull ->
+#   verify image on GHCR -> DB backup -> pull -> verify OCI revision ->
+#   pin APP_IMAGE + GIT_SHA in .env ->
 #   alembic upgrade heads (one-off container) -> recreate app+workers -> health gate.
 #
 # On a failed health gate the previous image is re-pinned and the services are
@@ -56,10 +57,10 @@ command -v flock >/dev/null || {
   echo "Install util-linux, or set DEPLOY_LOCK_FILE= to opt out (NOT recommended)." >&2
   exit 1
 }
-exec 9>"${LOCK_FILE}" 2>/dev/null || {
+if ! { exec 9>"${LOCK_FILE}"; } 2>/dev/null; then
   echo "Cannot open deploy lock ${LOCK_FILE}" >&2
   exit 1
-}
+fi
 if ! flock -n 9; then
   echo "REFUSING TO DEPLOY: another deploy already holds ${LOCK_FILE}." >&2
   pgrep -af "scripts/deploy.sh" | grep -v "^$$ " | sed "s/^/  running: /" >&2 || true
@@ -103,10 +104,63 @@ assert_no_source_mount() {
 cd "${DEPLOY_DIR}"
 COMPOSE=(docker compose -f docker-compose.yml)
 
-pinned_image() { grep -E '^APP_IMAGE=' .env | cut -d= -f2-; }
+env_value() {
+  local key="$1"
+  local value
+  value="$(grep -E "^${key}=" .env | tail -n 1 | cut -d= -f2- || true)"
+  printf '%s\n' "${value}"
+}
+
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" .env; then
+    sed -i "s|^${key}=.*|${key}=${value}|" .env
+  else
+    printf '%s=%s\n' "${key}" "${value}" >> .env
+  fi
+}
+
+restore_env_value() {
+  local key="$1"
+  local was_present="$2"
+  local value="$3"
+  if [[ "${was_present}" == "1" ]]; then
+    set_env_value "${key}" "${value}"
+  else
+    sed -i "/^${key}=/d" .env
+  fi
+}
+
+pinned_image() { env_value APP_IMAGE; }
+pinned_git_sha() { env_value GIT_SHA; }
+
+image_revision() {
+  docker image inspect "$1" \
+    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+}
+
+validate_image_revision() {
+  local image="$1"
+  local tag="$2"
+  local revision="$3"
+  local tag_sha
+  if [[ ! "${revision}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "IMAGE INTEGRITY FAILURE: ${image} has no full OCI revision label." >&2
+    return 1
+  fi
+  if [[ "${tag}" == sha-* ]]; then
+    tag_sha="${tag#sha-}"
+    if [[ "${revision:0:${#tag_sha}}" != "${tag_sha}" ]]; then
+      echo "IMAGE INTEGRITY FAILURE: tag ${tag} does not match OCI revision ${revision}." >&2
+      return 1
+    fi
+  fi
+}
 
 if [[ "${1:-}" == "--status" ]]; then
   echo "pinned:  $(pinned_image)"
+  echo "git sha: $(pinned_git_sha)"
   echo "running: $(docker inspect "${APP_CONTAINER}" --format '{{.Config.Image}}' 2>/dev/null || echo 'not running')"
   exit 0
 fi
@@ -114,6 +168,9 @@ fi
 TAG="${1:?usage: deploy.sh <image-tag>, e.g. deploy.sh sha-abc1234 (or --status)}"
 IMAGE="${IMAGE_REPO}:${TAG}"
 PREV_IMAGE="$(pinned_image)"
+PREV_IMAGE_PRESENT="$(grep -q '^APP_IMAGE=' .env && printf 1 || printf 0)"
+PREV_GIT_SHA="$(pinned_git_sha)"
+PREV_GIT_SHA_PRESENT="$(grep -q '^GIT_SHA=' .env && printf 1 || printf 0)"
 
 if [[ "${IMAGE}" == "${PREV_IMAGE}" ]]; then
   log "Image ${IMAGE} is already pinned — re-running deploy steps idempotently."
@@ -148,33 +205,31 @@ if [[ "${SKIP_BACKUP:-0}" != "1" ]]; then
 fi
 
 repin_prev() {
-  [[ -n "${PREV_IMAGE}" ]] && sed -i "s|^APP_IMAGE=.*|APP_IMAGE=${PREV_IMAGE}|" "${DEPLOY_DIR}/.env"
+  restore_env_value APP_IMAGE "${PREV_IMAGE_PRESENT}" "${PREV_IMAGE}"
+  restore_env_value GIT_SHA "${PREV_GIT_SHA_PRESENT}" "${PREV_GIT_SHA}"
 }
-trap 'repin_prev; echo "Deploy FAILED — APP_IMAGE restored to ${PREV_IMAGE:-none} (running containers untouched)" >&2' ERR
+trap 'repin_prev; echo "Deploy FAILED — APP_IMAGE/GIT_SHA restored to the previous release (running containers untouched)" >&2' ERR
 
 # From here on APP_IMAGE may already be pinned, so an interrupt must restore it
 # too -- not just terminate the backup child. (Migrations are NOT reverted; new
 # revisions must stay backward-compatible with the previous release.)
-trap 'cleanup_children; repin_prev; echo "Deploy interrupted — APP_IMAGE restored to ${PREV_IMAGE:-none}" >&2; exit 130' INT TERM HUP
-
-log "Pinning APP_IMAGE=${IMAGE}"
-if grep -q '^APP_IMAGE=' .env; then
-  sed -i "s|^APP_IMAGE=.*|APP_IMAGE=${IMAGE}|" .env
-else
-  printf 'APP_IMAGE=%s\n' "${IMAGE}" >> .env
-fi
-# Best-effort deploy record: resolve the tag's short sha to a full commit sha.
-if git -C "${REPO_DIR}" rev-parse --verify --quiet "${TAG#sha-}^{commit}" >/dev/null 2>&1; then
-  FULL_SHA="$(git -C "${REPO_DIR}" rev-parse "${TAG#sha-}^{commit}")"
-  if grep -q '^GIT_SHA=' .env; then
-    sed -i "s|^GIT_SHA=.*|GIT_SHA=${FULL_SHA}|" .env
-  else
-    printf 'GIT_SHA=%s\n' "${FULL_SHA}" >> .env
-  fi
-fi
+trap 'cleanup_children; repin_prev; echo "Deploy interrupted — APP_IMAGE/GIT_SHA restored to the previous release" >&2; exit 130' INT TERM HUP
 
 log "Pulling image"
-"${COMPOSE[@]}" pull app
+docker pull "${IMAGE}"
+
+log "Verifying image release metadata"
+if ! FULL_SHA="$(image_revision "${IMAGE}")"; then
+  echo "IMAGE INTEGRITY FAILURE: could not inspect ${IMAGE}." >&2
+  exit 1
+fi
+if ! validate_image_revision "${IMAGE}" "${TAG}" "${FULL_SHA}"; then
+  exit 1
+fi
+
+log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
+set_env_value APP_IMAGE "${IMAGE}"
+set_env_value GIT_SHA "${FULL_SHA}"
 
 # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
 # merged heads), so use `heads` (plural), never `head`.
