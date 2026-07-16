@@ -43,7 +43,10 @@ from app.services.customer_financial_position import get_customer_financial_posi
 from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.network.radius_sessions import live_framed_ips_by_subscription
-from app.services.status_presentation import account_status_presentation
+from app.services.status_presentation import (
+    account_status_presentation,
+    subscription_status_presentation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +325,9 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                 address=address,
                 ip_address=live_ips.get(subscription.id) or subscription.ipv4_address,
                 status=subscription.status.value if subscription.status else "pending",
+                status_presentation=subscription_status_presentation(
+                    subscription.status or "pending"
+                ),
                 monthly_cost=monthly_cost,
             )
         )
@@ -332,12 +338,14 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         else SimpleNamespace(
             status="inactive",
             plan_name="No active plan",
+            status_presentation=subscription_status_presentation("inactive"),
         )
     )
     if services:
         primary_service = SimpleNamespace(
             status=services[0].status,
             plan_name=services[0].name,
+            status_presentation=services[0].status_presentation,
         )
 
     open_count = 0
