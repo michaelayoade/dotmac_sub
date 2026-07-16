@@ -596,3 +596,47 @@ def test_infrastructure_service_status_presentation_tones():
     # Unknown / unmapped falls back to neutral, never silently positive.
     assert pres("weird").tone == StatusTone.neutral
     assert pres(None).tone == StatusTone.neutral
+
+
+# --- Customer-portal workflow presentations (service orders / appointments) ---
+
+
+def test_service_order_status_presentation_covers_canonical_set():
+    from app.models.provisioning import ServiceOrderStatus
+    from app.schemas.status_presentation import StatusTone
+    from app.services.status_presentation import service_order_status_presentation
+
+    for status in ServiceOrderStatus:
+        pres = service_order_status_presentation(status)
+        assert pres.value == status.value
+        assert pres.label
+    assert (
+        service_order_status_presentation(ServiceOrderStatus.active).tone
+        == StatusTone.positive
+    )
+    assert (
+        service_order_status_presentation(ServiceOrderStatus.failed).tone
+        == StatusTone.negative
+    )
+    # Unknown values fail neutral, never silently positive.
+    assert service_order_status_presentation("weird").tone == StatusTone.neutral
+
+
+def test_appointment_status_presentation_covers_canonical_set():
+    from app.models.provisioning import AppointmentStatus
+    from app.schemas.status_presentation import StatusTone
+    from app.services.status_presentation import appointment_status_presentation
+
+    for status in AppointmentStatus:
+        pres = appointment_status_presentation(status)
+        assert pres.value == status.value
+        assert pres.label
+    assert (
+        appointment_status_presentation(AppointmentStatus.completed).tone
+        == StatusTone.positive
+    )
+    assert (
+        appointment_status_presentation(AppointmentStatus.no_show).tone
+        == StatusTone.negative
+    )
+    assert appointment_status_presentation(None).tone == StatusTone.neutral

@@ -58,3 +58,15 @@ def test_the_subnet_is_overridable_for_co_hosted_stacks() -> None:
     assert "${DOCKER_SUBNET:-" in text, (
         "the compose bridge subnet must be overridable via DOCKER_SUBNET"
     )
+
+
+def test_vpn_blocked_subnet_is_configurable_for_co_hosted_stacks() -> None:
+    compose_text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    env_text = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+    assert "VPN_BLOCKED_LAN_SUBNETS: ${VPN_BLOCKED_LAN_SUBNETS:-" in compose_text, (
+        "VPN route protection must follow the configured compose bridge subnet"
+    )
+    assert re.search(r"^VPN_BLOCKED_LAN_SUBNETS=[0-9./]+", env_text, re.M), (
+        "VPN_BLOCKED_LAN_SUBNETS must be documented in .env.example"
+    )
