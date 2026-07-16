@@ -394,7 +394,7 @@ def preview_financial_access_consequence(
     health_reasons: list[str] = []
     profile_payload: dict = {"valid": False, "automation_safe": False}
     dedicated_bundle = False
-    inside_window = enforcement_window.within_enforcement_window(db)
+    window_decision = enforcement_window.resolve_enforcement_window_decision(db)
 
     if account is None:
         eligible = False
@@ -480,6 +480,19 @@ def preview_financial_access_consequence(
             if minimum_age_skip:
                 eligible = False
                 outcome = minimum_age_skip
+        if (
+            eligible
+            and reason == EnforcementReason.overdue
+            and action
+            in {
+                FinancialAccessAction.suspend,
+                FinancialAccessAction.reject,
+                FinancialAccessAction.throttle,
+            }
+            and window_decision.should_defer
+        ):
+            eligible = False
+            outcome = "outside_enforcement_window"
         if eligible:
             from app.services.billing_enforcement_guards import (
                 billing_enforcement_health,
@@ -589,7 +602,9 @@ def preview_financial_access_consequence(
         "shield_reason": shield_reason,
         "billing_health_reasons": health_reasons,
         "dedicated_bundle": dedicated_bundle,
-        "inside_enforcement_window": inside_window,
+        "inside_enforcement_window": window_decision.inside_window,
+        "enforcement_window_mode": window_decision.mode,
+        "enforcement_window_block_reason": window_decision.block_reason,
         "overdue_days": overdue_days,
         "target_subscription_ids": [str(value) for value in target_subscriptions],
         "credential_changes": [
@@ -1823,6 +1838,11 @@ def _execute_dunning_action_with_evidence(
                 "action": action.value,
                 "account_id": account_id,
                 "would_gate": True,
+                "mode": preview.decision_inputs.get("enforcement_window_mode"),
+                "deferred": preview.outcome == "outside_enforcement_window",
+                "block_reason": preview.decision_inputs.get(
+                    "enforcement_window_block_reason"
+                ),
                 "timezone": enforcement_window.resolve_timezone_name(db),
             },
         )

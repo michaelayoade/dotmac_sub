@@ -931,8 +931,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
     ),
-    # Enforcement (suspend/block) time-of-day window. Default unset = no gate;
-    # phase 6 audit-only logs "would_gate" without skipping until enforced.
+    # Enforcement (suspend/block) time-of-day window. Mode is explicit so
+    # operators can validate would-gate evidence before enabling deferral.
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="enforcement_window_mode",
+        env_var="ENFORCEMENT_WINDOW_MODE",
+        value_type=SettingValueType.string,
+        default="audit",
+        allowed={"audit", "enforce"},
+    ),
     SettingSpec(
         domain=SettingDomain.collections,
         key="enforcement_window_start",
