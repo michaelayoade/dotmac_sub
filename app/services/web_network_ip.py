@@ -1590,6 +1590,24 @@ IP_ADDRESS_LIST_DEFINITION = ListDefinition(
 )
 
 
+def combined_address_window(
+    offset: int, limit: int, total_ipv4: int
+) -> tuple[int, int, int, int]:
+    """Window ``(offset, limit)`` over the concatenated IPv4-then-IPv6 sequence.
+
+    The addresses list renders all IPv4 rows first, then all IPv6 rows. Treating
+    that as one ordered sequence, this returns the per-family
+    ``(ipv4_offset, ipv4_take, ipv6_offset, ipv6_take)`` so a page contains at
+    most ``limit`` rows and successive pages never skip or repeat an address —
+    unlike applying the same offset/limit to each family independently.
+    """
+    ipv4_offset = min(offset, total_ipv4)
+    ipv4_take = max(0, min(limit, total_ipv4 - offset))
+    ipv6_offset = max(0, offset - total_ipv4)
+    ipv6_take = max(0, limit - ipv4_take)
+    return ipv4_offset, ipv4_take, ipv6_offset, ipv6_take
+
+
 def build_ip_address_list_query(
     *,
     search: str | None = None,
@@ -1702,44 +1720,57 @@ def build_ip_management_data(
         or 0
     )
 
-    # Fetch paginated addresses with pool + assignment eager-loaded for the
-    # template's `addr.pool.name` and `addr.assignment.is_active` lookups.
-    ipv4_q = (
-        _addr_filters(
-            select(IPv4Address).options(
-                selectinload(IPv4Address.pool),
-                selectinload(IPv4Address.assignment),
-            ),
-            IPv4Address,
-        )
-        .order_by(
-            IPv4Address.address.desc()
-            if sort_dir == "desc"
-            else IPv4Address.address.asc()
-        )
-        .limit(address_limit)
-        .offset(offset)
+    # Combined pagination across the concatenated IPv4-then-IPv6 ordering: apply
+    # the page window to the merged sequence so a page shows at most
+    # address_limit rows and pages align across the two families. Previously each
+    # family used the same offset/limit independently, so a page could show up to
+    # 2x address_limit rows and later pages skipped real addresses.
+    ipv4_offset, ipv4_take, ipv6_offset, ipv6_take = combined_address_window(
+        offset, address_limit, total_ipv4
     )
-    ipv4_addresses = list(db.scalars(ipv4_q).all())
-    _annotate_ipv4_additional_route_owners(db, ipv4_addresses)
 
-    ipv6_q = (
-        _addr_filters(
-            select(IPv6Address).options(
-                selectinload(IPv6Address.pool),
-                selectinload(IPv6Address.assignment),
-            ),
-            IPv6Address,
+    # Fetch the windowed addresses with pool + assignment eager-loaded for the
+    # template's `addr.pool.name` and `addr.assignment.is_active` lookups.
+    ipv4_addresses: list = []
+    if ipv4_take:
+        ipv4_q = (
+            _addr_filters(
+                select(IPv4Address).options(
+                    selectinload(IPv4Address.pool),
+                    selectinload(IPv4Address.assignment),
+                ),
+                IPv4Address,
+            )
+            .order_by(
+                IPv4Address.address.desc()
+                if sort_dir == "desc"
+                else IPv4Address.address.asc()
+            )
+            .limit(ipv4_take)
+            .offset(ipv4_offset)
         )
-        .order_by(
-            IPv6Address.address.desc()
-            if sort_dir == "desc"
-            else IPv6Address.address.asc()
+        ipv4_addresses = list(db.scalars(ipv4_q).all())
+        _annotate_ipv4_additional_route_owners(db, ipv4_addresses)
+
+    ipv6_addresses: list = []
+    if ipv6_take:
+        ipv6_q = (
+            _addr_filters(
+                select(IPv6Address).options(
+                    selectinload(IPv6Address.pool),
+                    selectinload(IPv6Address.assignment),
+                ),
+                IPv6Address,
+            )
+            .order_by(
+                IPv6Address.address.desc()
+                if sort_dir == "desc"
+                else IPv6Address.address.asc()
+            )
+            .limit(ipv6_take)
+            .offset(ipv6_offset)
         )
-        .limit(address_limit)
-        .offset(offset)
-    )
-    ipv6_addresses = list(db.scalars(ipv6_q).all())
+        ipv6_addresses = list(db.scalars(ipv6_q).all())
 
     total_addresses = total_ipv4 + total_ipv6
     total_pages = max(1, (total_addresses + address_limit - 1) // address_limit)
