@@ -1353,7 +1353,10 @@ def build_beat_schedule() -> dict:
             SettingDomain.network_monitoring,
             "device_projection_reconcile_interval_seconds",
             "DEVICE_PROJECTION_RECONCILE_INTERVAL_SECONDS",
-            300,  # Every 5 minutes - operational-status freshness.
+            # Every 60s: the reconcile is ~1.75s for ~1.5k devices (measured on
+            # staging), and the admin device list reads this projection's
+            # last-known status, so a tight interval keeps that staleness small.
+            60,
         )
         device_projection_reconcile_interval_seconds = max(
             device_projection_reconcile_interval_seconds, 60
