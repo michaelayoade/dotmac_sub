@@ -368,9 +368,7 @@ _WITHHOLDING_TAX_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = 
 }
 
 
-_INFRASTRUCTURE_SERVICE_PRESENTATIONS: dict[
-    str, tuple[str, StatusTone, StatusIcon]
-] = {
+_INFRASTRUCTURE_SERVICE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
     "up": ("Up", StatusTone.positive, StatusIcon.check),
     "healthy": ("Healthy", StatusTone.positive, StatusIcon.check),
     "ok": ("OK", StatusTone.positive, StatusIcon.check),
@@ -421,9 +419,7 @@ def infrastructure_service_status_presentation(
     templates stop each carrying their own status→colour mapping. Unknown values
     fall back to a neutral tone.
     """
-    return _presentation(
-        _status_value(status), _INFRASTRUCTURE_SERVICE_PRESENTATIONS
-    )
+    return _presentation(_status_value(status), _INFRASTRUCTURE_SERVICE_PRESENTATIONS)
 
 
 def account_status_presentation(
