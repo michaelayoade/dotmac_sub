@@ -12,10 +12,32 @@ from __future__ import annotations
 import uuid
 
 from app.api import me as me_api
+from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.referral_native import Referral
 from app.models.subscriber import Subscriber
 from app.schemas.portal import ReferAFriendRequest
 from app.services import referrals as referrals_service
+
+
+def _program(db, *, enabled: bool = True, amount: str = "2500") -> None:
+    """Enable the Refer & Earn program (same knobs test_referrals_native uses)."""
+    rows = {
+        "referral_program_enabled": ("true" if enabled else "false"),
+        "referral_reward_amount": amount,
+    }
+    for key, text in rows.items():
+        db.add(
+            DomainSetting(
+                domain=SettingDomain.subscriber,
+                key=key,
+                value_type=SettingValueType.boolean
+                if key == "referral_program_enabled"
+                else SettingValueType.string,
+                value_text=text,
+                is_active=True,
+            )
+        )
+    db.commit()
 
 
 def _subscriber(db) -> Subscriber:
@@ -59,6 +81,7 @@ def test_me_referral_flag_off_writes_through_mirror(db_session, monkeypatch):
 def test_me_referral_flag_on_captures_natively(db_session, monkeypatch):
     """Flag ON: the referral lands in sub's native table, keyed to the
     referrer's code, with the mirror-compatible response shape."""
+    _program(db_session)
     sub = _subscriber(db_session)
     principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
     monkeypatch.setattr(referrals_service, "native_write_enabled", lambda db: True)
@@ -77,6 +100,7 @@ def test_me_referral_native_needs_no_crm_link(db_session, monkeypatch):
     """Rewards regression: a native-only subscriber (no CRM/splynx link) can
     refer a friend on the native path — the mirror path structurally 409s
     for them (resolve_crm_subscriber_id → None)."""
+    _program(db_session)
     sub = _subscriber(db_session)
     assert getattr(sub, "splynx_customer_id", None) in (None, "")
     principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
@@ -93,6 +117,7 @@ def test_native_capture_is_duplicate_guarded(db_session, monkeypatch):
     """The native unique-active-referred-person guard holds through the
     route: referring the same friend twice does not create a second active
     referral row."""
+    _program(db_session)
     sub = _subscriber(db_session)
     principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
     monkeypatch.setattr(referrals_service, "native_write_enabled", lambda db: True)
