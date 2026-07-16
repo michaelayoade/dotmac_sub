@@ -75,7 +75,12 @@ def _resolve_billing_cycle(
     db: Session,
     offer_id: str,
     offer_version_id: str | None,
+    override: BillingCycle | None = None,
 ) -> BillingCycle:
+    # Subscription-owned cadence wins over the offer price (SOT precedence:
+    # subscription.billing_cycle -> offer/version price -> offer header -> monthly).
+    if override is not None:
+        return override
     if offer_version_id:
         version_price: OfferVersionPrice | None = (
             db.query(OfferVersionPrice)
@@ -106,7 +111,7 @@ def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetim
 
     Args:
         start_at: The reference date (subscription start or last billing date)
-        cycle: The billing cycle (daily, weekly, monthly, annual)
+        cycle: The billing cycle (daily, weekly, monthly, quarterly, annual)
 
     Returns:
         The next billing date
@@ -115,6 +120,8 @@ def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetim
         return start_at + timedelta(days=1)
     if cycle == BillingCycle.weekly:
         return start_at + timedelta(weeks=1)
+    if cycle == BillingCycle.quarterly:
+        return _add_months(start_at, 3)
     if cycle == BillingCycle.annual:
         return _add_months(start_at, 12)
     # Default to monthly
@@ -1181,18 +1188,30 @@ class Subscriptions(ListResponseMixin):
         ):
             data["start_at"] = datetime.now(UTC)
         start_at = data.get("start_at")
-        if (
-            "next_billing_at" not in fields_set
-            and start_at
-            and data.get("status") == SubscriptionStatus.active
-        ):
+        # Own the effective cadence on the subscription (SOT precedence:
+        # contracted/sales cadence -> offer price -> monthly). Snapshot it so the
+        # row is self-describing and the recurring biller reads the subscription,
+        # not the offer, for owned subs.
+        if data.get("offer_id"):
             offer_version_id = data.get("offer_version_id")
             cycle = _resolve_billing_cycle(
                 db,
                 str(data["offer_id"]),
                 str(offer_version_id) if offer_version_id else None,
+                override=data.get("billing_cycle"),
             )
-            data["next_billing_at"] = _compute_next_billing_at(start_at, cycle)
+            # Snapshot whenever no contracted cadence was given (unset, or passed
+            # as None by a caller that always forwards the field): None means
+            # "inherit the offer", which we materialize here so the row is
+            # self-describing.
+            if not data.get("billing_cycle"):
+                data["billing_cycle"] = cycle
+            if (
+                "next_billing_at" not in fields_set
+                and start_at
+                and data.get("status") == SubscriptionStatus.active
+            ):
+                data["next_billing_at"] = _compute_next_billing_at(start_at, cycle)
         if "end_at" not in fields_set and start_at and data.get("contract_term"):
             end_at = _compute_contract_end_at(start_at, data["contract_term"])
             if end_at:
@@ -1639,9 +1658,19 @@ class Subscriptions(ListResponseMixin):
             # subscription start time if it was previously unset.
             start_at = datetime.now(UTC)
             data["start_at"] = start_at
+        # Service-change cadence transition (SOT): an explicit billing_cycle in
+        # the update becomes the new owned cadence; otherwise keep the sub's own.
+        cadence_override = data.get("billing_cycle", subscription.billing_cycle)
+        cadence_changing = (
+            "billing_cycle" in data
+            and data["billing_cycle"] != subscription.billing_cycle
+        )
         if status == SubscriptionStatus.active and start_at:
             cycle = _resolve_billing_cycle(
-                db, offer_id, str(offer_version_id) if offer_version_id else None
+                db,
+                offer_id,
+                str(offer_version_id) if offer_version_id else None,
+                override=cadence_override,
             )
             existing_next = _ensure_utc(data.get("next_billing_at") or next_billing_at)
             now = datetime.now(UTC)
@@ -1651,8 +1680,11 @@ class Subscriptions(ListResponseMixin):
             # 3. The existing value is more than 60 days in the past (stale migration data)
             stale = existing_next and (now - existing_next).days > 60
             resuming = previous_status == SubscriptionStatus.suspended
+            # A pure cadence change re-anchors on the NEXT cycle: keep the current
+            # next_billing_at so the in-flight period bills as scheduled; the new
+            # cadence applies when the biller next advances the anchor.
             if (
-                offer_changing
+                (offer_changing or cadence_changing)
                 and previous_status == SubscriptionStatus.active
                 and existing_next
                 and "next_billing_at" not in data

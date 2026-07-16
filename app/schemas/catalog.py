@@ -461,6 +461,9 @@ class SubscriptionBase(BaseModel):
     status: SubscriptionStatus = SubscriptionStatus.pending
     billing_mode: BillingMode = BillingMode.prepaid
     contract_term: ContractTerm = ContractTerm.month_to_month
+    # Contracted billing cadence (SOT: subscription owns effective cadence).
+    # None => inherit the offer price cadence at creation.
+    billing_cycle: BillingCycle | None = None
     start_at: datetime | None = None
     end_at: datetime | None = None
     next_billing_at: datetime | None = None
@@ -500,6 +503,7 @@ class SubscriptionUpdate(BaseModel):
     status: SubscriptionStatus | None = None
     billing_mode: BillingMode | None = None
     contract_term: ContractTerm | None = None
+    billing_cycle: BillingCycle | None = None
     start_at: datetime | None = None
     end_at: datetime | None = None
     next_billing_at: datetime | None = None

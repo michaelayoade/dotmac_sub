@@ -1160,7 +1160,9 @@ Dependency order:
    adapters, readback verification, and web workflows consume these projections
    and do not maintain firmware response string tables. A response classified
    as accepted is transport evidence, not proof of convergence; write workflows
-   still require the control-plane intent readback contract.
+   still require the control-plane intent readback contract. Protocol adapter,
+   authorization, provisioning, and reconcile history persist the sanitized
+   classifier projection as operation evidence; raw CLI output is not retained.
 12. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
@@ -1387,7 +1389,13 @@ Service intent:
    they do not update subscription status or offers directly.
 6. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
    assignment.
-7. `service_intent.ont`: projects provisioning intent to ONT operations.
+7. `service_intent.subscription_billing_cadence`: owns the subscription's
+   contracted billing cadence. Cadence is captured on the sales-order line,
+   materialized on the subscription at creation, and read by the recurring
+   biller (`subscription.billing_cycle` -> offer/version price -> monthly). The
+   offer price cadence is fallback-only; catalog offer-cadence immutability
+   stays with `service_intent.catalog_billing_governance`.
+8. `service_intent.ont`: projects provisioning intent to ONT operations.
 
 Rule: catalog policy and subscription owners define commercial intent. Every
 lifecycle execution carries a reviewed head and idempotency key. Network owners
