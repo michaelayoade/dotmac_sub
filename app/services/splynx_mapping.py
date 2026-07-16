@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
@@ -154,3 +155,23 @@ class SplynxMappingManager:
 
 
 splynx_mapping = SplynxMappingManager()
+
+
+def sync_status(db: Session, *, healthy_age_seconds: int = 7200) -> dict[str, object]:
+    """Freshness of the Splynx id-mapping sync for the operations overview.
+
+    Canonical owner of the sync-health decision: healthy when the most recent
+    mapping is younger than the supplied age threshold (configuration resolved
+    by the caller's settings).
+    """
+    last_sync = db.scalar(select(func.max(SplynxIdMapping.created_at)))
+    total_mappings = int(db.scalar(select(func.count(SplynxIdMapping.id))) or 0)
+    is_healthy = False
+    if last_sync is not None:
+        aware = last_sync if last_sync.tzinfo is not None else last_sync.replace(tzinfo=UTC)
+        is_healthy = (datetime.now(UTC) - aware).total_seconds() < healthy_age_seconds
+    return {
+        "last_sync": last_sync,
+        "total_mappings": total_mappings,
+        "is_healthy": is_healthy,
+    }

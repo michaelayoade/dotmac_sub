@@ -1917,18 +1917,10 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(network_operation_dispatch_seconds, 5),
         )
-        dashboard_cache_seconds = _resolve_int(
-            session,
-            SettingDomain.network_monitoring,
-            "dashboard_cache_refresh_interval_seconds",
-            180,
-        )
-        _sync_scheduled_task(
-            session,
-            name="dashboard_cache_refresh",
-            task_name="app.tasks.app_cache.refresh_dashboard_stats_cache",
-            enabled=True,
-            interval_seconds=max(dashboard_cache_seconds, 60),
+        # The redis dashboard stats-summary path was removed (the overview
+        # renders from the in-process global context); retire its beat row.
+        _retire_scheduled_task(
+            session, "app.tasks.app_cache.refresh_dashboard_stats_cache"
         )
         # Zabbix ONT snapshot / monitoring summary cache warmers retired with
         # the native monitoring cutover; disable any existing DB rows.
