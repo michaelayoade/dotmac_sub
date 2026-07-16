@@ -116,6 +116,12 @@ class InvoiceLineCreate(InvoiceLineBase):
     amount: Decimal | None = Field(default=None, ge=0)
 
 
+class SystemInvoiceLineCreate(InvoiceLineCreate):
+    """Internal automation request with a stable source-fact identity."""
+
+    billing_line_key: str | None = Field(default=None, max_length=255)
+
+
 class InvoiceLineUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     invoice_id: UUID | None = None
@@ -595,6 +601,92 @@ class PaymentSettlementReconciliationRequest(BaseModel):
     reason: str = Field(min_length=8, max_length=500)
 
 
+class BillingAccountLedgerEvidenceCandidateRead(BaseModel):
+    billing_account_ledger_entry_id: UUID
+    entry_type: LedgerEntryType
+    source: LedgerSource
+    amount: Decimal
+    currency: str
+    balance_after: Decimal
+
+
+class BillingAccountPaymentProvenanceCandidateRead(BaseModel):
+    provenance_type: str
+    provenance_id: UUID
+    status: str
+    amount: Decimal
+    currency: str
+
+
+class BillingAccountPaymentSettlementEvidenceInspectionRead(BaseModel):
+    payment_id: UUID
+    billing_account_id: UUID
+    payment_state: PaymentStatus
+    payment_amount: Decimal
+    currency: str
+    already_reconciled: bool
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    active_allocation_ids: list[UUID]
+    allocation_candidate_entries: list[PaymentSettlementEvidenceCandidateRead]
+    billing_account_candidate_entries: list[BillingAccountLedgerEvidenceCandidateRead]
+    provenance_candidates: list[BillingAccountPaymentProvenanceCandidateRead]
+
+
+class BillingAccountPaymentSettlementReconciliationRequest(BaseModel):
+    allocation_ledger_entry_ids: dict[UUID, UUID]
+    billing_account_ledger_entry_id: UUID | None = None
+    provenance_type: str = Field(
+        pattern="^(provider_event|payment_proof|topup_intent)$"
+    )
+    provenance_id: UUID
+    reason: str = Field(min_length=8, max_length=500)
+
+
+class BillingAccountPaymentSettlementAllocationEvidenceRead(BaseModel):
+    payment_allocation_id: UUID
+    invoice_id: UUID
+    account_id: UUID
+    amount: Decimal
+    ledger_entry_id: UUID
+
+
+class BillingAccountPaymentSettlementReconciliationPreviewRead(BaseModel):
+    payment_id: UUID
+    billing_account_id: UUID
+    payment_state: PaymentStatus
+    payment_amount: Decimal
+    currency: str
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    projection_drift: Decimal
+    allocated_amount: Decimal
+    unallocated_amount: Decimal
+    allocation_evidence: list[BillingAccountPaymentSettlementAllocationEvidenceRead]
+    billing_account_ledger_entry_id: UUID | None = None
+    provenance_type: str
+    provenance_id: UUID
+    money_posted: bool
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountPaymentSettlementReconciliationConfirm(
+    BillingAccountPaymentSettlementReconciliationRequest
+):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+
+
+class BillingAccountPaymentSettlementReconciliationResultRead(BaseModel):
+    settlement: PaymentSettlementRead
+    reconciliation_evidence_id: UUID
+    provenance_type: str
+    provenance_id: UUID
+    idempotent_replay: bool = False
+
+
 class PaymentUpdate(BaseModel):
     account_id: UUID | None = None
     billing_account_id: UUID | None = None
@@ -683,7 +775,8 @@ class PaymentRefundRead(BaseModel):
     id: UUID
     payment_id: UUID
     provider_event_id: UUID | None = None
-    ledger_entry_id: UUID
+    ledger_entry_id: UUID | None = None
+    billing_account_ledger_entry_id: UUID | None = None
     credit_consumption_ledger_entry_id: UUID | None = None
     amount: Decimal
     currency: str
@@ -730,7 +823,8 @@ class PaymentReversalRead(BaseModel):
     id: UUID
     payment_id: UUID
     provider_event_id: UUID | None = None
-    ledger_entry_id: UUID
+    ledger_entry_id: UUID | None = None
+    billing_account_ledger_entry_id: UUID | None = None
     credit_consumption_ledger_entry_id: UUID | None = None
     amount: Decimal
     currency: str
@@ -738,6 +832,66 @@ class PaymentReversalRead(BaseModel):
     reason: str
     preview_fingerprint: str | None = None
     created_at: datetime
+
+
+class BillingAccountPaymentReturnInvoiceEffectRead(BaseModel):
+    payment_allocation_id: UUID
+    invoice_id: UUID
+    account_id: UUID
+    invoice_number: str | None = None
+    receivable_before: Decimal
+    return_amount: Decimal
+    receivable_after: Decimal
+    result_ledger_entry_type: LedgerEntryType
+    result_ledger_source: LedgerSource
+
+
+class BillingAccountPaymentRefundPreviewRead(BaseModel):
+    payment_id: UUID
+    billing_account_id: UUID
+    currency: str
+    payment_gross: Decimal
+    refunded_before: Decimal
+    refundable_before: Decimal
+    refund_amount: Decimal
+    refunded_after: Decimal
+    payment_net_after: Decimal
+    status_after: PaymentStatus
+    consolidated_credit_before: Decimal
+    consolidated_credit_after: Decimal
+    consolidated_credit_consumption: Decimal
+    invoice_effects: list[BillingAccountPaymentReturnInvoiceEffectRead]
+    billing_account_ledger_entry_type: LedgerEntryType | None = None
+    billing_account_ledger_source: LedgerSource | None = None
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountPaymentRefundRequest(PaymentRefundRequest):
+    pass
+
+
+class BillingAccountPaymentReversalPreviewRead(BaseModel):
+    payment_id: UUID
+    billing_account_id: UUID
+    currency: str
+    payment_gross: Decimal
+    refunded_before: Decimal
+    payment_net_before: Decimal
+    reversal_amount: Decimal
+    status_after: PaymentStatus
+    consolidated_credit_before: Decimal
+    consolidated_credit_after: Decimal
+    consolidated_credit_consumption: Decimal
+    invoice_effects: list[BillingAccountPaymentReturnInvoiceEffectRead]
+    billing_account_ledger_entry_type: LedgerEntryType | None = None
+    billing_account_ledger_source: LedgerSource | None = None
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountPaymentReversalRequest(PaymentReversalRequest):
+    pass
 
 
 class PaymentSyncRead(BaseModel):
@@ -1678,11 +1832,76 @@ class BillingAccountPaymentConfirm(BillingAccountPaymentPreviewRequest):
     idempotency_key: str = Field(min_length=16, max_length=120)
 
 
+class BillingAccountCreditAllocationPreviewRequest(BaseModel):
+    amount: Decimal | None = Field(default=None, gt=0)
+
+
+class BillingAccountCreditSourceEffectRead(BaseModel):
+    billing_account_ledger_entry_id: UUID
+    payment_id: UUID
+    available_before: Decimal
+    consumed_amount: Decimal
+    available_after: Decimal
+
+
+class BillingAccountCreditInvoiceEffectRead(BaseModel):
+    invoice_id: UUID
+    invoice_number: str | None = None
+    receivable_before: Decimal
+    allocation_amount: Decimal
+    receivable_after: Decimal
+    source_billing_account_ledger_entry_id: UUID
+    source_payment_id: UUID
+    subscriber_ledger_entry_type: LedgerEntryType = LedgerEntryType.credit
+    subscriber_ledger_source: LedgerSource = LedgerSource.payment
+
+
+class BillingAccountCreditAllocationPreviewRead(BaseModel):
+    billing_account_id: UUID
+    subscriber_id: UUID
+    currency: str
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    unbacked_consolidated_credit: Decimal
+    subscriber_receivable_before: Decimal
+    allocation_amount: Decimal
+    subscriber_receivable_after: Decimal
+    source_effects: list[BillingAccountCreditSourceEffectRead]
+    invoice_effects: list[BillingAccountCreditInvoiceEffectRead]
+    consolidated_ledger_entry_type: LedgerEntryType = LedgerEntryType.debit
+    consolidated_ledger_source: LedgerSource = LedgerSource.payment
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountCreditAllocationConfirm(
+    BillingAccountCreditAllocationPreviewRequest
+):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+
+
+class BillingAccountCreditAllocationResultRead(BaseModel):
+    allocation_id: UUID
+    billing_account_id: UUID
+    subscriber_id: UUID
+    amount: Decimal
+    currency: str
+    billing_account_ledger_entry_id: UUID
+    payment_allocation_ids: list[UUID]
+    subscriber_ledger_entry_ids: list[UUID]
+    service_access_consequence: str
+    idempotent_replay: bool = False
+
+
 class BillingAccountStatementSubscriberLine(BaseModel):
     subscriber_id: UUID
     subscriber_name: str
     open_invoice_count: int
     open_balance: Decimal
+    allocation_allowed: bool = False
+    allocation_max: Decimal = Decimal("0.00")
+    allocation_reason: str | None = None
 
 
 class BillingAccountStatementPayment(BaseModel):

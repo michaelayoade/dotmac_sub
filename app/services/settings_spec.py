@@ -46,6 +46,12 @@ def _coerce_int_value(value: object) -> int | None:
 
 @dataclass(frozen=True)
 class SettingSpec(ListResponseMixin):
+    """Schema for a database-authoritative operational setting.
+
+    ``env_var`` names an optional bootstrap or migration input consumed by the
+    settings seed/sync paths. Runtime resolvers never consult it as an override.
+    """
+
     domain: SettingDomain
     key: str
     env_var: str | None
@@ -775,6 +781,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=86400,
         min_value=60,
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="prepaid_balance_sweep_interval_seconds",
+        env_var="PREPAID_BALANCE_SWEEP_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=3600,
+        min_value=300,
+        max_value=3600,
     ),
     SettingSpec(
         domain=SettingDomain.collections,
@@ -4011,9 +4026,11 @@ def list_specs(domain: SettingDomain) -> list[SettingSpec]:
 
 
 def resolve_value(db, domain: SettingDomain, key: str) -> Any:
-    """Resolve a setting value with Redis caching.
+    """Resolve a database-authoritative setting value with Redis caching.
 
-    Checks Redis cache first, falls back to database query, then caches result.
+    Resolution order is Redis cache, active database row, then the registered
+    default. Environment inputs are materialized by bootstrap/sync and are not
+    consulted here.
     """
     spec = get_spec(domain, key)
     if not spec:
@@ -4066,11 +4083,14 @@ def resolve_value(db, domain: SettingDomain, key: str) -> Any:
 
 
 def resolve_values_atomic(db, domain: SettingDomain, keys: list[str]) -> dict[str, Any]:
-    """Read multiple settings atomically to prevent race conditions.
+    """Read multiple database-authoritative settings atomically.
 
     This function retrieves multiple settings in a single database query,
     preventing inconsistent reads that can occur when settings are read
     one at a time while another process is updating them.
+
+    Missing rows resolve to their registered defaults. Environment inputs are
+    bootstrap-only and are not consulted here.
 
     Args:
         db: Database session

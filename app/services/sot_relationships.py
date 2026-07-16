@@ -161,8 +161,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "consolidated payment settlement preview and confirmation",
                     "consolidated payment idempotency and actor audit evidence",
+                    "historical consolidated settlement evidence reconciliation",
+                    "exact consolidated settlement cash provenance links",
                     "exact member-invoice allocation ledger links",
                     "exact consolidated-credit ledger links",
+                    "consolidated-credit allocation preview and confirmation",
+                    "exact source-credit consumption and subscriber-ledger links",
+                    "consolidated-credit allocation idempotency and actor audit",
+                    "consolidated payment refund eligibility and preview",
+                    "billing-account refund confirmation and exact ledger evidence",
+                    "consolidated payment reversal eligibility and preview",
+                    "billing-account reversal confirmation and exact ledger evidence",
+                    "consolidated return idempotency and actor audit evidence",
                     "consolidated payment access-reconciliation handoff",
                 ),
                 depends_on=(
@@ -174,7 +184,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Subscriber invoice receivable credits remain subscriber "
                     "ledger rows; reseller-held surplus is recorded in the "
                     "billing-account ledger and never assigned to a fake "
-                    "subscriber. Payment state and access state remain separate."
+                    "subscriber. Moving held credit to a member receivable is a "
+                    "separate preview-bound transfer with exact source and result "
+                    "links. Payment state and access state remain separate."
                 ),
             ),
             SOTService(
@@ -189,6 +201,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "previewed prepaid renewal consequence and exact debit link",
                     "settled account-credit allocation preview and confirmation",
                     "exact invoice-credit and account-credit-consumption links",
+                    "native unallocated-credit reconciliation transactions",
                     "historical payment settlement evidence reconciliation",
                     "payment settlement access-reconciliation handoff",
                     "payment-originated ledger postings",
@@ -237,6 +250,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "invoice status transitions",
                     "invoice adjustment and reversal postings",
                     "automation invoice creation and draft issuance",
+                    "automation invoice-line construction and source-fact replay",
+                    "usage-charge invoice and invoice-line construction",
                     "overdue invoice state and observation event",
                     "unfunded prepaid invoice return-to-draft eligibility",
                     "invoice-originated ledger postings",
@@ -588,6 +603,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device retry-pending and alarm classification",
                 ),
                 depends_on=("runtime.infrastructure_polling",),
+            ),
+            SOTService(
+                name="network.device_projection",
+                module="app.services.device_projection_reconcile",
+                owns=(
+                    "device_projections materialised table",
+                    "unified cross-type device row (OLT/core/ONT/CPE)",
+                    "projected operational status and freshness",
+                    "device projection orphan pruning",
+                ),
+                depends_on=(
+                    "network.device_state",
+                    "network.monitoring_inventory",
+                    "network.identity",
+                ),
+                notes=(
+                    "Sole canonical writer of device_projections. Delegates the "
+                    "multi-source device derivation to collect_devices and "
+                    "projects one materialised row per device so the admin device "
+                    "list can search/filter/sort/paginate in SQL. The table is a "
+                    "rebuildable cache: reconcile is idempotent, stamps "
+                    "refreshed_at, and prunes rows whose source device is gone. "
+                    "Readers never write it; they request a reconcile rather than "
+                    "maintaining a parallel derivation path."
+                ),
             ),
             SOTService(
                 name="network.operation_ledger",
@@ -1442,8 +1482,18 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="control.settings_spec",
                 module="app.services.settings_spec",
-                owns=("setting schema", "setting value coercion", "env fallback rules"),
+                owns=(
+                    "setting schema and validation bounds",
+                    "setting value coercion",
+                    "DB-authoritative runtime setting resolution",
+                    "registered setting defaults",
+                ),
                 depends_on=("control.domain_settings",),
+                notes=(
+                    "Runtime precedence is Redis cache, active database row, then "
+                    "the registered default. SettingSpec.env_var is bootstrap and "
+                    "migration metadata, never an implicit live override."
+                ),
             ),
             SOTService(
                 name="control.settings_bootstrap",
@@ -1454,6 +1504,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "default notification-template seeding",
                 ),
                 depends_on=("control.domain_settings", "control.settings_spec"),
+                notes=(
+                    "Environment inputs are materialized one way into stored "
+                    "settings and do not override runtime database decisions."
+                ),
             ),
             SOTService(
                 name="control.relationships",
@@ -1473,9 +1527,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.api.settings",
         ),
         rule=(
-            "Callers ask the feature registry whether a capability is enabled; "
-            "they should not independently compose module, env, DB, and legacy "
-            "flag state."
+            "Settings are inputs, not decision owners. Callers ask the named "
+            "owner or resolver for a decision; they do not independently compose "
+            "module, environment, database, and legacy state. Business and "
+            "operational tuning is database-authoritative unless a separately "
+            "registered, visible emergency override says otherwise."
         ),
     ),
     DomainSOT(
@@ -1912,9 +1968,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "web_admin_resellers owns the reseller read; this projection "
                     "declares the list capabilities (status filter, name sort, "
                     "pagination) so the route derives no pagination or filter rules. "
-                    "The admin reseller surface is currently gated by customer:read/"
-                    "write; a reseller:read/write split is a tracked follow-up "
-                    "requiring a reseller access-policy decision."
+                    "The admin reseller surface is granularly gated by reseller:read "
+                    "(list) and reseller:write (create/edit), split off the shared "
+                    "customer:read/write."
                 ),
             ),
             SOTService(
@@ -1937,6 +1993,49 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "mirror with no Sub-owned admin bulk command, so no selection or "
                     "bulk is declared. Each dispatch route is granularly gated "
                     "(operations:dispatch:read/write/assign)."
+                ),
+            ),
+            SOTService(
+                name="ui.project_list_projection",
+                module="app.services.web_projects",
+                owns=(
+                    "admin project searchable fields",
+                    "admin project filter and stable sort semantics",
+                    "admin project list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "operations.project_lifecycle",
+                ),
+                notes=(
+                    "projects_service.projects.list (operations.project_lifecycle) "
+                    "owns the canonical filtered/sorted project query; this "
+                    "projection declares the list capabilities and normalizes "
+                    "request state, then delegates the read. It issues no query of "
+                    "its own. Gated by the existing granular project:read."
+                ),
+            ),
+            SOTService(
+                name="ui.audit_events_list_projection",
+                module="app.services.web_system_audit",
+                owns=(
+                    "admin audit-log filterable fields",
+                    "admin audit-log sort and default-order semantics",
+                    "admin audit-log list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "audit_service.audit_events.list (observability.audit_log) owns "
+                    "the canonical filtered/sorted audit query; this projection "
+                    "declares the list capabilities (filter by actor/action/entity, "
+                    "sort on occurred_at) and normalizes request state, then "
+                    "delegates the read and count. It issues no query of its own. "
+                    "Read-only: audit events are immutable observations with no admin "
+                    "bulk command, so no selection or bulk is declared. Gated by the "
+                    "existing granular audit:read."
                 ),
             ),
         ),

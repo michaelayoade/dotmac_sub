@@ -28,7 +28,12 @@ from app.services.billing._common import (
 )
 from app.services.billing.adjustments import AccountAdjustments
 from app.services.billing.billing_accounts import BillingAccounts
-from app.services.billing.consolidated_payments import ConsolidatedPaymentSettlements
+from app.services.billing.consolidated_payments import (
+    ConsolidatedCreditAllocations,
+    ConsolidatedPaymentRefunds,
+    ConsolidatedPaymentReversals,
+    ConsolidatedPaymentSettlements,
+)
 from app.services.billing.credit_notes import (
     CreditNoteApplications,
     CreditNoteLines,
@@ -74,12 +79,18 @@ payment_providers = PaymentProviders()
 payment_provider_events = PaymentProviderEvents()
 billing_accounts = BillingAccounts()
 consolidated_payment_settlements = ConsolidatedPaymentSettlements()
+consolidated_credit_allocations = ConsolidatedCreditAllocations()
+consolidated_payment_refunds = ConsolidatedPaymentRefunds()
+consolidated_payment_reversals = ConsolidatedPaymentReversals()
 account_adjustments = AccountAdjustments()
 
 __all__ = [
     # Classes
     "BillingAccounts",
     "ConsolidatedPaymentSettlements",
+    "ConsolidatedCreditAllocations",
+    "ConsolidatedPaymentRefunds",
+    "ConsolidatedPaymentReversals",
     "AccountAdjustments",
     "Invoices",
     "InvoiceLines",
@@ -123,6 +134,9 @@ __all__ = [
     "payment_provider_events",
     "billing_accounts",
     "consolidated_payment_settlements",
+    "consolidated_credit_allocations",
+    "consolidated_payment_refunds",
+    "consolidated_payment_reversals",
     "account_adjustments",
     "billing_reporting",
     # Helper functions (for billing_automation compatibility)

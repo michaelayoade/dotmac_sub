@@ -217,6 +217,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Read-only; findings deduped by fingerprint.",
     ),
+    "app.tasks.device_projection.reconcile_device_projections": _c(
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Idempotent projection rebuild; the next reconcile repairs a stale or "
+        "partial device_projections table and prunes orphans.",
+    ),
     "app.tasks.dotmac_erp_outbox.deliver_erp_sync_events": _c(
         "integration",
         STATE,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import builtins
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -376,28 +376,29 @@ class BillingAccounts(ListResponseMixin):
     def credit_balance(
         db: Session, billing_account_id: str, amount: Decimal
     ) -> BillingAccount:
-        """Increment the unallocated balance on a billing account."""
-        ba = BillingAccounts.get(db, billing_account_id)
-        ba.balance = round_money(to_decimal(ba.balance) + to_decimal(amount))
-        ba.updated_at = datetime.now(UTC)
-        db.flush()
-        return ba
+        """Reject the retired projection-only consolidated credit writer."""
+        del db, billing_account_id, amount
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Consolidated credit is written only by its settlement owner with "
+                "exact billing-account ledger evidence"
+            ),
+        )
 
     @staticmethod
     def debit_balance(
         db: Session, billing_account_id: str, amount: Decimal
     ) -> BillingAccount:
-        """Decrement the unallocated balance on a billing account."""
-        ba = BillingAccounts.get(db, billing_account_id)
-        new_balance = round_money(to_decimal(ba.balance) - to_decimal(amount))
-        if new_balance < 0:
-            raise HTTPException(
-                status_code=400, detail="Insufficient billing account balance"
-            )
-        ba.balance = new_balance
-        ba.updated_at = datetime.now(UTC)
-        db.flush()
-        return ba
+        """Reject the retired projection-only consolidated debit writer."""
+        del db, billing_account_id, amount
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Consolidated credit is consumed only by its allocation owner with "
+                "exact billing-account ledger evidence"
+            ),
+        )
 
 
 billing_accounts = BillingAccounts()

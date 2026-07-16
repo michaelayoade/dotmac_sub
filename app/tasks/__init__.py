@@ -40,6 +40,7 @@ from app.tasks.crm_ticket_pull import (
 )
 from app.tasks.cross_app_drift import run_cross_app_drift_detection
 from app.tasks.customer_impact_metrics import export_customer_impact_metrics
+from app.tasks.device_projection import reconcile_device_projections
 from app.tasks.dotmac_erp_outbox import (
     deliver_erp_sync_events,
     refresh_expense_claim_statuses,
@@ -305,6 +306,7 @@ __all__ = [
     "warm_topology_status",
     "run_infrastructure_poll",
     "export_customer_impact_metrics",
+    "reconcile_device_projections",
     "run_radius_health_check",
     "run_lldp_topology_poll",
     "reconcile_detected_outages",
