@@ -12,6 +12,8 @@ from app.models.billing import (
     LedgerEntryType,
     LedgerSource,
     Payment,
+    PaymentSettlement,
+    PaymentSettlementOrigin,
     PaymentStatus,
 )
 from app.models.catalog import (
@@ -70,15 +72,27 @@ def _add_credit(db, account, amount="100.00") -> None:
     )
     db.add(payment)
     db.flush()
+    entry = LedgerEntry(
+        account_id=account.id,
+        payment_id=payment.id,
+        entry_type=LedgerEntryType.credit,
+        source=LedgerSource.payment,
+        amount=Decimal(amount),
+        currency="NGN",
+        memo="Top-up",
+    )
+    db.add(entry)
+    db.flush()
     db.add(
-        LedgerEntry(
-            account_id=account.id,
+        PaymentSettlement(
             payment_id=payment.id,
-            entry_type=LedgerEntryType.credit,
-            source=LedgerSource.payment,
+            unallocated_ledger_entry_id=entry.id,
             amount=Decimal(amount),
+            unallocated_amount=Decimal(amount),
+            prepaid_amount=Decimal("0.00"),
             currency="NGN",
-            memo="Top-up",
+            origin=PaymentSettlementOrigin.system,
+            idempotency_key=f"test-cleanup-credit-{payment.id}",
         )
     )
     db.flush()

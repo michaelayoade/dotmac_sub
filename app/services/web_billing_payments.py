@@ -29,6 +29,8 @@ from app.models.billing import (
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.schemas.billing import (
+    BillingAccountPaymentRefundRequest,
+    BillingAccountPaymentReversalRequest,
     PaymentAllocationConfirm,
     PaymentAllocationPreviewRequest,
     PaymentCreate,
@@ -228,13 +230,23 @@ def build_payment_detail_data(
             .order_by(Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc())
             .all()
         )
+    refund_capability = (
+        billing_service.consolidated_payment_refunds.capability(db, payment_id)
+        if payment.billing_account_id is not None
+        else billing_service.refunds.capability(db, payment_id)
+    )
+    reversal_capability = (
+        billing_service.consolidated_payment_reversals.capability(db, payment_id)
+        if payment.billing_account_id is not None
+        else billing_service.reversals.capability(db, payment_id)
+    )
     return {
         "payment": payment,
         "payment_status_presentation": payment_status_presentation(payment.status),
         "primary_invoice_id": payment_primary_invoice_id(payment),
         "edit_capability": billing_service.payments.edit_capability(db, payment_id),
-        "refund_capability": billing_service.refunds.capability(db, payment_id),
-        "reversal_capability": billing_service.reversals.capability(db, payment_id),
+        "refund_capability": refund_capability,
+        "reversal_capability": reversal_capability,
         "allocation_invoices": allocation_invoices,
         "allocation_available": allocation_available,
         "active_page": "payments",
@@ -1384,7 +1396,12 @@ def preview_payment_refund(
         amount=parsed_amount,
         reason=normalized_reason,
     )
-    preview = billing_service.refunds.preview(db, payment_id, request)
+    payment = billing_service.payments.get(db, payment_id)
+    preview = (
+        billing_service.consolidated_payment_refunds.preview(db, payment_id, request)
+        if payment.billing_account_id is not None
+        else billing_service.refunds.preview(db, payment_id, request)
+    )
     return {
         "preview": preview,
         "reason": normalized_reason,
@@ -1501,15 +1518,24 @@ def process_payment_refund_with_audit(
     idempotency_key: str,
 ):
     """Confirm a previewed completed refund through the canonical owner."""
-    result = billing_service.refunds.process_with_evidence(
-        db,
-        payment_id,
-        PaymentRefundRequest(
-            amount=Decimal(amount),
-            reason=reason.strip() if reason and reason.strip() else None,
-            preview_fingerprint=preview_fingerprint,
-            idempotency_key=idempotency_key,
-        ),
+    payment = billing_service.payments.get(db, payment_id)
+    payload_values = {
+        "amount": Decimal(amount),
+        "reason": reason.strip() if reason and reason.strip() else None,
+        "preview_fingerprint": preview_fingerprint,
+        "idempotency_key": idempotency_key,
+    }
+    result = (
+        billing_service.consolidated_payment_refunds.confirm(
+            db,
+            payment_id,
+            BillingAccountPaymentRefundRequest(**payload_values),
+            actor_id=_actor_id(request),
+        )
+        if payment.billing_account_id is not None
+        else billing_service.refunds.process_with_evidence(
+            db, payment_id, PaymentRefundRequest(**payload_values)
+        )
     )
     log_audit_event(
         db=db,
@@ -1531,7 +1557,12 @@ def preview_payment_reversal(
 ) -> dict[str, object]:
     """Build the owner-authored chargeback/bank-reversal preview."""
     request = PaymentReversalPreviewRequest(reason=reason.strip())
-    preview = billing_service.reversals.preview(db, payment_id, request)
+    payment = billing_service.payments.get(db, payment_id)
+    preview = (
+        billing_service.consolidated_payment_reversals.preview(db, payment_id, request)
+        if payment.billing_account_id is not None
+        else billing_service.reversals.preview(db, payment_id, request)
+    )
     return {
         "preview": preview,
         "reason": request.reason,
@@ -1549,14 +1580,23 @@ def process_payment_reversal_with_audit(
     idempotency_key: str,
 ):
     """Confirm a previewed payment reversal through its canonical owner."""
-    result = billing_service.reversals.process_with_evidence(
-        db,
-        payment_id,
-        PaymentReversalRequest(
-            reason=reason.strip(),
-            preview_fingerprint=preview_fingerprint,
-            idempotency_key=idempotency_key,
-        ),
+    payment = billing_service.payments.get(db, payment_id)
+    payload_values = {
+        "reason": reason.strip(),
+        "preview_fingerprint": preview_fingerprint,
+        "idempotency_key": idempotency_key,
+    }
+    result = (
+        billing_service.consolidated_payment_reversals.confirm(
+            db,
+            payment_id,
+            BillingAccountPaymentReversalRequest(**payload_values),
+            actor_id=_actor_id(request),
+        )
+        if payment.billing_account_id is not None
+        else billing_service.reversals.process_with_evidence(
+            db, payment_id, PaymentReversalRequest(**payload_values)
+        )
     )
     log_audit_event(
         db=db,

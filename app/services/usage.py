@@ -14,7 +14,7 @@ from sqlalchemy import and_, bindparam, create_engine, func, or_, text
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
+from app.models.billing import Invoice, InvoiceStatus, TaxApplication
 from app.models.catalog import (
     AccessCredential,
     AddOn,
@@ -38,6 +38,7 @@ from app.models.usage import (
     UsageRatingRunStatus,
     UsageRecord,
 )
+from app.schemas.billing import InvoiceCreate, SystemInvoiceLineCreate
 from app.schemas.usage import (
     QuotaBucketCreate,
     QuotaBucketUpdate,
@@ -52,7 +53,13 @@ from app.schemas.usage import (
 )
 from app.services import control_registry, settings_spec
 from app.services import domain_settings as domain_settings_service
-from app.services.common import apply_ordering, apply_pagination, validate_enum
+from app.services.billing.invoices import InvoiceLines, Invoices
+from app.services.common import (
+    apply_ordering,
+    apply_pagination,
+    coerce_uuid,
+    validate_enum,
+)
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.radius_accounting_health import assess_freshness, stale_after_seconds
@@ -1160,19 +1167,21 @@ def _resolve_or_create_invoice(
         if default_status
         else InvoiceStatus.draft
     )
-    invoice = Invoice(
-        account_id=account_id,
-        status=status_value,
-        currency=currency,
-        subtotal=Decimal("0.00"),
-        tax_total=Decimal("0.00"),
-        total=Decimal("0.00"),
-        balance_due=Decimal("0.00"),
-        billing_period_start=period_start,
-        billing_period_end=period_end,
+    invoice = Invoices.stage_system_invoice(
+        db,
+        InvoiceCreate(
+            account_id=coerce_uuid(account_id),
+            status=status_value,
+            currency=currency,
+            subtotal=Decimal("0.00"),
+            tax_total=Decimal("0.00"),
+            total=Decimal("0.00"),
+            balance_due=Decimal("0.00"),
+            billing_period_start=period_start,
+            billing_period_end=period_end,
+        ),
+        reason="usage_charge_posting",
     )
-    db.add(invoice)
-    db.flush()
     return invoice
 
 
@@ -1596,17 +1605,19 @@ class UsageCharges(ListResponseMixin):
                 charge.period_end,
                 charge.currency,
             )
-        line = InvoiceLine(
-            invoice_id=invoice.id,
-            subscription_id=charge.subscription_id,
-            description="Usage overage",
-            quantity=Decimal("1.000"),
-            unit_price=_round_money(charge.amount),
-            amount=_round_money(charge.amount),
-            tax_application=TaxApplication.exclusive,
+        line = InvoiceLines.stage_system_line(
+            db,
+            SystemInvoiceLineCreate(
+                invoice_id=invoice.id,
+                subscription_id=charge.subscription_id,
+                description="Usage overage",
+                quantity=Decimal("1.000"),
+                unit_price=_round_money(charge.amount),
+                amount=_round_money(charge.amount),
+                tax_application=TaxApplication.exclusive,
+            ),
+            reason="usage_charge_posting",
         )
-        db.add(line)
-        db.flush()
         charge.invoice_line_id = line.id
         charge.status = UsageChargeStatus.posted
         db.flush()

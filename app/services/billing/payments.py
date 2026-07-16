@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import cast
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -882,10 +881,13 @@ def _record_unallocated_payment_credit(
     if remaining <= 0:
         return None
     if payment.billing_account_id is not None:
-        from app.services.billing.billing_accounts import BillingAccounts
-
-        BillingAccounts.credit_balance(db, str(payment.billing_account_id), remaining)
-        return None
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Consolidated credit must be posted by the consolidated payment "
+                "settlement owner with exact billing-account ledger evidence"
+            ),
+        )
     entry = _create_payment_ledger_entry(db, payment, None, remaining)
     if entry is None:
         raise HTTPException(
@@ -3074,197 +3076,15 @@ class Payments(ListResponseMixin):
         subscriber_id: str,
         amount: Decimal | int | float | str | None = None,
     ) -> dict:
-        """Allocate a reseller billing account's unallocated balance to one subscriber.
-
-        The credit is consumed from the billing account's existing unallocated
-        consolidated payments, oldest first, and applied to the selected
-        subscriber's oldest open invoices.
-        """
-        from app.models.billing import BillingAccount
-        from app.models.subscriber import Subscriber
-        from app.services.billing.billing_accounts import BillingAccounts
-
-        ba = (
-            db.query(BillingAccount)
-            .filter(BillingAccount.id == billing_account_id)
-            .with_for_update()
-            .first()
-        )
-        if not ba:
-            raise HTTPException(status_code=404, detail="Billing account not found")
-        available_balance = round_money(to_decimal(ba.balance))
-        if available_balance <= 0:
-            raise HTTPException(
-                status_code=400, detail="No unallocated reseller funds available"
-            )
-        allocation_limit = available_balance
-        if amount is not None:
-            allocation_limit = round_money(to_decimal(amount))
-            if allocation_limit <= 0:
-                raise HTTPException(
-                    status_code=400, detail="Allocation amount must be greater than 0"
-                )
-            if allocation_limit > available_balance:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Allocation exceeds unallocated reseller funds",
-                )
-
-        subscriber = get_by_id(db, Subscriber, subscriber_id)
-        if subscriber is None or str(subscriber.reseller_id) != str(ba.reseller_id):
-            raise HTTPException(status_code=404, detail="Subscriber not found")
-
-        invoices = (
-            db.query(Invoice)
-            .filter(Invoice.account_id == subscriber.id)
-            .filter(Invoice.is_active.is_(True))
-            .filter(
-                Invoice.status.in_(
-                    [
-                        InvoiceStatus.issued,
-                        InvoiceStatus.partially_paid,
-                        InvoiceStatus.overdue,
-                    ]
-                )
-            )
-            .filter(Invoice.balance_due > 0)
-            .order_by(Invoice.due_at.asc().nulls_last(), Invoice.created_at.asc())
-            .all()
-        )
-        if not invoices:
-            raise HTTPException(
-                status_code=400, detail="Subscriber has no open invoices"
-            )
-
-        allocated_sq = (
-            db.query(
-                PaymentAllocation.payment_id.label("payment_id"),
-                func.coalesce(
-                    func.sum(PaymentAllocation.amount), Decimal("0.00")
-                ).label("allocated"),
-            )
-            .group_by(PaymentAllocation.payment_id)
-            .subquery()
-        )
-        payment_result_rows = (
-            db.query(
-                Payment,
-                func.coalesce(allocated_sq.c.allocated, Decimal("0.00")).label(
-                    "allocated"
-                ),
-            )
-            .outerjoin(allocated_sq, allocated_sq.c.payment_id == Payment.id)
-            .filter(Payment.billing_account_id == ba.id)
-            .filter(Payment.is_active.is_(True))
-            .filter(Payment.status == PaymentStatus.succeeded)
-            .order_by(Payment.paid_at.asc().nulls_last(), Payment.created_at.asc())
-            .all()
-        )
-        payment_rows: list[tuple[Payment, Decimal]] = [
-            (payment, cast(Decimal, allocated))
-            for payment, allocated in payment_result_rows
-        ]
-        payment_backing_available = round_money(
-            sum(
-                (
-                    round_money(to_decimal(payment.amount) - to_decimal(allocated))
-                    for payment, allocated in payment_rows
-                    if payment.currency == ba.currency
-                ),
-                Decimal("0.00"),
-            )
-        )
-        if payment_backing_available < allocation_limit:
-            backing_amount = round_money(allocation_limit - payment_backing_available)
-            backing_payment = Payment(
-                billing_account_id=ba.id,
-                amount=backing_amount,
-                currency=ba.currency,
-                status=PaymentStatus.succeeded,
-                memo="Reseller unallocated balance credit",
-                paid_at=datetime.now(UTC),
-            )
-            db.add(backing_payment)
-            db.flush()
-            payment_rows.append((backing_payment, Decimal("0.00")))
-
-        remaining_balance = allocation_limit
-        total_allocated = Decimal("0.00")
-        invoice_ids: set = set()
-        allocations_by_payment: dict[Payment, list[PaymentAllocation]] = {}
-        payment_remaining_by_id = {
-            payment.id: round_money(to_decimal(payment.amount) - to_decimal(allocated))
-            for payment, allocated in payment_rows
-        }
-
-        for invoice in invoices:
-            invoice_remaining = round_money(to_decimal(invoice.balance_due))
-            if invoice_remaining <= 0:
-                continue
-
-            for payment, _already_allocated in payment_rows:
-                if remaining_balance <= 0 or invoice_remaining <= 0:
-                    break
-                if payment.currency != invoice.currency:
-                    continue
-
-                payment_available = payment_remaining_by_id.get(
-                    payment.id, Decimal("0.00")
-                )
-                if payment_available <= 0:
-                    continue
-
-                amount = min(remaining_balance, invoice_remaining, payment_available)
-                allocation, applied_amount = _apply_payment_allocation(
-                    db,
-                    payment,
-                    invoice,
-                    amount,
-                    memo="Allocated from reseller unallocated funds",
-                )
-                allocations_by_payment.setdefault(payment, []).append(allocation)
-                total_allocated = round_money(total_allocated + applied_amount)
-                remaining_balance = round_money(remaining_balance - applied_amount)
-                invoice_remaining = round_money(invoice_remaining - applied_amount)
-                payment_remaining_by_id[payment.id] = round_money(
-                    payment_available - applied_amount
-                )
-                invoice_ids.add(invoice.id)
-
-            if remaining_balance <= 0:
-                break
-
-        if total_allocated <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="No eligible unallocated reseller funds could be applied",
-            )
-        if total_allocated > available_balance:
-            raise HTTPException(
-                status_code=400, detail="Allocation exceeds unallocated reseller funds"
-            )
-
-        db.flush()
-        for invoice_id in invoice_ids:
-            recalculated_invoice = get_by_id(db, Invoice, invoice_id)
-            if recalculated_invoice:
-                _finalize_invoice_payment_effects(db, recalculated_invoice)
-
-        BillingAccounts.debit_balance(db, str(ba.id), total_allocated)
-        db.commit()
-
-        for payment, allocations in allocations_by_payment.items():
-            _emit_consolidated_payment_events(db, payment, allocations)
-
-        return {
-            "subscriber_id": str(subscriber.id),
-            "allocated_total": total_allocated,
-            "currency": ba.currency,
-            "remaining_unallocated_balance": round_money(
-                available_balance - total_allocated
+        """Compatibility gate for the retired one-step consolidated allocation."""
+        del db, billing_account_id, subscriber_id, amount
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Use the consolidated credit allocation owner preview and "
+                "fingerprint-bound confirmation workflow"
             ),
-            "invoice_count": len(invoice_ids),
-        }
+        )
 
     @staticmethod
     def get(db: Session, payment_id: str):
@@ -3785,11 +3605,41 @@ class Payments(ListResponseMixin):
         return payment
 
 
+def _payment_has_exact_unallocated_evidence(
+    db: Session,
+    payment: Payment,
+) -> bool:
+    settlement = payment.settlement
+    if (
+        settlement is None
+        or settlement.unallocated_ledger_entry_id is None
+        or settlement.currency != payment.currency
+        or round_money(to_decimal(settlement.unallocated_amount)) <= Decimal("0.00")
+    ):
+        return False
+    entry = db.get(LedgerEntry, settlement.unallocated_ledger_entry_id)
+    return bool(
+        entry is not None
+        and entry.is_active
+        and entry.account_id == payment.account_id
+        and entry.invoice_id is None
+        and entry.payment_id == payment.id
+        and entry.entry_type == LedgerEntryType.credit
+        and entry.source == LedgerSource.payment
+        and entry.currency == payment.currency
+        and round_money(to_decimal(entry.amount))
+        == round_money(to_decimal(settlement.unallocated_amount))
+    )
+
+
 def _payment_unallocated_credit_remaining(
     db: Session,
     payment: Payment,
 ) -> Decimal:
-    if payment.settlement is None:
+    if not _payment_has_exact_unallocated_evidence(db, payment):
+        return Decimal("0.00")
+    settlement = payment.settlement
+    if settlement is None:  # narrowed by the structural evidence check above
         return Decimal("0.00")
     consumed = db.query(
         func.coalesce(func.sum(LedgerEntry.amount), Decimal("0.00"))
@@ -3802,8 +3652,8 @@ def _payment_unallocated_credit_remaining(
     return max(
         Decimal("0.00"),
         round_money(
-            to_decimal(payment.settlement.unallocated_amount)
-            - to_decimal(payment.settlement.prepaid_amount)
+            to_decimal(settlement.unallocated_amount)
+            - to_decimal(settlement.prepaid_amount)
             - to_decimal(consumed)
         ),
     )
@@ -3868,6 +3718,14 @@ def _build_payment_allocation_preview(
             detail=(
                 "Payment has no reviewed settlement evidence; reconcile it before "
                 "allocating account credit"
+            ),
+        )
+    if not _payment_has_exact_unallocated_evidence(db, payment):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Payment has no exact unallocated-credit ledger evidence; "
+                "reconcile its settlement before allocating"
             ),
         )
     invoice = get_by_id(db, Invoice, payload.invoice_id)

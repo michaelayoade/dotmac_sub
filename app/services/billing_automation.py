@@ -36,11 +36,11 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.network import SubscriberAdditionalRoute
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
-from app.schemas.billing import InvoiceCreate
+from app.schemas.billing import InvoiceCreate, SystemInvoiceLineCreate
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.billing import _recalculate_invoice_totals
 from app.services.billing._common import _calculate_tax_amount
-from app.services.billing.invoices import Invoices, next_invoice_number
+from app.services.billing.invoices import InvoiceLines, Invoices, next_invoice_number
 from app.services.billing.reconcile_unposted import settle_open_invoices_from_credit
 from app.services.billing_prepaid_overlap_repair import apply_prepaid_overlap_hold
 from app.services.billing_settings import (
@@ -578,8 +578,9 @@ def _bill_recurring_addons(
         )
         if amount <= Decimal("0.00"):
             continue
-        db.add(
-            InvoiceLine(
+        InvoiceLines.stage_system_line(
+            db,
+            SystemInvoiceLineCreate(
                 invoice_id=invoice.id,
                 subscription_id=subscription.id,
                 description=(
@@ -598,7 +599,8 @@ def _bill_recurring_addons(
                     "billing_period_end": period_end.isoformat(),
                 },
                 billing_line_key=billing_line_key,
-            )
+            ),
+            reason="scheduled_recurring_addon",
         )
         added += 1
     return added
@@ -1404,26 +1406,30 @@ def run_invoice_cycle(
             continue
 
         tax_rate_id = _resolve_tax_rate_id(db, subscription)
-        line = InvoiceLine(
-            invoice_id=invoice.id,
-            subscription_id=subscription.id,
-            description=description,
-            quantity=Decimal("1.000"),
-            unit_price=round_money(line_amount),
-            amount=round_money(line_amount),
-            tax_rate_id=tax_rate_id,
-            tax_application=(
-                _default_tax_application(db) if tax_rate_id else TaxApplication.exempt
+        InvoiceLines.stage_system_line(
+            db,
+            SystemInvoiceLineCreate(
+                invoice_id=invoice.id,
+                subscription_id=subscription.id,
+                description=description,
+                quantity=Decimal("1.000"),
+                unit_price=round_money(line_amount),
+                amount=round_money(line_amount),
+                tax_rate_id=tax_rate_id,
+                tax_application=(
+                    _default_tax_application(db)
+                    if tax_rate_id
+                    else TaxApplication.exempt
+                ),
+                metadata_={
+                    "kind": "base_subscription",
+                    "billing_period_start": period_start.isoformat(),
+                    "billing_period_end": period_end.isoformat(),
+                },
+                billing_line_key=billing_line_key,
             ),
-            metadata_={
-                "kind": "base_subscription",
-                "billing_period_start": period_start.isoformat(),
-                "billing_period_end": period_end.isoformat(),
-            },
-            billing_line_key=billing_line_key,
+            reason="scheduled_base_subscription",
         )
-        db.add(line)
-        db.flush()
         summary["subscriptions_billed"] += 1
         summary["lines_created"] += 1
         # Bill active recurring add-ons (e.g. extra IP blocks) on the same invoice.
@@ -1548,7 +1554,6 @@ def run_invoice_cycle(
         ):
             from contextlib import nullcontext
 
-            from app.services import collections as collections_service
             from app.services.notification_suppression import suppress_notifications
 
             touched_account_ids = {
@@ -1563,6 +1568,11 @@ def run_invoice_cycle(
             )
             with restore_notify_ctx:
                 for account_id in touched_account_ids:
+                    account = db.get(Subscriber, coerce_uuid(account_id))
+                    was_walled = account is not None and account.status in (
+                        SubscriberStatus.suspended,
+                        SubscriberStatus.blocked,
+                    )
                     try:
                         settle_result = settle_open_invoices_from_credit(db, account_id)
                     except Exception:
@@ -1582,45 +1592,17 @@ def run_invoice_cycle(
                         summary["credit_settled_invoices"] += len(
                             settle_result.invoices_settled
                         )
-                    # Re-couple access state to debt: settling credit clears debt
-                    # WITHOUT a payment event, so the payment_received restore never
-                    # fires and the account would settle-but-stay-walled. When credit
-                    # applied and no overdue debt remains, re-evaluate enforcement:
-                    #   - restore_account_services lifts payment-suspended SUBSCRIPTIONS
-                    #     (reason-scoped: admin/abuse blocks untouched);
-                    #   - compute_account_status re-derives the SUBSCRIBER status, which
-                    #     is what the runner's widened (active-subscription) population
-                    #     needs — restore alone won't clear a stale account-level block.
-                    # Both are idempotent and never override a genuine subscription-level
-                    # suspension (the derived status stays suspended in that case).
+                    # PaymentAllocations owns the exact transfer and hands a paid
+                    # invoice to the access-reconciliation owner. This automation
+                    # adapter only reports that resulting state transition; it must
+                    # not run a second restoration decision path.
                     if (
                         settle_result.changed
-                        and not collections_service.has_overdue_balance(db, account_id)
+                        and was_walled
+                        and account is not None
+                        and account.status == SubscriberStatus.active
                     ):
-                        from app.services.account_lifecycle import (
-                            compute_account_status,
-                        )
-
-                        account = db.get(Subscriber, coerce_uuid(account_id))
-                        was_walled = account is not None and account.status in (
-                            SubscriberStatus.suspended,
-                            SubscriberStatus.blocked,
-                        )
-                        try:
-                            collections_service.restore_account_services(db, account_id)
-                            new_status = compute_account_status(db, account_id)
-                        except Exception:
-                            logger.exception(
-                                "invoice_credit_restore_failed",
-                                extra={
-                                    "event": "invoice_credit_restore_failed",
-                                    "run_id": str(run_uuid) if run_uuid else None,
-                                    "account_id": account_id,
-                                },
-                            )
-                            new_status = None
-                        if was_walled and new_status == SubscriberStatus.active:
-                            summary["accounts_restored"] += 1
+                        summary["accounts_restored"] += 1
 
         db.commit()
 
@@ -1844,17 +1826,20 @@ def generate_prorated_invoice(
         f"{offer_name} (Prorated: {activation_date.date()} - {period_end.date()})"
     )
 
-    line = InvoiceLine(
-        invoice_id=invoice.id,
-        subscription_id=subscription.id,
-        description=description,
-        quantity=Decimal("1.000"),
-        unit_price=round_money(line_amount),
-        amount=round_money(line_amount),
-        tax_rate_id=tax_rate_id,
-        tax_application=_default_tax_application(db),
+    InvoiceLines.stage_system_line(
+        db,
+        SystemInvoiceLineCreate(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description=description,
+            quantity=Decimal("1.000"),
+            unit_price=round_money(line_amount),
+            amount=round_money(line_amount),
+            tax_rate_id=tax_rate_id,
+            tax_application=_default_tax_application(db),
+        ),
+        reason="prorated_subscription_activation",
     )
-    db.add(line)
 
     # Set next billing date to the end of this prorated period
     subscription.next_billing_at = period_end
