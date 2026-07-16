@@ -274,16 +274,39 @@ def reseller_billing(
 
 
 @router.post(
-    "/billing/subscribers/{subscriber_id}/allocate", response_class=HTMLResponse
+    "/billing/subscribers/{subscriber_id}/allocate/preview",
+    response_class=HTMLResponse,
 )
-def reseller_billing_allocate_subscriber(
+def reseller_billing_allocate_subscriber_preview(
     request: Request,
     subscriber_id: str,
     amount: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_billing_service.allocate_subscriber_funds(
+    return web_reseller_billing_service.preview_subscriber_funds_allocation(
         request, db, subscriber_id, amount
+    )
+
+
+@router.post(
+    "/billing/subscribers/{subscriber_id}/allocate/confirm",
+    response_class=HTMLResponse,
+)
+def reseller_billing_allocate_subscriber_confirm(
+    request: Request,
+    subscriber_id: str,
+    amount: str = Form(...),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_billing_service.confirm_subscriber_funds_allocation(
+        request,
+        db,
+        subscriber_id,
+        amount,
+        preview_fingerprint,
+        idempotency_key,
     )
 
 

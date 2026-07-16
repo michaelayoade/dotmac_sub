@@ -375,6 +375,20 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert consolidated_ledger_owner is not None
     assert consolidated_ledger_owner.name == "financial.consolidated_payments"
 
+    consolidated_credit_allocation_owner = sot_relationships.owning_service_for(
+        "consolidated-credit allocation preview and confirmation"
+    )
+    assert consolidated_credit_allocation_owner is not None
+    assert (
+        consolidated_credit_allocation_owner.name == "financial.consolidated_payments"
+    )
+
+    consolidated_credit_evidence_owner = sot_relationships.owning_service_for(
+        "exact source-credit consumption and subscriber-ledger links"
+    )
+    assert consolidated_credit_evidence_owner is not None
+    assert consolidated_credit_evidence_owner.name == "financial.consolidated_payments"
+
     allocation_owner = sot_relationships.owning_service_for(
         "settled account-credit allocation preview and confirmation"
     )

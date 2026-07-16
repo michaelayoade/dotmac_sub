@@ -230,6 +230,34 @@ def test_payment_creation_settlement_and_allocation_use_owner_confirmation() -> 
     assert "Exact account-credit ledger" in allocation
 
 
+def test_consolidated_credit_allocation_uses_owner_preview_and_confirmation() -> None:
+    web_route = _source("app/web/reseller/routes.py")
+    api = _source("app/api/reseller.py")
+    adapter = _source("app/services/reseller_portal_billing.py")
+    index = _source("templates/reseller/billing/index.html")
+    confirmation = _source("templates/reseller/billing/allocation_confirm.html")
+
+    assert '"/billing/subscribers/{subscriber_id}/allocate/preview"' in web_route
+    assert '"/billing/subscribers/{subscriber_id}/allocate/confirm"' in web_route
+    assert "preview_fingerprint: str = Form(...)" in web_route
+    assert "idempotency_key: str = Form(...)" in web_route
+    assert '"/billing/subscribers/{subscriber_id}/allocation/preview"' in api
+    assert '"/billing/subscribers/{subscriber_id}/allocation/confirm"' in api
+    assert "BillingAccountCreditAllocationConfirm" in api
+    assert "consolidated_credit_allocations.preview(" in adapter
+    assert "consolidated_credit_allocations.confirm(" in adapter
+    assert "allocate_consolidated_balance_to_subscriber(" not in adapter
+    assert "[s.open_balance, unallocated_balance] | min" not in index
+    assert "s.allocation_allowed" in index
+    assert "s.allocation_max" in index
+    assert "onsubmit=" not in index
+    assert 'name="preview_fingerprint"' in confirmation
+    assert 'name="idempotency_key"' in confirmation
+    assert "Consolidated prepaid credit" in confirmation
+    assert "Subscriber postpaid receivable" in confirmation
+    assert "Service access is not decided by this screen" in confirmation
+
+
 def test_invoice_void_and_writeoff_use_owner_preview_and_exact_evidence() -> None:
     route = _source("app/web/admin/billing_invoice_actions.py")
     bulk_route = _source("app/web/admin/billing_invoice_bulk.py")

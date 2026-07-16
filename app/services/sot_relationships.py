@@ -163,6 +163,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "consolidated payment idempotency and actor audit evidence",
                     "exact member-invoice allocation ledger links",
                     "exact consolidated-credit ledger links",
+                    "consolidated-credit allocation preview and confirmation",
+                    "exact source-credit consumption and subscriber-ledger links",
+                    "consolidated-credit allocation idempotency and actor audit",
                     "consolidated payment access-reconciliation handoff",
                 ),
                 depends_on=(
@@ -174,7 +177,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Subscriber invoice receivable credits remain subscriber "
                     "ledger rows; reseller-held surplus is recorded in the "
                     "billing-account ledger and never assigned to a fake "
-                    "subscriber. Payment state and access state remain separate."
+                    "subscriber. Moving held credit to a member receivable is a "
+                    "separate preview-bound transfer with exact source and result "
+                    "links. Payment state and access state remain separate."
                 ),
             ),
             SOTService(

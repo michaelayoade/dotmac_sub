@@ -27,6 +27,8 @@ from app.models.billing import (  # noqa: F401
     BankReconciliationItem,
     BankReconciliationRun,
     BillingAccount,
+    BillingAccountCreditAllocation,
+    BillingAccountCreditAllocationItem,
     BillingAccountLedgerEntry,
     BillingRun,
     BillingRunSchedule,

@@ -306,6 +306,126 @@ class BillingAccountLedgerEntry(Base):
     payment = relationship("Payment", back_populates="billing_account_ledger_entries")
 
 
+class BillingAccountCreditAllocation(Base):
+    """Confirmed transfer of consolidated credit to subscriber receivables."""
+
+    __tablename__ = "billing_account_credit_allocations"
+    __table_args__ = (
+        CheckConstraint(
+            "amount > 0", name="ck_billing_account_credit_allocations_amount_positive"
+        ),
+        UniqueConstraint(
+            "billing_account_ledger_entry_id",
+            name="uq_billing_account_credit_allocations_debit_entry",
+        ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_billing_account_credit_allocations_idempotency_key",
+        ),
+        Index(
+            "ix_billing_account_credit_allocations_account_created",
+            "billing_account_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    billing_account_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    preview_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    billing_account = relationship("BillingAccount")
+    subscriber = relationship("Subscriber")
+    billing_account_ledger_entry = relationship("BillingAccountLedgerEntry")
+    items = relationship(
+        "BillingAccountCreditAllocationItem",
+        back_populates="allocation",
+        passive_deletes=True,
+    )
+
+
+class BillingAccountCreditAllocationItem(Base):
+    """Exact source-credit and subscriber-ledger evidence for an allocation."""
+
+    __tablename__ = "billing_account_credit_allocation_items"
+    __table_args__ = (
+        CheckConstraint(
+            "amount > 0",
+            name="ck_billing_account_credit_allocation_items_amount_positive",
+        ),
+        UniqueConstraint(
+            "payment_allocation_id",
+            name="uq_billing_account_credit_allocation_items_payment_allocation",
+        ),
+        UniqueConstraint(
+            "subscriber_ledger_entry_id",
+            name="uq_billing_account_credit_allocation_items_subscriber_ledger",
+        ),
+        Index(
+            "ix_billing_account_credit_allocation_items_allocation",
+            "allocation_id",
+        ),
+        Index(
+            "ix_billing_account_credit_allocation_items_source",
+            "source_billing_account_ledger_entry_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_credit_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    source_billing_account_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("billing_account_ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    payment_allocation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_allocations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    subscriber_ledger_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    allocation = relationship("BillingAccountCreditAllocation", back_populates="items")
+    source_billing_account_ledger_entry = relationship("BillingAccountLedgerEntry")
+    payment_allocation = relationship("PaymentAllocation")
+    subscriber_ledger_entry = relationship("LedgerEntry")
+
+
 class Invoice(Base):
     __tablename__ = "invoices"
     __table_args__ = (

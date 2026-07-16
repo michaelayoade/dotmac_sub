@@ -41,6 +41,14 @@ APPROVED_BILLING_ACCOUNT_LEDGER_WRITERS = {
     Path("app/services/billing/consolidated_payments.py")
 }
 
+APPROVED_CONSOLIDATED_CREDIT_ALLOCATION_WRITERS = {
+    Path("app/services/billing/consolidated_payments.py")
+}
+
+APPROVED_BILLING_ACCOUNT_BALANCE_WRITERS = {
+    Path("app/services/billing/consolidated_payments.py")
+}
+
 
 APPROVED_CREDIT_APPLICATION_WRITERS = {Path("app/services/billing/credit_notes.py")}
 
@@ -128,6 +136,30 @@ def _invoice_status_write_lines(path: Path) -> list[int]:
     return _enum_status_write_lines(path, "InvoiceStatus")
 
 
+def _billing_account_balance_write_lines(path: Path) -> list[int]:
+    """Find balance assignments in modules that depend on BillingAccount."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    if not any(
+        isinstance(node, ast.Name) and node.id == "BillingAccount"
+        for node in ast.walk(tree)
+    ):
+        return []
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        elif isinstance(node, ast.AugAssign):
+            targets = [node.target]
+        else:
+            continue
+        if any(
+            isinstance(target, ast.Attribute) and target.attr == "balance"
+            for target in targets
+        ):
+            lines.append(node.lineno)
+    return lines
+
+
 def _invoice_terminal_status_write_lines(path: Path) -> list[int]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     lines: list[int] = []
@@ -170,6 +202,10 @@ def test_only_approved_modules_post_to_the_ledger() -> None:
         lambda path: _constructor_lines(path, "LedgerEntry"),
         APPROVED_LEDGER_WRITERS,
     )
+    assert not violations, (
+        "LedgerEntry constructed outside an approved money owner:\n  "
+        + "\n  ".join(violations)
+    )
 
 
 def test_only_the_account_adjustment_owner_constructs_adjustment_evidence() -> None:
@@ -179,10 +215,6 @@ def test_only_the_account_adjustment_owner_constructs_adjustment_evidence() -> N
     )
     assert not violations, (
         "AccountAdjustment constructed outside its owner:\n  " + "\n  ".join(violations)
-    )
-    assert not violations, (
-        "LedgerEntry constructed outside an approved money owner:\n  "
-        + "\n  ".join(violations)
     )
 
 
@@ -222,6 +254,36 @@ def test_only_consolidated_payment_owner_writes_billing_account_ledger() -> None
     )
     assert not violations, (
         "BillingAccountLedgerEntry constructed outside its owner:\n  "
+        + "\n  ".join(violations)
+    )
+
+
+def test_only_consolidated_credit_owner_constructs_allocation_evidence() -> None:
+    decisions = _violations(
+        lambda path: _constructor_lines(path, "BillingAccountCreditAllocation"),
+        APPROVED_CONSOLIDATED_CREDIT_ALLOCATION_WRITERS,
+    )
+    items = _violations(
+        lambda path: _constructor_lines(path, "BillingAccountCreditAllocationItem"),
+        APPROVED_CONSOLIDATED_CREDIT_ALLOCATION_WRITERS,
+    )
+    assert not decisions, (
+        "BillingAccountCreditAllocation constructed outside its owner:\n  "
+        + "\n  ".join(decisions)
+    )
+    assert not items, (
+        "BillingAccountCreditAllocationItem constructed outside its owner:\n  "
+        + "\n  ".join(items)
+    )
+
+
+def test_only_consolidated_money_owner_writes_billing_account_balance() -> None:
+    violations = _violations(
+        _billing_account_balance_write_lines,
+        APPROVED_BILLING_ACCOUNT_BALANCE_WRITERS,
+    )
+    assert not violations, (
+        "BillingAccount.balance written outside its ledger-backed owner:\n  "
         + "\n  ".join(violations)
     )
 
@@ -408,6 +470,18 @@ def test_financial_writer_allowlists_only_name_real_writers() -> None:
         (
             APPROVED_BILLING_ACCOUNT_LEDGER_WRITERS,
             lambda path: _constructor_lines(path, "BillingAccountLedgerEntry"),
+        ),
+        (
+            APPROVED_CONSOLIDATED_CREDIT_ALLOCATION_WRITERS,
+            lambda path: _constructor_lines(path, "BillingAccountCreditAllocation"),
+        ),
+        (
+            APPROVED_CONSOLIDATED_CREDIT_ALLOCATION_WRITERS,
+            lambda path: _constructor_lines(path, "BillingAccountCreditAllocationItem"),
+        ),
+        (
+            APPROVED_BILLING_ACCOUNT_BALANCE_WRITERS,
+            _billing_account_balance_write_lines,
         ),
         (
             APPROVED_CREDIT_APPLICATION_WRITERS,

@@ -417,6 +417,35 @@ Consolidated payment settlement has a separate scoped owner contract:
   Historical succeeded consolidated payments are not guessed into evidence;
   they require a later explicit reconciliation slice.
 
+Consolidated-credit allocation is a separate transfer owned by the same scoped
+financial service:
+
+- Old path: the reseller portal and API submitted a one-step allocation after
+  deriving the maximum from displayed invoice totals and
+  `BillingAccount.balance`. The payment service could synthesize a succeeded
+  payment when that projection lacked source evidence, then mutate the balance
+  directly. The result did not structurally identify which consolidated credit
+  was consumed.
+- Owner: `financial.consolidated_payments` produces the allocation capability,
+  exact FIFO source/invoice preview, locked fingerprint confirmation,
+  idempotency, actor audit, and access-reconciliation handoff. Web and API
+  adapters only render the owner preview and submit its confirmation command.
+- Position boundary: recorded consolidated credit, ledger-evidenced
+  consolidated credit, subscriber postpaid receivables, payment state, and
+  service-access consequence remain separate. Projection drift or historical
+  allocation without exact source-consumption evidence fails closed; no
+  synthetic payment repairs it.
+- Exact evidence: revision `310_consolidated_credit_allocation` records one
+  allocation decision linked to its billing-account debit and item rows linking
+  each source billing-account credit to the exact `PaymentAllocation` and
+  subscriber `LedgerEntry` it produced. `BillingAccount.balance` is updated only
+  alongside the canonical ledger transaction.
+- Cutover gate: the projection-only balance credit/debit helpers and legacy
+  one-step allocation command remain gated. Read-only preview, stale rejection,
+  cross-reseller scope, partial allocation, exact dual-ledger links, replay,
+  audit, UI/API preview-confirm, and sole-writer architecture tests must remain
+  green.
+
 Imported-payment batch reversal is a separate migrated wrapper owner:
 
 - Owner: `financial.import_payment_batch_reversals` owns durable creation

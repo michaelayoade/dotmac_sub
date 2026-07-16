@@ -1,0 +1,63 @@
+{% extends "reseller/base.html" %}
+
+{% block title %}Confirm credit allocation{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+  <div>
+    <a href="/reseller/billing" class="text-sm font-semibold text-indigo-600 hover:underline dark:text-indigo-400">&larr; Back to billing</a>
+    <h1 class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">Confirm consolidated credit allocation</h1>
+    <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">Review the owner-computed financial effects before committing this action.</p>
+  </div>
+
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div class="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+      <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Consolidated prepaid credit</p>
+      <dl class="mt-3 space-y-2 text-sm">
+        <div class="flex justify-between"><dt>Recorded</dt><dd class="tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(preview.recorded_consolidated_credit) }}</dd></div>
+        <div class="flex justify-between"><dt>Ledger-evidenced</dt><dd class="tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(preview.evidenced_consolidated_credit) }}</dd></div>
+        <div class="flex justify-between font-semibold"><dt>After confirmation</dt><dd class="tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(preview.evidenced_consolidated_credit - preview.allocation_amount) }}</dd></div>
+      </dl>
+    </div>
+    <div class="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+      <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Subscriber postpaid receivable</p>
+      <dl class="mt-3 space-y-2 text-sm">
+        <div class="flex justify-between"><dt>Before</dt><dd class="tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(preview.subscriber_receivable_before) }}</dd></div>
+        <div class="flex justify-between"><dt>Credit applied</dt><dd class="tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(preview.allocation_amount) }}</dd></div>
+        <div class="flex justify-between font-semibold"><dt>After confirmation</dt><dd class="tabular-nums">{{ preview.currency }} {{ "{:,.2f}".format(preview.subscriber_receivable_after) }}</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <div class="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="font-semibold text-slate-900 dark:text-white">Exact invoice effects</h2>
+    <div class="mt-3 divide-y divide-slate-100 text-sm dark:divide-slate-700">
+      {% for effect in preview.invoice_effects %}
+      <div class="flex items-start justify-between gap-4 py-3">
+        <div>
+          <p class="font-medium">{{ effect.invoice_number or effect.invoice_id }}</p>
+          <p class="mt-1 text-xs text-slate-500">Source payment {{ effect.source_payment_id }}</p>
+        </div>
+        <div class="text-right tabular-nums">
+          <p>{{ preview.currency }} {{ "{:,.2f}".format(effect.allocation_amount) }}</p>
+          <p class="mt-1 text-xs text-slate-500">Due after: {{ preview.currency }} {{ "{:,.2f}".format(effect.receivable_after) }}</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+    Service access is not decided by this screen. Confirmation requests reconciliation after the exact financial entries are recorded.
+  </div>
+
+  <form method="post" action="/reseller/billing/subscribers/{{ preview.subscriber_id }}/allocate/confirm" class="flex justify-end gap-3">
+    {% include "components/forms/csrf_input.html" %}
+    <input type="hidden" name="amount" value="{{ preview.allocation_amount }}">
+    <input type="hidden" name="preview_fingerprint" value="{{ preview.fingerprint }}">
+    <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+    <a href="/reseller/billing" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:text-slate-200">Cancel</a>
+    <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">Confirm allocation</button>
+  </form>
+</div>
+{% endblock %}

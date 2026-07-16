@@ -1678,11 +1678,76 @@ class BillingAccountPaymentConfirm(BillingAccountPaymentPreviewRequest):
     idempotency_key: str = Field(min_length=16, max_length=120)
 
 
+class BillingAccountCreditAllocationPreviewRequest(BaseModel):
+    amount: Decimal | None = Field(default=None, gt=0)
+
+
+class BillingAccountCreditSourceEffectRead(BaseModel):
+    billing_account_ledger_entry_id: UUID
+    payment_id: UUID
+    available_before: Decimal
+    consumed_amount: Decimal
+    available_after: Decimal
+
+
+class BillingAccountCreditInvoiceEffectRead(BaseModel):
+    invoice_id: UUID
+    invoice_number: str | None = None
+    receivable_before: Decimal
+    allocation_amount: Decimal
+    receivable_after: Decimal
+    source_billing_account_ledger_entry_id: UUID
+    source_payment_id: UUID
+    subscriber_ledger_entry_type: LedgerEntryType = LedgerEntryType.credit
+    subscriber_ledger_source: LedgerSource = LedgerSource.payment
+
+
+class BillingAccountCreditAllocationPreviewRead(BaseModel):
+    billing_account_id: UUID
+    subscriber_id: UUID
+    currency: str
+    recorded_consolidated_credit: Decimal
+    evidenced_consolidated_credit: Decimal
+    unbacked_consolidated_credit: Decimal
+    subscriber_receivable_before: Decimal
+    allocation_amount: Decimal
+    subscriber_receivable_after: Decimal
+    source_effects: list[BillingAccountCreditSourceEffectRead]
+    invoice_effects: list[BillingAccountCreditInvoiceEffectRead]
+    consolidated_ledger_entry_type: LedgerEntryType = LedgerEntryType.debit
+    consolidated_ledger_source: LedgerSource = LedgerSource.payment
+    service_access_consequence: str
+    fingerprint: str
+
+
+class BillingAccountCreditAllocationConfirm(
+    BillingAccountCreditAllocationPreviewRequest
+):
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=120)
+
+
+class BillingAccountCreditAllocationResultRead(BaseModel):
+    allocation_id: UUID
+    billing_account_id: UUID
+    subscriber_id: UUID
+    amount: Decimal
+    currency: str
+    billing_account_ledger_entry_id: UUID
+    payment_allocation_ids: list[UUID]
+    subscriber_ledger_entry_ids: list[UUID]
+    service_access_consequence: str
+    idempotent_replay: bool = False
+
+
 class BillingAccountStatementSubscriberLine(BaseModel):
     subscriber_id: UUID
     subscriber_name: str
     open_invoice_count: int
     open_balance: Decimal
+    allocation_allowed: bool = False
+    allocation_max: Decimal = Decimal("0.00")
+    allocation_reason: str | None = None
 
 
 class BillingAccountStatementPayment(BaseModel):
