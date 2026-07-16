@@ -103,10 +103,7 @@ def test_valid_event_reaches_service(db_session):
         code, resp = _post(db_session, body)
     assert code == 200, resp
     assert resp["status"] == "ok"
-    assert (
-        db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").count()
-        == 1
-    )
+    assert db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").count() == 1
 
 
 def test_event_noop_when_pull_disabled(monkeypatch, db_session):
@@ -134,9 +131,7 @@ def test_event_noop_when_pull_disabled(monkeypatch, db_session):
     }
     push.assert_not_called()
     assert (
-        db_session.query(WorkOrder)
-        .filter_by(crm_work_order_id="wo-killed")
-        .count()
+        db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-killed").count()
         == 0
     )
 

@@ -219,10 +219,7 @@ def test_work_order_redelivery_is_deduped(db_session):
     assert first["status"] == "ok"
     assert second["status"] == "ignored" and second["reason"] == "duplicate"
     # The mirror upsert ran exactly once; the redelivery never re-applied.
-    assert (
-        db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").count()
-        == 1
-    )
+    assert db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").count() == 1
     assert db_session.query(CrmWebhookDelivery).count() == 1
 
 

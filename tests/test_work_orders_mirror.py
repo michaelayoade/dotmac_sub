@@ -397,9 +397,7 @@ def test_upsert_protects_native_field_activity_from_crm_clobber(db_session):
     ):
         work_orders_mirror.reconcile_subscriber(db_session, str(sub.id))
 
-    row = (
-        db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-native").one()
-    )
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-native").one()
     # Protected: status + activity timestamps stay sub-owned.
     assert row.status == "in_progress"
     assert row.started_at.replace(tzinfo=UTC) == started
@@ -474,11 +472,7 @@ def test_upsert_protects_sub_prefixed_rows_without_marker(db_session):
             },
         )
 
-    row = (
-        db_session.query(WorkOrder)
-        .filter_by(crm_work_order_id="sub-abc123")
-        .one()
-    )
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="sub-abc123").one()
     assert row.status == "in_progress"
 
 

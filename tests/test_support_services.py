@@ -592,11 +592,7 @@ def test_field_visit_tag_creates_native_work_order_once(db_session, subscriber):
     work_order_id = (ticket.metadata_ or {}).get("work_order_id")
     assert work_order_id is not None
     assert work_order_id.startswith("sub-")  # native dispatch public id
-    row = (
-        db_session.query(WorkOrder)
-        .filter_by(crm_work_order_id=work_order_id)
-        .one()
-    )
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id=work_order_id).one()
     assert row.subscriber_id == subscriber.id
     assert row.crm_ticket_id == str(ticket.id)
     assert row.title == "Field visit — Fiber issue"
@@ -679,9 +675,7 @@ def test_automation_added_field_visit_tag_births_work_order(db_session, subscrib
     work_order_id = (ticket.metadata_ or {}).get("work_order_id")
     assert work_order_id is not None
     assert (
-        db_session.query(WorkOrder)
-        .filter_by(crm_work_order_id=work_order_id)
-        .count()
+        db_session.query(WorkOrder).filter_by(crm_work_order_id=work_order_id).count()
         == 1
     )
 
