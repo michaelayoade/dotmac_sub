@@ -50,17 +50,37 @@ def payments_list(
     unallocated_only: bool = Query(False),
     db: Session = Depends(get_db),
 ):
+    try:
+        list_query = web_billing_payments_service.build_payments_list_query(
+            customer_ref=customer_ref,
+            partner_id=partner_id,
+            status=status,
+            method=method,
+            search=search,
+            date_range=date_range,
+            unallocated_only=unallocated_only,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError:
+        # Out-of-contract sort/page params (e.g. hand-edited URL) fall back to
+        # the contract defaults rather than erroring the page.
+        list_query = web_billing_payments_service.build_payments_list_query(
+            page=page, unallocated_only=unallocated_only
+        )
+
     state = web_billing_payments_service.build_payments_list_data(
         db,
-        page=page,
-        per_page=per_page,
-        customer_ref=customer_ref,
-        partner_id=partner_id,
-        status=status,
-        method=method,
-        search=search,
-        date_range=date_range,
-        unallocated_only=unallocated_only,
+        page=list_query.page,
+        per_page=list_query.per_page,
+        customer_ref=list_query.filter_value("customer_ref"),
+        partner_id=list_query.filter_value("partner_id"),
+        status=list_query.filter_value("status"),
+        method=list_query.filter_value("method"),
+        search=list_query.search,
+        date_range=list_query.filter_value("date_range"),
+        unallocated_only=list_query.filter_value("unallocated_only") == "true",
+        sort_dir=list_query.sort_dir,
     )
     from app.web.admin import get_current_user, get_sidebar_stats
 

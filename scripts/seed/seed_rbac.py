@@ -56,6 +56,8 @@ DEFAULT_PERMISSIONS = [
     ("auth:credential:write", "Manage authentication credentials"),
     ("system:read", "View system administration resources"),
     ("system:write", "Manage system administration resources"),
+    ("notification:read", "View notification templates, queue, and history"),
+    ("notification:write", "Manage notification templates and delivery"),
     ("system:db_admin", "Perform restricted database administration"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),

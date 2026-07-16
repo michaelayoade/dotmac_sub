@@ -22,6 +22,11 @@ from app.services import notification_template_conditions as condition_service
 from app.services import notification_template_renderer as template_renderer
 from app.services import sms as sms_service
 from app.services.integrations.connectors import whatsapp as whatsapp_connector
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
 from app.services.whatsapp_notification_templates import (
     provider_template_from_template,
     sync_whatsapp_registry_templates,
@@ -40,17 +45,117 @@ def delivery_statuses() -> list[str]:
     return [item.value for item in DeliveryStatus]
 
 
-def templates_list_context(
-    db: Session,
+# UI page contracts for the admin notification lists. Each is the
+# projection-boundary owner for its surface: it declares searchable/filterable
+# /sortable fields, default order and page sizes. The routes validate and submit
+# through the contract; the context functions remain the read owners that issue
+# the SQL via notification_service.
+NOTIFICATION_TEMPLATES_LIST_DEFINITION = ListDefinition(
+    key="notification_templates",
+    fields=(
+        ListFieldDefinition("search", "Search", searchable=True),
+        ListFieldDefinition("channel", "Channel", filterable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("name", "Name", sortable=True),
+    ),
+    default_sort="name",
+    default_sort_dir="asc",
+    default_per_page=25,
+)
+
+NOTIFICATION_QUEUE_LIST_DEFINITION = ListDefinition(
+    key="notification_queue",
+    fields=(
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("channel", "Channel", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+    default_per_page=25,
+)
+
+NOTIFICATION_HISTORY_LIST_DEFINITION = ListDefinition(
+    key="notification_history",
+    fields=(
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("occurred_at", "Occurred", sortable=True),
+    ),
+    default_sort="occurred_at",
+    default_sort_dir="desc",
+    default_per_page=25,
+)
+
+
+def build_templates_list_query(
     *,
-    channel: str | None,
-    status: str | None,
-    search: str | None,
-    page: int,
-    per_page: int,
-) -> dict[str, object]:
+    channel: str | None = None,
+    status: str | None = None,
+    search: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise notification-template list params through the page contract."""
+    return NOTIFICATION_TEMPLATES_LIST_DEFINITION.build_query(
+        search=search,
+        filters={"channel": channel, "status": status},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def build_queue_list_query(
+    *,
+    status: str | None = None,
+    channel: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise notification-queue list params through the page contract."""
+    return NOTIFICATION_QUEUE_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"status": status, "channel": channel},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def build_history_list_query(
+    *,
+    status: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise notification-history list params through the page contract."""
+    return NOTIFICATION_HISTORY_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"status": status},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def templates_list_context(db: Session, query: ListQuery) -> dict[str, object]:
+    """Read owner for the notification-template list (reads a validated query)."""
     sync_whatsapp_registry_templates(db)
-    offset = (page - 1) * per_page
+    channel = query.filter_value("channel")
+    status = query.filter_value("status")
+    search = query.search
+    page = query.page
+    per_page = query.per_page
+    offset = query.offset
     effective_channel = channel if channel else None
     effective_status = str(status or "").strip().lower()
     is_active = (
@@ -67,7 +172,7 @@ def templates_list_context(
         is_active=is_active,
         search=effective_search,
         order_by="name",
-        order_dir="asc",
+        order_dir=query.sort_dir,
         limit=per_page,
         offset=offset,
     )
@@ -442,15 +547,13 @@ def bulk_notification_setup_context(db: Session) -> dict[str, object]:
     }
 
 
-def queue_context(
-    db: Session,
-    *,
-    status: str | None,
-    channel: str | None,
-    page: int,
-    per_page: int,
-) -> dict[str, object]:
-    offset = (page - 1) * per_page
+def queue_context(db: Session, query: ListQuery) -> dict[str, object]:
+    """Read owner for the notification-queue list (reads a validated query)."""
+    status = query.filter_value("status")
+    channel = query.filter_value("channel")
+    page = query.page
+    per_page = query.per_page
+    offset = query.offset
     notification_status = status if status else "queued"
     effective_channel = channel if channel else None
     notifications_list = notification_service.notifications.list(
@@ -459,7 +562,7 @@ def queue_context(
         status=notification_status,
         is_active=True,
         order_by="created_at",
-        order_dir="desc",
+        order_dir=query.sort_dir,
         limit=per_page,
         offset=offset,
     )
@@ -483,21 +586,19 @@ def queue_context(
     }
 
 
-def history_context(
-    db: Session,
-    *,
-    status: str | None,
-    page: int,
-    per_page: int,
-) -> dict[str, object]:
-    offset = (page - 1) * per_page
+def history_context(db: Session, query: ListQuery) -> dict[str, object]:
+    """Read owner for the notification-history list (reads a validated query)."""
+    status = query.filter_value("status")
+    page = query.page
+    per_page = query.per_page
+    offset = query.offset
     deliveries = notification_service.deliveries.list(
         db=db,
         notification_id=None,
         status=status if status else None,
         is_active=True,
         order_by="occurred_at",
-        order_dir="desc",
+        order_dir=query.sort_dir,
         limit=per_page,
         offset=offset,
     )
