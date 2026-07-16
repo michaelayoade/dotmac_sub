@@ -474,6 +474,9 @@ def _dispatch_plan_change(
             subscription_id=str(subscription.id),
             new_offer_id=target_offer_id,
             preview_fingerprint=fingerprint,
+            preview_effective_at=datetime.fromisoformat(
+                str(quote["preview_effective_at"])
+            ),
             idempotency_key=(
                 command.idempotency_key or subscription_command_fingerprint(command)
             ),

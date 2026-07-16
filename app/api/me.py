@@ -538,6 +538,7 @@ def my_plan_change_submit(
             offer_id=str(payload.offer_id),
             notes=payload.notes,
             preview_fingerprint=payload.preview_fingerprint or "",
+            preview_effective_at=payload.preview_effective_at,
             idempotency_key=payload.idempotency_key or "",
             confirmation_origin="customer_api",
         )

@@ -912,6 +912,7 @@ def _calculate_proration(
     next_billing = subscription.next_billing_at
     if not next_billing:
         return {
+            "effective_at": now,
             "credit_amount": Decimal("0.00"),
             "charge_amount": Decimal("0.00"),
             "net_amount": Decimal("0.00"),
@@ -941,6 +942,7 @@ def _calculate_proration(
 
     if remaining_cycle_seconds <= 0:
         return {
+            "effective_at": now,
             "credit_amount": Decimal("0.00"),
             "charge_amount": Decimal("0.00"),
             "net_amount": Decimal("0.00"),
@@ -981,6 +983,7 @@ def _calculate_proration(
     days_in_cycle = max(total_cycle_seconds // 86400, 0)
 
     return {
+        "effective_at": now,
         "credit_amount": credit_amount,
         "charge_amount": charge_amount,
         "net_amount": net_amount,
@@ -1426,6 +1429,7 @@ class Subscriptions(ListResponseMixin):
         skip_proration_artifacts: bool = False,
         plan_change_operation_key: str | None = None,
         plan_change_preview_fingerprint: str | None = None,
+        plan_change_effective_at: datetime | None = None,
         plan_change_request_id: str | None = None,
         plan_change_actor_id: str | None = None,
     ):
@@ -1519,6 +1523,7 @@ class Subscriptions(ListResponseMixin):
                             old_offer.name if old_offer else "Previous Plan"
                         ),
                         operation_key=plan_change_operation_key,
+                        effective_at=plan_change_effective_at,
                         expected_preview_fingerprint=(plan_change_preview_fingerprint),
                     )
                 except (

@@ -1176,6 +1176,7 @@ class PlanChangeSubmitRequest(BaseModel):
     # Cross-family submissions create a non-financial migration ticket. These
     # become mandatory at the owner boundary for same-family immediate changes.
     preview_fingerprint: str | None = Field(default=None, min_length=64, max_length=64)
+    preview_effective_at: datetime | None = None
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=120)
     notes: str | None = None
 

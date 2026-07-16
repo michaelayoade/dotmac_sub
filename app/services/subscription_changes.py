@@ -430,6 +430,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
         skip_proration_artifacts: bool = False,
         plan_change_operation_key: str | None = None,
         plan_change_preview_fingerprint: str | None = None,
+        plan_change_effective_at: datetime | None = None,
         plan_change_actor_id: str | None = None,
     ) -> SubscriptionChangeRequest:
         """Apply an approved subscription change request.
@@ -493,6 +494,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
                 db,
                 subscription,
                 str(request.requested_offer_id),
+                effective_at=plan_change_effective_at,
             )
             if decision.fingerprint != expected_fingerprint:
                 raise HTTPException(
@@ -536,6 +538,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
             skip_proration_artifacts=skip_proration_artifacts,
             plan_change_operation_key=plan_change_operation_key or str(request.id),
             plan_change_preview_fingerprint=expected_fingerprint,
+            plan_change_effective_at=plan_change_effective_at,
             plan_change_request_id=(str(request.id) if expected_fingerprint else None),
             plan_change_actor_id=plan_change_actor_id,
         )
@@ -585,6 +588,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
         subscription_id: str,
         new_offer_id: str,
         preview_fingerprint: str,
+        preview_effective_at: datetime,
         idempotency_key: str,
         confirmation_origin: str,
         confirmation_snapshot: dict[str, object],
@@ -640,6 +644,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
                 str(request.id),
                 plan_change_operation_key=key,
                 plan_change_preview_fingerprint=fingerprint,
+                plan_change_effective_at=preview_effective_at,
                 plan_change_actor_id=actor_id,
             )
         except IntegrityError:
@@ -656,6 +661,7 @@ class SubscriptionChangeRequests(ListResponseMixin):
                 subscription_id=subscription_id,
                 new_offer_id=new_offer_id,
                 preview_fingerprint=fingerprint,
+                preview_effective_at=preview_effective_at,
                 idempotency_key=key,
                 confirmation_origin=confirmation_origin,
                 confirmation_snapshot=confirmation_snapshot,

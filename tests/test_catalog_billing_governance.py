@@ -12,6 +12,7 @@ from app.models.catalog import (
     BillingCycle,
     BillingMode,
     OfferPrice,
+    PriceUnit,
     PriceType,
     Subscription,
     SubscriptionAddOn,
@@ -83,6 +84,33 @@ def test_live_offer_price_cannot_be_mutated_in_place(
     db_session.refresh(price)
     assert exc.value.status_code == 409
     assert price.amount == Decimal("100.00")
+
+
+def test_live_offer_price_unit_change_remains_blocked(
+    db_session, subscriber, catalog_offer
+):
+    price = OfferPrice(
+        offer_id=catalog_offer.id,
+        price_type=PriceType.recurring,
+        amount=Decimal("100.00"),
+        currency="NGN",
+        billing_cycle=BillingCycle.monthly,
+        unit=None,
+        is_active=True,
+    )
+    db_session.add(price)
+    db_session.commit()
+    _live_subscription(db_session, subscriber, catalog_offer)
+
+    with pytest.raises(HTTPException) as exc:
+        catalog_service.offer_prices.update(
+            db_session,
+            str(price.id),
+            OfferPriceUpdate(unit=PriceUnit.month),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["fields"] == ["unit"]
 
 
 def test_duplicate_active_offer_price_is_rejected(db_session, catalog_offer):
