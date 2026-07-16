@@ -210,6 +210,8 @@ class PaymentProviderEvents(ListResponseMixin):
     ):
         # Import Payments here to avoid circular dependency at module level
         from app.services.billing.consolidated_payments import (
+            ConsolidatedPaymentRefunds,
+            ConsolidatedPaymentReversals,
             ConsolidatedPaymentSettlements,
             consolidated_settlement_key,
         )
@@ -472,19 +474,35 @@ class PaymentProviderEvents(ListResponseMixin):
             event.processed_at = datetime.now(UTC)
         elif new_status and payment:
             if new_status == PaymentStatus.refunded:
-                Refunds.process_provider_event_refund(
-                    db,
-                    payment_id=str(payment.id),
-                    provider_event_id=event.id,
-                    commit=False,
-                )
+                if payment.billing_account_id is not None:
+                    ConsolidatedPaymentRefunds.process_provider_event(
+                        db,
+                        payment_id=str(payment.id),
+                        provider_event_id=event.id,
+                        commit=False,
+                    )
+                else:
+                    Refunds.process_provider_event_refund(
+                        db,
+                        payment_id=str(payment.id),
+                        provider_event_id=event.id,
+                        commit=False,
+                    )
             elif new_status == PaymentStatus.reversed:
-                PaymentReversals.process_provider_event_reversal(
-                    db,
-                    payment_id=str(payment.id),
-                    provider_event_id=event.id,
-                    commit=False,
-                )
+                if payment.billing_account_id is not None:
+                    ConsolidatedPaymentReversals.process_provider_event(
+                        db,
+                        payment_id=str(payment.id),
+                        provider_event_id=event.id,
+                        commit=False,
+                    )
+                else:
+                    PaymentReversals.process_provider_event_reversal(
+                        db,
+                        payment_id=str(payment.id),
+                        provider_event_id=event.id,
+                        commit=False,
+                    )
             elif (
                 new_status == PaymentStatus.succeeded
                 and payment.billing_account_id is not None

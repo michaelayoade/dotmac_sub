@@ -9,6 +9,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.billing import (
+    BillingAccountCreditAllocation,
+    BillingAccountCreditAllocationItem,
     Invoice,
     InvoiceStatus,
     LedgerEntry,
@@ -17,7 +19,12 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
-from app.schemas.billing import BillingAccountPaymentPreviewRequest, PaymentCreate
+from app.schemas.billing import (
+    BillingAccountCreditAllocationConfirm,
+    BillingAccountCreditAllocationPreviewRequest,
+    BillingAccountPaymentPreviewRequest,
+    PaymentCreate,
+)
 from app.services import billing as billing_service
 
 
@@ -69,6 +76,24 @@ def _settle(db_session, payload: PaymentCreate, *, auto_allocate: bool = True):
         idempotency_key=f"test-consolidated-{uuid.uuid4()}",
         origin=PaymentSettlementOrigin.system,
     ).payment
+
+
+def _allocate_credit(db_session, billing_account_id, subscriber_id, amount=None):
+    request = BillingAccountCreditAllocationPreviewRequest(amount=amount)
+    preview = billing_service.consolidated_credit_allocations.preview(
+        db_session, str(billing_account_id), str(subscriber_id), request
+    )
+    result = billing_service.consolidated_credit_allocations.confirm(
+        db_session,
+        str(billing_account_id),
+        str(subscriber_id),
+        BillingAccountCreditAllocationConfirm(
+            amount=amount,
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key=f"test-credit-allocation-{uuid.uuid4()}",
+        ),
+    )
+    return preview, result
 
 
 def test_paymentcreate_requires_exactly_one_account_scope():
@@ -192,9 +217,7 @@ def test_allocate_consolidated_balance_to_selected_subscriber(db_session):
         auto_allocate=False,
     )
 
-    result = billing_service.payments.allocate_consolidated_balance_to_subscriber(
-        db_session, str(ba.id), str(sub_b.id)
-    )
+    preview, result = _allocate_credit(db_session, ba.id, sub_b.id)
 
     db_session.refresh(inv_a)
     db_session.refresh(inv_b)
@@ -204,8 +227,9 @@ def test_allocate_consolidated_balance_to_selected_subscriber(db_session):
         .filter(PaymentAllocation.payment_id == payment.id)
         .all()
     )
-    assert result["allocated_total"] == Decimal("80.00")
-    assert result["subscriber_id"] == str(sub_b.id)
+    assert preview.allocation_amount == Decimal("80.00")
+    assert result.amount == Decimal("80.00")
+    assert result.subscriber_id == sub_b.id
     assert len(allocations) == 1
     assert allocations[0].invoice_id == inv_b.id
     assert inv_a.balance_due == Decimal("80.00")
@@ -232,9 +256,7 @@ def test_allocate_consolidated_balance_never_exceeds_unallocated_credit(db_sessi
         auto_allocate=False,
     )
 
-    result = billing_service.payments.allocate_consolidated_balance_to_subscriber(
-        db_session, str(ba.id), str(sub.id)
-    )
+    _preview, result = _allocate_credit(db_session, ba.id, sub.id)
 
     db_session.refresh(inv)
     db_session.refresh(ba)
@@ -243,7 +265,7 @@ def test_allocate_consolidated_balance_never_exceeds_unallocated_credit(db_sessi
         .filter(PaymentAllocation.payment_id == payment.id)
         .one()
     )
-    assert result["allocated_total"] == Decimal("100.00")
+    assert result.amount == Decimal("100.00")
     assert allocation.amount == Decimal("100.00")
     assert inv.balance_due == Decimal("150.00")
     assert ba.balance == Decimal("0.00")
@@ -268,8 +290,8 @@ def test_allocate_consolidated_balance_honors_requested_amount(db_session):
         auto_allocate=False,
     )
 
-    result = billing_service.payments.allocate_consolidated_balance_to_subscriber(
-        db_session, str(ba.id), str(sub.id), amount=Decimal("40.00")
+    _preview, result = _allocate_credit(
+        db_session, ba.id, sub.id, amount=Decimal("40.00")
     )
 
     db_session.refresh(inv)
@@ -279,35 +301,36 @@ def test_allocate_consolidated_balance_honors_requested_amount(db_session):
         .filter(PaymentAllocation.payment_id == payment.id)
         .one()
     )
-    assert result["allocated_total"] == Decimal("40.00")
+    assert result.amount == Decimal("40.00")
     assert allocation.amount == Decimal("40.00")
     assert inv.balance_due == Decimal("210.00")
     assert ba.balance == Decimal("60.00")
 
 
-def test_allocate_consolidated_balance_with_balance_only_credit(db_session):
+def test_allocate_consolidated_balance_rejects_unbacked_projection_credit(db_session):
     reseller = _make_reseller(db_session, name="BalanceOnly")
     ba = billing_service.billing_accounts.create_default_for_reseller(
         db_session, str(reseller.id)
     )
     sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="ONLY")
     inv = _make_invoice(db_session, account_id=sub.id, balance=Decimal("30000.00"))
-    billing_service.billing_accounts.credit_balance(
-        db_session, str(ba.id), Decimal("30000.00")
-    )
+    ba.balance = Decimal("30000.00")
     db_session.commit()
 
-    result = billing_service.payments.allocate_consolidated_balance_to_subscriber(
-        db_session, str(ba.id), str(sub.id)
-    )
+    with pytest.raises(HTTPException, match="unbacked balance drift"):
+        billing_service.consolidated_credit_allocations.preview(
+            db_session,
+            str(ba.id),
+            str(sub.id),
+            BillingAccountCreditAllocationPreviewRequest(),
+        )
 
     db_session.refresh(inv)
     db_session.refresh(ba)
-    allocation = db_session.query(PaymentAllocation).one()
-    assert result["allocated_total"] == Decimal("30000.00")
-    assert allocation.amount == Decimal("30000.00")
-    assert inv.balance_due == Decimal("0.00")
-    assert ba.balance == Decimal("0.00")
+    assert db_session.query(PaymentAllocation).count() == 0
+    assert db_session.query(BillingAccountCreditAllocation).count() == 0
+    assert inv.balance_due == Decimal("30000.00")
+    assert ba.balance == Decimal("30000.00")
 
 
 def test_reseller_account_activity_includes_subscriber_allocations(db_session):
@@ -330,9 +353,7 @@ def test_reseller_account_activity_includes_subscriber_allocations(db_session):
         ),
         auto_allocate=False,
     )
-    billing_service.payments.allocate_consolidated_balance_to_subscriber(
-        db_session, str(ba.id), str(sub.id)
-    )
+    _allocate_credit(db_session, ba.id, sub.id)
 
     activity = reseller_portal_billing.account_activity(db_session, str(reseller.id))
 
@@ -343,6 +364,46 @@ def test_reseller_account_activity_includes_subscriber_allocations(db_session):
     assert allocation_entries[0]["amount"] == Decimal("100.00")
     assert "Sub ACT" in allocation_entries[0]["description"]
     assert str(inv.id) in allocation_entries[0]["description"]
+
+
+def test_credit_allocation_links_source_and_resulting_ledger_evidence(db_session):
+    reseller = _make_reseller(db_session, name="ExactEvidence")
+    ba = billing_service.billing_accounts.create_default_for_reseller(
+        db_session, str(reseller.id)
+    )
+    sub = _make_subscriber(db_session, reseller_id=reseller.id, suffix="EVIDENCE")
+    invoice = _make_invoice(db_session, account_id=sub.id, balance=Decimal("75.00"))
+    payment = _settle(
+        db_session,
+        PaymentCreate(
+            billing_account_id=ba.id,
+            amount=Decimal("100.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+        ),
+        auto_allocate=False,
+    )
+
+    preview, result = _allocate_credit(
+        db_session, ba.id, sub.id, amount=Decimal("60.00")
+    )
+
+    allocation = db_session.get(BillingAccountCreditAllocation, result.allocation_id)
+    item = db_session.query(BillingAccountCreditAllocationItem).one()
+    payment_allocation = db_session.get(PaymentAllocation, item.payment_allocation_id)
+    assert allocation is not None
+    assert allocation.billing_account_ledger_entry_id == (
+        result.billing_account_ledger_entry_id
+    )
+    assert item.source_billing_account_ledger_entry_id == (
+        preview.source_effects[0].billing_account_ledger_entry_id
+    )
+    assert payment_allocation is not None
+    assert payment_allocation.payment_id == payment.id
+    assert payment_allocation.invoice_id == invoice.id
+    assert payment_allocation.ledger_entry_id == item.subscriber_ledger_entry_id
+    assert result.payment_allocation_ids == [item.payment_allocation_id]
+    assert result.subscriber_ledger_entry_ids == [item.subscriber_ledger_entry_id]
 
 
 def test_billing_account_statement_filters_open_invoice_subscribers(db_session):

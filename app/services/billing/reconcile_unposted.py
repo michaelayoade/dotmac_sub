@@ -20,12 +20,12 @@ payment credit) and apply it to the account's open invoices — settling the deb
 exactly as if the money had been posted at invoice time — then let the existing
 ``restore_account_services`` chain recompute status and lift enforcement.
 
-This module is the money engine. It reuses the canonical allocation primitives
-(``_apply_payment_allocation`` / ``_recalculate_invoice_totals``) so the
-bookkeeping is byte-for-byte identical to ``Payments.create``'s auto-allocate
-path — the same path that already works on the happy path. It is invoked by the
-one-off CLI ``scripts/one_off/reconcile_unposted_payments.py`` (dry-run first)
-and is safe to re-run: it is idempotent per (payment, invoice).
+This module is an orchestration adapter. It projects candidate work, then sends
+each exact payment/invoice transfer through ``PaymentAllocations`` preview and
+fingerprint-bound confirmation. It never constructs allocation or ledger rows.
+It is invoked by the one-off CLI
+``scripts/one_off/reconcile_unposted_payments.py`` (dry-run first) and is safe
+to re-run through a stable idempotency key per (payment, invoice).
 """
 
 from __future__ import annotations
@@ -44,14 +44,17 @@ from app.models.billing import (
     Invoice,
     InvoiceLine,
     InvoiceStatus,
-    LedgerEntry,
-    LedgerEntryType,
-    LedgerSource,
     Payment,
     PaymentAllocation,
     PaymentStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
 )
 from app.models.catalog import BillingMode, Subscription
+from app.schemas.billing import (
+    PaymentAllocationConfirm,
+    PaymentAllocationPreviewRequest,
+)
 from app.services.billing._common import (
     _recalculate_invoice_totals as recalculate_invoice_totals,
 )
@@ -60,7 +63,7 @@ from app.services.billing._common import (
     lock_account,
 )
 from app.services.billing.invoices import Invoices
-from app.services.billing.payments import _apply_payment_allocation
+from app.services.billing.payments import PaymentAllocations
 from app.services.common import coerce_uuid, round_money, to_decimal
 from app.services.notification_suppression import suppress_notifications
 from app.services.service_entitlements import (
@@ -68,12 +71,6 @@ from app.services.service_entitlements import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Memo stamped on the offsetting unallocated debit so the reduction of the
-# credit pool is auditable and distinguishable from refunds.
-CREDIT_SETTLEMENT_MEMO = (
-    "Available balance applied to open invoices (cutover reconcile)"
-)
 
 _OPEN_STATUSES = (
     InvoiceStatus.issued,
@@ -127,29 +124,9 @@ def _open_invoices(db: Session, account_id: str) -> list[Invoice]:
 def _allocatable_payments(
     db: Session, account_id: str
 ) -> list[tuple[Payment, Decimal]]:
-    """Succeeded payments for the account with their already-allocated totals.
-
-    Returns ``(payment, unallocated_room)`` oldest first. ``unallocated_room`` is
-    ``amount - Σ active allocations`` — the part of the payment still available
-    to apply to an invoice (so a re-run naturally skips fully-allocated rows).
-    """
-    allocated_sq = (
-        db.query(
-            PaymentAllocation.payment_id.label("payment_id"),
-            func.coalesce(func.sum(PaymentAllocation.amount), Decimal("0.00")).label(
-                "allocated"
-            ),
-        )
-        .filter(PaymentAllocation.is_active.is_(True))
-        .group_by(PaymentAllocation.payment_id)
-        .subquery()
-    )
+    """Return owner-evidenced allocatable payment credit, oldest first."""
     rows = (
-        db.query(
-            Payment,
-            func.coalesce(allocated_sq.c.allocated, Decimal("0.00")).label("allocated"),
-        )
-        .outerjoin(allocated_sq, allocated_sq.c.payment_id == Payment.id)
+        db.query(Payment)
         .filter(Payment.account_id == coerce_uuid(account_id))
         .filter(Payment.is_active.is_(True))
         .filter(Payment.status == PaymentStatus.succeeded)
@@ -160,23 +137,70 @@ def _allocatable_payments(
         .order_by(Payment.paid_at.asc().nulls_last(), Payment.created_at.asc())
         .all()
     )
+    account_remaining_by_currency: dict[str, Decimal] = {}
     out: list[tuple[Payment, Decimal]] = []
-    for payment, allocated in rows:
-        room = round_money(to_decimal(payment.amount) - to_decimal(allocated))
+    for payment in rows:
+        currency = payment.currency or "NGN"
+        if currency not in account_remaining_by_currency:
+            account_remaining_by_currency[currency] = max(
+                Decimal("0.00"),
+                round_money(
+                    get_account_credit_balance(db, str(account_id), currency=currency)
+                ),
+            )
+        room = min(
+            PaymentAllocations.available_amount(db, str(payment.id)),
+            account_remaining_by_currency[currency],
+        )
         if room > 0:
             out.append((payment, room))
+            account_remaining_by_currency[currency] = round_money(
+                account_remaining_by_currency[currency] - room
+            )
     return out
+
+
+def _allocation_key(payment: Payment, invoice: Invoice) -> str:
+    return f"reconcile-unposted-{payment.id}-{invoice.id}"
+
+
+def _confirm_allocation(
+    db: Session,
+    *,
+    payment: Payment,
+    invoice: Invoice,
+    amount: Decimal,
+) -> Decimal:
+    """Preview and confirm one exact transfer through the payment owner."""
+    request = PaymentAllocationPreviewRequest(
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        amount=amount,
+    )
+    preview = PaymentAllocations.preview(db, request)
+    result = PaymentAllocations.confirm(
+        db,
+        PaymentAllocationConfirm(
+            **request.model_dump(),
+            preview_fingerprint=preview.fingerprint,
+            idempotency_key=_allocation_key(payment, invoice),
+        ),
+        commit=False,
+    )
+    if result.allocation.ledger_entry_id is None:
+        raise RuntimeError("Allocation owner returned no invoice ledger evidence")
+    if result.allocation.consumption_ledger_entry_id is None:
+        raise RuntimeError("Allocation owner returned no credit-consumption evidence")
+    return round_money(to_decimal(result.allocation.amount))
 
 
 def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResult:
     """Apply an account's available (unallocated) credit to its open invoices.
 
-    The credit is consumed from the account's existing succeeded payments,
-    oldest first, and applied to the oldest open invoices. For every naira
-    applied we (a) create the ``PaymentAllocation`` (which reduces the invoice's
-    ``balance_due`` on recalculation) and (b) write one offsetting unallocated
-    **debit** ledger entry, so ``get_account_credit_balance`` drops by exactly
-    the applied amount and the money is never double-counted.
+    The credit is consumed from owner-evidenced succeeded payments, oldest
+    first, and applied to the oldest open invoices. Every transfer uses the
+    payment-allocation owner's preview and confirmation, which links the exact
+    invoice credit and unallocated-credit consumption debit.
 
     Does NOT commit — the caller owns the transaction boundary (so the one-off
     can commit per account and roll back a single bad account without losing the
@@ -243,7 +267,6 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
     )
 
     remaining_by_currency = dict(spendable_by_currency)
-    applied_by_currency: dict[str, Decimal] = {}
     room_by_payment: dict = {payment.id: room for payment, room in payments}
     touched: set = set()
 
@@ -268,19 +291,15 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
             amount = min(remaining, invoice_remaining, payment_room)
             if amount <= 0:
                 continue
-            _allocation, applied = _apply_payment_allocation(
+            applied = _confirm_allocation(
                 db,
-                payment,
-                invoice,
-                amount,
-                memo="Available balance applied (cutover reconcile)",
+                payment=payment,
+                invoice=invoice,
+                amount=amount,
             )
             result.applied = round_money(result.applied + applied)
             remaining = round_money(remaining - applied)
             remaining_by_currency[currency] = remaining
-            applied_by_currency[currency] = round_money(
-                applied_by_currency.get(currency, Decimal("0.00")) + applied
-            )
             invoice_remaining = round_money(invoice_remaining - applied)
             room_by_payment[payment.id] = round_money(payment_room - applied)
             touched.add(invoice.id)
@@ -298,26 +317,6 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
         if inv.status == InvoiceStatus.paid:
             result.invoices_settled.append(str(invoice_id))
 
-    if result.applied > 0:
-        # Reduce the unallocated-credit pool by exactly what we applied. Mirrors
-        # the reseller path's closing ``BillingAccounts.debit_balance``; here
-        # the pool is the per-account ledger, so the reduction is a debit with
-        # no invoice_id.
-        for currency, applied in applied_by_currency.items():
-            if applied <= 0:
-                continue
-            db.add(
-                LedgerEntry(
-                    account_id=coerce_uuid(account_id),
-                    invoice_id=None,
-                    payment_id=None,
-                    entry_type=LedgerEntryType.debit,
-                    source=LedgerSource.payment,
-                    amount=applied,
-                    currency=currency,
-                    memo=CREDIT_SETTLEMENT_MEMO,
-                )
-            )
     db.flush()
     logger.info(
         "Cutover reconcile: applied %s credit to %d invoice(s) for account %s "
@@ -340,8 +339,9 @@ def settle_single_invoice_from_credit(
     so it cannot destroy credit on unrelated historical invoices (the reason the
     account-wide settle is disabled by default). Same accounting — a
     ``PaymentAllocation`` per applied naira plus one offsetting unallocated
-    debit ledger entry, so ``get_account_credit_balance`` drops by exactly the
-    amount and money is never double-counted. Does NOT commit.
+    debit ledger entry through the payment owner, so
+    ``get_account_credit_balance`` drops by exactly the amount and money is
+    never double-counted. Does NOT commit.
 
     ``only_if_full=True`` makes it all-or-nothing: if the payment-backed credit
     cannot fully cover the invoice remaining, nothing is applied (returns 0).
@@ -383,8 +383,11 @@ def settle_single_invoice_from_credit(
         amount = min(remaining, room)
         if amount <= 0:
             continue
-        _allocation, applied = _apply_payment_allocation(
-            db, payment, invoice, amount, memo=CREDIT_SETTLEMENT_MEMO
+        applied = _confirm_allocation(
+            db,
+            payment=payment,
+            invoice=invoice,
+            amount=amount,
         )
         applied_total = round_money(applied_total + applied)
         remaining = round_money(remaining - applied)
@@ -393,20 +396,31 @@ def settle_single_invoice_from_credit(
 
     db.flush()
     recalculate_invoice_totals(db, invoice)
-    # Reduce the unallocated-credit pool by exactly what we applied.
-    db.add(
-        LedgerEntry(
-            account_id=coerce_uuid(account_id),
-            invoice_id=None,
-            payment_id=None,
-            entry_type=LedgerEntryType.debit,
-            source=LedgerSource.payment,
-            amount=applied_total,
-            currency=currency,
-            memo=CREDIT_SETTLEMENT_MEMO,
-        )
-    )
+    if invoice.status == InvoiceStatus.paid:
+        _advance_prepaid_billing_from_entitlements(db, invoice)
     return applied_total
+
+
+def _advance_prepaid_billing_from_entitlements(db: Session, invoice: Invoice) -> None:
+    """Keep prepaid scheduling aligned with the exact paid-invoice evidence."""
+    ensure_prepaid_entitlements_for_paid_invoice(db, invoice)
+    entitlements = (
+        db.query(ServiceEntitlement)
+        .filter(ServiceEntitlement.source_invoice_id == invoice.id)
+        .filter(ServiceEntitlement.status == ServiceEntitlementStatus.active)
+        .all()
+    )
+    for entitlement in entitlements:
+        subscription = db.get(Subscription, entitlement.subscription_id)
+        entitlement_end = _as_utc(entitlement.ends_at)
+        current_next_billing = (
+            _as_utc(subscription.next_billing_at) if subscription is not None else None
+        )
+        if subscription is not None and (
+            entitlement_end is not None
+            and (current_next_billing is None or current_next_billing < entitlement_end)
+        ):
+            subscription.next_billing_at = entitlement.ends_at
 
 
 def _prepaid_draft_invoices(db: Session, account_id: str) -> list[Invoice]:
@@ -458,24 +472,6 @@ def settle_prepaid_draft_invoices_from_credit(
         db.flush()
         recalculate_invoice_totals(db, invoice)
         if invoice.status == InvoiceStatus.paid:
-            for entitlement in ensure_prepaid_entitlements_for_paid_invoice(
-                db, invoice
-            ):
-                subscription = db.get(Subscription, entitlement.subscription_id)
-                entitlement_end = _as_utc(entitlement.ends_at)
-                current_next_billing = (
-                    _as_utc(subscription.next_billing_at)
-                    if subscription is not None
-                    else None
-                )
-                if subscription is not None and (
-                    entitlement_end is not None
-                    and (
-                        current_next_billing is None
-                        or current_next_billing < entitlement_end
-                    )
-                ):
-                    subscription.next_billing_at = entitlement.ends_at
             result.applied = round_money(result.applied + applied)
             result.invoices_touched.append(str(invoice.id))
             result.invoices_settled.append(str(invoice.id))

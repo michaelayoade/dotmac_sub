@@ -339,6 +339,18 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert automation_invoice_owner is not None
     assert automation_invoice_owner.name == "financial.invoices"
 
+    automation_line_owner = sot_relationships.owning_service_for(
+        "automation invoice-line construction and source-fact replay"
+    )
+    assert automation_line_owner is not None
+    assert automation_line_owner.name == "financial.invoices"
+
+    usage_invoice_owner = sot_relationships.owning_service_for(
+        "usage-charge invoice and invoice-line construction"
+    )
+    assert usage_invoice_owner is not None
+    assert usage_invoice_owner.name == "financial.invoices"
+
     overdue_invoice_owner = sot_relationships.owning_service_for(
         "overdue invoice state and observation event"
     )
@@ -369,17 +381,61 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert consolidated_settlement_owner is not None
     assert consolidated_settlement_owner.name == "financial.consolidated_payments"
 
+    consolidated_reconciliation_owner = sot_relationships.owning_service_for(
+        "historical consolidated settlement evidence reconciliation"
+    )
+    assert consolidated_reconciliation_owner is not None
+    assert consolidated_reconciliation_owner.name == "financial.consolidated_payments"
+
+    consolidated_provenance_owner = sot_relationships.owning_service_for(
+        "exact consolidated settlement cash provenance links"
+    )
+    assert consolidated_provenance_owner is not None
+    assert consolidated_provenance_owner.name == "financial.consolidated_payments"
+
     consolidated_ledger_owner = sot_relationships.owning_service_for(
         "exact consolidated-credit ledger links"
     )
     assert consolidated_ledger_owner is not None
     assert consolidated_ledger_owner.name == "financial.consolidated_payments"
 
+    consolidated_credit_allocation_owner = sot_relationships.owning_service_for(
+        "consolidated-credit allocation preview and confirmation"
+    )
+    assert consolidated_credit_allocation_owner is not None
+    assert (
+        consolidated_credit_allocation_owner.name == "financial.consolidated_payments"
+    )
+
+    consolidated_credit_evidence_owner = sot_relationships.owning_service_for(
+        "exact source-credit consumption and subscriber-ledger links"
+    )
+    assert consolidated_credit_evidence_owner is not None
+    assert consolidated_credit_evidence_owner.name == "financial.consolidated_payments"
+
+    consolidated_refund_owner = sot_relationships.owning_service_for(
+        "billing-account refund confirmation and exact ledger evidence"
+    )
+    assert consolidated_refund_owner is not None
+    assert consolidated_refund_owner.name == "financial.consolidated_payments"
+
+    consolidated_reversal_owner = sot_relationships.owning_service_for(
+        "billing-account reversal confirmation and exact ledger evidence"
+    )
+    assert consolidated_reversal_owner is not None
+    assert consolidated_reversal_owner.name == "financial.consolidated_payments"
+
     allocation_owner = sot_relationships.owning_service_for(
         "settled account-credit allocation preview and confirmation"
     )
     assert allocation_owner is not None
     assert allocation_owner.name == "financial.payments"
+
+    native_credit_reconciliation_owner = sot_relationships.owning_service_for(
+        "native unallocated-credit reconciliation transactions"
+    )
+    assert native_credit_reconciliation_owner is not None
+    assert native_credit_reconciliation_owner.name == "financial.payments"
 
     refund_owner = sot_relationships.owning_service_for(
         "payment refund confirmation and exact ledger evidence"

@@ -21,6 +21,12 @@
     </dl>
     {% endcall %}
 
+    {% if preview.billing_account_id %}
+    {% call card("Consolidated credit", color="blue") %}
+    <p class="text-sm text-slate-600 dark:text-slate-300">Reseller-held credit: {{ preview.currency }} {{ "{:,.2f}".format(preview.consolidated_credit_before) }} → {{ preview.currency }} {{ "{:,.2f}".format(preview.consolidated_credit_after) }}</p>
+    <p class="mt-2 text-xs text-slate-500">Exact billing-account consumption: {{ preview.currency }} {{ "{:,.2f}".format(preview.consolidated_credit_consumption) }}. This is distinct from member receivables and service access.</p>
+    {% endcall %}
+    {% else %}
     <div class="grid gap-6 lg:grid-cols-2">
         {% call card("Prepaid funding", color="amber") %}
         <p class="text-sm text-slate-600 dark:text-slate-300">Customer financial position: {{ preview.currency }} {{ "{:,.2f}".format(preview.prepaid_funding_before) }} → {{ preview.currency }} {{ "{:,.2f}".format(preview.prepaid_funding_after) }}</p>
@@ -30,17 +36,22 @@
         <p class="mt-2 text-xs text-slate-500">Consumption attributable to this refund: {{ preview.currency }} {{ "{:,.2f}".format(preview.account_credit_consumption) }}</p>
         {% endcall %}
     </div>
+    {% endif %}
 
     {% call card("Invoice receivables", color="violet") %}
     {% if preview.invoice_effects %}
     <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-xs uppercase text-slate-500"><th class="pb-2">Invoice</th><th class="pb-2">Receivable before</th><th class="pb-2">Refund attributed</th><th class="pb-2">Receivable after</th></tr></thead><tbody>
-        {% for effect in preview.invoice_effects %}<tr class="border-t border-slate-100 dark:border-slate-700"><td class="py-2">{{ effect.invoice_number or effect.invoice_id }}</td><td>{{ preview.currency }} {{ "{:,.2f}".format(effect.receivable_before) }}</td><td>{{ preview.currency }} {{ "{:,.2f}".format(effect.refund_attributed) }}</td><td>{{ preview.currency }} {{ "{:,.2f}".format(effect.receivable_after) }}</td></tr>{% endfor %}
+        {% for effect in preview.invoice_effects %}<tr class="border-t border-slate-100 dark:border-slate-700"><td class="py-2">{{ effect.invoice_number or effect.invoice_id }}</td><td>{{ preview.currency }} {{ "{:,.2f}".format(effect.receivable_before) }}</td><td>{{ preview.currency }} {{ "{:,.2f}".format(effect.return_amount if preview.billing_account_id else effect.refund_attributed) }}</td><td>{{ preview.currency }} {{ "{:,.2f}".format(effect.receivable_after) }}</td></tr>{% endfor %}
     </tbody></table></div>
     {% else %}<p class="text-sm text-slate-500">No invoice allocation is affected.</p>{% endif %}
     {% endcall %}
 
     {% call card("Exact evidence and access consequence", color="emerald") %}
+    {% if preview.billing_account_id %}
+    <p class="text-sm text-slate-600 dark:text-slate-300">Exact results: {% if preview.consolidated_credit_consumption %}one billing-account {{ preview.billing_account_ledger_entry_type.value }} / {{ preview.billing_account_ledger_source.value }} for {{ preview.currency }} {{ "{:,.2f}".format(preview.consolidated_credit_consumption) }}{% else %}no billing-account debit{% endif %}, plus {{ preview.invoice_effects|length }} subscriber allocation-reversal ledger row(s).</p>
+    {% else %}
     <p class="text-sm text-slate-600 dark:text-slate-300">Ledger result: {{ preview.ledger_entry_type.value }} / {{ preview.ledger_source.value }} / {{ preview.currency }} {{ "{:,.2f}".format(preview.ledger_amount) }}.</p>
+    {% endif %}
     <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">Access consequence: Sub will request a canonical account-status recheck. This preview does not promise a particular service-access state.</p>
     {% endcall %}
 
