@@ -911,6 +911,44 @@ class TestBuildBeatSchedule:
             for call in mock_session.add.call_args_list
         )
 
+    def test_prepaid_enforcement_sweep_uses_registered_cadence(self, monkeypatch):
+        monkeypatch.setenv("GIS_SYNC_ENABLED", "false")
+        monkeypatch.delenv("USAGE_RATING_ENABLED", raising=False)
+        monkeypatch.delenv("DUNNING_ENABLED", raising=False)
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.filter.return_value.filter.return_value.filter.return_value.first.return_value = None
+        mock_session.query.return_value.filter.return_value.all.return_value = []
+        mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+
+        original_resolve_int = scheduler_config._resolve_int
+
+        def resolve_int(db, domain, key, default):
+            if key == "prepaid_balance_sweep_interval_seconds":
+                return 1800
+            return original_resolve_int(db, domain, key, default)
+
+        with (
+            _control_overrides(
+                {"gis.sync": False, "collections.prepaid_balance_enforcement": True}
+            ),
+            patch.object(scheduler_config, "SessionLocal", return_value=mock_session),
+            patch.object(scheduler_config, "_resolve_int", side_effect=resolve_int),
+            patch.object(
+                scheduler_config.integration_service,
+                "list_interval_jobs",
+                return_value=[],
+            ),
+        ):
+            scheduler_config.build_beat_schedule()
+
+        assert any(
+            getattr(call.args[0], "name", None) == "prepaid_balance_sweep"
+            and getattr(call.args[0], "interval_seconds", None) == 1800
+            and getattr(call.args[0], "enabled", None) is True
+            for call in mock_session.add.call_args_list
+        )
+
     def test_ignores_retired_splynx_sync_settings(self, monkeypatch):
         """Retired legacy-sync env toggles must not create beat entries."""
         monkeypatch.setenv("GIS_SYNC_ENABLED", "false")

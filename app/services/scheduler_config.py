@@ -964,16 +964,24 @@ def build_beat_schedule() -> dict:
         # control key, routed through the single control-plane resolver): it
         # arms low-balance/deactivation timers and SUSPENDS depleted prepaid
         # accounts, so it stays a deliberate opt-in. The sweep also no-ops
-        # internally when the control is off. Daily cadence.
+        # internally when the control is off. Cadence is constrained by the
+        # registered setting so the sweep reaches every configured blocking
+        # window instead of being anchored once daily before that window.
         prepaid_balance_enforcement_enabled = control_registry.is_enabled(
             session, "collections.prepaid_balance_enforcement"
+        )
+        prepaid_balance_sweep_interval_seconds = _resolve_int(
+            session,
+            SettingDomain.collections,
+            "prepaid_balance_sweep_interval_seconds",
+            3600,
         )
         _sync_scheduled_task(
             session,
             name="prepaid_balance_sweep",
             task_name="app.tasks.collections.prepaid_balance_sweep",
             enabled=prepaid_balance_enforcement_enabled,
-            interval_seconds=86400,
+            interval_seconds=prepaid_balance_sweep_interval_seconds,
         )
         # Billing master-switch config guard — ALWAYS on (independent of
         # billing_enabled) so an unexpected flip is caught, not silently armed.
