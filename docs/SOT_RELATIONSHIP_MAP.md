@@ -49,6 +49,7 @@ but equivalent state and actions resolve through the same backend owners.
 20. `ui_bulk_actions`
 21. `ui_semantic_presentation`
 22. `vpn_remote_access`
+23. `sales_referrals`
 
 Rule: each PR should finish one domain slice: define the owner service, migrate
 the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
@@ -1424,3 +1425,18 @@ through these owners. `web_vpn_*` adapters and device-access code do not build
 WireGuard config, mutate peers, or write the system interface directly. The
 Redis `vpn_cache` is a rebuildable projection of server/peer configs, never a
 source of truth.
+
+## Sales and Referrals
+
+1. `sales.orders`: owns sales order lifecycle.
+2. `sales.selfserve`: owns the self-serve quote and signup flow.
+3. `sales.service`: owns sales service operations.
+4. `referrals.data`: owns referral DB and CRM data access — the Refer & Earn
+   data mirror.
+5. `referrals.program`: owns Refer & Earn referral program logic.
+
+Rule: sales order, self-serve quote/signup, sales service, and Refer & Earn
+referral logic resolve through these owners. `web_sales`/`web_referrals` adapters
+and API/task callers request an outcome; the referral mirror is the sole DB and
+CRM data-access path for Refer & Earn, treated as a cache of CRM data, never a
+parallel authority.
