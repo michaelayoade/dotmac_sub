@@ -79,10 +79,7 @@ def test_dashboard_drilldown_links_resolve():
     paths = _registered_paths()
     hrefs = _kpi_hrefs() + _attention_hrefs()
     assert hrefs, "expected drill-down hrefs from the KPI strip and attention feed"
-    dead = sorted(
-        {href.split("?", 1)[0] for href in hrefs}
-        - {p for p in paths}
-    )
+    dead = sorted({href.split("?", 1)[0] for href in hrefs} - {p for p in paths})
     assert not dead, (
         "dashboard drill-down links point at unregistered routes "
         f"(dead cohort links): {dead}"
