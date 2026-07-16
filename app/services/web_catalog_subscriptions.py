@@ -4072,9 +4072,7 @@ def bulk_change_plan(
         reason="Bulk plan change requested from the admin catalog",
         target_offer_id=target_offer_id,
         effective_timing=timing,
-        effective_at=(
-            preview_effective_at if effective_timing == "instant" else None
-        ),
+        effective_at=(preview_effective_at if effective_timing == "instant" else None),
     )
     return result.as_dict()
 
