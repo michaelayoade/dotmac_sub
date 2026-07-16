@@ -39,7 +39,9 @@ from app.services.web_network_core_devices_forms import (
     validate_values,
 )
 from app.services.web_network_core_devices_inventory import (
+    NETWORK_DEVICE_LIST_DEFINITION,
     _device_matches_search,
+    build_network_device_list_query,
     collect_devices,
     compute_device_stats,
     devices_filter_data,
@@ -98,6 +100,8 @@ __all__ = [
     "update_provisioning_access_for_device",
     "validate_values",
     "_device_matches_search",
+    "NETWORK_DEVICE_LIST_DEFINITION",
+    "build_network_device_list_query",
     "collect_devices",
     "compute_device_stats",
     "devices_filter_data",
