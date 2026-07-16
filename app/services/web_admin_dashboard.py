@@ -293,9 +293,7 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
 
     try:
         now = datetime.now(UTC)
-        month_start = now.replace(
-            day=1, hour=0, minute=0, second=0, microsecond=0
-        )
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         month_end = (month_start + timedelta(days=32)).replace(day=1)
         overview = BillingReporting.get_overview_stats(
             db, period_start=month_start, period_end=month_end
