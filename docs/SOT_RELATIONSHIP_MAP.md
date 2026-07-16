@@ -117,7 +117,13 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    after that timestamp. There is no Splynx/legacy fallback or authority toggle.
    A pre-cutover account without an approved opening balance fails closed; an
    account created after cutover starts at zero and accumulates native events.
-   Bulk callers use the same owner instead of reconstructing another balance.
+   Portal outstanding-balance views consume its collection-blocking
+   value; a capped invoice display list never caps or redefines the amount.
+   Billing reporting applies the same collectible/non-proforma boundary and
+   derives settled value from invoice money, not a status label. The account
+   balance KPI is collectible AR in one declared currency, never `min_balance`.
+   Bulk callers use the same owner instead of reconstructing another balance
+   or looping the single-customer ledger reader.
 8. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold` in the
@@ -1256,6 +1262,8 @@ Rule: domain services request a notification outcome; they should not construct
 notification rows, choose email/SMS/WhatsApp directly, or maintain recipient
 read state outside the owning service. Admin inbox routes must not load or
 mutate inbox ORM rows, control commits, or select alternate mutation helpers.
+Invoice issue/send actions emit `invoice_sent` once through the invoice owner;
+web and bulk adapters do not hand-compose or directly deliver a second email.
 
 ## Events and Webhooks
 
