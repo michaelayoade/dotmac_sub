@@ -16,7 +16,7 @@
                 <span class="text-slate-900 dark:text-white">Snapshot</span>
             </nav>
             <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Backup Snapshot</h1>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{{ backup.created_at.strftime('%Y-%m-%d %H:%M:%S') if backup.created_at else '-' }}</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{{ backup.created_at | app_datetime('%Y-%m-%d %H:%M:%S', '-') }}</p>
         </div>
         <div class="inline-flex items-center gap-2">
             <a href="/admin/network/olts/{{ olt.id }}/backups" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">

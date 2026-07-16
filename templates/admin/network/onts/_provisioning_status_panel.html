@@ -31,7 +31,7 @@
         <span class="font-medium text-slate-900 dark:text-white">{{ summary.last_event_label or 'Latest update' }}</span>
         <span>{{ summary.last_event_message }}</span>
         {% if summary.last_event_at %}
-        <span class="text-slate-400 dark:text-slate-500">• {{ summary.last_event_at.strftime('%b %d, %H:%M') }}</span>
+        <span class="text-slate-400 dark:text-slate-500">• {{ summary.last_event_at | app_datetime('%b %d, %H:%M') }}</span>
         {% endif %}
     </div>
     {% endif %}
@@ -114,7 +114,7 @@
                             <span class="text-sm font-medium text-slate-900 dark:text-white">{{ event.step_label }}</span>
                             <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold {{ event.badge_class }}">{{ event.status_label }}</span>
                             {% if event.created_at %}
-                            <span class="text-xs text-slate-400 dark:text-slate-500">{{ event.created_at.strftime('%b %d, %H:%M') }}</span>
+                            <span class="text-xs text-slate-400 dark:text-slate-500">{{ event.created_at | app_datetime('%b %d, %H:%M') }}</span>
                             {% endif %}
                         </div>
                         {% if event.message %}

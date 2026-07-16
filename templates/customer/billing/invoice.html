@@ -30,9 +30,9 @@
             </div>
             <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
                 {%- if invoice.issued_at -%}
-                    Issued {{ invoice.issued_at.strftime('%B %d, %Y') }}
+                    Issued {{ invoice.issued_at | portal_datetime('%B %d, %Y', include_tz=False) }}
                 {%- elif invoice.created_at -%}
-                    Created {{ invoice.created_at.strftime('%B %d, %Y') }}
+                    Created {{ invoice.created_at | portal_datetime('%B %d, %Y', include_tz=False) }}
                 {%- endif -%}
             </p>
         </div>
@@ -60,11 +60,11 @@
                         <div class="mt-2 space-y-1 text-sm">
                             <p class="flex items-center gap-2 text-stone-600 dark:text-stone-300">
                                 <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                                Issued {{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}
+                                Issued {{ invoice.issued_at | portal_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
                             </p>
                             <p class="flex items-center gap-2 text-stone-600 dark:text-stone-300">
                                 <svg class="h-4 w-4 text-stone-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                Due {{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}
+                                Due {{ invoice.due_at | portal_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
                             </p>
                         </div>
                     </div>
@@ -143,7 +143,7 @@
                 </p>
                 <p class="mt-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                    Due {{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}
+                    Due {{ invoice.due_at | portal_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
                 </p>
                 {% if status_val != 'paid' %}
                 <a href="/portal/billing/pay?invoice={{ invoice.id }}" class="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-brand-500 to-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-md shadow-brand-500/20 transition-all duration-300 hover:shadow-lg hover:shadow-brand-500/30 hover:-translate-y-0.5">

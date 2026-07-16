@@ -81,7 +81,7 @@
             <p class="mt-2 text-2xl font-semibold text-slate-900 dark:text-white">{{ service_port_summary.count | default(0) }}</p>
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                 {% if service_port_summary.last_imported_at %}
-                    Imported {{ service_port_summary.last_imported_at.strftime("%Y-%m-%d %H:%M") }}
+                    Imported {{ service_port_summary.last_imported_at | app_datetime('%Y-%m-%d %H:%M') }}
                 {% else %}
                     Not imported
                 {% endif %}
@@ -118,7 +118,7 @@
                             <div id="profile-bundle-apply-status-{{ bundle.id }}">{{ bundle.drift_status or "pending" }}</div>
                             <div class="font-mono">{{ bundle.checksum[:12] }}</div>
                             {% if bundle.last_applied_at %}
-                            <div>{{ bundle.last_applied_at.strftime("%Y-%m-%d %H:%M") }}</div>
+                            <div>{{ bundle.last_applied_at | app_datetime('%Y-%m-%d %H:%M') }}</div>
                             {% endif %}
                         </td>
                         <td class="px-4 py-3 text-right">
@@ -215,7 +215,7 @@
                         <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ port.vlan_id }}</td>
                         <td class="px-4 py-3 text-right text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ port.gem_index }}</td>
                         <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ port.source }}</td>
-                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ port.last_imported_at.strftime("%Y-%m-%d %H:%M") if port.last_imported_at else "-" }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">{{ port.last_imported_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>

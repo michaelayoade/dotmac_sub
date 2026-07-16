@@ -45,7 +45,7 @@
                     <td class="px-4 py-3">
                         <a href="/admin/billing/service-extensions/{{ ext.id }}" class="font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ ext.reason | truncate(60) }}</a>
                     </td>
-                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ ext.window_start.strftime("%Y-%m-%d %H:%M") }} → {{ ext.window_end.strftime("%Y-%m-%d %H:%M") }}</td>
+                    <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ ext.window_start | app_datetime('%Y-%m-%d %H:%M', include_tz=False) }} → {{ ext.window_end | app_datetime('%Y-%m-%d %H:%M') }}</td>
                     <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ ext.scope_type.value | replace("_", " ") | title }}</td>
                     <td class="px-4 py-3 text-right tabular-nums">{{ ext.days }}</td>
                     <td class="px-4 py-3 text-right tabular-nums">{{ ext.affected_count if ext.status.value == "applied" else "—" }}</td>
@@ -53,7 +53,7 @@
                         {% set variant = {"pending": "warning", "applied": "active", "canceled": "inactive"} %}
                         {{ status_badge(ext.status.value | title, variant.get(ext.status.value, "default"), size="sm") }}
                     </td>
-                    <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ ext.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                    <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ ext.created_at | app_datetime('%Y-%m-%d %H:%M') }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

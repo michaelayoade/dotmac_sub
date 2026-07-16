@@ -36,7 +36,7 @@
                     <td class="px-4 py-3 text-right text-sm">{{ run.total_rows }}</td>
                     <td class="px-4 py-3 text-right text-sm text-emerald-600">{{ run.ok_rows }}</td>
                     <td class="px-4 py-3 text-right text-sm text-red-600">{{ run.failed_rows }}</td>
-                    <td class="px-4 py-3 text-sm text-slate-500">{{ run.created_at.strftime("%Y-%m-%d %H:%M") if run.created_at else "" }}</td>
+                    <td class="px-4 py-3 text-sm text-slate-500">{{ run.created_at | app_datetime('%Y-%m-%d %H:%M', '') }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="7" class="px-4 py-8 text-center text-sm text-slate-500">No import runs yet.</td></tr>

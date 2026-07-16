@@ -163,7 +163,7 @@
                                 {{ alert.severity.value | title }}
                             </span>
                             <span class="text-sm text-slate-900 dark:text-white">{{ alert.rule.name if alert.rule else 'Unknown' }}</span>
-                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ alert.triggered_at.strftime('%b %d %H:%M') if alert.triggered_at else '' }}</span>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ alert.triggered_at | app_datetime('%b %d %H:%M', '') }}</span>
                         </div>
                     </div>
                     {% endfor %}
@@ -323,7 +323,7 @@
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Seen</p>
                         <p class="mt-1 text-sm font-semibold text-slate-900 dark:text-white">
-                            {{ device_health.last_seen.strftime('%b %d, %Y %H:%M') if device_health.last_seen else '--' }}
+                            {{ device_health.last_seen | app_datetime('%b %d, %Y %H:%M', '--') }}
                         </p>
                     </div>
                     <div>
@@ -368,11 +368,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ device.created_at.strftime('%B %d, %Y') if device.created_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ device.created_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ device.updated_at.strftime('%B %d, %Y') if device.updated_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ device.updated_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                 </div>
             </div>
@@ -391,7 +391,7 @@
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</div>
                         {% endif %}
                         {% if activity.occurred_at %}
-                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d, %Y at %H:%M') }}</div>
+                        <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d, %Y at %H:%M') }}</div>
                         {% endif %}
                     </div>
                     {% endfor %}

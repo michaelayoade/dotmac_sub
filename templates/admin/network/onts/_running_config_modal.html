@@ -21,7 +21,7 @@
             <svg class="mr-1.5 h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
-            Cached {{ fetched_at.strftime('%Y-%m-%d %H:%M') if fetched_at else '' }}
+            Cached {{ fetched_at | app_datetime('%Y-%m-%d %H:%M', '') }}
         </span>
         {% elif fetched_at and not error %}
         <span class="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">

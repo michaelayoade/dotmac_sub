@@ -246,7 +246,7 @@
                             {% else %}Account{% endif %}
                         </td>
                         <td class="px-6 py-3 text-right font-mono tabular-nums font-medium text-slate-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total|default(0)) }}</td>
-                        <td class="px-6 py-3 text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else '—' }}</td>
+                        <td class="px-6 py-3 text-slate-500 dark:text-slate-400">{{ invoice.due_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
                         <td class="px-6 py-3">
                             {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </td>

@@ -89,7 +89,7 @@
                         <span class="flex items-center gap-1.5">
                             {% set start_date = customer.account_start_date or customer.created_at %}
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                            Customer since {{ start_date.strftime('%B %Y') if start_date else 'N/A' }}
+                            Customer since {{ start_date | app_datetime('%B %Y', 'N/A', include_tz=False) }}
                         </span>
                     </div>
                 </div>
@@ -687,7 +687,7 @@
                             <div class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30">
                                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Login</p>
                                 <p class="mt-1 text-sm font-semibold text-slate-700 dark:text-slate-300">
-                                    {{ customer_user_access.last_login_at.strftime('%b %d, %Y %H:%M') if customer_user_access.last_login_at else 'Never' }}
+                                    {{ customer_user_access.last_login_at | app_datetime('%b %d, %Y %H:%M', 'Never') }}
                                 </p>
                             </div>
                         </div>
@@ -732,7 +732,7 @@
                         </div>
                         <p class="text-xs text-slate-500 dark:text-slate-400">
                             {% if customer_user_access.invite_sent_at %}
-                            Invite sent {{ customer_user_access.invite_sent_at.strftime('%b %d, %Y %H:%M') }}.
+                            Invite sent {{ customer_user_access.invite_sent_at | app_datetime('%b %d, %Y %H:%M') }}.
                             {% else %}
                             No invite sent yet.
                             {% endif %}
@@ -902,7 +902,7 @@
                                 <div>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">Connection</p>
                                     <p class="font-mono font-medium text-slate-900 dark:text-white">
-                                        {{ card_conn.identifier or ('Updated ' ~ card_conn.last_seen_at.strftime('%b %d, %H:%M')) }}
+                                        {{ card_conn.identifier or ('Updated ' ~ card_conn.last_seen_at | app_datetime('%b %d, %H:%M')) }}
                                     </p>
                                 </div>
                                 {% endif %}
@@ -963,7 +963,7 @@
                         </div>
                         <div>
                             <h3 class="font-semibold text-amber-900 dark:text-amber-200">Pending pin correction</h3>
-                            <p class="text-xs text-amber-700 dark:text-amber-300/80">Submitted {{ plr.created_at.strftime('%Y-%m-%d %H:%M') }} · awaiting review</p>
+                            <p class="text-xs text-amber-700 dark:text-amber-300/80">Submitted {{ plr.created_at | app_datetime('%Y-%m-%d %H:%M') }} · awaiting review</p>
                         </div>
                     </div>
                     <div class="space-y-3 p-5">
@@ -1183,7 +1183,7 @@
                             </p>
                             {% endif %}
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                                {{ activity.timestamp.strftime('%b %d, %Y at %I:%M %p') if activity.timestamp else 'Unknown time' }}
+                                {{ activity.timestamp | app_datetime('%b %d, %Y at %I:%M %p', 'Unknown time') }}
                                 {% if activity.amount %}<span class="ml-2 font-medium text-slate-600 dark:text-slate-400">₦{{ '{:,.0f}'.format(activity.amount) }}</span>{% endif %}
                             </p>
                         </div>
@@ -1212,7 +1212,7 @@
                             </p>
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
                                 {% set inv_date = invoice.issued_at or invoice.created_at %}
-                                {{ inv_date.strftime('%b %d, %Y') if inv_date else 'Unknown' }}
+                                {{ inv_date | app_datetime('%b %d, %Y', 'Unknown', include_tz=False) }}
                                 {% set amount = invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else (invoice.total if invoice.total is not none else 0) %}
                                 <span class="ml-2 font-medium text-slate-600 dark:text-slate-400">₦{{ '{:,.0f}'.format(amount) }}</span>
                             </p>
@@ -1236,7 +1236,7 @@
                                 <span class="text-slate-500 dark:text-slate-400"> - {{ payment_presentation.label }}</span>
                             </p>
                             <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                                {{ (payment.paid_at or payment.created_at).strftime('%b %d, %Y at %I:%M %p') if payment.paid_at or payment.created_at else 'Unknown' }}
+                                {{ (payment.paid_at or payment.created_at) | app_datetime('%b %d, %Y at %I:%M %p', 'Unknown') }}
                                 <span class="ml-2 font-medium text-slate-600 dark:text-slate-300">₦{{ '{:,.0f}'.format(payment.amount | default(0)) }}</span>
                             </p>
                         </div>
@@ -1363,7 +1363,7 @@
                             </div>
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ invoice.invoice_number | default('Invoice') }}</p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at).strftime('%b %d, %Y') if (invoice.issued_at or invoice.created_at) else 'N/A' }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
                             </div>
                         </div>
                         <div class="text-right">
@@ -1398,7 +1398,7 @@
                             </div>
                             <div>
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ (payment.id|string)[0:8] | upper }}</p>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at.strftime('%b %d, %Y') if payment.paid_at else payment.created_at.strftime('%b %d, %Y') }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at | app_datetime('%b %d, %Y', include_tz=False) if payment.paid_at else payment.created_at | app_datetime('%b %d, %Y', include_tz=False) }}</p>
                             </div>
                         </div>
                         <div class="text-right">
@@ -1439,7 +1439,7 @@
                             <td class="px-5 py-3">
                                 <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ invoice.invoice_number | default((invoice.id|string)[:8]|upper) }}</a>
                             </td>
-                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at).strftime('%b %d, %Y') if (invoice.issued_at or invoice.created_at) else 'N/A' }}</td>
+                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
                             <td class="px-5 py-3">{{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}</td>
                             <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.balance_due | default(0)) }}</td>
                             <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else invoice.total | default(0)) }}</td>
@@ -1465,7 +1465,7 @@
                 <a href="/admin/billing/payments/{{ payment.id }}" class="flex items-center justify-between gap-4 px-5 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                     <div>
                         <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ payment.receipt_number or (payment.id|string)[:8]|upper }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at.strftime('%b %d, %Y') if payment.paid_at else payment.created_at.strftime('%b %d, %Y') }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at | app_datetime('%b %d, %Y', include_tz=False) if payment.paid_at else payment.created_at | app_datetime('%b %d, %Y', include_tz=False) }}</p>
                     </div>
                     <div class="text-right">
                         <p class="text-sm font-bold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(payment.amount | default(0)) }}</p>
@@ -1505,7 +1505,7 @@
                                 {% if proof.payment_id %}<p class="text-xs text-slate-500 dark:text-slate-400">Payment {{ (proof.payment_id|string)[:8]|upper }}</p>{% endif %}
                             </td>
                             <td class="px-5 py-3 text-sm text-slate-600 dark:text-slate-300">{{ proof.bank_name or 'N/A' }}</td>
-                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ proof.created_at.strftime('%b %d, %Y') if proof.created_at else 'N/A' }}</td>
+                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ proof.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
                             <td class="px-5 py-3 text-sm text-slate-600 dark:text-slate-300">{{ proof_status | title }}</td>
                             <td class="px-5 py-3 text-right text-sm font-bold tabular-nums text-slate-900 dark:text-white">{{ proof.currency }} {{ '{:,.2f}'.format(proof.amount | default(0)) }}</td>
                         </tr>
@@ -1531,7 +1531,7 @@
                 <div class="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
                     <div>
                         <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ credit.credit_number or (credit.id|string)[:8]|upper }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ credit.created_at.strftime('%b %d, %Y') if credit.created_at else 'N/A' }} · {{ credit_status | replace('_', ' ') | title }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ credit.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }} · {{ credit_status | replace('_', ' ') | title }}</p>
                         {% if credit.memo %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ credit.memo }}</p>{% endif %}
                     </div>
                     <div class="flex items-center gap-4 md:text-right">
@@ -1566,13 +1566,13 @@
                         <div>
                             <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ extension.reason if extension else 'Service extension' }}</p>
                             <p class="text-xs text-slate-500 dark:text-slate-400">
-                                {{ entry.created_at.strftime('%b %d, %Y') if entry.created_at else 'N/A' }}
+                                {{ entry.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
                                 {% if extension %} · {{ extension.days }} day{{ 's' if extension.days != 1 else '' }} · {{ extension_status | title }}{% endif %}
                             </p>
                         </div>
                         <div class="text-sm text-slate-600 dark:text-slate-300 md:text-right">
-                            <p>Previous: {{ entry.previous_next_billing_at.strftime('%b %d, %Y') if entry.previous_next_billing_at else 'N/A' }}</p>
-                            <p>New: {{ entry.new_next_billing_at.strftime('%b %d, %Y') if entry.new_next_billing_at else 'N/A' }}</p>
+                            <p>Previous: {{ entry.previous_next_billing_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
+                            <p>New: {{ entry.new_next_billing_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
                         </div>
                     </div>
                 </a>
@@ -1595,7 +1595,7 @@
                     <div>
                         <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ application.credit_note.credit_number if application.credit_note else (application.credit_note_id|string)[:8]|upper }}</p>
                         <p class="text-xs text-slate-500 dark:text-slate-400">
-                            Applied {{ application.created_at.strftime('%b %d, %Y') if application.created_at else 'N/A' }}
+                            Applied {{ application.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
                             {% if application.invoice %} to {{ application.invoice.invoice_number or (application.invoice.id|string)[:8]|upper }}{% endif %}
                         </p>
                         {% if application.memo %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ application.memo }}</p>{% endif %}
@@ -1798,7 +1798,7 @@
                                     {% if show_service_assignments and subscription.next_billing_at %}
                                     <span class="flex items-center gap-1">
                                         <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                                        Next bill: {{ subscription.next_billing_at.strftime('%b %d, %Y') }}
+                                        Next bill: {{ subscription.next_billing_at | app_datetime('%b %d, %Y', include_tz=False) }}
                                     </span>
                                     {% endif %}
                                 </div>
@@ -2010,7 +2010,7 @@
                                 <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ log.subject or log.recipient or log.channel.value | replace('_', ' ') | title }}</p>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ log.channel.value | replace('_', ' ') | title }} · {{ log.direction.value | title }} · {{ log.status.value | title }}</p>
                             </div>
-                            <span class="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{{ (log.sent_at or log.created_at).strftime('%b %d, %Y') if (log.sent_at or log.created_at) else 'N/A' }}</span>
+                            <span class="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{{ (log.sent_at or log.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>
                         </div>
                         {% if log.body %}
                         <p class="mt-2 line-clamp-2 text-sm text-slate-600 dark:text-slate-300">{{ log.body }}</p>
@@ -2034,7 +2034,7 @@
                     {% for order in service_orders %}
                     <a href="/admin/provisioning/orders/{{ order.id }}" class="block px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                         <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ order.order_type.value | replace('_', ' ') | title if order.order_type else 'Service Order' }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ order.status.value | replace('_', ' ') | title }} · {{ order.created_at.strftime('%b %d, %Y') if order.created_at else 'N/A' }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ order.status.value | replace('_', ' ') | title }} · {{ order.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
                     </a>
                     {% endfor %}
                 </div>
@@ -2136,7 +2136,7 @@
                             {% for case in dunning_cases[:3] %}
                             <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ case.status.value | title }} case</p>
-                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Step {{ case.current_step or 0 }} · {{ case.started_at.strftime('%b %d, %Y') if case.started_at else 'N/A' }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Step {{ case.current_step or 0 }} · {{ case.started_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
                             </div>
                             {% endfor %}
                         </div>

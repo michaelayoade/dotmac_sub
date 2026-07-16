@@ -702,7 +702,7 @@ def test_core_network_table_shows_ping_result_and_device_tooltip():
 
     assert "POP: {{ device_pop_name }}" in template
     assert "latest_ping.label if latest_ping else '-'" in template
-    assert "latest_ping.recorded_at.strftime('%Y-%m-%d %H:%M')" in template
+    assert "latest_ping.recorded_at | app_datetime('%Y-%m-%d %H:%M')" in template
     assert "status-tone-{{ ping_tone }}" in template
     assert "status-tone-dot-{{ ping_tone }}" in template
 

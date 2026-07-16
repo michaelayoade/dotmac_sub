@@ -137,7 +137,7 @@
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Last Password Change</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                {{ credential.password_updated_at.strftime('%b %d, %Y %H:%M') if credential.password_updated_at else 'Never' }}
+                                {{ credential.password_updated_at | app_datetime('%b %d, %Y %H:%M', 'Never') }}
                             </dd>
                         </div>
                     </dl>
@@ -163,7 +163,7 @@
                                 </div>
                                 <div>
                                     <p class="text-sm font-medium text-slate-900 dark:text-white">{{ mfa.method_type.value | title }}</p>
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">Added {{ mfa.created_at.strftime('%b %d, %Y') if mfa.created_at else 'Unknown' }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Added {{ mfa.created_at | app_datetime('%b %d, %Y', 'Unknown', include_tz=False) }}</p>
                                 </div>
                             </div>
                             {% if mfa.enabled %}
@@ -195,11 +195,11 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ user.created_at.strftime('%B %d, %Y') if user.created_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ user.created_at | app_datetime('%B %d, %Y', '-', include_tz=False) }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ user.updated_at.strftime('%B %d, %Y %H:%M') if user.updated_at else '-' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ user.updated_at | app_datetime('%B %d, %Y %H:%M', '-') }}</p>
                     </div>
 	                </div>
 	            </div>
@@ -216,7 +216,7 @@
 	                        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-900/40">
 	                            <div class="flex items-start justify-between gap-3">
 	                                <p class="min-w-0 truncate text-sm font-medium text-slate-900 dark:text-white">{{ activity.title }}</p>
-	                                <span class="shrink-0 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at.strftime('%b %d') if activity.occurred_at else 'Recent' }}</span>
+	                                <span class="shrink-0 text-xs text-slate-400 dark:text-slate-500">{{ activity.occurred_at | app_datetime('%b %d', 'Recent', include_tz=False) }}</span>
 	                            </div>
 	                            <p class="mt-1 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{{ activity.description }}</p>
 	                        </div>

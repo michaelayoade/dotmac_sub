@@ -55,7 +55,7 @@
                         <td class="px-4 py-3 font-mono text-xs text-slate-600 dark:text-slate-300">{{ intent.subscription_id or '-' }}</td>
                         <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ intent.verified_revision or '-' }} / {{ intent.desired_revision }}</td>
                         <td class="px-4 py-3 font-medium {% if intent.status.value == 'verified' %}text-emerald-600{% elif intent.status.value == 'drifted' %}text-rose-600{% else %}text-amber-600{% endif %}">{{ intent.status.value | replace('_', ' ') | title }}</td>
-                        <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ intent.last_observed_at.strftime('%Y-%m-%d %H:%M') if intent.last_observed_at else '-' }}</td>
+                        <td class="px-4 py-3 text-slate-600 dark:text-slate-300">{{ intent.last_observed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                         <td class="px-4 py-3 text-right"><a href="/admin/network/uisp-control/{{ intent.id }}" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">Inspect</a></td>
                     </tr>
                     {% else %}

@@ -86,7 +86,7 @@
                     <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                         {% for row in unmatched_imports %}
                         <tr>
-                            <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.occurred_at.strftime('%Y-%m-%d %H:%M') if row.occurred_at else '-' }}</td>
+                            <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.occurred_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                             <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.file_name }}</td>
                             <td class="px-4 py-2 text-sm font-semibold text-amber-600 dark:text-amber-300">{{ row.unmatched_count }}</td>
                         </tr>

@@ -49,9 +49,9 @@
         <span>Mode: {{ "Dry-run preview" if push.dry_run else "Live push" }}</span>
         <span>Failure policy: {{ push.failure_policy | replace('_', ' ') | title }}</span>
         {% if push.operation_id %}<span>Operation: <span class="font-mono">{{ push.operation_id }}</span></span>{% endif %}
-        <span>Created: {{ push.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+        <span>Created: {{ push.created_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</span>
         {% if push.completed_at %}
-        <span>Completed: {{ push.completed_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+        <span>Completed: {{ push.completed_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</span>
         {% endif %}
         {% if push.template %}
         <span>Template: {{ push.template.name }}</span>

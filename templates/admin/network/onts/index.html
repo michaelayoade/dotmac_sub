@@ -253,7 +253,7 @@
             <span class="flex items-center justify-between gap-3 sm:justify-start"><span class="text-slate-500 dark:text-slate-400">Active</span> <strong class="text-emerald-700 dark:text-emerald-300">{{ unconfigured_stats.active_candidates }}</strong></span>
             <span class="flex items-center justify-between gap-3 sm:justify-start"><span class="text-slate-500 dark:text-slate-400">History</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.history_candidates }}</strong></span>
             <span class="flex items-center justify-between gap-3 sm:justify-start"><span class="text-slate-500 dark:text-slate-400">OLTs</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.olts_with_candidates }}</strong></span>
-            <span class="flex items-center justify-between gap-3 sm:justify-start sm:col-span-2 lg:col-span-1"><span class="text-slate-500 dark:text-slate-400">Last seen</span> <strong class="whitespace-nowrap text-slate-900 dark:text-white">{{ unconfigured_stats.last_seen_at.strftime('%Y-%m-%d %H:%M') if unconfigured_stats.last_seen_at else '-' }}</strong></span>
+            <span class="flex items-center justify-between gap-3 sm:justify-start sm:col-span-2 lg:col-span-1"><span class="text-slate-500 dark:text-slate-400">Last seen</span> <strong class="whitespace-nowrap text-slate-900 dark:text-white">{{ unconfigured_stats.last_seen_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</strong></span>
         </div>
 
         {% call filter_bar() %}
@@ -340,8 +340,8 @@
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
-                                <div>First: {% if entry.first_seen_at %}{{ entry.first_seen_at.strftime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</div>
-                                <div class="text-xs text-slate-500 dark:text-slate-400">Last: {% if entry.last_seen_at %}{{ entry.last_seen_at.strftime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</div>
+                                <div>First: {% if entry.first_seen_at %}{{ entry.first_seen_at | app_datetime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</div>
+                                <div class="text-xs text-slate-500 dark:text-slate-400">Last: {% if entry.last_seen_at %}{{ entry.last_seen_at | app_datetime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</div>
                             </td>
                             <td class="px-3 py-2 text-right">
                                 {% if entry.is_active %}
@@ -558,8 +558,8 @@
                             <td class="px-3 py-2 whitespace-nowrap">
                                 {% set effective_last_seen_at = sd.get("last_seen_at") or ont.last_seen_at %}
                                 {% if effective_last_seen_at %}
-                                <span class="text-xs text-slate-600 dark:text-slate-400" title="{{ effective_last_seen_at.strftime('%Y-%m-%d %H:%M:%S') if effective_last_seen_at else '' }}">
-                                    {{ effective_last_seen_at.strftime('%b %d, %H:%M') if effective_last_seen_at else '-' }}
+                                <span class="text-xs text-slate-600 dark:text-slate-400" title="{{ effective_last_seen_at | app_datetime('%Y-%m-%d %H:%M:%S', '') }}">
+                                    {{ effective_last_seen_at | app_datetime('%b %d, %H:%M', '-') }}
                                 </span>
                                 {% else %}
                                 <span class="text-xs text-slate-400">—</span>

@@ -54,7 +54,7 @@
             {% if overdue_invoices %}
             <div class="text-right">
                 <p class="text-sm font-medium text-red-600 dark:text-red-400">{{ overdue_invoices | length }} overdue invoice(s)</p>
-                <p class="text-xs text-slate-500 dark:text-slate-400">Oldest due {{ oldest_due_date.strftime('%b %d, %Y') if oldest_due_date else 'N/A' }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">Oldest due {{ oldest_due_date | portal_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</p>
             </div>
             {% endif %}
         </div>

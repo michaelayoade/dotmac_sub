@@ -34,7 +34,7 @@
                 <p class="mt-1 text-lg font-bold text-stone-900 dark:text-white">#{{ invoice.invoice_number or invoice.id[:8] }}</p>
                 {% if invoice.due_at %}
                 <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
-                    Due {{ invoice.due_at.strftime('%b %d, %Y') }}
+                    Due {{ invoice.due_at | portal_datetime('%b %d, %Y', include_tz=False) }}
                 </p>
                 {% endif %}
             </div>

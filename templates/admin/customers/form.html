@@ -800,14 +800,14 @@
                                 {% endif %}
                             </div>
                             <span class="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700">
-                                {{ activity.timestamp.strftime('%b %d') if activity.timestamp else 'Recent' }}
+                                {{ activity.timestamp | app_datetime('%b %d', 'Recent', include_tz=False) }}
                             </span>
                         </div>
                         <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                             {% if activity.actor_name %}
                             <span>By {{ activity.actor_name }}</span>
                             {% endif %}
-                            <span>{{ activity.timestamp.strftime('%I:%M %p') if activity.timestamp else 'Unknown time' }}</span>
+                            <span>{{ activity.timestamp | app_datetime('%I:%M %p', 'Unknown time') }}</span>
                         </div>
                     </div>
                     {% endfor %}

@@ -106,7 +106,7 @@
                         —
                         {% endif %}
                     </td>
-                    <td class="text-slate-500">{{ row.incident.started_at.strftime('%Y-%m-%d %H:%M') if row.incident.started_at else '—' }}</td>
+                    <td class="text-slate-500">{{ row.incident.started_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
                     <td class="text-slate-500">{{ row.incident.declared_by or '—' }}</td>
                     <td class="text-slate-500">{{ row.incident.note or '' }}</td>
                     <td>

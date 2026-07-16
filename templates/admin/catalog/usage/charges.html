@@ -70,7 +70,7 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {{ charge.period_start.strftime('%Y-%m-%d') if charge.period_start else '' }} - {{ charge.period_end.strftime('%Y-%m-%d') if charge.period_end else '' }}
+                            {{ charge.period_start | app_datetime('%Y-%m-%d', '', include_tz=False) }} - {{ charge.period_end | app_datetime('%Y-%m-%d', '', include_tz=False) }}
                         </td>
                         <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400 font-mono">{{ charge.subscription_id|string|truncate(8, True, '') if charge.subscription_id else '-' }}</td>
                         <td class="whitespace-nowrap px-3 py-4 text-sm text-slate-500 dark:text-slate-400">
