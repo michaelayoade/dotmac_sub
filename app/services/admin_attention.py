@@ -142,8 +142,7 @@ def build_attention_items(
     if pending_orders > 0:
         _add(
             _item(
-                f"{pending_orders} pending service "
-                f"{_plural(pending_orders, 'order')}",
+                f"{pending_orders} pending service {_plural(pending_orders, 'order')}",
                 "/admin/provisioning",
                 "info",
                 "provisioning",
