@@ -6,8 +6,8 @@ owned solely by the ``network.device_projection`` reconciler; it lets the admin
 device list search/filter/sort/paginate in SQL instead of aggregating and
 deriving status in memory on every request.
 
-Revision ID: 314_device_projection_table
-Revises: 313_dispatch_granular_permissions
+Revision ID: 319_device_projection_table
+Revises: 318_consolidated_settlement_reconciliation
 Create Date: 2026-07-16
 """
 
@@ -17,8 +17,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "314_device_projection_table"
-down_revision = "313_dispatch_granular_permissions"
+revision = "319_device_projection_table"
+down_revision = "318_consolidated_settlement_reconciliation"
 branch_labels = None
 depends_on = None
 

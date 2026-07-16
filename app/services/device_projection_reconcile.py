@@ -24,8 +24,10 @@ derivation path.
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -62,7 +64,7 @@ class DeviceProjectionReconcileResult:
         return self.inserted + self.updated
 
 
-def _subscriber_id(subscriber: object) -> object | None:
+def _subscriber_id(subscriber: object) -> uuid.UUID | None:
     """Best-effort extraction of a subscriber UUID from the derived dict.
 
     The derivation currently carries ``None`` for every device, but accept an
@@ -72,7 +74,7 @@ def _subscriber_id(subscriber: object) -> object | None:
     if subscriber is None:
         return None
     candidate = getattr(subscriber, "id", subscriber)
-    return coerce_uuid(candidate)
+    return cast("uuid.UUID | None", coerce_uuid(candidate))
 
 
 def reconcile_device_projections(
