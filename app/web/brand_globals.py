@@ -60,9 +60,15 @@ def _attach_globals(templates: Jinja2Templates) -> None:
     from app.config import settings
     from app.services.display_format import currency_symbol
     from app.services.status_presentation import (
+        account_status_presentation,
         appointment_status_presentation,
         infrastructure_service_status_presentation,
+        invoice_status_presentation,
+        payment_status_presentation,
+        provisioning_task_status_presentation,
         service_order_status_presentation,
+        subscription_status_presentation,
+        ticket_status_presentation,
     )
 
     templates.env.globals.setdefault(
@@ -74,6 +80,25 @@ def _attach_globals(templates: Jinja2Templates) -> None:
     )
     templates.env.globals.setdefault(
         "appointment_status_presentation", appointment_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "subscription_status_presentation", subscription_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "invoice_status_presentation", invoice_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "payment_status_presentation", payment_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "ticket_status_presentation", ticket_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "account_status_presentation", account_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "provisioning_task_status_presentation",
+        provisioning_task_status_presentation,
     )
     templates.env.globals.setdefault("brand", get_brand())
     templates.env.globals.setdefault("current_year", _current_year)

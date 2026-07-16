@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
+    IPAssignment,
     IpPool,
     IpPoolUtilizationSnapshot,
     IPv4Address,
@@ -146,6 +147,42 @@ class IpPoolUtilizationSnapshotManager:
             keep_days,
         )
         return {"deleted": deleted}
+
+
+def live_pool_counts(db: Session, pool) -> tuple[int, int]:
+    """Live ``(used, total)`` counts for one pool, as the admin network
+    report renders them.
+
+    ``total`` is the number of address rows loaded into the pool and ``used``
+    counts active ``IPAssignment`` rows joined to those addresses (moved
+    verbatim from the web report layer). This is intentionally distinct from
+    ``take_snapshot``'s capacity-from-CIDR totals: the report shows counted
+    address rows, the snapshot charts capacity utilization over time.
+    """
+    pool_ip_version = getattr(pool.ip_version, "value", pool.ip_version)
+    if pool_ip_version == "ipv6":
+        pool_total = (
+            db.query(IPv6Address).filter(IPv6Address.pool_id == pool.id).count()
+        )
+        pool_used = (
+            db.query(IPAssignment)
+            .join(IPv6Address, IPAssignment.ipv6_address_id == IPv6Address.id)
+            .filter(IPv6Address.pool_id == pool.id)
+            .filter(IPAssignment.is_active.is_(True))
+            .count()
+        )
+    else:
+        pool_total = (
+            db.query(IPv4Address).filter(IPv4Address.pool_id == pool.id).count()
+        )
+        pool_used = (
+            db.query(IPAssignment)
+            .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+            .filter(IPv4Address.pool_id == pool.id)
+            .filter(IPAssignment.is_active.is_(True))
+            .count()
+        )
+    return pool_used, pool_total
 
 
 ip_pool_utilization_snapshots = IpPoolUtilizationSnapshotManager()
