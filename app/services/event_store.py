@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
@@ -33,12 +33,18 @@ def _sanitize_payload(value: Any) -> Any:
     return value
 
 
-def create_event_record(db: Session, event: Event) -> EventStore:
+def create_event_record(
+    db: Session,
+    event: Event,
+    *,
+    status: EventStatus = EventStatus.processing,
+) -> EventStore:
     record = EventStore(
+        id=uuid4(),
         event_id=event.event_id,
         event_type=event.event_type.value,
         payload=_sanitize_payload(event.payload),
-        status=EventStatus.processing,
+        status=status,
         actor=event.actor,
         subscriber_id=event.subscriber_id,
         account_id=event.account_id,
@@ -47,6 +53,34 @@ def create_event_record(db: Session, event: Event) -> EventStore:
         service_order_id=event.service_order_id,
     )
     db.add(record)
+    db.flush()
+    return record
+
+
+def list_pending_event_ids(db: Session, *, limit: int) -> list[UUID]:
+    rows = (
+        db.query(EventStore.id)
+        .filter(EventStore.status == EventStatus.pending)
+        .filter(EventStore.is_active.is_(True))
+        .order_by(EventStore.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
+def claim_pending_event(db: Session, event_store_id: UUID) -> EventStore | None:
+    record = (
+        db.query(EventStore)
+        .filter(EventStore.id == event_store_id)
+        .filter(EventStore.status == EventStatus.pending)
+        .filter(EventStore.is_active.is_(True))
+        .with_for_update(skip_locked=True)
+        .one_or_none()
+    )
+    if record is None:
+        return None
+    record.status = EventStatus.processing
     db.flush()
     return record
 

@@ -423,16 +423,36 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 if target is None:
                     if offer is None:
                         raise ValueError("Offer is required")
+                    from app.services.billing_profile import (
+                        resolve_subscription_billing_mode_for_write,
+                    )
+
+                    target_billing_mode = resolve_subscription_billing_mode_for_write(
+                        db,
+                        account_id=subscriber.id,
+                        offer_id=offer.id,
+                    )
                     target = Subscription(
                         subscriber_id=subscriber.id,
                         offer_id=offer.id,
                         status=SubscriptionStatus.pending,
+                        billing_mode=target_billing_mode,
                     )
                     apply_offer_radius_profile(db, target, sync_credentials=False)
                     db.add(target)
                 elif offer is not None:
+                    from app.services.billing_profile import (
+                        resolve_subscription_billing_mode_for_write,
+                    )
+
+                    target_billing_mode = resolve_subscription_billing_mode_for_write(
+                        db,
+                        account_id=subscriber.id,
+                        offer_id=offer.id,
+                    )
                     previous_offer_id = target.offer_id
                     target.offer_id = offer.id
+                    target.billing_mode = target_billing_mode
                     apply_offer_radius_profile(
                         db,
                         target,

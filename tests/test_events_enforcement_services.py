@@ -263,6 +263,26 @@ class TestEventDispatcher:
         # Verify db.add was called (event persistence)
         mock_db.add.assert_called_once()
 
+    def test_dispatch_pending_event_claims_existing_record(self, db_session):
+        from app.models.event_store import EventStatus
+        from app.services import event_store as event_store_service
+
+        dispatcher = EventDispatcher()
+        event = Event(event_type=EventType.custom, payload={"source": "outbox"})
+        record = event_store_service.create_event_record(
+            db_session,
+            event,
+            status=EventStatus.pending,
+        )
+        db_session.commit()
+
+        assert dispatcher.dispatch_pending_event(db_session, record.id) is True
+        db_session.commit()
+
+        db_session.refresh(record)
+        assert record.status == EventStatus.completed
+        assert dispatcher.dispatch_pending_event(db_session, record.id) is False
+
     def test_dispatch_logs_structured_lifecycle(self, db_session, caplog):
         dispatcher = EventDispatcher()
         handler = MagicMock()

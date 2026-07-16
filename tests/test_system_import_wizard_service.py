@@ -5,7 +5,7 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 
 from app.models.billing import Invoice, LedgerEntry, Payment, PaymentAllocation
-from app.models.catalog import Subscription
+from app.models.catalog import BillingMode, Subscription
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import IpPool
 from app.models.network_monitoring import NetworkDevice
@@ -255,6 +255,9 @@ def test_execute_import_subscriptions_json(db_session, subscriber, catalog_offer
 def test_execute_import_subscriptions_preserves_next_billing_date(
     db_session, subscriber, catalog_offer
 ):
+    subscriber.billing_mode = BillingMode.postpaid
+    catalog_offer.billing_mode = BillingMode.postpaid
+    db_session.commit()
     payload = (
         "subscriber_id,offer_id,status,billing_mode,next_billing_at\n"
         f"{subscriber.id},{catalog_offer.id},active,postpaid,2026-08-15T00:00:00+00:00\n"

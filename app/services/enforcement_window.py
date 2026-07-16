@@ -15,6 +15,7 @@ window comparisons here use the ``scheduler.timezone`` setting (local TZ).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from zoneinfo import ZoneInfo
 
@@ -22,6 +23,21 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
 from app.services import settings_spec
+
+
+@dataclass(frozen=True)
+class EnforcementWindowDecision:
+    mode: str
+    inside_window: bool
+    block_reason: str | None
+
+    @property
+    def enforced(self) -> bool:
+        return self.mode == "enforce"
+
+    @property
+    def should_defer(self) -> bool:
+        return self.enforced and not self.inside_window
 
 
 def resolve_timezone_name(db: Session) -> str:
@@ -126,14 +142,15 @@ def within_send_window(db: Session, run_at: datetime) -> bool:
     )
 
 
-def within_enforcement_window(db: Session, run_at: datetime | None = None) -> bool:
-    """Whether state-changing enforcement (suspend/block) is allowed now.
+def resolve_enforcement_window_decision(
+    db: Session, run_at: datetime | None = None
+) -> EnforcementWindowDecision:
+    """Resolve the configured audit/enforce decision for the current window.
 
     Gated by ``collections.enforcement_window_start`` / ``enforcement_window_end``
     ("HH:MM", local ``scheduler.timezone``) plus
-    ``enforcement_skip_weekends`` / ``enforcement_skip_holidays``. Returns
-    ``True`` (no gate) when nothing is configured, so callers stay
-    backwards-compatible until an operator sets a window.
+    ``enforcement_skip_weekends`` / ``enforcement_skip_holidays``. Audit mode
+    records a closed window without deferring; enforce mode makes it actionable.
     """
     start_raw = settings_spec.resolve_value(
         db, SettingDomain.collections, "enforcement_window_start"
@@ -154,16 +171,27 @@ def within_enforcement_window(db: Session, run_at: datetime | None = None) -> bo
         )
         or []
     )
-    if start is None and end is None and not skip_weekends and not skip_holidays:
-        return True
-    local_run_at = to_local(db, run_at or datetime.now(UTC))
-    return (
-        window_block_reason(
-            local_run_at,
-            start_time=start,
-            end_time=end,
-            skip_weekends=skip_weekends,
-            skip_holidays=skip_holidays if isinstance(skip_holidays, list) else None,
-        )
-        is None
+    configured_mode = settings_spec.resolve_value(
+        db, SettingDomain.collections, "enforcement_window_mode"
     )
+    mode = str(configured_mode or "audit").strip().lower()
+    if mode not in {"audit", "enforce"}:
+        mode = "audit"
+    local_run_at = to_local(db, run_at or datetime.now(UTC))
+    block_reason = window_block_reason(
+        local_run_at,
+        start_time=start,
+        end_time=end,
+        skip_weekends=skip_weekends,
+        skip_holidays=skip_holidays if isinstance(skip_holidays, list) else None,
+    )
+    return EnforcementWindowDecision(
+        mode=mode,
+        inside_window=block_reason is None,
+        block_reason=block_reason,
+    )
+
+
+def within_enforcement_window(db: Session, run_at: datetime | None = None) -> bool:
+    """Whether the configured local enforcement window is currently open."""
+    return resolve_enforcement_window_decision(db, run_at).inside_window

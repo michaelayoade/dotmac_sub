@@ -359,6 +359,38 @@ class TestSeedCollectionsSettings:
         assert setting is not None
         assert setting.value_json == ["2026-01-01"]
 
+    def test_seeds_enforcement_window_policy(self, db_session, monkeypatch):
+        monkeypatch.setenv("ENFORCEMENT_WINDOW_MODE", "enforce")
+        monkeypatch.setenv("ENFORCEMENT_WINDOW_START", "09:00")
+        monkeypatch.setenv("ENFORCEMENT_WINDOW_END", "17:00")
+        monkeypatch.setenv("ENFORCEMENT_SKIP_WEEKENDS", "true")
+        monkeypatch.setenv("ENFORCEMENT_SKIP_HOLIDAYS", '["2026-01-01"]')
+
+        settings_seed.seed_collections_settings(db_session)
+
+        rows = {
+            row.key: row
+            for row in db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.collections,
+                DomainSetting.key.in_(
+                    {
+                        "enforcement_window_mode",
+                        "enforcement_window_start",
+                        "enforcement_window_end",
+                        "enforcement_skip_weekends",
+                        "enforcement_skip_holidays",
+                    }
+                ),
+            )
+            .all()
+        }
+        assert rows["enforcement_window_mode"].value_text == "enforce"
+        assert rows["enforcement_window_start"].value_text == "09:00"
+        assert rows["enforcement_window_end"].value_text == "17:00"
+        assert rows["enforcement_skip_weekends"].value_json is True
+        assert rows["enforcement_skip_holidays"].value_json == ["2026-01-01"]
+
     def test_seeds_prepaid_balance_sweep_interval(self, db_session, monkeypatch):
         monkeypatch.setenv("PREPAID_BALANCE_SWEEP_INTERVAL_SECONDS", "1800")
 
@@ -563,6 +595,32 @@ class TestSeedSchedulerSettings:
         )
         assert setting is not None
         assert setting.value_text == "America/New_York"
+
+    def test_seeds_event_outbox_dispatch_settings(self, db_session, monkeypatch):
+        monkeypatch.setenv("EVENT_DISPATCH_ENABLED", "true")
+        monkeypatch.setenv("EVENT_DISPATCH_INTERVAL_SECONDS", "30")
+        monkeypatch.setenv("EVENT_DISPATCH_BATCH_SIZE", "250")
+
+        settings_seed.seed_scheduler_settings(db_session)
+
+        rows = {
+            row.key: row
+            for row in db_session.query(DomainSetting)
+            .filter(
+                DomainSetting.domain == SettingDomain.scheduler,
+                DomainSetting.key.in_(
+                    {
+                        "event_dispatch_enabled",
+                        "event_dispatch_interval_seconds",
+                        "event_dispatch_batch_size",
+                    }
+                ),
+            )
+            .all()
+        }
+        assert rows["event_dispatch_enabled"].value_json is True
+        assert rows["event_dispatch_interval_seconds"].value_text == "30"
+        assert rows["event_dispatch_batch_size"].value_text == "250"
 
 
 # =============================================================================

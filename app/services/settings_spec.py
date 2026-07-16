@@ -946,8 +946,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
     ),
-    # Enforcement (suspend/block) time-of-day window. Default unset = no gate;
-    # phase 6 audit-only logs "would_gate" without skipping until enforced.
+    # Enforcement (suspend/block) time-of-day window. Mode is explicit so
+    # operators can validate would-gate evidence before enabling deferral.
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="enforcement_window_mode",
+        env_var="ENFORCEMENT_WINDOW_MODE",
+        value_type=SettingValueType.string,
+        default="audit",
+        allowed={"audit", "enforce"},
+    ),
     SettingSpec(
         domain=SettingDomain.collections,
         key="enforcement_window_start",
@@ -1274,6 +1282,34 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=5,
         min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.scheduler,
+        key="event_dispatch_enabled",
+        env_var="EVENT_DISPATCH_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="Durable event outbox dispatch enabled",
+    ),
+    SettingSpec(
+        domain=SettingDomain.scheduler,
+        key="event_dispatch_interval_seconds",
+        env_var="EVENT_DISPATCH_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        min_value=10,
+        max_value=300,
+        label="Durable event outbox dispatch interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.scheduler,
+        key="event_dispatch_batch_size",
+        env_var="EVENT_DISPATCH_BATCH_SIZE",
+        value_type=SettingValueType.integer,
+        default=100,
+        min_value=1,
+        max_value=1000,
+        label="Durable event outbox dispatch batch size",
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,

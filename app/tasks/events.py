@@ -6,8 +6,10 @@ Handles retry of failed events and cleanup of old event records.
 import logging
 
 from app.celery_app import celery_app
+from app.models.domain_settings import SettingDomain
 from app.services import event_store as event_store_service
 from app.services.db_session_adapter import db_session_adapter
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,58 @@ BATCH_SIZE = 100
 # Advisory lock keys for preventing concurrent task runs
 _EVENT_RETRY_LOCK_KEY = 70420801
 _EVENT_STALE_LOCK_KEY = 70420802
+_EVENT_DISPATCH_LOCK_KEY = 70420803
+
+
+def _configured_int(session, key: str, default: int) -> int:
+    value = resolve_value(session, SettingDomain.scheduler, key)
+    try:
+        return int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+@celery_app.task(name="app.tasks.events.dispatch_pending_events")
+def dispatch_pending_events():
+    """Recover committed event outbox rows not handled after caller commit."""
+    from app.services.events.dispatcher import get_dispatcher
+
+    with db_session_adapter.advisory_lock(_EVENT_DISPATCH_LOCK_KEY) as (
+        session,
+        lock_acquired,
+    ):
+        if not lock_acquired:
+            return {"skipped_due_to_lock": 1}
+
+        batch_size = _configured_int(session, "event_dispatch_batch_size", 100)
+        event_ids = event_store_service.list_pending_event_ids(
+            session,
+            limit=batch_size,
+        )
+        dispatcher = get_dispatcher()
+        dispatched = 0
+        skipped = 0
+        failed = 0
+        for event_store_id in event_ids:
+            try:
+                if dispatcher.dispatch_pending_event(session, event_store_id):
+                    dispatched += 1
+                else:
+                    skipped += 1
+                session.commit()
+            except Exception:
+                failed += 1
+                session.rollback()
+                logger.exception(
+                    "pending_event_dispatch_failed",
+                    extra={"event_store_id": str(event_store_id)},
+                )
+        return {
+            "selected": len(event_ids),
+            "dispatched": dispatched,
+            "skipped": skipped,
+            "failed": failed,
+        }
 
 
 @celery_app.task(name="app.tasks.events.retry_failed_events")

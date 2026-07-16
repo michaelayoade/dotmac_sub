@@ -17,6 +17,7 @@ from app.models.catalog import (
     AccessType,
     AddOnType,
     BillingCycle,
+    BillingMode,
     ContractTerm,
     DunningAction,
     NasVendor,
@@ -1459,6 +1460,66 @@ class TestSubscriptions:
         assert sub.id is not None
         assert sub.status == SubscriptionStatus.pending
 
+    def test_create_rejects_account_offer_billing_mode_drift(
+        self, db_session, subscriber
+    ):
+        subscriber.billing_mode = BillingMode.prepaid
+        offer = _make_offer(db_session, billing_mode=BillingMode.postpaid)
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            catalog_service.subscriptions.create(
+                db_session,
+                SubscriptionCreate(subscriber_id=subscriber.id, offer_id=offer.id),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "account_offer_billing_mode_mismatch" in exc_info.value.detail
+
+    def test_create_rejects_explicit_billing_mode_override(
+        self, db_session, subscriber, catalog_offer
+    ):
+        subscriber.billing_mode = BillingMode.prepaid
+        catalog_offer.billing_mode = BillingMode.prepaid
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            catalog_service.subscriptions.create(
+                db_session,
+                SubscriptionCreate(
+                    subscriber_id=subscriber.id,
+                    offer_id=catalog_offer.id,
+                    billing_mode=BillingMode.postpaid,
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "requested_billing_mode_mismatch" in exc_info.value.detail
+
+    def test_update_rejects_billing_mode_drift(
+        self, db_session, subscriber, catalog_offer
+    ):
+        subscriber.billing_mode = BillingMode.prepaid
+        catalog_offer.billing_mode = BillingMode.prepaid
+        db_session.commit()
+        subscription = catalog_service.subscriptions.create(
+            db_session,
+            SubscriptionCreate(
+                subscriber_id=subscriber.id,
+                offer_id=catalog_offer.id,
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            catalog_service.subscriptions.update(
+                db_session,
+                str(subscription.id),
+                SubscriptionUpdate(billing_mode=BillingMode.postpaid),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "requested_billing_mode_mismatch" in exc_info.value.detail
+
     def test_create_subscription_inherits_offer_radius_profile(
         self, db_session, subscriber
     ):
@@ -1622,9 +1683,9 @@ class TestSubscriptions:
         # Preserved (future), NOT recomputed to start_at + 12mo (~35 days ago).
         assert end_at > now
 
-    def test_offer_change_rederives_billing_mode(self, db_session, subscriber):
-        """Switching a non-active sub to a different-mode offer re-derives
-        billing_mode (only Subscription.billing_mode gates invoicing)."""
+    def test_offer_change_rejects_account_billing_mode_drift(
+        self, db_session, subscriber
+    ):
         from app.models.catalog import BillingMode
 
         prepaid_offer = _make_offer(
@@ -1644,14 +1705,18 @@ class TestSubscriptions:
         )
         assert sub.billing_mode == BillingMode.prepaid
 
-        updated = catalog_service.subscriptions.update(
-            db_session,
-            str(sub.id),
-            SubscriptionUpdate(offer_id=postpaid_offer.id),
-        )
+        with pytest.raises(HTTPException) as exc_info:
+            catalog_service.subscriptions.update(
+                db_session,
+                str(sub.id),
+                SubscriptionUpdate(offer_id=postpaid_offer.id),
+            )
 
-        assert updated.offer_id == postpaid_offer.id
-        assert updated.billing_mode == BillingMode.postpaid
+        assert exc_info.value.status_code == 409
+        assert "account_offer_billing_mode_mismatch" in exc_info.value.detail
+        db_session.refresh(sub)
+        assert sub.offer_id == prepaid_offer.id
+        assert sub.billing_mode == BillingMode.prepaid
 
     def test_proration_uses_effective_old_price_not_catalog(
         self, db_session, subscriber

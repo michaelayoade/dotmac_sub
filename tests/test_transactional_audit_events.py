@@ -183,7 +183,8 @@ def test_emit_event_is_deferred_until_commit(_mock_init_handlers, db_session):
         subscriber_id=subscriber.id,
     )
 
-    assert db_session.query(EventStore).count() == 0
+    staged = db_session.query(EventStore).one()
+    assert staged.status == EventStatus.pending
 
     db_session.commit()
 
@@ -211,6 +212,32 @@ def test_emit_event_is_discarded_on_rollback(_mock_init_handlers, db_session):
     db_session.rollback()
 
     assert db_session.query(EventStore).count() == 0
+
+
+@patch("app.services.events.dispatcher._dispatcher", None)
+@patch("app.services.events.dispatcher._initialize_handlers")
+def test_emit_event_remains_pending_when_after_commit_dispatch_fails(
+    _mock_init_handlers, db_session, monkeypatch
+):
+    from app.services.events.dispatcher import EventDispatcher
+
+    monkeypatch.setattr(
+        EventDispatcher,
+        "dispatch_pending_event",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("worker lost")),
+    )
+    event = emit_event(
+        db_session,
+        EventType.subscriber_created,
+        {"subscriber_id": "recoverable"},
+    )
+
+    db_session.commit()
+
+    row = (
+        db_session.query(EventStore).filter(EventStore.event_id == event.event_id).one()
+    )
+    assert row.status == EventStatus.pending
 
 
 def test_emit_event_sanitizes_sensitive_payload_values(db_session):
@@ -359,7 +386,8 @@ def test_emit_event_in_nested_transaction_waits_for_outer_commit(
     )
     savepoint.commit()
 
-    assert db_session.query(EventStore).count() == 0
+    staged = db_session.query(EventStore).one()
+    assert staged.status == EventStatus.pending
 
     db_session.commit()
 
