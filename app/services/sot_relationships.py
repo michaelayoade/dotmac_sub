@@ -2039,54 +2039,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="ui.notification_templates_list_projection",
+                name="ui.notification_list_projection",
                 module="app.services.web_notifications",
                 owns=(
                     "admin notification-template list searchable/filterable fields",
-                    "admin notification-template sort and default-order semantics",
-                    "admin notification-template list pagination normalization",
-                ),
-                depends_on=("ui.list_contracts", "communications.notification_service"),
-                notes=(
-                    "communications.notification_service owns the canonical "
-                    "filtered/sorted template query; templates_list_context declares "
-                    "the list capabilities (search, filter channel/status, sort name) "
-                    "and normalizes request state, then delegates the read and count. "
-                    "Gated by the granular notification:read (split off the coarse "
-                    "system:read in migration 320). Read-only: template mutations have "
-                    "their own routes; no bulk selection declared."
-                ),
-            ),
-            SOTService(
-                name="ui.notification_queue_list_projection",
-                module="app.services.web_notifications",
-                owns=(
                     "admin notification-queue list filterable fields",
-                    "admin notification-queue sort and default-order semantics",
-                    "admin notification-queue list pagination normalization",
-                ),
-                depends_on=("ui.list_contracts", "communications.notification_service"),
-                notes=(
-                    "queue_context declares the list capabilities (filter "
-                    "status/channel, default status=queued, sort created_at) and "
-                    "delegates the read/count to communications.notification_service. "
-                    "Gated by notification:read. Read-only list."
-                ),
-            ),
-            SOTService(
-                name="ui.notification_history_list_projection",
-                module="app.services.web_notifications",
-                owns=(
                     "admin notification-history list filterable fields",
-                    "admin notification-history sort and default-order semantics",
-                    "admin notification-history list pagination normalization",
+                    "admin notification list sort and default-order semantics",
+                    "admin notification list pagination normalization",
                 ),
                 depends_on=("ui.list_contracts", "communications.notification_service"),
                 notes=(
-                    "history_context declares the list capabilities (filter status, "
-                    "sort occurred_at) and delegates the delivery read/count to "
-                    "communications.notification_service. Gated by notification:read. "
-                    "Read-only: delivery history is an immutable observation log."
+                    "One projection owner for the three admin notification lists "
+                    "(templates, queue, delivery history). "
+                    "NOTIFICATION_{TEMPLATES,QUEUE,HISTORY}_LIST_DEFINITION declare "
+                    "the per-list capabilities (search + filter channel/status, sort "
+                    "name; filter status/channel, sort created_at; filter status, "
+                    "sort occurred_at); templates_list_context / queue_context / "
+                    "history_context normalize request state and delegate the read + "
+                    "count to communications.notification_service. Gated by the "
+                    "granular notification:read/notification:write (split off the "
+                    "coarse system:read/write in migration 320). Read-only lists: "
+                    "mutations have their own routes; no bulk selection declared."
                 ),
             ),
             SOTService(
