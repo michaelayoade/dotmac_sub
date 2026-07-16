@@ -2015,6 +2015,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "its own. Gated by the existing granular project:read."
                 ),
             ),
+            SOTService(
+                name="ui.audit_events_list_projection",
+                module="app.services.web_system_audit",
+                owns=(
+                    "admin audit-log filterable fields",
+                    "admin audit-log sort and default-order semantics",
+                    "admin audit-log list pagination normalization",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "audit_service.audit_events.list (observability.audit_log) owns "
+                    "the canonical filtered/sorted audit query; this projection "
+                    "declares the list capabilities (filter by actor/action/entity, "
+                    "sort on occurred_at) and normalizes request state, then "
+                    "delegates the read and count. It issues no query of its own. "
+                    "Read-only: audit events are immutable observations with no admin "
+                    "bulk command, so no selection or bulk is declared. Gated by the "
+                    "existing granular audit:read."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.tables",

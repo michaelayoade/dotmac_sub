@@ -19,21 +19,74 @@ from app.services.audit_helpers import (
     load_audit_actor_subscribers,
     resolve_actor_name,
 )
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+)
 
 logger = logging.getLogger(__name__)
 
+# UI page contract for the admin audit-log list. This is the projection-boundary
+# owner: it declares which columns are filterable and sortable, the default
+# ordering, and the allowed page sizes. The route renders and submits through
+# this contract; it does not decide relevance or ordering. Only occurred_at is
+# sortable because the audit read owner (audit_events.list) orders on it.
+AUDIT_EVENTS_LIST_DEFINITION = ListDefinition(
+    key="audit_events",
+    fields=(
+        ListFieldDefinition("actor_id", "Actor", filterable=True),
+        ListFieldDefinition("action", "Action", filterable=True),
+        ListFieldDefinition("entity_type", "Entity type", filterable=True),
+        ListFieldDefinition("occurred_at", "Occurred", sortable=True),
+    ),
+    default_sort="occurred_at",
+    default_sort_dir="desc",
+    default_per_page=50,
+)
 
-def get_audit_page_data(
-    db: Session,
+
+def build_audit_list_query(
     *,
-    actor_id: str | None,
-    action: str | None,
-    entity_type: str | None,
-    page: int,
-    per_page: int,
-) -> dict[str, object]:
-    """Return audit events view rows and pagination totals."""
-    offset = (page - 1) * per_page
+    actor_id: str | None = None,
+    action: str | None = None,
+    entity_type: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> ListQuery:
+    """Normalise loose audit-log request params through the page contract.
+
+    Rejects unsupported sort fields / page sizes and drops blank filters, so
+    the read owner receives an already-validated query.
+    """
+    return AUDIT_EVENTS_LIST_DEFINITION.build_query(
+        search=None,
+        filters={
+            "actor_id": actor_id,
+            "action": action,
+            "entity_type": entity_type,
+        },
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def get_audit_page_data(db: Session, query: ListQuery) -> dict[str, object]:
+    """Return audit events view rows and pagination totals for one page.
+
+    Reads filters, ordering and pagination from the validated ``ListQuery``
+    (built via :func:`build_audit_list_query`); the caller is a thin adapter.
+    """
+    actor_id = query.filter_value("actor_id")
+    action = query.filter_value("action")
+    entity_type = query.filter_value("entity_type")
+    page = query.page
+    per_page = query.per_page
+    offset = query.offset
     normalized_actor_id = _normalize_actor_id(actor_id)
 
     events = audit_service.audit_events.list(
@@ -47,8 +100,8 @@ def get_audit_page_data(
         is_success=None,
         status_code=None,
         is_active=None,
-        order_by="occurred_at",
-        order_dir="desc",
+        order_by=query.sort_by,
+        order_dir=query.sort_dir,
         limit=per_page,
         offset=offset,
     )
