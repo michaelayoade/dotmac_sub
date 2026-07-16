@@ -179,16 +179,11 @@ app.services.quotes_mirror
 app.services.radio_registration
 app.services.radius
 app.services.redis_client
-app.services.referrals
-app.services.referrals_mirror
 app.services.reseller_portal
 app.services.reseller_portal_billing
 app.services.reseller_service_requests
 app.services.router_management.config
 app.services.router_management.inventory
-app.services.sales.selfserve
-app.services.sales.service
-app.services.sales_orders
 app.services.service_entitlements
 app.services.service_extensions
 app.services.sla_assignment

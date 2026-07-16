@@ -23,6 +23,7 @@ from app.models.catalog import (
     AddOn,
     AddOnPrice,
     AddOnType,
+    BillingCycle,
     BillingMode,
     ContractTerm,
     NasDevice,
@@ -33,6 +34,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionAddOn,
     SubscriptionStatus,
+    billing_cycle_suffix,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
@@ -92,11 +94,13 @@ POOL_IPV4_SELECTOR_PREFIX = "pool:"
 UNSPECIFIED_IPV4 = ipaddress.IPv4Address(0)
 
 
-def _format_offer_price_summary(amount: object | None) -> str:
+def _format_offer_price_summary(
+    amount: object | None, cycle: BillingCycle | None = None
+) -> str:
     value = _coerce_setting_decimal(amount)
     if value is None:
         return ""
-    return f"₦{value:,.0f}/mo"
+    return f"₦{value:,.0f}{billing_cycle_suffix(cycle)}"
 
 
 def _offer_option(offer: object) -> dict[str, str]:
@@ -104,7 +108,8 @@ def _offer_option(offer: object) -> dict[str, str]:
     name = str(getattr(offer, "name", "") or "")
     prices = getattr(offer, "prices", None) or []
     amount = getattr(prices[0], "amount", None) if prices else None
-    price_summary = _format_offer_price_summary(amount)
+    cycle = getattr(prices[0], "billing_cycle", None) if prices else None
+    price_summary = _format_offer_price_summary(amount, cycle)
     label = name
     if price_summary:
         label = f"{name} - {price_summary}"
@@ -122,25 +127,24 @@ def _offer_options(
     offer_ids = [
         getattr(offer, "id", None) for offer in offers if getattr(offer, "id", None)
     ]
-    first_amount_by_offer_id: dict[str, object] = {}
+    first_price_by_offer_id: dict[str, tuple[object, BillingCycle | None]] = {}
     if include_prices and offer_ids:
         price_rows = (
-            db.query(OfferPrice.offer_id, OfferPrice.amount)
+            db.query(OfferPrice.offer_id, OfferPrice.amount, OfferPrice.billing_cycle)
             .filter(OfferPrice.offer_id.in_(offer_ids))
             .filter(OfferPrice.is_active.is_(True))
             .order_by(OfferPrice.created_at.asc())
             .all()
         )
-        for offer_id, amount in price_rows:
-            first_amount_by_offer_id.setdefault(str(offer_id), amount)
+        for offer_id, amount, cycle in price_rows:
+            first_price_by_offer_id.setdefault(str(offer_id), (amount, cycle))
 
     options: list[dict[str, str]] = []
     for offer in offers:
         offer_id = str(getattr(offer, "id", "") or "")
         name = str(getattr(offer, "name", "") or "")
-        price_summary = _format_offer_price_summary(
-            first_amount_by_offer_id.get(offer_id)
-        )
+        amount, cycle = first_price_by_offer_id.get(offer_id, (None, None))
+        price_summary = _format_offer_price_summary(amount, cycle)
         label = f"{name} - {price_summary}" if price_summary else name
         options.append(
             {

@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import (
@@ -49,6 +50,8 @@ from app.models.service_extension import (
 )
 from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Subscriber
+from app.schemas.billing import CreditNoteIssuePreviewRequest
+from app.services.billing.credit_notes import CreditNotes
 from app.services.customer_financial_ledger import (
     LEGACY_LEDGER_CUTOVER,
     PAYMENT_ACTIVITY_AT,
@@ -57,10 +60,12 @@ from app.services.customer_financial_ledger import (
 )
 from scripts.one_off.billing_alignment_audit import (
     _batch_customer_positions,
+    _batch_ledger_credit,
     _batch_reconstructed_positions,
     _configure_read_only_session,
     d1_double_swings,
     d2_unbacked_deactivated_credits,
+    d8_unapplied_credit_notes,
     d12_enforcement_mismatch,
 )
 from scripts.one_off.export_prepaid_funding_snapshot import (
@@ -149,6 +154,61 @@ def test_batch_position_matches_canonical_native_balance(db_session, subscriber)
 
     assert expected == Decimal("65.00")
     assert actual[(str(subscriber.id), "NGN")] == expected
+
+
+def test_batch_position_excludes_credit_note_operational_evidence(
+    db_session, subscriber
+):
+    result = CreditNotes.issue_system(
+        db_session,
+        CreditNoteIssuePreviewRequest(
+            account_id=subscriber.id,
+            currency="NGN",
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+        ),
+        idempotency_key=uuid4().hex,
+        commit=True,
+    )
+
+    expected = calculate_customer_balance(db_session, str(subscriber.id))
+    actual = _batch_customer_positions(db_session, [subscriber.id], currency="NGN")
+    operational = _batch_ledger_credit(db_session, [subscriber.id], currency="NGN")
+
+    assert result.credit_note.funding_ledger_entry_id == result.funding_ledger_entry.id
+    assert expected == Decimal("50.00")
+    assert actual[(str(subscriber.id), "NGN")] == expected
+    assert operational[str(subscriber.id)] == Decimal("50.00")
+
+
+def test_d8_reports_only_unfunded_credit_note_remainders(db_session, subscriber):
+    CreditNotes.issue_system(
+        db_session,
+        CreditNoteIssuePreviewRequest(
+            account_id=subscriber.id,
+            currency="NGN",
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+        ),
+        idempotency_key=uuid4().hex,
+        commit=True,
+    )
+    historical = CreditNote(
+        account_id=subscriber.id,
+        credit_number="ALIGN-UNFUNDED-HISTORICAL",
+        status=CreditNoteStatus.issued,
+        subtotal=Decimal("30.00"),
+        total=Decimal("30.00"),
+        currency="NGN",
+    )
+    db_session.add(historical)
+    db_session.commit()
+
+    finding = d8_unapplied_credit_notes(db_session)
+
+    assert finding.count == 1
+    assert finding.amount == Decimal("30.00")
+    assert finding.rows[0]["credit_note_id"] == str(historical.id)
 
 
 def test_batch_position_uses_constant_query_count(db_session, subscriber):

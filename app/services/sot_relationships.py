@@ -1611,6 +1611,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("service_intent.catalog_policy",),
             ),
             SOTService(
+                name="service_intent.subscription_billing_cadence",
+                module="app.services.catalog.subscriptions",
+                owns=(
+                    "subscription billing cadence",
+                    "subscription cadence resolution "
+                    "(subscription -> offer price -> monthly)",
+                    "next-billing anchor computation",
+                ),
+                depends_on=("service_intent.catalog_policy",),
+                notes=(
+                    "The subscription is the source of truth for a customer's "
+                    "contracted billing cadence, captured from the sales-order "
+                    "line and read by billing_automation. The offer/version "
+                    "price cadence is fallback-only when the subscription's is "
+                    "unset. Catalog offer-cadence immutability stays with "
+                    "service_intent.catalog_billing_governance."
+                ),
+            ),
+            SOTService(
                 name="service_intent.subscription_lifecycle",
                 module="app.services.subscription_lifecycle",
                 owns=(
@@ -2162,6 +2181,55 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "resolve through these owners. API, web, and task callers request a "
             "geocode or a sync outcome; they do not embed their own geocode "
             "lookups or spatial write logic."
+        ),
+    ),
+    DomainSOT(
+        domain="sales_referrals",
+        services=(
+            SOTService(
+                name="sales.orders",
+                module="app.services.sales_orders",
+                owns=("sales order lifecycle",),
+            ),
+            SOTService(
+                name="sales.selfserve",
+                module="app.services.sales.selfserve",
+                owns=("self-serve quote and signup flow",),
+            ),
+            SOTService(
+                name="sales.service",
+                module="app.services.sales.service",
+                owns=("sales service operations",),
+            ),
+            SOTService(
+                name="referrals.data",
+                module="app.services.referrals_mirror",
+                owns=(
+                    "referral DB and CRM data access",
+                    "Refer & Earn data mirror",
+                ),
+            ),
+            SOTService(
+                name="referrals.program",
+                module="app.services.referrals",
+                owns=("Refer & Earn referral program logic",),
+                depends_on=("referrals.data",),
+            ),
+        ),
+        entrypoints=(
+            "app.api.me",
+            "app.api.crm_webhooks",
+            "app.web.customer.referrals",
+            "app.tasks.referrals",
+            "app.services.web_sales",
+            "app.services.web_referrals",
+        ),
+        rule=(
+            "Sales order, self-serve quote/signup, sales service, and Refer & "
+            "Earn referral logic resolve through these owners. web_sales/"
+            "web_referrals adapters and API/task callers request an outcome; the "
+            "referral mirror is the sole DB and CRM data-access path for Refer & "
+            "Earn, treated as a cache of CRM data, never a parallel authority."
         ),
     ),
 )

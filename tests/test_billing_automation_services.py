@@ -193,6 +193,9 @@ class TestResolvePrice:
             is_active=True,
         )
         db_session.add(offer_price)
+        # Clear the subscription's snapshotted cadence to exercise the
+        # price-fallback branch (SOT: subscription cadence otherwise wins).
+        subscription.billing_cycle = None
         db_session.commit()
 
         amount, currency, cycle = billing_automation._resolve_price(
@@ -2690,6 +2693,9 @@ class TestCancellationCreditCycle:
         now = datetime.now(UTC)
         subscription.status = SubscriptionStatus.active
         subscriber_account.status = AccountStatus.active
+        # Clear the snapshotted cadence so the weekly price drives the window
+        # via the fallback (SOT: an owned subscription cadence otherwise wins).
+        subscription.billing_cycle = None
         # 3 days left; the active price bills WEEKLY.
         subscription.next_billing_at = now + timedelta(days=3)
         db_session.add(

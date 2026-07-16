@@ -50,6 +50,7 @@ but equivalent state and actions resolve through the same backend owners.
 21. `ui_semantic_presentation`
 22. `vpn_remote_access`
 23. `geospatial`
+24. `sales_referrals`
 
 Rule: each PR should finish one domain slice: define the owner service, migrate
 the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
@@ -1160,7 +1161,9 @@ Dependency order:
    adapters, readback verification, and web workflows consume these projections
    and do not maintain firmware response string tables. A response classified
    as accepted is transport evidence, not proof of convergence; write workflows
-   still require the control-plane intent readback contract.
+   still require the control-plane intent readback contract. Protocol adapter,
+   authorization, provisioning, and reconcile history persist the sanitized
+   classifier projection as operation evidence; raw CLI output is not retained.
 12. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
@@ -1387,7 +1390,13 @@ Service intent:
    they do not update subscription status or offers directly.
 6. `service_intent.subscription_nas_assignment`: owns commercial-service NAS
    assignment.
-7. `service_intent.ont`: projects provisioning intent to ONT operations.
+7. `service_intent.subscription_billing_cadence`: owns the subscription's
+   contracted billing cadence. Cadence is captured on the sales-order line,
+   materialized on the subscription at creation, and read by the recurring
+   biller (`subscription.billing_cycle` -> offer/version price -> monthly). The
+   offer price cadence is fallback-only; catalog offer-cadence immutability
+   stays with `service_intent.catalog_billing_governance`.
+8. `service_intent.ont`: projects provisioning intent to ONT operations.
 
 Rule: catalog policy and subscription owners define commercial intent. Every
 lifecycle execution carries a reviewed head and idempotency key. Network owners
@@ -1436,3 +1445,18 @@ source of truth.
 Rule: address/coordinate resolution and spatial data synchronization resolve
 through these owners. API, web, and task callers request a geocode or a sync
 outcome; they do not embed their own geocode lookups or spatial write logic.
+
+## Sales and Referrals
+
+1. `sales.orders`: owns sales order lifecycle.
+2. `sales.selfserve`: owns the self-serve quote and signup flow.
+3. `sales.service`: owns sales service operations.
+4. `referrals.data`: owns referral DB and CRM data access — the Refer & Earn
+   data mirror.
+5. `referrals.program`: owns Refer & Earn referral program logic.
+
+Rule: sales order, self-serve quote/signup, sales service, and Refer & Earn
+referral logic resolve through these owners. `web_sales`/`web_referrals` adapters
+and API/task callers request an outcome; the referral mirror is the sole DB and
+CRM data-access path for Refer & Earn, treated as a cache of CRM data, never a
+parallel authority.

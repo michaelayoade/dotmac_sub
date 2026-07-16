@@ -92,7 +92,7 @@ environment that has the mirror before it drives a repair.
 | D4 native orphan payment | F19 | **1** | 18,812.50 | Real, single instance |
 | D5 misallocated payment | F3 | **2** | 60,000.00 | **Real — F3 fired in production, twice** |
 | D6 succeeded, no `paid_at` | F15 | 1 | 17,500.00 | Real; the `paid_at` fix largely held |
-| D8 unapplied credit note | F4 | 339 | 2,290,830.01 | Real; the F4 drift mechanism is populated |
+| D8 issued credit remainder without funding evidence | F4 | 339 | 2,290,830.01 | Real historical cohort; forward authority merged in `8b08acf2`, but repair remains reviewed and dry-run-first |
 | D9 pending money | F18 | 0 | 0.00 | **Zero** |
 | D10 void with live debits | F6 | 0 | 0.00 | **Zero** |
 | D11 opening debits | — | 0 | 0.00 | **Zero — cohort already remediated** |
