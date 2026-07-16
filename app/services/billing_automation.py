@@ -224,7 +224,8 @@ def _resolve_price(db: Session, subscription: Subscription):
             return (
                 version_price.amount,
                 version_price.currency,
-                version_price.billing_cycle,
+                # SOT: subscription-owned cadence wins; price cadence is fallback.
+                subscription.billing_cycle or version_price.billing_cycle,
             )
     offer_prices = (
         db.query(OfferPrice)
@@ -244,7 +245,13 @@ def _resolve_price(db: Session, subscription: Subscription):
         )
     if offer_prices:
         offer_price = offer_prices[0]
-        return offer_price.amount, offer_price.currency, offer_price.billing_cycle
+        return (
+            offer_price.amount,
+            offer_price.currency,
+            # SOT: subscription-owned cadence wins; price cadence is fallback.
+            subscription.billing_cycle or offer_price.billing_cycle,
+        )
+    # No price => no charge; cadence is irrelevant with nothing to bill.
     return None, None, None
 
 

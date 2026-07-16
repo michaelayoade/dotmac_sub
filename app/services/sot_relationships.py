@@ -1611,6 +1611,25 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("service_intent.catalog_policy",),
             ),
             SOTService(
+                name="service_intent.subscription_billing_cadence",
+                module="app.services.catalog.subscriptions",
+                owns=(
+                    "subscription billing cadence",
+                    "subscription cadence resolution "
+                    "(subscription -> offer price -> monthly)",
+                    "next-billing anchor computation",
+                ),
+                depends_on=("service_intent.catalog_policy",),
+                notes=(
+                    "The subscription is the source of truth for a customer's "
+                    "contracted billing cadence, captured from the sales-order "
+                    "line and read by billing_automation. The offer/version "
+                    "price cadence is fallback-only when the subscription's is "
+                    "unset. Catalog offer-cadence immutability stays with "
+                    "service_intent.catalog_billing_governance."
+                ),
+            ),
+            SOTService(
                 name="service_intent.subscription_lifecycle",
                 module="app.services.subscription_lifecycle",
                 owns=(

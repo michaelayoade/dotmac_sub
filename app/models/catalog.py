@@ -48,6 +48,28 @@ class BillingCycle(enum.Enum):
     annual = "annual"
 
 
+def billing_cycle_noun(cycle: "BillingCycle | None") -> str:
+    """Human cadence noun for invoice line descriptions (e.g. 'quarterly')."""
+    return {
+        BillingCycle.daily: "daily",
+        BillingCycle.weekly: "weekly",
+        BillingCycle.monthly: "monthly",
+        BillingCycle.quarterly: "quarterly",
+        BillingCycle.annual: "annual",
+    }.get(cycle or BillingCycle.monthly, "monthly")
+
+
+def billing_cycle_suffix(cycle: "BillingCycle | None") -> str:
+    """Price-summary suffix for a cadence (e.g. '/qtr', '/yr')."""
+    return {
+        BillingCycle.daily: "/day",
+        BillingCycle.weekly: "/wk",
+        BillingCycle.monthly: "/mo",
+        BillingCycle.quarterly: "/qtr",
+        BillingCycle.annual: "/yr",
+    }.get(cycle or BillingCycle.monthly, "/mo")
+
+
 class ContractTerm(enum.Enum):
     month_to_month = "month_to_month"
     twelve_month = "twelve_month"
@@ -786,6 +808,11 @@ class Subscription(Base):
     contract_term: Mapped[ContractTerm] = mapped_column(
         Enum(ContractTerm), default=ContractTerm.month_to_month
     )
+    # Contracted billing cadence owned by this subscription (SOT). Nullable:
+    # NULL => inherit the offer/version price cadence (fallback). New contracts
+    # captured from the sales order set this explicitly; existing rows are
+    # backfilled to their currently-resolved cadence by migration 310.
+    billing_cycle: Mapped[BillingCycle | None] = mapped_column(Enum(BillingCycle))
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_billing_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
