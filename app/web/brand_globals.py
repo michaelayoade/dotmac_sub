@@ -62,13 +62,16 @@ def _attach_globals(templates: Jinja2Templates) -> None:
     from app.services.status_presentation import (
         account_status_presentation,
         appointment_status_presentation,
+        device_operational_status_presentation,
         infrastructure_service_status_presentation,
         invoice_status_presentation,
         payment_status_presentation,
         provisioning_task_status_presentation,
         service_order_status_presentation,
         subscription_status_presentation,
+        system_job_status_presentation,
         ticket_status_presentation,
+        work_order_status_presentation,
     )
 
     templates.env.globals.setdefault(
@@ -80,6 +83,16 @@ def _attach_globals(templates: Jinja2Templates) -> None:
     )
     templates.env.globals.setdefault(
         "appointment_status_presentation", appointment_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "work_order_status_presentation", work_order_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "system_job_status_presentation", system_job_status_presentation
+    )
+    templates.env.globals.setdefault(
+        "device_operational_status_presentation",
+        device_operational_status_presentation,
     )
     templates.env.globals.setdefault(
         "subscription_status_presentation", subscription_status_presentation
