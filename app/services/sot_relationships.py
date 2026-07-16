@@ -657,6 +657,22 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
+                name="network.ont_runtime_status",
+                module="app.services.network.ont_runtime_status",
+                owns=(
+                    "Huawei ONT runtime-status poll observations",
+                    "Huawei OLT bulk-status pollability predicate",
+                    "Huawei OLT bulk-status poll task admission",
+                ),
+                depends_on=("runtime.infrastructure_polling",),
+                notes=(
+                    "Owns recurring and stale-read-triggered Huawei bulk status "
+                    "polls as retry-safe infrastructure observations. These polls "
+                    "do not create tracked device operations; operator-requested "
+                    "single-ONT commands remain owned by operation dispatch."
+                ),
+            ),
+            SOTService(
                 name="network.device_state",
                 module="app.services.device_operational_status",
                 owns=(
@@ -664,7 +680,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "device operational status vocabulary",
                     "device retry-pending and alarm classification",
                 ),
-                depends_on=("runtime.infrastructure_polling",),
+                depends_on=(
+                    "runtime.infrastructure_polling",
+                    "network.ont_runtime_status",
+                ),
             ),
             SOTService(
                 name="network.ont_status_refresh",
@@ -676,13 +695,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=(
                     "network.device_state",
-                    "network.operation_dispatch",
+                    "network.ont_runtime_status",
                 ),
                 notes=(
                     "Read surfaces may request refresh through this owner, but "
                     "must not poll OLTs directly. Huawei refreshes are admitted "
-                    "as bounded OLT-level background jobs; UISP-managed ONTs "
-                    "remain owned by the UISP topology sync source."
+                    "through the infrastructure observation polling owner as "
+                    "bounded OLT-level jobs; UISP-managed ONTs remain owned by "
+                    "the UISP topology sync source."
                 ),
             ),
             SOTService(
@@ -1313,8 +1333,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="runtime.infrastructure_polling",
                 module="app.services.infrastructure_polling",
                 owns=(
-                    "native infrastructure poll observations",
-                    "pollable device predicate",
+                    "shared native reachability poll observations",
+                    "generic network-device pollable predicate",
                     "poll heartbeat result counters",
                 ),
                 depends_on=("runtime.db_sessions",),

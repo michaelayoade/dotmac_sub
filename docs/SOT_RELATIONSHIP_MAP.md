@@ -1370,33 +1370,38 @@ Dependency order:
    alert rules, and alert state mutations.
 3. `network.access_path`: resolves `subscriber/subscription -> access path`.
 4. `network.radius_sessions`: resolves online-now state from active sessions.
-5. `network.device_state`: derives NOC operational state, retry state, and alarm
+5. `network.ont_runtime_status`: owns Huawei bulk ONT status observations, the
+   Huawei OLT pollability predicate, and admission of those poll tasks. Scheduled
+   sweeps and stale inventory reads request the same retry-safe infrastructure
+   observation poll through this owner. These bulk reads are not tracked device
+   commands; operator-requested single-ONT refresh remains operation-backed.
+6. `network.device_state`: derives NOC operational state, retry state, and alarm
    classification from administrative intent and monitoring observations, and
    owns the `up/degraded/down/maintenance` vocabulary. Retry-pending gaps stay
    binary but are non-alarming; presentation renders retry-pending `down` as
    warning/clock rather than a confirmed negative failure.
-6. `network.ont_status_refresh`: owns admission of stale ONT runtime-status
+7. `network.ont_status_refresh`: owns admission of stale ONT runtime-status
    refresh requests from read surfaces. ONT inventory may request a refresh when
    displayed evidence is stale, but it must not poll OLTs directly. Huawei ONTs
-   are refreshed through bounded OLT-level background jobs with per-OLT
-   cooldown/admission; UISP-managed ONTs remain refreshed by the UISP topology
-   sync source. `Status refresh pending` means the displayed value is retained
-   or derived and needs asynchronous confirmation, not that the page performed a
-   live check.
-7. `network.outage_impact`: resolves affected customers from topology.
-8. `network.device_groups`: owns device-group mutations, membership, and bulk
+   request the `network.ont_runtime_status` infrastructure observation poll with
+   per-OLT cooldown/admission; UISP-managed ONTs remain refreshed by the UISP
+   topology sync source. `Status refresh pending` means the displayed value is
+   retained or derived and needs asynchronous confirmation, not that the page
+   performed a live check.
+8. `network.outage_impact`: resolves affected customers from topology.
+9. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
-9. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
+10. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
    incident transitions, escalation planning, and outage event emission.
-10. `network.connection_health`: combines authoritative path, live-session,
+11. `network.connection_health`: combines authoritative path, live-session,
    last-mile, impact, and active-incident inputs into the customer-safe
    `connected/trouble/outage` verdict plus headline/message/advice. It does not
    own device operational state or raw online-session observations.
-11. `network.control_plane_intent`: owns the shared desired-state delivery
+12. `network.control_plane_intent`: owns the shared desired-state delivery
    lifecycle, control-plane target/revision identity, and vendor status
    projections. Vendor adapters project through this one
    desired-to-readback lifecycle.
-12. `network.huawei_cli_response`: owns Huawei CLI response classification,
+13. `network.huawei_cli_response`: owns Huawei CLI response classification,
    stable error codes, expected-absence predicates, unsupported-command
    detection, and idempotent response semantics. Huawei SSH sessions, protocol
    adapters, readback verification, and web workflows consume these projections
@@ -1405,11 +1410,11 @@ Dependency order:
    still require the control-plane intent readback contract. Protocol adapter,
    authorization, provisioning, and reconcile history persist the sanitized
    classifier projection as operation evidence; raw CLI output is not retained.
-13. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+14. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
    and it projects through `network.control_plane_intent`.
-14. `network.operation_ledger`: owns the tracked device operation lifecycle and
+15. `network.operation_ledger`: owns the tracked device operation lifecycle and
    status vocabulary, the terminal-transition guard, correlation-key duplicate
    suppression, stale-active reclamation, parent/child rollup, and whether an
    operation may run, resume, or be re-executed. Celery is transport: tasks
@@ -1424,10 +1429,11 @@ Dependency order:
    immutable; each approved attempt is a separate `redrive_of` operation.
    `app.services.network_operation_recovery` is the ledger's typed recovery
    boundary. It cannot dispatch task names or payloads supplied by a route.
-   The initial handler covers observation-only ONT status refresh. Firmware,
-   configuration, lifecycle, and other device writes remain ineligible until
-   their owning service provides current-state validation and replay safety.
-15. `network.operation_dispatch`: owns transactional staging and transport for
+   The initial recovery handler covers operator-requested, observation-only
+   single-ONT status refresh. Firmware, configuration, lifecycle, and other
+   device writes remain ineligible until their owning service provides
+   current-state validation and replay safety.
+16. `network.operation_dispatch`: owns transactional staging and transport for
    operation-backed network commands. The operation and its exact versioned
    command are committed together in `network_operation_dispatches`; request
    handlers never commit an operation and then publish its device task. The
@@ -1438,17 +1444,19 @@ Dependency order:
    delivery, exhausted publication, and reconciliation-needed execution are
    transport evidence, not substitutes for operation/device outcome. Unknown
    execution fails closed and requires current-state review before redrive.
-   The cutover covers ONT status refresh, ONT authorization and baseline repair,
-   TR-069 bootstrap verification attempts, ONT and OLT firmware entry commands,
-   and OLT-triggered ONT desired-state reconciliation. Firmware verification/
-   readback continuations retain their own state machines and are not parallel
-   command-origination paths.
-16. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
+   The cutover covers operator-requested single-ONT status refresh, ONT
+   authorization and baseline repair, TR-069 bootstrap verification attempts,
+   ONT and OLT firmware entry commands, and OLT-triggered ONT desired-state
+   reconciliation. Recurring or stale-read-triggered bulk OLT status collection
+   is observation polling owned by `network.ont_runtime_status`, not an
+   operation-backed command. Firmware verification/readback continuations retain
+   their own state machines and are not parallel command-origination paths.
+17. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
    for ONT authorization, baseline repair, and bootstrap verification commands.
    It commits each operation and typed dispatch atomically. Admin, API, and bulk
    callers receive operation/dispatch identifiers and never publish the device
    task themselves.
-17. `network.ont_provisioning_execution`: owns the tracked authorization,
+18. `network.ont_provisioning_execution`: owns the tracked authorization,
    baseline-repair, DB-only baseline preview, bootstrap retry, parent rollup,
    and bulk-item transitions.
    Celery workers claim an existing dispatch and delegate execution here; they
@@ -1523,8 +1531,10 @@ Dependency order:
 2. `runtime.task_idempotency`: owns duplicate suppression and stale task
    execution rows.
 3. `runtime.task_heartbeat`: owns task success/skip heartbeat signals.
-4. `runtime.infrastructure_polling`: owns native poll observations and the
-   pollable-device predicate.
+4. `runtime.infrastructure_polling`: owns shared native reachability observations
+   and the generic network-device pollability predicate. Domain-specific
+   collectors such as Huawei ONT runtime status depend on these polling
+   mechanics while owning their own observation and eligibility contracts.
 5. `runtime.infrastructure_health`: owns dependency health checks for
    Postgres, Redis, VictoriaMetrics, Celery, and related infrastructure.
 

@@ -12,16 +12,18 @@ from typing import Any
 from redis.exceptions import RedisError
 from sqlalchemy.orm import Session
 
-from app.models.network import DeviceStatus, OLTDevice
+from app.models.network import OLTDevice
 from app.services import app_cache
-from app.services.network.ont_status import resolve_effective_ont_status
-from app.services.queue_adapter import QueueDispatchResult, enqueue_task
+from app.services.device_operational_status import derive_ont_operational_status
+from app.services.network.ont_runtime_status import (
+    huawei_olt_status_pollable,
+    queue_huawei_olt_status_poll,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_REFRESH_COOLDOWN_SECONDS = 120
 DEFAULT_MAX_OLTS_PER_REQUEST = 4
-_HUAWEI_STATUS_TASK = "app.tasks.ont_runtime_status.refresh_huawei_olt_status"
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class OntStatusRefreshAdmission:
     suppressed_recent_request: int = 0
     skipped_non_huawei: int = 0
     skipped_missing_olt: int = 0
+    skipped_inactive_ont: int = 0
     queue_errors: int = 0
 
 
@@ -43,16 +46,6 @@ def _as_aware_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
-
-
-def _is_huawei_bulk_pollable(olt: OLTDevice) -> bool:
-    vendor = str(getattr(olt, "vendor", "") or "").strip().lower()
-    return (
-        bool(getattr(olt, "is_active", False))
-        and getattr(olt, "status", DeviceStatus.active) == DeviceStatus.active
-        and getattr(olt, "uisp_device_id", None) is None
-        and vendor == "huawei"
-    )
 
 
 def _recently_polled(olt: OLTDevice, *, now: datetime, cooldown_seconds: int) -> bool:
@@ -82,16 +75,6 @@ def _claim_refresh_window(olt_id: str, *, cooldown_seconds: int, now: datetime) 
     return bool(claimed)
 
 
-def _queue_huawei_olt_refresh(olt_id: str) -> QueueDispatchResult:
-    return enqueue_task(
-        _HUAWEI_STATUS_TASK,
-        args=[olt_id],
-        queue="ingestion",
-        correlation_id=f"ont-status-refresh:{olt_id}",
-        source="network.ont_status_refresh",
-    )
-
-
 def request_stale_ont_status_refreshes(
     db: Session,
     onts: Iterable[Any],
@@ -111,12 +94,16 @@ def request_stale_ont_status_refreshes(
     stale_onts = 0
     skipped_missing_olt = 0
     skipped_non_huawei = 0
+    skipped_inactive_ont = 0
     suppressed_recent_poll = 0
     candidate_olts: dict[str, OLTDevice] = {}
 
     for ont in onts:
-        effective = resolve_effective_ont_status(ont, now=current)
-        if not effective.retry_pending:
+        if not bool(getattr(ont, "is_active", False)):
+            skipped_inactive_ont += 1
+            continue
+        operational = derive_ont_operational_status(ont, now=current)
+        if not operational.retry_pending:
             continue
         stale_onts += 1
 
@@ -128,7 +115,7 @@ def request_stale_ont_status_refreshes(
             skipped_missing_olt += 1
             continue
 
-        if not _is_huawei_bulk_pollable(olt):
+        if not huawei_olt_status_pollable(olt):
             skipped_non_huawei += 1
             continue
 
@@ -141,13 +128,18 @@ def request_stale_ont_status_refreshes(
     queued_olts = 0
     suppressed_recent_request = 0
     queue_errors = 0
-    for olt_id in list(candidate_olts)[: max(0, int(max_olts))]:
+    admission_limit = max(0, int(max_olts))
+    for olt_id in candidate_olts:
+        if queued_olts >= admission_limit:
+            break
         if not _claim_refresh_window(
             olt_id, cooldown_seconds=cooldown_seconds, now=current
         ):
             suppressed_recent_request += 1
             continue
-        result = _queue_huawei_olt_refresh(olt_id)
+        result = queue_huawei_olt_status_poll(
+            olt_id, source="network.ont_status_refresh"
+        )
         if result.queued:
             queued_olts += 1
         else:
@@ -165,5 +157,6 @@ def request_stale_ont_status_refreshes(
         suppressed_recent_request=suppressed_recent_request,
         skipped_non_huawei=skipped_non_huawei,
         skipped_missing_olt=skipped_missing_olt,
+        skipped_inactive_ont=skipped_inactive_ont,
         queue_errors=queue_errors,
     )

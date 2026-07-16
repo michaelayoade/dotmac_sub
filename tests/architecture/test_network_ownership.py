@@ -53,6 +53,11 @@ APPROVED_PROVISION_WITH_RECONCILIATION_CALLERS = {
     Path("app/services/network/ont_provisioning/orchestrator.py"),
 }
 
+BULK_STATUS_POLL_ORIGINATORS = {
+    Path("app/services/network/ont_status_refresh.py"),
+    Path("app/tasks/ont_runtime_status.py"),
+}
+
 
 def _iter_app_python_files() -> list[Path]:
     return sorted(path for path in APP_DIR.rglob("*.py") if path.is_file())
@@ -138,3 +143,28 @@ def test_full_ont_provisioning_uses_orchestrator_entrypoint() -> None:
     )
 
     assert not violations, "\n".join(violations)
+
+
+def test_bulk_ont_status_poll_originators_use_runtime_status_owner() -> None:
+    forbidden = {"enqueue_task", "delay", "apply_async", "send_task"}
+    violations: list[str] = []
+    for relative in BULK_STATUS_POLL_ORIGINATORS:
+        tree = ast.parse(
+            (PROJECT_ROOT / relative).read_text(encoding="utf-8"),
+            filename=str(relative),
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = None
+            if isinstance(node.func, ast.Name):
+                name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                name = node.func.attr
+            if name in forbidden:
+                violations.append(f"{relative}:{node.lineno}:{name}")
+
+    assert not violations, (
+        "Bulk ONT status polls must be requested through "
+        "network.ont_runtime_status:\n" + "\n".join(violations)
+    )
