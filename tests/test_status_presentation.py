@@ -8,6 +8,7 @@ import pytest
 
 from app.models.billing import CreditNoteStatus, InvoiceStatus, PaymentStatus
 from app.models.catalog import SubscriptionStatus
+from app.models.field_expense import FIELD_EXPENSE_STATUSES
 from app.models.network_monitoring import DeviceRole, DeviceStatus, NetworkDevice
 from app.models.payment_proof import WithholdingTaxStatus
 from app.models.subscriber import SubscriberStatus
@@ -30,6 +31,7 @@ from app.services.status_presentation import (
     connection_health_status_presentation,
     credit_note_status_presentation,
     device_operational_status_presentation,
+    field_expense_status_presentation,
     invoice_status_presentation,
     outage_status_presentation,
     payment_status_presentation,
@@ -73,6 +75,18 @@ def test_vendor_purchase_invoice_presentation_covers_authoritative_enum(
     presentation = vendor_purchase_invoice_status_presentation(status)
 
     assert presentation.value == status.value
+    assert presentation.label
+    assert presentation.tone in StatusTone
+    assert presentation.icon in StatusIcon
+
+
+@pytest.mark.parametrize("status", list(FIELD_EXPENSE_STATUSES))
+def test_field_expense_presentation_covers_authoritative_statuses(
+    status: str,
+) -> None:
+    presentation = field_expense_status_presentation(status)
+
+    assert presentation.value == status
     assert presentation.label
     assert presentation.tone in StatusTone
     assert presentation.icon in StatusIcon

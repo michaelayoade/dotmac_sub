@@ -540,3 +540,17 @@ def vendor_purchase_invoice_status_presentation(
 ) -> StatusPresentation:
     """Project vendor purchase-invoice approval status without re-deriving it."""
     return _presentation(_status_value(status), _VENDOR_PURCHASE_INVOICE_PRESENTATIONS)
+
+
+_FIELD_EXPENSE_PRESENTATIONS: dict[str, tuple[str, StatusTone, StatusIcon]] = {
+    "draft": ("Draft", StatusTone.neutral, StatusIcon.archive),
+    "submitted": ("Submitted", StatusTone.info, StatusIcon.clock),
+    "approved": ("Approved", StatusTone.positive, StatusIcon.check),
+    "rejected": ("Rejected", StatusTone.negative, StatusIcon.x),
+    "paid": ("Paid", StatusTone.positive, StatusIcon.check),
+}
+
+
+def field_expense_status_presentation(status: str | None) -> StatusPresentation:
+    """Project field-expense claim status without re-deriving the workflow."""
+    return _presentation(_status_value(status), _FIELD_EXPENSE_PRESENTATIONS)
