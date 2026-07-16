@@ -28,7 +28,7 @@ from app.models.ticket_workflow import (
     SlaPolicy,
     WorkflowEntityType,
 )
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services import workqueue
 from app.services.workqueue import (
     ActionKind,
@@ -172,8 +172,8 @@ def _work_order(
     status: str = "scheduled",
     scheduled_start: datetime | None = None,
     assigned_to_crm_person_id: str | None = None,
-) -> WorkOrderMirror:
-    work_order = WorkOrderMirror(
+) -> WorkOrder:
+    work_order = WorkOrder(
         crm_work_order_id=f"WO-{uuid4().hex[:8]}",
         subscriber_id=subscriber.id,
         title="Fibre install",

@@ -39,7 +39,7 @@
                 <select id="work-order" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
                     <option value="">Select a work order…</option>
                     {% for wo in work_orders %}
-                    <option value="{{ wo.crm_work_order_id }}" {% if selected_work_order == wo.crm_work_order_id %}selected{% endif %}>{{ wo.label }}</option>
+                    <option value="{{ wo.public_id }}" {% if selected_work_order == wo.public_id %}selected{% endif %}>{{ wo.label }}</option>
                     {% endfor %}
                 </select>
             </div>

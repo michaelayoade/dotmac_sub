@@ -2298,7 +2298,7 @@ class OntAssignment(Base):
         index=True,
     )
     work_order_mirror_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("work_order_mirror.id", ondelete="SET NULL")
+        UUID(as_uuid=True), ForeignKey("work_order.id", ondelete="SET NULL")
     )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
@@ -2387,7 +2387,7 @@ class OntAssignment(Base):
     pon_port = relationship("PonPort", back_populates="ont_assignments")
     subscriber = relationship("Subscriber", back_populates="ont_assignments")
     subscription = relationship("Subscription")
-    work_order_mirror = relationship("WorkOrderMirror")
+    work_order_mirror = relationship("WorkOrder")
     service_address = relationship("Address")
 
 

@@ -11,7 +11,7 @@ import pytest
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror, WorkOrderSyncState
+from app.models.work_order import WorkOrder, WorkOrderSyncState
 from app.services import work_orders_mirror
 
 
@@ -71,7 +71,7 @@ def test_reconcile_upserts_and_marks_synced(db_session):
     ):
         ok = work_orders_mirror.reconcile_subscriber(db_session, str(sub.id))
     assert ok is True
-    row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo1").one()
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="wo1").one()
     assert row.status == "dispatched"
     assert row.technician_name == "Ade Tech"
     assert row.estimated_duration_minutes == 60
@@ -143,7 +143,7 @@ def test_webhook_dispatched_upserts_and_pushes(db_session):
         )
     assert out["status"] == "ok"
     push.assert_called_once()
-    row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo9").one()
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="wo9").one()
     assert row.status == "dispatched"
     assert row.technician_name == "Ade Tech"
     assert row.assigned_to_crm_person_id == "crm-tech-9"
@@ -176,7 +176,7 @@ def test_webhook_completed_sets_completed_at(db_session):
             },
         )
     assert out["status"] == "ok"
-    row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo9").one()
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="wo9").one()
     assert row.status == "completed"
     assert row.completed_at is not None
 
@@ -260,7 +260,7 @@ def test_stale_read_serves_stale_and_refreshes_async(db_session):
 
     sub = _subscriber(db_session, crm_id=uuid.uuid4())
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             subscriber_id=sub.id,
             crm_work_order_id="wo-stale",
             title="Old",
@@ -324,7 +324,7 @@ def test_read_serves_local_only_when_pull_disabled(monkeypatch, db_session):
     )
     sub = _subscriber(db_session, crm_id=uuid.uuid4())
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             subscriber_id=sub.id,
             crm_work_order_id="sub-native1",
             title="Native install",
@@ -353,7 +353,7 @@ def test_upsert_protects_native_field_activity_from_crm_clobber(db_session):
     started = datetime(2026, 7, 9, 9, 0, tzinfo=UTC)
     sub = _subscriber(db_session, crm_id=uuid.uuid4())
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             subscriber_id=sub.id,
             crm_work_order_id="wo-native",
             title="Repair",
@@ -397,9 +397,7 @@ def test_upsert_protects_native_field_activity_from_crm_clobber(db_session):
     ):
         work_orders_mirror.reconcile_subscriber(db_session, str(sub.id))
 
-    row = (
-        db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-native").one()
-    )
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-native").one()
     # Protected: status + activity timestamps stay sub-owned.
     assert row.status == "in_progress"
     assert row.started_at.replace(tzinfo=UTC) == started
@@ -418,7 +416,7 @@ def test_webhook_does_not_clobber_or_notify_on_native_row(db_session):
     re-pushes lifecycle notifications (the field transitions own that)."""
     sub = _subscriber(db_session)
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             subscriber_id=sub.id,
             crm_work_order_id="wo-echo",
             title="Repair",
@@ -445,7 +443,7 @@ def test_webhook_does_not_clobber_or_notify_on_native_row(db_session):
         "native_precedence": True,
     }
     push.assert_not_called()
-    row = db_session.query(WorkOrderMirror).filter_by(crm_work_order_id="wo-echo").one()
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-echo").one()
     assert row.status == "completed"
 
 
@@ -454,7 +452,7 @@ def test_upsert_protects_sub_prefixed_rows_without_marker(db_session):
     dispatch.work_order_headers.create) even without the metadata marker."""
     sub = _subscriber(db_session)
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             subscriber_id=sub.id,
             crm_work_order_id="sub-abc123",
             title="Native",
@@ -474,11 +472,7 @@ def test_upsert_protects_sub_prefixed_rows_without_marker(db_session):
             },
         )
 
-    row = (
-        db_session.query(WorkOrderMirror)
-        .filter_by(crm_work_order_id="sub-abc123")
-        .one()
-    )
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="sub-abc123").one()
     assert row.status == "in_progress"
 
 
@@ -489,7 +483,7 @@ def test_technician_location_uses_native_presence_for_owned_work_order(db_sessio
         crm_person_id="crm-tech-live",
         title="Field technician",
     )
-    row = WorkOrderMirror(
+    row = WorkOrder(
         subscriber_id=sub.id,
         crm_work_order_id="wo-live",
         title="Repair",
@@ -528,7 +522,7 @@ def test_technician_location_uses_native_dispatch_assignment(db_session):
         person_id=uuid.uuid4(),
         title="Field technician",
     )
-    row = WorkOrderMirror(
+    row = WorkOrder(
         subscriber_id=sub.id,
         crm_work_order_id="wo-dispatch-live",
         title="Repair",
@@ -569,7 +563,7 @@ def test_technician_location_uses_native_dispatch_assignment(db_session):
 def test_technician_location_hidden_when_work_order_not_active(db_session):
     sub = _subscriber(db_session)
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             subscriber_id=sub.id,
             crm_work_order_id="wo-scheduled",
             title="Install",
@@ -591,7 +585,7 @@ def test_technician_location_hidden_when_work_order_not_active(db_session):
 
 def test_rate_technician_stores_local_metadata_and_is_idempotent(db_session):
     sub = _subscriber(db_session)
-    row = WorkOrderMirror(
+    row = WorkOrder(
         subscriber_id=sub.id,
         crm_work_order_id="wo-rate",
         title="Repair",
@@ -635,7 +629,7 @@ def test_rate_technician_stores_local_metadata_and_is_idempotent(db_session):
 def test_rate_technician_rejects_incomplete_work_order(db_session):
     sub = _subscriber(db_session)
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             subscriber_id=sub.id,
             crm_work_order_id="wo-open",
             title="Install",

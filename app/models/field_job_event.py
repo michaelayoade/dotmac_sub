@@ -46,7 +46,7 @@ class FieldJobEvent(Base):
     )
     work_order_mirror_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("work_order_mirror.id", ondelete="CASCADE"),
+        ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
     crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -74,6 +74,6 @@ class FieldJobEvent(Base):
         UUID(as_uuid=True), nullable=False
     )
 
-    work_order_mirror = relationship("WorkOrderMirror")
+    work_order_mirror = relationship("WorkOrder")
     author_technician = relationship("TechnicianProfile")
     system_user = relationship("SystemUser")

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.models.erp_domain_sync import ErpDomainSyncCursor
 from app.models.project import Project
 from app.models.support import Ticket
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.dotmac_erp.client import DotMacERPClient, build_erp_client
 
 _DOMAINS = ("projects", "tickets", "work_orders")
@@ -64,8 +64,8 @@ def _tickets(db: Session, cursor: ErpDomainSyncCursor, limit: int):
 
 def _work_orders(db: Session, cursor: ErpDomainSyncCursor, limit: int):
     return (
-        _after_cursor(db.query(WorkOrderMirror), WorkOrderMirror, cursor)
-        .order_by(WorkOrderMirror.updated_at.asc(), WorkOrderMirror.id.asc())
+        _after_cursor(db.query(WorkOrder), WorkOrder, cursor)
+        .order_by(WorkOrder.updated_at.asc(), WorkOrder.id.asc())
         .limit(limit)
         .all()
     )
@@ -117,7 +117,7 @@ def _ticket_payload(row: Ticket) -> dict:
     }
 
 
-def _work_order_payload(row: WorkOrderMirror) -> dict:
+def _work_order_payload(row: WorkOrder) -> dict:
     metadata = dict(row.metadata_ or {})
     metadata.update(
         {

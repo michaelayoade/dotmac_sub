@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import _location, _profile_from_principal, _scoped_query
 from app.services.field.map_assets import field_map_assets
 from app.services.status_presentation import work_order_status_presentation
@@ -56,15 +56,15 @@ def _search_jobs(db: Session, profile, term: str, *, limit: int) -> list[dict]:
         _scoped_query(db, profile)
         .filter(
             or_(
-                WorkOrderMirror.crm_work_order_id.ilike(like),
-                WorkOrderMirror.title.ilike(like),
-                WorkOrderMirror.description.ilike(like),
-                WorkOrderMirror.address.ilike(like),
+                WorkOrder.public_id.ilike(like),
+                WorkOrder.title.ilike(like),
+                WorkOrder.description.ilike(like),
+                WorkOrder.address.ilike(like),
             )
         )
         .order_by(
-            WorkOrderMirror.scheduled_start.asc().nullslast(),
-            WorkOrderMirror.created_at.asc(),
+            WorkOrder.scheduled_start.asc().nullslast(),
+            WorkOrder.created_at.asc(),
         )
         .limit(limit)
         .all()
@@ -78,7 +78,7 @@ def _search_jobs(db: Session, profile, term: str, *, limit: int) -> list[dict]:
         items.append(
             {
                 "kind": "job",
-                "id": row.crm_work_order_id,
+                "id": row.public_id,
                 "title": row.title,
                 "subtitle": row.address,
                 "latitude": location.latitude,

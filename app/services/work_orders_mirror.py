@@ -22,7 +22,7 @@ from app.models.dispatch import (
 )
 from app.models.field_location import FieldTechPresence
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror, WorkOrderSyncState
+from app.models.work_order import WorkOrder, WorkOrderSyncState
 from app.services.common import coerce_uuid
 from app.services.crm_client import CRMClientError, get_crm_client
 from app.services.crm_portal import resolve_crm_subscriber_id
@@ -85,20 +85,20 @@ def _crm_person_uuid(crm_person_id: str) -> uuid.UUID:
 
 def _owned_work_order(
     db: Session, subscriber_id: str, work_order_id: str
-) -> WorkOrderMirror | None:
+) -> WorkOrder | None:
     try:
         sub_uuid = coerce_uuid(str(subscriber_id))
     except (TypeError, ValueError):
         return None
     return db.scalar(
-        select(WorkOrderMirror).where(
-            WorkOrderMirror.subscriber_id == sub_uuid,
-            WorkOrderMirror.crm_work_order_id == str(work_order_id),
+        select(WorkOrder).where(
+            WorkOrder.subscriber_id == sub_uuid,
+            WorkOrder.public_id == str(work_order_id),
         )
     )
 
 
-def _assigned_profile(db: Session, row: WorkOrderMirror) -> TechnicianProfile | None:
+def _assigned_profile(db: Session, row: WorkOrder) -> TechnicianProfile | None:
     assignment = db.scalar(
         select(WorkOrderAssignmentQueue)
         .where(
@@ -123,22 +123,27 @@ def _assigned_profile(db: Session, row: WorkOrderMirror) -> TechnicianProfile | 
     return None
 
 
-def _rating_metadata(row: WorkOrderMirror) -> dict | None:
+def _rating_metadata(row: WorkOrder) -> dict | None:
     metadata = row.metadata_ if isinstance(row.metadata_, dict) else {}
     rating = metadata.get("technician_rating")
     return rating if isinstance(rating, dict) else None
 
 
-def is_sub_authoritative(row: WorkOrderMirror) -> bool:
+def is_sub_authoritative(row: WorkOrder) -> bool:
     """True when sub owns this row's field activity (Phase 2 SoT posture).
 
-    Two markers: native rows are born with a ``sub-`` public id
-    (dispatch.WorkOrderHeaders.create), and native field writes stamp
-    ``metadata.native_field_source == "sub"`` (field/source.py). CRM
-    reconcile/webhook ingest must not clobber status or activity timestamps
-    on such rows — the sub-pointed field app is the only writer there.
+    Markers: a row with no ``crm_work_order_id`` has no CRM upstream and so was
+    created natively; during the WORK_ORDER_IDENTITY_SOT slice-1 compat window
+    native rows instead dual-write a ``sub-`` public id into that column
+    (dispatch.WorkOrderHeaders.create). Native field writes stamp
+    ``metadata.native_field_source == "sub"`` (field/source.py) on rows that
+    *were* imported. CRM reconcile/webhook ingest must not clobber status or
+    activity timestamps on such rows — the sub-pointed field app is the only
+    writer there.
     """
-    if str(row.crm_work_order_id or "").startswith("sub-"):
+    if row.crm_work_order_id is None:
+        return True
+    if str(row.crm_work_order_id).startswith("sub-"):
         return True
     metadata = row.metadata_ if isinstance(row.metadata_, dict) else {}
     return metadata.get("native_field_source") == "sub"
@@ -215,7 +220,7 @@ def _upsert_row(
     is_active: bool | None = None,
     metadata_: dict | None = None,
     work_order_created_at: datetime | None = None,
-) -> WorkOrderMirror:
+) -> WorkOrder:
     _ensure_technician_profile(
         db,
         crm_person_id=assigned_to_crm_person_id,
@@ -223,12 +228,10 @@ def _upsert_row(
         phone=technician_phone,
     )
     row = db.scalar(
-        select(WorkOrderMirror).where(
-            WorkOrderMirror.crm_work_order_id == crm_work_order_id
-        )
+        select(WorkOrder).where(WorkOrder.crm_work_order_id == crm_work_order_id)
     )
     if row is None:
-        row = WorkOrderMirror(
+        row = WorkOrder(
             crm_work_order_id=crm_work_order_id, subscriber_id=subscriber_id
         )
         db.add(row)
@@ -467,9 +470,9 @@ def read_for_subscriber(
             _enqueue_lazy_refresh(str(subscriber_id))
 
     rows = db.scalars(
-        select(WorkOrderMirror)
-        .where(WorkOrderMirror.subscriber_id == sub_uuid)
-        .order_by(WorkOrderMirror.created_at.desc())
+        select(WorkOrder)
+        .where(WorkOrder.subscriber_id == sub_uuid)
+        .order_by(WorkOrder.created_at.desc())
     ).all()
 
     items = [row_to_item(r, include_internal=False) for r in rows]
@@ -605,9 +608,7 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
     # order neither clobbers it (_upsert_row) nor re-notifies the customer
     # (the native field transitions own that lifecycle).
     prev_row = db.scalar(
-        select(WorkOrderMirror).where(
-            WorkOrderMirror.crm_work_order_id == crm_work_order_id
-        )
+        select(WorkOrder).where(WorkOrder.crm_work_order_id == crm_work_order_id)
     )
     prev_status = prev_row.status if prev_row is not None else None
     protected = prev_row is not None and is_sub_authoritative(prev_row)

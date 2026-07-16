@@ -813,8 +813,8 @@ from app.models.work_link import (  # noqa: F401
     WorkLink,
     WorkLinkType,
 )
-from app.models.work_order_mirror import (  # noqa: F401
-    WorkOrderMirror,
+from app.models.work_order import (  # noqa: F401
+    WorkOrder,
     WorkOrderSyncState,
 )
 from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401

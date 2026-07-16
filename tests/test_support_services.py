@@ -574,7 +574,7 @@ def test_field_visit_tag_creates_native_work_order_once(db_session, subscriber):
     """Phase 2 (sub = work-order SoT): a field_visit ticket births a native
     dispatch work-order header — visible to dispatch and field_mobile — not
     the legacy provisioning ServiceOrder stub."""
-    from app.models.work_order_mirror import WorkOrderMirror
+    from app.models.work_order import WorkOrder
 
     ticket = support_service.tickets.create(
         db_session,
@@ -592,11 +592,7 @@ def test_field_visit_tag_creates_native_work_order_once(db_session, subscriber):
     work_order_id = (ticket.metadata_ or {}).get("work_order_id")
     assert work_order_id is not None
     assert work_order_id.startswith("sub-")  # native dispatch public id
-    row = (
-        db_session.query(WorkOrderMirror)
-        .filter_by(crm_work_order_id=work_order_id)
-        .one()
-    )
+    row = db_session.query(WorkOrder).filter_by(crm_work_order_id=work_order_id).one()
     assert row.subscriber_id == subscriber.id
     assert row.crm_ticket_id == str(ticket.id)
     assert row.title == "Field visit — Fiber issue"
@@ -612,14 +608,14 @@ def test_field_visit_tag_creates_native_work_order_once(db_session, subscriber):
         TicketUpdate(tags=["field_visit"]),
         actor_id=str(subscriber.id),
     )
-    assert db_session.query(WorkOrderMirror).count() == 1
+    assert db_session.query(WorkOrder).count() == 1
 
 
 def test_legacy_service_order_backed_ticket_not_double_created(db_session, subscriber):
     """A pre-cutover ticket whose metadata.work_order_id points at a legacy
     ServiceOrder stub is honored for dedupe — no new work order on update."""
     from app.models.provisioning import ServiceOrder as ServiceOrderModel
-    from app.models.work_order_mirror import WorkOrderMirror
+    from app.models.work_order import WorkOrder
 
     legacy = ServiceOrderModel(subscriber_id=subscriber.id)
     db_session.add(legacy)
@@ -644,14 +640,14 @@ def test_legacy_service_order_backed_ticket_not_double_created(db_session, subsc
         TicketUpdate(tags=["field_visit"]),
         actor_id=str(subscriber.id),
     )
-    assert db_session.query(WorkOrderMirror).count() == 0
+    assert db_session.query(WorkOrder).count() == 0
 
 
 def test_automation_added_field_visit_tag_births_work_order(db_session, subscriber):
     """Automation→WO hook: an add_tag rule stamping field_visit on
     ticket_created births the native work order in the same create flow."""
     from app.models.support import AutomationActionType, AutomationTrigger
-    from app.models.work_order_mirror import WorkOrderMirror
+    from app.models.work_order import WorkOrder
 
     support_automation.create_rule(
         db_session,
@@ -679,9 +675,7 @@ def test_automation_added_field_visit_tag_births_work_order(db_session, subscrib
     work_order_id = (ticket.metadata_ or {}).get("work_order_id")
     assert work_order_id is not None
     assert (
-        db_session.query(WorkOrderMirror)
-        .filter_by(crm_work_order_id=work_order_id)
-        .count()
+        db_session.query(WorkOrder).filter_by(crm_work_order_id=work_order_id).count()
         == 1
     )
 

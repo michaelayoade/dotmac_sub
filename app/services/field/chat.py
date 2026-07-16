@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.field_chat import FieldJobChatMessage
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import (
     OPEN_STATUSES,
     _profile_from_principal,
@@ -43,11 +43,11 @@ def _scoped_work_order(
     db: Session,
     principal: dict[str, Any],
     crm_work_order_id: str,
-) -> WorkOrderMirror:
+) -> WorkOrder:
     profile = _profile_from_principal(db, principal)
     row = (
         _scoped_query(db, profile)
-        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+        .filter(WorkOrder.public_id == crm_work_order_id)
         .one_or_none()
     )
     if row is None:
@@ -55,11 +55,11 @@ def _scoped_work_order(
     return row
 
 
-def _can_send(row: WorkOrderMirror) -> bool:
+def _can_send(row: WorkOrder) -> bool:
     return bool(row.subscriber_id) and row.status in OPEN_STATUSES
 
 
-def _customer_name(db: Session, row: WorkOrderMirror) -> str | None:
+def _customer_name(db: Session, row: WorkOrder) -> str | None:
     subscriber = db.get(Subscriber, row.subscriber_id)
     if subscriber is None:
         return None
@@ -107,7 +107,7 @@ class FieldJobChat:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
@@ -119,7 +119,7 @@ class FieldJobChat:
         user = _system_user(db, profile)
         message = FieldJobChatMessage(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.crm_work_order_id,
+            crm_work_order_id=row.public_id,
             direction="staff",
             body=text,
             author_technician_id=profile.id,

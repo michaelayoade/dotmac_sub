@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.dispatch import AvailabilityBlock, Shift
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 
 _DEFAULT_WINDOW_DAYS = 7
@@ -96,9 +96,9 @@ class FieldSchedule:
 
         jobs = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.scheduled_start.isnot(None))
-            .filter(WorkOrderMirror.scheduled_start >= start)
-            .filter(WorkOrderMirror.scheduled_start <= end)
+            .filter(WorkOrder.scheduled_start.isnot(None))
+            .filter(WorkOrder.scheduled_start >= start)
+            .filter(WorkOrder.scheduled_start <= end)
             .all()
         )
         entries.extend(
@@ -107,7 +107,7 @@ class FieldSchedule:
                 "start_at": _as_utc(row.scheduled_start),
                 "end_at": _as_utc(row.scheduled_end) if row.scheduled_end else None,
                 "title": row.title,
-                "reference_id": row.crm_work_order_id,
+                "reference_id": row.public_id,
             }
             for row in jobs
         )

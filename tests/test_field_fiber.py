@@ -18,7 +18,7 @@ from app.models.network import (
 )
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.field import fiber as field_fiber
 
 
@@ -68,8 +68,8 @@ def _subscriber(db_session) -> Subscriber:
     return subscriber
 
 
-def _work_order(db_session, subscriber: Subscriber) -> WorkOrderMirror:
-    row = WorkOrderMirror(
+def _work_order(db_session, subscriber: Subscriber) -> WorkOrder:
+    row = WorkOrder(
         crm_work_order_id="wo-fiber",
         subscriber_id=subscriber.id,
         title="Fiber repair",

@@ -1,9 +1,9 @@
-"""Native read views over imported work-order mirror rows.
+"""Native read views over Sub-owned work orders.
 
 During migration, CRM can still hydrate legacy work-order headers into
-``work_order_mirror``. Native field execution activity is authored in sub, and
-this module is the in-process read layer admin, dispatch, and field APIs can use
-without fanning out to CRM.
+``work_order`` (keyed by ``crm_work_order_id`` provenance). Native field
+execution activity is authored in sub, and this module is the in-process read
+layer admin, dispatch, and field APIs use without fanning out to CRM.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.common import coerce_uuid
 from app.services.field.work_order_status import WORK_ORDER_TERMINAL_VALUES
 
@@ -57,7 +57,7 @@ def _subscriber_name(subscriber: Subscriber | None) -> str | None:
     )
 
 
-def _subscriber_snapshot(row: WorkOrderMirror, subscriber: Subscriber | None) -> dict:
+def _subscriber_snapshot(row: WorkOrder, subscriber: Subscriber | None) -> dict:
     return {
         "account_id": str(row.subscriber_id),
         "account_name": _subscriber_name(subscriber),
@@ -68,13 +68,16 @@ def _subscriber_snapshot(row: WorkOrderMirror, subscriber: Subscriber | None) ->
 
 
 def row_to_item(
-    row: WorkOrderMirror,
+    row: WorkOrder,
     *,
     subscriber: Subscriber | None = None,
     include_internal: bool = True,
 ) -> dict[str, Any]:
     item: dict[str, Any] = {
-        "id": row.crm_work_order_id,
+        # Compat window: id keeps its historical value (== public_id) while
+        # old clients still key on it; public_id is the forward identity.
+        "id": row.public_id,
+        "public_id": row.public_id,
         "title": row.title,
         "status": row.status,
         "work_type": row.work_type,
@@ -114,45 +117,44 @@ def row_to_item(
 
 
 def _base_query(db: Session):
-    return db.query(WorkOrderMirror, Subscriber).join(
-        Subscriber, Subscriber.id == WorkOrderMirror.subscriber_id
+    return db.query(WorkOrder, Subscriber).join(
+        Subscriber, Subscriber.id == WorkOrder.subscriber_id
     )
 
 
 def _apply_filters(query, filters: WorkOrderListFilters):
     if filters.is_active is not None:
-        query = query.filter(WorkOrderMirror.is_active.is_(filters.is_active))
+        query = query.filter(WorkOrder.is_active.is_(filters.is_active))
     if filters.status:
-        query = query.filter(WorkOrderMirror.status == filters.status)
+        query = query.filter(WorkOrder.status == filters.status)
     if filters.priority:
-        query = query.filter(WorkOrderMirror.priority == filters.priority)
+        query = query.filter(WorkOrder.priority == filters.priority)
     if filters.work_type:
-        query = query.filter(WorkOrderMirror.work_type == filters.work_type)
+        query = query.filter(WorkOrder.work_type == filters.work_type)
     if filters.subscriber_id:
         query = query.filter(
-            WorkOrderMirror.subscriber_id == coerce_uuid(filters.subscriber_id)
+            WorkOrder.subscriber_id == coerce_uuid(filters.subscriber_id)
         )
     if filters.crm_ticket_id:
-        query = query.filter(WorkOrderMirror.crm_ticket_id == filters.crm_ticket_id)
+        query = query.filter(WorkOrder.crm_ticket_id == filters.crm_ticket_id)
     if filters.crm_project_id:
-        query = query.filter(WorkOrderMirror.crm_project_id == filters.crm_project_id)
+        query = query.filter(WorkOrder.crm_project_id == filters.crm_project_id)
     if filters.assigned_to_crm_person_id:
         query = query.filter(
-            WorkOrderMirror.assigned_to_crm_person_id
-            == filters.assigned_to_crm_person_id
+            WorkOrder.assigned_to_crm_person_id == filters.assigned_to_crm_person_id
         )
     if filters.scheduled_from:
-        query = query.filter(WorkOrderMirror.scheduled_start >= filters.scheduled_from)
+        query = query.filter(WorkOrder.scheduled_start >= filters.scheduled_from)
     if filters.scheduled_to:
-        query = query.filter(WorkOrderMirror.scheduled_start <= filters.scheduled_to)
+        query = query.filter(WorkOrder.scheduled_start <= filters.scheduled_to)
     q = (filters.q or "").strip()
     if q:
         pattern = f"%{q}%"
         query = query.filter(
             or_(
-                WorkOrderMirror.title.ilike(pattern),
-                WorkOrderMirror.address.ilike(pattern),
-                WorkOrderMirror.crm_work_order_id.ilike(pattern),
+                WorkOrder.title.ilike(pattern),
+                WorkOrder.address.ilike(pattern),
+                WorkOrder.public_id.ilike(pattern),
                 Subscriber.first_name.ilike(pattern),
                 Subscriber.last_name.ilike(pattern),
                 Subscriber.company_name.ilike(pattern),
@@ -164,10 +166,10 @@ def _apply_filters(query, filters: WorkOrderListFilters):
 
 
 _SORT_COLUMNS = {
-    "status": WorkOrderMirror.status,
-    "priority": WorkOrderMirror.priority,
-    "scheduled_start": WorkOrderMirror.scheduled_start,
-    "created_at": WorkOrderMirror.created_at,
+    "status": WorkOrder.status,
+    "priority": WorkOrder.priority,
+    "scheduled_start": WorkOrder.scheduled_start,
+    "created_at": WorkOrder.created_at,
 }
 
 
@@ -177,10 +179,10 @@ def query_work_orders(
     *,
     sort_by: str | None = None,
     sort_dir: str | None = None,
-) -> tuple[list[tuple[WorkOrderMirror, Subscriber]], int]:
+) -> tuple[list[tuple[WorkOrder, Subscriber]], int]:
     """Owner query for the work-order list.
 
-    Returns filtered, sorted, paginated ``(WorkOrderMirror, Subscriber)`` rows and
+    Returns filtered, sorted, paginated ``(WorkOrder, Subscriber)`` rows and
     the total. UI list projections declare the sort/filter/pagination contract and
     delegate the read here; they never rebuild this query. ``sort_by``/``sort_dir``
     default to the canonical schedule-then-created ordering when unset, so existing
@@ -191,17 +193,17 @@ def query_work_orders(
     offset = max(int(filters.offset or 0), 0)
 
     filtered = _apply_filters(_base_query(db), filters)
-    total = int(filtered.with_entities(func.count(WorkOrderMirror.id)).scalar() or 0)
+    total = int(filtered.with_entities(func.count(WorkOrder.id)).scalar() or 0)
 
     column = _SORT_COLUMNS.get(sort_by or "")
     if column is not None:
         primary = column.desc() if str(sort_dir).lower() == "desc" else column.asc()
-        ordering = [primary.nullslast(), WorkOrderMirror.id.asc()]
+        ordering = [primary.nullslast(), WorkOrder.id.asc()]
     else:
         ordering = [
-            WorkOrderMirror.scheduled_start.asc().nullslast(),
-            WorkOrderMirror.created_at.desc(),
-            WorkOrderMirror.id.asc(),
+            WorkOrder.scheduled_start.asc().nullslast(),
+            WorkOrder.created_at.desc(),
+            WorkOrder.id.asc(),
         ]
     rows = filtered.order_by(*ordering).limit(limit).offset(offset).all()
     return rows, total
@@ -223,12 +225,8 @@ def list_work_orders(db: Session, filters: WorkOrderListFilters | None = None) -
     }
 
 
-def get_work_order(db: Session, crm_work_order_id: str) -> dict | None:
-    pair = (
-        _base_query(db)
-        .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
-        .first()
-    )
+def get_work_order(db: Session, public_id: str) -> dict | None:
+    pair = _base_query(db).filter(WorkOrder.public_id == public_id).first()
     if pair is None:
         return None
     row, subscriber = pair
@@ -238,9 +236,9 @@ def get_work_order(db: Session, crm_work_order_id: str) -> dict | None:
 def summary(db: Session, filters: WorkOrderListFilters | None = None) -> dict:
     filters = filters or WorkOrderListFilters()
     query = _apply_filters(_base_query(db), filters)
-    rows = query.with_entities(
-        WorkOrderMirror.status, func.count(WorkOrderMirror.id)
-    ).group_by(WorkOrderMirror.status)
+    rows = query.with_entities(WorkOrder.status, func.count(WorkOrder.id)).group_by(
+        WorkOrder.status
+    )
     by_status = {str(status): int(count) for status, count in rows}
     total = sum(by_status.values())
     terminal = sum(
@@ -250,9 +248,9 @@ def summary(db: Session, filters: WorkOrderListFilters | None = None) -> dict:
     now = datetime.now(UTC)
     overdue = int(
         _apply_filters(_base_query(db), filters)
-        .filter(WorkOrderMirror.scheduled_start < now)
-        .filter(WorkOrderMirror.status.notin_(TERMINAL_STATUSES))
-        .with_entities(func.count(WorkOrderMirror.id))
+        .filter(WorkOrder.scheduled_start < now)
+        .filter(WorkOrder.status.notin_(TERMINAL_STATUSES))
+        .with_entities(func.count(WorkOrder.id))
         .scalar()
         or 0
     )
@@ -276,7 +274,7 @@ def options(db: Session) -> dict[str, list[str]]:
         ]
 
     return {
-        "statuses": values(WorkOrderMirror.status),
-        "priorities": values(WorkOrderMirror.priority),
-        "work_types": values(WorkOrderMirror.work_type),
+        "statuses": values(WorkOrder.status),
+        "priorities": values(WorkOrder.priority),
+        "work_types": values(WorkOrder.work_type),
     }

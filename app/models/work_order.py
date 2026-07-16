@@ -1,8 +1,11 @@
-"""Local work-order execution view for the Field Service tracker.
+"""Work-order headers and their field-execution activity.
 
-Legacy work-order headers can be imported from CRM during migration so customer
-app/web surfaces can show "where's my technician?" instantly. Sub owns native
-field execution activity once a work-order workflow has been ported.
+Sub owns work orders. ``public_id`` is the identity; ``crm_work_order_id`` is a
+nullable reference to the CRM row a header was imported from during migration,
+and is NULL for natively created work orders. Field activity (worklogs, notes,
+attachments, materials, movements, fiber tests, chat, job events) hangs off
+``work_order.id`` and has no upstream to rebuild from, so this table is
+authoritative storage, not a cache.
 """
 
 import uuid
@@ -16,16 +19,30 @@ from sqlalchemy.types import JSON, DateTime
 from app.db import Base
 
 
-class WorkOrderMirror(Base):
-    """One CRM work order attributed to one of our subscribers (local copy)."""
+def _default_public_id(context) -> str:
+    """Seed public_id from the CRM provenance ref when a row is imported
+    (matching migration 328's backfill), else mint a native ``sub-`` id."""
+    crm_id = context.get_current_parameters().get("crm_work_order_id")
+    return crm_id or f"sub-{uuid.uuid4().hex}"
 
-    __tablename__ = "work_order_mirror"
+
+class WorkOrder(Base):
+    """One work order attributed to one of our subscribers."""
+
+    __tablename__ = "work_order"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    crm_work_order_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, unique=True, index=True
+    public_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        unique=True,
+        index=True,
+        default=_default_public_id,
+    )
+    crm_work_order_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
     )
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

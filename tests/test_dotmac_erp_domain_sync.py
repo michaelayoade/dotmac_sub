@@ -4,7 +4,7 @@ from app.models.erp_domain_sync import ErpDomainSyncCursor
 from app.models.project import Project
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.dotmac_erp.domain_sync import sync_operational_domains
 
 
@@ -39,7 +39,7 @@ def _seed(db):
     )
     db.add_all([project, ticket])
     db.flush()
-    work_order = WorkOrderMirror(
+    work_order = WorkOrder(
         crm_work_order_id=str(uuid4()),
         subscriber_id=subscriber.id,
         title="Native field work",

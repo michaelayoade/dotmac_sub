@@ -12,7 +12,7 @@ from app.models.dispatch import TechnicianProfile
 from app.models.network import FdhCabinet
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
 
 
@@ -49,7 +49,7 @@ def _seed(db_session):
         )
     )
     db_session.add(
-        WorkOrderMirror(
+        WorkOrder(
             crm_work_order_id="wo-field-api",
             subscriber_id=sub.id,
             title="Fibre install",

@@ -997,9 +997,9 @@ will reject.
     declares the admin work-order list capabilities with `ui.list_contracts` and
     delegates the read to `work_order_views.query_work_orders`
     (`operations.work_orders`), which owns the canonical filtered/sorted query —
-    the projection issues no SQL. Read-only: work orders are a CRM mirror with no
-    Sub-owned admin bulk command, so no selection/bulk is declared. Each dispatch
-    route is granularly gated (`operations:dispatch:read`/`:write`/`:assign`).
+    the projection issues no SQL. Read-only: no Sub-owned admin bulk command is
+    declared, so no selection/bulk is declared. Each dispatch route is granularly
+    gated (`operations:dispatch:read`/`:write`/`:assign`).
 
 15. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
     project list capabilities with `ui.list_contracts` — searchable name,
@@ -1553,6 +1553,13 @@ Dependency order:
 3. `operations.work_order_status`: declares persisted work-order values and the
    canonical open, assignable, and terminal sets.
 4. `operations.work_orders`: exposes work-order read models and customer links.
+   The `work_order` table is Sub's authoritative work-order storage
+   (WORK_ORDER_IDENTITY_SOT): identity is the Sub-generated `public_id`;
+   `crm_work_order_id` is a nullable provenance reference written only by CRM
+   import/webhook ingest, resolved to native identity once at that boundary and
+   never used as a join key. Field-evidence tables join through the
+   `work_order.id` FK; their denormalized string columns are dual-written for
+   compatibility until the slice-5 retirement drops them.
 5. `operations.field_completion`: owns field-job completion eligibility, evidence
    requirements, and completion transitions.
 6. `operations.project_lifecycle`: owns native project field/status mutations,

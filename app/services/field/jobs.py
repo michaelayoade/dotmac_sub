@@ -1,8 +1,8 @@
-"""Technician-scoped field job reads over imported work-order mirrors.
+"""Technician-scoped field job reads over Sub-owned work orders.
 
-CRM can hydrate legacy work-order headers during migration. Native field
-execution activity is authored in sub and recorded on ``work_order_mirror`` as
-sub-authoritative metadata.
+CRM can hydrate legacy work-order headers during migration
+(``crm_work_order_id`` provenance). Native field execution activity is
+authored in sub and recorded on ``work_order`` as sub-authoritative metadata.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
 from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
-from app.models.work_order_mirror import WorkOrderMirror
+from app.models.work_order import WorkOrder
 from app.schemas.field import (
     FieldAttachmentRead,
     FieldCustomer,
@@ -147,28 +147,25 @@ def _profile_from_principal(
 
 
 def _metadata_text_match(key: str, value: str):
-    return WorkOrderMirror.metadata_[key].as_string() == value
+    return WorkOrder.metadata_[key].as_string() == value
 
 
 def _scoped_query(db: Session, profile: TechnicianProfile):
     assignment_ids = select(WorkOrderAssignmentQueue.work_order_mirror_id).filter(
         WorkOrderAssignmentQueue.assigned_technician_id == profile.id
     )
-    query = db.query(WorkOrderMirror).filter(WorkOrderMirror.is_active.is_(True))
-    clauses: list[Any] = [WorkOrderMirror.id.in_(assignment_ids)]
+    query = db.query(WorkOrder).filter(WorkOrder.is_active.is_(True))
+    clauses: list[Any] = [WorkOrder.id.in_(assignment_ids)]
     if profile.crm_person_id:
-        clauses.append(
-            WorkOrderMirror.assigned_to_crm_person_id == profile.crm_person_id
-        )
+        clauses.append(WorkOrder.assigned_to_crm_person_id == profile.crm_person_id)
     vendor_id = getattr(profile, "_field_vendor_id", None)
     if vendor_id:
         clauses.extend(
             [
                 _metadata_text_match("assigned_vendor_id", vendor_id),
                 _metadata_text_match("vendor_id", vendor_id),
-                WorkOrderMirror.metadata_["assigned_vendor"]["id"].as_string()
-                == vendor_id,
-                WorkOrderMirror.metadata_["vendor"]["id"].as_string() == vendor_id,
+                WorkOrder.metadata_["assigned_vendor"]["id"].as_string() == vendor_id,
+                WorkOrder.metadata_["vendor"]["id"].as_string() == vendor_id,
             ]
         )
     vendor_user_id = getattr(profile, "_field_vendor_user_id", None)
@@ -207,9 +204,7 @@ def _subscriber_name(subscriber: Subscriber) -> str | None:
     )
 
 
-def _customer(
-    row: WorkOrderMirror, subscriber: Subscriber | None
-) -> FieldCustomer | None:
+def _customer(row: WorkOrder, subscriber: Subscriber | None) -> FieldCustomer | None:
     if subscriber is None:
         return None
     status = getattr(subscriber, "status", None)
@@ -225,7 +220,7 @@ def _customer(
     )
 
 
-def _location(row: WorkOrderMirror) -> FieldJobLocation:
+def _location(row: WorkOrder) -> FieldJobLocation:
     metadata = row.metadata_ or {}
     latitude = _first_present(metadata, "latitude", "lat")
     longitude = _first_present(metadata, "longitude", "lng")
@@ -272,9 +267,9 @@ _ASSET_DESTINATION_TYPES = {
 }
 
 
-def _summary(row: WorkOrderMirror) -> FieldJobSummary:
+def _summary(row: WorkOrder) -> FieldJobSummary:
     return FieldJobSummary(
-        id=row.crm_work_order_id,
+        id=row.public_id,
         work_order_mirror_id=row.id,
         title=row.title,
         description=row.description,
@@ -307,13 +302,13 @@ class FieldJobs:
         scoped = _scoped_query(db, profile)
         open_jobs = [
             row
-            for row in scoped.filter(WorkOrderMirror.status.in_(OPEN_STATUSES)).all()
+            for row in scoped.filter(WorkOrder.status.in_(OPEN_STATUSES)).all()
             if row.scheduled_start is None or row.scheduled_start.date() <= today
         ]
         completed_today = [
             row
-            for row in scoped.filter(WorkOrderMirror.status == "completed")
-            .filter(WorkOrderMirror.completed_at.isnot(None))
+            for row in scoped.filter(WorkOrder.status == "completed")
+            .filter(WorkOrder.completed_at.isnot(None))
             .all()
             if row.completed_at and row.completed_at.date() == today
         ]
@@ -341,24 +336,24 @@ class FieldJobs:
         profile = _profile_from_principal(db, principal)
         query = _scoped_query(db, profile)
         if status:
-            query = query.filter(WorkOrderMirror.status == status)
+            query = query.filter(WorkOrder.status == status)
         if date_from:
             query = query.filter(
                 or_(
-                    WorkOrderMirror.scheduled_start.is_(None),
-                    WorkOrderMirror.scheduled_start >= date_from,
+                    WorkOrder.scheduled_start.is_(None),
+                    WorkOrder.scheduled_start >= date_from,
                 )
             )
         if date_to:
             query = query.filter(
                 or_(
-                    WorkOrderMirror.scheduled_start.is_(None),
-                    WorkOrderMirror.scheduled_start <= date_to,
+                    WorkOrder.scheduled_start.is_(None),
+                    WorkOrder.scheduled_start <= date_to,
                 )
             )
         query = query.order_by(
-            WorkOrderMirror.scheduled_start.asc().nullslast(),
-            WorkOrderMirror.created_at.asc(),
+            WorkOrder.scheduled_start.asc().nullslast(),
+            WorkOrder.created_at.asc(),
         )
         return [_summary(row) for row in apply_pagination(query, limit, offset).all()]
 
@@ -371,7 +366,7 @@ class FieldJobs:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
@@ -450,7 +445,7 @@ class FieldJobs:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .one_or_none()
         )
         if row is None:
@@ -513,7 +508,7 @@ class FieldJobs:
         profile = _profile_from_principal(db, principal)
         row = (
             _scoped_query(db, profile)
-            .filter(WorkOrderMirror.crm_work_order_id == crm_work_order_id)
+            .filter(WorkOrder.public_id == crm_work_order_id)
             .with_for_update()
             .one_or_none()
         )
