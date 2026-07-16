@@ -86,6 +86,7 @@ def _attach_globals(templates: Jinja2Templates) -> None:
         ticket_status_presentation,
         work_order_status_presentation,
     )
+    from app.web.customer.branding import _format_portal_datetime
 
     templates.env.globals.setdefault(
         "infra_service_status_presentation",
@@ -148,6 +149,7 @@ def _attach_globals(templates: Jinja2Templates) -> None:
     templates.env.globals.setdefault("currency_symbol", currency_symbol)
     templates.env.filters.setdefault("money", _money_filter)
     templates.env.filters.setdefault("app_datetime", _app_datetime_filter)
+    templates.env.filters.setdefault("portal_datetime", _format_portal_datetime)
 
 
 def _backfill_loaded_template_instances() -> None:

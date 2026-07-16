@@ -22,6 +22,7 @@ from app.models.tr069 import (
 )
 from app.schemas.tr069 import Tr069AcsServerCreate, Tr069JobCreate
 from app.services.events.types import EventType
+from app.web.brand_globals import _app_datetime_filter
 
 # ---------------------------------------------------------------------------
 # 1. TR-069 event types
@@ -854,11 +855,9 @@ class TestAutoLinkOnts:
             "authorization_result": None,
         }
 
-        html = (
-            Environment(loader=FileSystemLoader("templates"), autoescape=True)
-            .get_template("admin/network/onts/index.html")
-            .render(context)
-        )
+        env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
+        env.filters["app_datetime"] = _app_datetime_filter
+        html = env.get_template("admin/network/onts/index.html").render(context)
 
         assert "UI-ACS-LAST-SEEN-001" in html
         assert "Apr 28, 08:55" in html
