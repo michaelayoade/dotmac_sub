@@ -8,15 +8,17 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import PaymentStatus
-from app.models.network import IPAssignment, IPv4Address, IPv6Address
 from app.models.subscriber import AccountStatus, Subscriber, SubscriberCategory
 from app.services import billing as billing_service
+from app.services import ip_pool_utilization_snapshot as ip_pool_snapshot_service
 from app.services import network as network_service
 from app.services import subscriber as subscriber_service
+from app.services import subscriber_growth
+from app.services import usage_summary as usage_summary_service
 
 logger = logging.getLogger(__name__)
 
@@ -58,31 +60,7 @@ def _collect_pool_data(
             limit=block_limit,
             offset=0,
         )
-        pool_used = 0
-        pool_total = 0
-        pool_ip_version = getattr(pool.ip_version, "value", pool.ip_version)
-        if pool_ip_version == "ipv6":
-            pool_total = (
-                db.query(IPv6Address).filter(IPv6Address.pool_id == pool.id).count()
-            )
-            pool_used = (
-                db.query(IPAssignment)
-                .join(IPv6Address, IPAssignment.ipv6_address_id == IPv6Address.id)
-                .filter(IPv6Address.pool_id == pool.id)
-                .filter(IPAssignment.is_active.is_(True))
-                .count()
-            )
-        else:
-            pool_total = (
-                db.query(IPv4Address).filter(IPv4Address.pool_id == pool.id).count()
-            )
-            pool_used = (
-                db.query(IPAssignment)
-                .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
-                .filter(IPv4Address.pool_id == pool.id)
-                .filter(IPAssignment.is_active.is_(True))
-                .count()
-            )
+        pool_used, pool_total = ip_pool_snapshot_service.live_pool_counts(db, pool)
 
         if pool_total == 0:
             for _ in blocks:
@@ -300,9 +278,6 @@ def _attach_period_usage_to_subscribers(
     start: datetime,
     end: datetime,
 ) -> float:
-    from app.models.catalog import Subscription
-    from app.services.web_reports_extended import _subscription_bandwidth_usage_subquery
-
     # Report-only fields stuffed onto ORM instances for template consumption.
     for sub in subscribers:
         sub.period_usage_gb = 0.0  # type: ignore[attr-defined]
@@ -313,20 +288,12 @@ def _attach_period_usage_to_subscribers(
     if not subscriber_ids:
         return 0.0
 
-    span_seconds = max(0.0, (end - start).total_seconds())
-    usage = _subscription_bandwidth_usage_subquery(start, end, span_seconds)
-    rows = db.execute(
-        select(
-            Subscription.subscriber_id,
-            func.coalesce(func.sum(usage.c.usage_bytes), 0).label("usage_bytes"),
-            func.coalesce(func.sum(usage.c.avg_total), 0).label("avg_bps"),
-            func.count(usage.c.subscription_id).label("active_services"),
-        )
-        .select_from(usage)
-        .join(Subscription, Subscription.id == usage.c.subscription_id)
-        .where(Subscription.subscriber_id.in_(subscriber_ids))
-        .group_by(Subscription.subscriber_id)
-    ).all()
+    rows = usage_summary_service.period_usage_by_subscriber(
+        db,
+        subscriber_ids,
+        start=start,
+        end=end,
+    )
 
     by_subscriber = {row.subscriber_id: row for row in rows}
     total_usage_gb = 0.0
@@ -388,89 +355,6 @@ def _percent_change(
     return round(((current_value - previous_value) / previous_value) * 100, 1)
 
 
-def _month_starts(months: int = 6) -> list[datetime]:
-    now = datetime.now(UTC)
-    first_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    starts = []
-    year = first_this_month.year
-    month = first_this_month.month - months + 1
-    while month <= 0:
-        month += 12
-        year -= 1
-    for _ in range(months):
-        starts.append(datetime(year, month, 1, tzinfo=UTC))
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
-    return starts
-
-
-def _monthly_customer_growth_series(db: Session, *, months: int = 6) -> dict[str, list]:
-    starts = _month_starts(months)
-    labels: list[str] = []
-    totals: list[int] = []
-    new_counts: list[int] = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
-        total = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.created_at < end,
-                )
-            )
-            or 0
-        )
-        new_count = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.created_at >= start,
-                    Subscriber.created_at < end,
-                )
-            )
-            or 0
-        )
-        labels.append(start.strftime("%b"))
-        totals.append(int(total))
-        new_counts.append(int(new_count))
-    return {"labels": labels, "total": totals, "new": new_counts}
-
-
-def _monthly_churn_series(db: Session, *, months: int = 6) -> dict[str, list]:
-    starts = _month_starts(months)
-    labels: list[str] = []
-    rates: list[float] = []
-    counts: list[int] = []
-    for idx, start in enumerate(starts):
-        end = starts[idx + 1] if idx + 1 < len(starts) else datetime.now(UTC)
-        total = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.created_at < end,
-                )
-            )
-            or 0
-        )
-        cancelled = (
-            db.scalar(
-                select(func.count(Subscriber.id)).where(
-                    subscriber_service.visible_subscriber_clause(),
-                    Subscriber.status == AccountStatus.canceled,
-                    Subscriber.updated_at >= start,
-                    Subscriber.updated_at < end,
-                )
-            )
-            or 0
-        )
-        labels.append(start.strftime("%b"))
-        counts.append(int(cancelled))
-        rates.append(round((int(cancelled) / int(total) * 100) if total else 0, 1))
-    return {"labels": labels, "rate": rates, "count": counts}
-
-
 def get_revenue_report_data(db: Session) -> dict:
     """Compose the revenue report from the billing reporting read owners.
 
@@ -521,33 +405,8 @@ def get_revenue_report_data(db: Session) -> dict:
 
 
 def _subscriber_growth_percent(db: Session) -> float | None:
-    now = datetime.now(UTC)
-    current_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    previous_start = (
-        current_start.replace(year=current_start.year - 1, month=12)
-        if current_start.month == 1
-        else current_start.replace(month=current_start.month - 1)
-    )
-    current_new = (
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause(),
-                Subscriber.created_at >= current_start,
-                Subscriber.created_at < now,
-            )
-        )
-        or 0
-    )
-    previous_new = (
-        db.scalar(
-            select(func.count(Subscriber.id)).where(
-                subscriber_service.visible_subscriber_clause(),
-                Subscriber.created_at >= previous_start,
-                Subscriber.created_at < current_start,
-            )
-        )
-        or 0
-    )
+    """Month-over-month new-signup growth; counts owned by subscriber_growth."""
+    current_new, previous_new = subscriber_growth.monthly_new_counts(db)
     return _percent_change(current_new, previous_new)
 
 
@@ -674,7 +533,7 @@ def get_subscribers_report_data(
         "total_usage_gb": total_usage_gb,
         "status_filter": status or "",
         "status_options": [item.value for item in AccountStatus],
-        "growth_data": _monthly_customer_growth_series(db),
+        "growth_data": subscriber_growth.monthly_customer_growth_series(db),
     }
 
 
@@ -760,44 +619,28 @@ def build_subscribers_export_csv(
 
 
 def get_churn_report_data(db: Session) -> dict:
-    all_subscribers = list(
-        db.scalars(
-            select(Subscriber)
-            .where(subscriber_service.visible_subscriber_clause())
-            .order_by(Subscriber.created_at.desc())
-        ).all()
-    )
-    total_subscribers = len(all_subscribers)
-    for sub in all_subscribers:
-        sub.status = _derive_subscriber_status(sub)
-    cancelled_subscribers = [
-        s for s in all_subscribers if s.status == AccountStatus.canceled
-    ]
-    cancelled_count = len(cancelled_subscribers)
-    at_risk_subscribers = [
-        s for s in all_subscribers if s.status == AccountStatus.suspended
-    ]
-    at_risk_count = len(at_risk_subscribers)
+    """Compose the churn report from the subscriber growth/churn read owner.
+
+    Counts, the monthly churn series, and the recent-cancellation list are
+    owned by app.services.subscriber_growth; this function assembles and
+    presents.
+    """
+    summary = subscriber_growth.churn_summary(db)
+    total_subscribers = summary["total"]
+    cancelled_count = summary["cancelled_count"]
+    at_risk_count = summary["at_risk_count"]
     churn_rate = (
         (cancelled_count / total_subscribers * 100) if total_subscribers > 0 else 0
     )
     retention_rate = 100 - churn_rate
-    recent_cancellations = sorted(
-        cancelled_subscribers,
-        key=lambda x: (
-            subscriber_service.get_effective_updated_at(x)
-            or datetime.min.replace(tzinfo=UTC)
-        ),
-        reverse=True,
-    )[:10]
     return {
         "churn_rate": churn_rate,
         "retention_rate": retention_rate,
         "cancelled_count": cancelled_count,
         "at_risk_count": at_risk_count,
         "churn_reasons": {},
-        "churn_data": _monthly_churn_series(db),
-        "recent_cancellations": recent_cancellations,
+        "churn_data": subscriber_growth.monthly_churn_series(db),
+        "recent_cancellations": subscriber_growth.recent_cancellations(db, limit=10),
     }
 
 
@@ -873,25 +716,17 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
 
 
 def get_technician_report_data(db: Session) -> dict:
-    from sqlalchemy import func, select
+    """Compose the technician report from the provisioning read owner.
 
-    from app.models.provisioning import (
-        AppointmentStatus,
-        InstallAppointment,
-        ProvisioningTask,
-        ServiceOrder,
-        ServiceOrderStatus,
-        TaskStatus,
-    )
+    The aggregated figures are owned by
+    app.services.provisioning_managers.technician_report_stats; this function
+    assembles them with the recent-completion listing and owns presentation
+    (the top-10 slice) only.
+    """
+    from app.models.provisioning import ServiceOrder, ServiceOrderStatus
+    from app.services import provisioning_managers
 
-    jobs_completed = (
-        db.scalar(
-            select(func.count(ServiceOrder.id)).where(
-                ServiceOrder.status == ServiceOrderStatus.active
-            )
-        )
-        or 0
-    )
+    stats = provisioning_managers.technician_report_stats(db)
     recent_completions = list(
         db.scalars(
             select(ServiceOrder)
@@ -901,118 +736,13 @@ def get_technician_report_data(db: Session) -> dict:
         ).all()
     )
 
-    # Real technician count from appointments + provisioning tasks
-    tech_names: set[str] = set()
-    appt_techs = db.scalars(
-        select(InstallAppointment.technician)
-        .where(InstallAppointment.technician.isnot(None))
-        .distinct()
-    ).all()
-    tech_names.update(t for t in appt_techs if t)
-    task_assignees = db.scalars(
-        select(ProvisioningTask.assigned_to)
-        .where(ProvisioningTask.assigned_to.isnot(None))
-        .distinct()
-    ).all()
-    tech_names.update(t for t in task_assignees if t)
-    total_technicians = len(tech_names)
-
-    # Average completion hours from provisioning tasks with start/end times
-    completed_tasks = db.execute(
-        select(
-            ProvisioningTask.started_at,
-            ProvisioningTask.completed_at,
-        ).where(
-            ProvisioningTask.status == TaskStatus.completed,
-            ProvisioningTask.started_at.isnot(None),
-            ProvisioningTask.completed_at.isnot(None),
-        )
-    ).all()
-    if completed_tasks:
-        total_hours = 0.0
-        counted = 0
-        for t in completed_tasks:
-            t_start = _ensure_aware_datetime(t.started_at)
-            t_end = _ensure_aware_datetime(t.completed_at)
-            if t_start and t_end:
-                total_hours += max(0.0, (t_end - t_start).total_seconds() / 3600)
-                counted += 1
-        avg_completion_hours = round(total_hours / max(1, counted), 1)
-    else:
-        avg_completion_hours = 0.0
-
-    # First visit rate from appointments (completed vs no-show/canceled)
-    total_appointments = db.scalar(select(func.count(InstallAppointment.id))) or 0
-    completed_appointments = (
-        db.scalar(
-            select(func.count(InstallAppointment.id)).where(
-                InstallAppointment.status == AppointmentStatus.completed
-            )
-        )
-        or 0
-    )
-    (
-        db.scalar(
-            select(func.count(InstallAppointment.id)).where(
-                InstallAppointment.status == AppointmentStatus.no_show
-            )
-        )
-        or 0
-    )
-    if total_appointments > 0:
-        first_visit_rate = round((completed_appointments / total_appointments) * 100, 1)
-    else:
-        first_visit_rate = 0.0
-
-    # Per-technician stats
-    technician_stats: list[dict[str, object]] = []
-    for tech_name in sorted(tech_names):
-        tech_total = (
-            db.scalar(
-                select(func.count(InstallAppointment.id)).where(
-                    InstallAppointment.technician == tech_name
-                )
-            )
-            or 0
-        )
-        tech_completed = (
-            db.scalar(
-                select(func.count(InstallAppointment.id)).where(
-                    InstallAppointment.technician == tech_name,
-                    InstallAppointment.status == AppointmentStatus.completed,
-                )
-            )
-            or 0
-        )
-        technician_stats.append(
-            {
-                "name": tech_name,
-                "total_jobs": tech_total,
-                "completed_jobs": tech_completed,
-                "avg_hours": avg_completion_hours,
-                "rating": round(
-                    (tech_completed / tech_total * 5) if tech_total > 0 else 0, 1
-                ),
-            }
-        )
-
-    job_type_rows = db.execute(
-        select(ServiceOrder.status, func.count(ServiceOrder.id)).group_by(
-            ServiceOrder.status
-        )
-    ).all()
-    job_type_breakdown = {
-        (row.status.value if row.status else "unknown"): int(row[1] or 0)
-        for row in job_type_rows
-    }
-
     return {
-        "total_technicians": total_technicians,
-        "jobs_completed": jobs_completed,
-        "avg_completion_hours": avg_completion_hours,
-        "first_visit_rate": first_visit_rate,
-        "technician_stats": technician_stats[:10],
-        "job_type_breakdown": job_type_breakdown,
+        "total_technicians": stats["total_technicians"],
+        "jobs_completed": stats["jobs_completed"],
+        "avg_completion_hours": stats["avg_completion_hours"],
+        "first_visit_rate": stats["first_visit_rate"],
+        "technician_stats": stats["technician_stats"][:10],
+        "job_type_breakdown": stats["job_type_breakdown"],
         "recent_completions": recent_completions,
     }
 
