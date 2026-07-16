@@ -1,7 +1,7 @@
 """Add reviewed provenance for reconstructed historical return documents.
 
-Revision ID: 322_consolidated_return_document_reconstruction
-Revises: 321_consolidated_return_reconciliation
+Revision ID: 325_consolidated_return_document_reconstruction
+Revises: 324_consolidated_return_reconciliation
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "322_consolidated_return_document_reconstruction"
-down_revision = "321_consolidated_return_reconciliation"
+revision = "325_consolidated_return_document_reconstruction"
+down_revision = "324_consolidated_return_reconciliation"
 branch_labels = None
 depends_on = None
 

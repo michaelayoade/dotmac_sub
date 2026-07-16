@@ -501,7 +501,7 @@ financial service:
   subscriber `LedgerEntry` it produced. `BillingAccount.balance` is updated only
   alongside the canonical ledger transaction.
 - Historical boundary: revision
-  `320_consolidated_credit_consumption_reconciliation` adds reviewed provenance
+  `323_consolidated_credit_consumption_reconciliation` adds reviewed provenance
   for a legacy transfer that changed a member receivable without recording the
   exact source-consumption structure. Inspection keeps the recorded balance,
   ledger-evidenced credit, projection drift, valid source credits, unlinked
@@ -554,7 +554,7 @@ Consolidated refunds and payment reversals remain under that scoped owner:
 - Cutover gate: revision `317_consolidated_payment_returns.py`, partial-surplus,
   full-refund, reversal, stale-preview, replay, dual-ledger, provider dispatch,
   admin/API dispatch, and sole-writer tests must remain green.
-- Historical boundary: revision `321_consolidated_return_reconciliation` adds
+- Historical boundary: revision `324_consolidated_return_reconciliation` adds
   read-only inspection, fingerprint-bound preview, locked confirmation,
   idempotent replay, actor audit, and one reviewed provenance row for an
   existing historical consolidated `PaymentRefund` or `PaymentReversal`.
@@ -572,7 +572,7 @@ Consolidated refunds and payment reversals remain under that scoped owner:
   than being reconstructed from a UI value, memo, current eligibility, or
   inferred billing state.
 - Missing-document boundary: revision
-  `322_consolidated_return_document_reconstruction` covers the narrower case
+  `325_consolidated_return_document_reconstruction` covers the narrower case
   where a historical consolidated payment already carries a return-compatible
   status and exact unclaimed return debits exist, but the `PaymentRefund` or
   `PaymentReversal` document is absent. The status is a consistency gate, not
