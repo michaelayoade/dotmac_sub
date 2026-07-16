@@ -1515,6 +1515,38 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
     DomainSOT(
+        domain="ai_advisory",
+        services=(
+            SOTService(
+                name="ai.insights",
+                module="app.services.ai_operations",
+                owns=(
+                    "AI insight rows",
+                    "insight lifecycle: create, acknowledge, expire",
+                    "per-scope AI intake configuration",
+                ),
+                notes=(
+                    "The canonical writer of AIInsight. Generated insights "
+                    "land here and nowhere else; AiIntakeConfig owns the "
+                    "per-scope/channel decision to run AI at all. AI is "
+                    "advisory: it never mutates domain state — acting on a "
+                    "recommendation means calling the domain's declared "
+                    "owner. See docs/designs/AI_SOT.md."
+                ),
+            ),
+        ),
+        entrypoints=(
+            "app.api.ai_operations",
+            "app.tasks.ai_operations",
+        ),
+        rule=(
+            "AI observes, derives, and recommends; it never decides domain "
+            "state. Insight consequences are requested from the owning domain "
+            "service, which applies its own guards, events, and audit. No "
+            "app/services/ai* module writes a non-AI ORM row."
+        ),
+    ),
+    DomainSOT(
         domain="provisioning_operations",
         services=(
             SOTService(

@@ -6,7 +6,6 @@ app.services.account_deletion
 app.services.account_status_reconcile
 app.services.admin_alerts
 app.services.admin_whats_new
-app.services.ai_operations
 app.services.analytics
 app.services.auth
 app.services.auth_flow
