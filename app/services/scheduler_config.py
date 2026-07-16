@@ -1325,6 +1325,33 @@ def build_beat_schedule() -> dict:
             enabled=infra_availability_prune_enabled,
             interval_seconds=infra_availability_prune_interval_seconds,
         )
+        # Unified device projection reconcile - keeps device_projections fresh
+        # (one materialised row per device with pre-derived operational status)
+        # so the admin device list can page in SQL.
+        device_projection_reconcile_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "device_projection_reconcile_enabled",
+            "DEVICE_PROJECTION_RECONCILE_ENABLED",
+            True,
+        )
+        device_projection_reconcile_interval_seconds = _effective_int(
+            session,
+            SettingDomain.network_monitoring,
+            "device_projection_reconcile_interval_seconds",
+            "DEVICE_PROJECTION_RECONCILE_INTERVAL_SECONDS",
+            300,  # Every 5 minutes - operational-status freshness.
+        )
+        device_projection_reconcile_interval_seconds = max(
+            device_projection_reconcile_interval_seconds, 60
+        )
+        _sync_scheduled_task(
+            session,
+            name="device_projection_reconcile",
+            task_name="app.tasks.device_projection.reconcile_device_projections",
+            enabled=device_projection_reconcile_enabled,
+            interval_seconds=device_projection_reconcile_interval_seconds,
+        )
         # Vacation hold auto-resume - runs hourly to resume expired holds
         vacation_hold_resume_enabled = _effective_bool(
             session,

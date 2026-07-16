@@ -605,6 +605,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("runtime.infrastructure_polling",),
             ),
             SOTService(
+                name="network.device_projection",
+                module="app.services.device_projection_reconcile",
+                owns=(
+                    "device_projections materialised table",
+                    "unified cross-type device row (OLT/core/ONT/CPE)",
+                    "projected operational status and freshness",
+                    "device projection orphan pruning",
+                ),
+                depends_on=(
+                    "network.device_state",
+                    "network.monitoring_inventory",
+                    "network.identity",
+                ),
+                notes=(
+                    "Sole canonical writer of device_projections. Delegates the "
+                    "multi-source device derivation to collect_devices and "
+                    "projects one materialised row per device so the admin device "
+                    "list can search/filter/sort/paginate in SQL. The table is a "
+                    "rebuildable cache: reconcile is idempotent, stamps "
+                    "refreshed_at, and prunes rows whose source device is gone. "
+                    "Readers never write it; they request a reconcile rather than "
+                    "maintaining a parallel derivation path."
+                ),
+            ),
+            SOTService(
                 name="network.operation_ledger",
                 module="app.services.network_operations",
                 owns=(
