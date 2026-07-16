@@ -1306,7 +1306,11 @@ def get_outstanding_receivables(db: Session) -> dict:
         ).where(
             Invoice.is_active.is_(True),
             Invoice.status.in_(
-                (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+                (
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                )
             ),
             Invoice.balance_due > 0,
         )
@@ -1391,7 +1395,9 @@ def get_revenue_by_service_type(db: Session) -> list[dict]:
         )
         .select_from(InvoiceLine)
         .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
-        .join(Subscription, Subscription.id == InvoiceLine.subscription_id, isouter=True)
+        .join(
+            Subscription, Subscription.id == InvoiceLine.subscription_id, isouter=True
+        )
         .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
         .where(Invoice.is_active.is_(True))
         .group_by(CatalogOffer.service_type)
@@ -1418,6 +1424,5 @@ def get_customer_statement_totals(db: Session, *, limit: int = 200) -> list[dict
         .limit(limit)
     )
     return [
-        {"name": r[0], "doc_count": r[1], "total": r[2]}
-        for r in db.execute(stmt).all()
+        {"name": r[0], "doc_count": r[1], "total": r[2]} for r in db.execute(stmt).all()
     ]

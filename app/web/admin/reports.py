@@ -262,7 +262,9 @@ def reports_revenue(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/revenue.html", context)
 
 
-@router.get("/revenue/export", dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/revenue/export", dependencies=[Depends(require_permission("reports:billing"))]
+)
 def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_revenue_export_csv(db=db, days=days)
     return Response(
@@ -323,8 +325,12 @@ def reports_subscribers(
     return templates.TemplateResponse("admin/reports/subscribers.html", context)
 
 
-@router.get("/customers/export", dependencies=[Depends(require_permission("customer:read"))])
-@router.get("/subscribers/export", dependencies=[Depends(require_permission("customer:read"))])
+@router.get(
+    "/customers/export", dependencies=[Depends(require_permission("customer:read"))]
+)
+@router.get(
+    "/subscribers/export", dependencies=[Depends(require_permission("customer:read"))]
+)
 def reports_subscribers_export(
     days: int | None = None,
     date_from: str | None = None,
@@ -346,7 +352,11 @@ def reports_subscribers_export(
     )
 
 
-@router.get("/churn", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:read"))])
+@router.get(
+    "/churn",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def reports_churn(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -370,7 +380,9 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/churn.html", context)
 
 
-@router.get("/churn/export", dependencies=[Depends(require_permission("customer:read"))])
+@router.get(
+    "/churn/export", dependencies=[Depends(require_permission("customer:read"))]
+)
 def reports_churn_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_churn_export_csv(db=db, days=days)
     return Response(
@@ -412,7 +424,9 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/network.html", context)
 
 
-@router.get("/network/export", dependencies=[Depends(require_permission("reports:network"))])
+@router.get(
+    "/network/export", dependencies=[Depends(require_permission("reports:network"))]
+)
 def reports_network_export(hours: int | None = None, db: Session = Depends(get_db)):
     report_data = web_reports_service.get_network_report_data(db=db, hours=hours)
     content = web_reports_service.build_network_export_csv(report_data, hours=hours)
@@ -451,7 +465,10 @@ def reports_technician(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/technician.html", context)
 
 
-@router.get("/technician/export", dependencies=[Depends(require_permission("provisioning:read"))])
+@router.get(
+    "/technician/export",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
 def reports_technician_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_technician_export_csv(db=db, days=days)
     return Response(
@@ -999,7 +1016,11 @@ def reports_inbox_escalations_export(
 # ===================================================================
 
 
-@router.get("/subscriber-growth", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:read"))])
+@router.get(
+    "/subscriber-growth",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def reports_subscriber_growth(
     request: Request,
     days: int = 30,
@@ -1017,7 +1038,11 @@ def reports_subscriber_growth(
     return templates.TemplateResponse("admin/reports/subscriber_growth.html", ctx)
 
 
-@router.get("/usage-by-plan", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/usage-by-plan",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_usage_by_plan_data(db)
     ctx = _base_context(
@@ -1031,7 +1056,11 @@ def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/usage_by_plan.html", ctx)
 
 
-@router.get("/upcoming-charges", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/upcoming-charges",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_upcoming_charges_data(db)
     ctx = _base_context(
@@ -1045,7 +1074,11 @@ def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/upcoming_charges.html", ctx)
 
 
-@router.get("/revenue-per-plan", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/revenue-per-plan",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_revenue_per_plan(
     request: Request,
     date_from: str | None = None,
@@ -1066,7 +1099,11 @@ def reports_revenue_per_plan(
     return templates.TemplateResponse("admin/reports/revenue_per_plan.html", ctx)
 
 
-@router.get("/invoices", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/invoices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_invoices(
     request: Request,
     date_from: str | None = None,
@@ -1088,7 +1125,11 @@ def reports_invoices(
     return templates.TemplateResponse("admin/reports/invoices.html", ctx)
 
 
-@router.get("/statements", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/statements",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_statements(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_statements_data(db)
     ctx = _base_context(
@@ -1098,7 +1139,11 @@ def reports_statements(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/statements.html", ctx)
 
 
-@router.get("/tax", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/tax",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_tax(
     request: Request,
     date_from: str | None = None,
@@ -1121,7 +1166,11 @@ def reports_tax(
     return templates.TemplateResponse("admin/reports/tax.html", ctx)
 
 
-@router.get("/mrr", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/mrr",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_mrr(
     request: Request,
     year: int | None = None,
@@ -1146,7 +1195,11 @@ def reports_mrr(
     return templates.TemplateResponse("admin/reports/mrr.html", ctx)
 
 
-@router.get("/new-services", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:read"))])
+@router.get(
+    "/new-services",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def reports_new_services(
     request: Request,
     date_from: str | None = None,
@@ -1167,7 +1220,11 @@ def reports_new_services(
     return templates.TemplateResponse("admin/reports/new_services.html", ctx)
 
 
-@router.get("/custom-pricing", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/custom-pricing",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_custom_pricing_data(db)
     ctx = _base_context(
@@ -1181,7 +1238,11 @@ def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/custom_pricing.html", ctx)
 
 
-@router.get("/revenue-categories", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:billing"))])
+@router.get(
+    "/revenue-categories",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing"))],
+)
 def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_revenue_categories_data(db)
     ctx = _base_context(
@@ -1195,7 +1256,11 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/revenue_categories.html", ctx)
 
 
-@router.get("/bandwidth", response_class=HTMLResponse, dependencies=[Depends(require_permission("reports:network"))])
+@router.get(
+    "/bandwidth",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:network"))],
+)
 def reports_bandwidth(
     request: Request,
     days: int | None = None,
@@ -1222,7 +1287,9 @@ def reports_bandwidth(
     return templates.TemplateResponse("admin/reports/bandwidth.html", ctx)
 
 
-@router.get("/bandwidth/export", dependencies=[Depends(require_permission("reports:network"))])
+@router.get(
+    "/bandwidth/export", dependencies=[Depends(require_permission("reports:network"))]
+)
 def reports_bandwidth_export(
     days: int | None = None,
     date_from: str | None = None,
