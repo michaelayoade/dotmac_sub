@@ -16,6 +16,7 @@ from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_attention as admin_attention_service
 from app.services import admin_whats_new as admin_whats_new_service
 from app.services import infrastructure_health as infrastructure_health_service
+from app.services import settings_spec
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -64,6 +65,15 @@ _dashboard_infrastructure_cache: (
     ]
     | None
 ) = None
+
+
+def _network_monitoring_int_setting(db: Session, key: str, default: int) -> int:
+    raw = settings_spec.resolve_value(db, SettingDomain.network_monitoring, key)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def _invoice_total(inv) -> float:
