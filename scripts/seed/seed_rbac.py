@@ -50,6 +50,8 @@ DEFAULT_PERMISSIONS = [
     ("*", "Full access (wildcard) — grants every permission"),
     # Audit
     ("audit:read", "Read audit events"),
+    # Integrations (service ApiKey scopes)
+    ("integration:crm", "CRM service integration API access"),
     # Auth & System
     ("auth:manage", "Manage authentication settings"),
     ("auth:credential:read", "View authentication credential metadata"),

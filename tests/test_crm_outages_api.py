@@ -275,6 +275,6 @@ def test_outage_routes_declare_crm_bearer_guard():
                 getattr(dep.dependency, "__name__", "")
                 for dep in getattr(route, "dependencies", [])
             }
-            assert "require_crm_bearer" in names
+            assert "require_crm_service_auth" in names
             seen.add(route.path)
     assert seen == {"/crm/outages", "/crm/outages/{incident_id}"}
