@@ -47,41 +47,26 @@ def _capturing_client(captured: dict):
     return factory
 
 
-def test_service_token_sends_api_key_and_skips_staff_login():
-    client = CRMClient(
-        "https://crm.example", "user", "pass", service_token="svc-key-123"
-    )
+def test_service_token_sends_api_key():
+    client = CRMClient("https://crm.example", service_token="svc-key-123")
     captured: dict = {}
     with patch("app.services.crm_client.httpx.Client", _capturing_client(captured)):
-        # If this touched _ensure_token it would attempt a real login and fail;
-        # boobytrap it to prove the staff path is never taken.
-        with patch.object(
-            client,
-            "_ensure_token",
-            side_effect=AssertionError("staff login must not run with a service token"),
-        ):
-            client._request("GET", "/api/v1/subscribers")
+        client._request("GET", "/api/v1/subscribers")
 
     assert captured["headers"]["X-API-Key"] == "svc-key-123"
     assert "Authorization" not in captured["headers"]
 
 
-def test_no_service_token_uses_staff_bearer():
+def test_no_service_token_fails_loudly():
+    """The staff username/password->JWT fallback is retired (auth S1)."""
     client = CRMClient("https://crm.example", "user", "pass")
-    captured: dict = {}
-    with patch("app.services.crm_client.httpx.Client", _capturing_client(captured)):
-        with patch.object(client, "_ensure_token", return_value="jwt-tok"):
-            client._request("GET", "/api/v1/subscribers")
-
-    assert captured["headers"]["Authorization"] == "Bearer jwt-tok"
-    assert "X-API-Key" not in captured["headers"]
+    with pytest.raises(CRMClientError, match="staff-credential login"):
+        client._auth_headers()
 
 
 def test_per_request_headers_still_override_but_api_key_stays():
     """Portal-scoped reads pass their own Authorization; the key rides alongside."""
-    client = CRMClient(
-        "https://crm.example", "user", "pass", service_token="svc-key-123"
-    )
+    client = CRMClient("https://crm.example", service_token="svc-key-123")
     captured: dict = {}
     with patch("app.services.crm_client.httpx.Client", _capturing_client(captured)):
         client._request(

@@ -13,7 +13,7 @@ from app.services.crm_client import CRMClient
 
 
 def _client() -> CRMClient:
-    return CRMClient(base_url="http://crm", username="u", password="p")
+    return CRMClient(base_url="http://crm", service_token="svc")
 
 
 def test_four_reads_share_one_minted_token(monkeypatch):

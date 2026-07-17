@@ -40,10 +40,9 @@ def ensure_default_crm_ticket_sync(db: Session) -> IntegrationJob:
             name="DotMac CRM",
             connector_type=ConnectorType.http,
             base_url=settings.crm_base_url,
-            auth_type=ConnectorAuthType.basic,
+            auth_type=ConnectorAuthType.api_key,
             auth_config={
-                "username": settings.crm_username,
-                "password": settings.crm_password,
+                "service_token": settings.crm_service_token,
             },
             timeout_sec=45,
             metadata_={"sync_adapter": "crm"},

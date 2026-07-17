@@ -82,8 +82,9 @@ class Settings:
     # NOT perform the staff username/password login below. The staff credentials
     # remain only as a transitional fallback while this token is unset.
     crm_service_token: str = os.getenv("CRM_SERVICE_TOKEN", "")
-    crm_username: str = os.getenv("CRM_USERNAME", "")
-    crm_password: str = os.getenv("CRM_PASSWORD", "")
+    # CRM_USERNAME/CRM_PASSWORD retired (auth unification S1): services
+    # authenticate to CRM with CRM_SERVICE_TOKEN only; staff credentials are
+    # for humans. The env vars are intentionally no longer read.
     # Shared secret for inbound CRM webhook deliveries (HMAC-SHA256).
     crm_webhook_secret: str = os.getenv("CRM_WEBHOOK_SECRET", "")
     # Dedicated bearer token for CRM server-to-server pull/write-back API.
