@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 TEMPLATE = (
-    Path(__file__).resolve().parents[1]
-    / "templates/admin/resellers/detail.html"
+    Path(__file__).resolve().parents[1] / "templates/admin/resellers/detail.html"
 ).read_text()
 
 
@@ -18,9 +17,7 @@ def test_link_customer_form_is_exposed_from_linked_subscribers_modal() -> None:
     assert 'id="link-customer-modal"' in TEMPLATE
     assert 'role="dialog"' in TEMPLATE
     assert 'aria-modal="true"' in TEMPLATE
-    assert TEMPLATE.count(
-        'action="/admin/resellers/{{ reseller.id }}/users/link"'
-    ) == 1
+    assert TEMPLATE.count('action="/admin/resellers/{{ reseller.id }}/users/link"') == 1
 
 
 def test_invite_user_form_is_exposed_from_reseller_details_header() -> None:
@@ -32,6 +29,6 @@ def test_invite_user_form_is_exposed_from_reseller_details_header() -> None:
     assert "showInviteUserModal: false" in TEMPLATE
     assert 'id="invite-reseller-user-modal"' in TEMPLATE
     assert 'aria-labelledby="invite-reseller-user-modal-title"' in TEMPLATE
-    assert TEMPLATE.count(
-        'action="/admin/resellers/{{ reseller.id }}/users/create"'
-    ) == 1
+    assert (
+        TEMPLATE.count('action="/admin/resellers/{{ reseller.id }}/users/create"') == 1
+    )
