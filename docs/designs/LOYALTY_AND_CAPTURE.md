@@ -69,8 +69,9 @@ something. Keeping them separate in the *channel* is what keeps both honest.
 
 | Concern | Owner | Note |
 |---|---|---|
-| Who is due a milestone | **`loyalty.milestones`** (new) | DERIVES from `Subscriber.created_at` + payment + referrals. Stores no tier. |
-| What was granted | **`loyalty.grants`** (new) | The only durable loyalty fact: *this customer was granted this, on this date, for this reason.* |
+| Who is due a milestone | **`loyalty.milestones`** (new) | DERIVES from `Subscriber.created_at` + payment + referrals. Stores no tier. **Proposes only.** |
+| Whether to grant | **a human** | See "Grants are reviewed" below. The system never decides. |
+| What was granted | **`loyalty.grants`** (new) | The only durable loyalty fact: *this customer was granted this, on this date, for this reason, **by this person**.* |
 | Sending | `communications.intents` / `comms_campaigns` | Existing. Requests an outcome; does not decide eligibility. |
 | Consent | `communications.eligibility` | Existing. **Sole** arbiter of transactional vs marketing. Never bypassed. |
 | The captured location | `customer.data_completeness` + the verification ledger | Existing (PR #1423/#1430). Capture writes ledger rows; the reconciler adjudicates. |
@@ -81,6 +82,26 @@ payment behaviour + advocacy, on read. The moment we persist "gold customer"
 as a fact, we have built a second authority for something Sub already knows —
 the mirror pattern, in a party hat. Only the **grant** is a fact, because a
 grant is an event that happened.
+
+## Grants are reviewed, never automatic (Michael, 2026-07-17)
+
+`loyalty.milestones` produces a **review queue**, not a decision. A human
+approves each grant; `loyalty.grants` records what that person approved and
+who they were.
+
+This is the same rule the rest of this codebase now runs on — the geocoder
+proposes and a human confirms; a suggestion never auto-applies; an AI insight
+advises and a person acts. A reward is money or capacity leaving the
+business, so it is the *last* thing that should fire because a date rolled
+over.
+
+It also removes the worst failure mode by construction: no automatic grant
+can be triggered by a bad `created_at`, a backfilled subscriber, or a
+migration that touches tenure. The review queue is a projection; approving is
+the command; the grant is the fact. Everything else about the design stays —
+the derivation, the cooldown, and the good-standing gate become *inputs to
+the reviewer's judgement* and filters on the queue, not gates on an
+autonomous action.
 
 ## Configurability
 
@@ -145,7 +166,10 @@ disconnecting them is worse than silence.
 One PR, feature-sliced, everything default-OFF:
 
 1. **`loyalty.milestones`** — derive who is due. Pure, read-only, no sends.
-2. **`loyalty.grants`** — the grant ledger + cooldown + good-standing gate.
+   Output is a **review queue projection**, not a decision.
+2. **`loyalty.grants`** — the review surface + the grant ledger. A human
+   approves; the ledger records what was approved and by whom. Cooldown and
+   good-standing filter the queue rather than gate an autonomous action.
    Requests the reward from the owning domain; never provisions.
 3. **The transactional ask** — through `communications.eligibility` as
    transactional. Tests must prove it is NOT classified as marketing, and
@@ -157,6 +181,7 @@ One PR, feature-sliced, everything default-OFF:
 
 ## Non-goals
 
+- **Automatic grants.** A human approves every one (Michael, 2026-07-17).
 - Storing a loyalty tier. Derive it.
 - Marketing sends. Zero opt-ins; and this is not a promotion.
 - Provisioning rewards inside loyalty. It requests; the catalog/provisioning
@@ -165,10 +190,12 @@ One PR, feature-sliced, everything default-OFF:
 
 ## Open questions for Michael
 
-1. **What is the reward?** A speed boost costs capacity; a bill credit costs
-   money and touches the ledger (which has one canonical writer, deliberately).
-   The design requests from the owning domain either way, but the choice
-   changes who we integrate with.
+1. **What is the reward?** (Michael is thinking on this.) A speed boost costs
+   capacity; a bill credit costs money and touches the ledger's single
+   canonical writer. The design requests from the owning domain either way,
+   but the choice changes who we integrate with. Manual review lowers the
+   stakes of getting this wrong first time — a bad reward is refused at the
+   queue, not discovered in the ledger.
 2. **Does the anniversary ask need Legal's eye?** The classification is
    defensible — the location requirement is real and NDPR-relevant — but
    "transactional message, in-product reward" is a judgement, and it is worth
