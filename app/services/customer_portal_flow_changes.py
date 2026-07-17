@@ -34,6 +34,8 @@ from app.services.form_contracts import (
     FormConsequence,
     FormContract,
     FormPrerequisite,
+)
+from app.services.form_contracts import (
     register as register_form_contract,
 )
 
@@ -250,23 +252,23 @@ def _build_migration_offers(
 # execution time; this rendered contract is disclosure, not enforcement.
 PLAN_CHANGE_FORM = register_form_contract(
     FormContract(
-    key="customer.plan_change",
-    title="Change plan",
-    entity="subscription",
-    command_owner="customer_portal_flow_changes.apply_instant_plan_change",
-    consequences=(
-        FormConsequence(
-            "proration",
-            "Switching today applies an immediate prorated charge or credit "
-            "for the remainder of your current period",
-        ),
-        FormConsequence(
-            "reprovision",
-            "Your connection is re-provisioned to the new plan's speed right away",
-        ),
-        FormConsequence(
-            "cross_family",
-            "Choosing a plan from a different family submits a migration "
+        key="customer.plan_change",
+        title="Change plan",
+        entity="subscription",
+        command_owner="customer_portal_flow_changes.apply_instant_plan_change",
+        consequences=(
+            FormConsequence(
+                "proration",
+                "Switching today applies an immediate prorated charge or credit "
+                "for the remainder of your current period",
+            ),
+            FormConsequence(
+                "reprovision",
+                "Your connection is re-provisioned to the new plan's speed right away",
+            ),
+            FormConsequence(
+                "cross_family",
+                "Choosing a plan from a different family submits a migration "
                 "request for our team instead of changing instantly",
             ),
         ),
