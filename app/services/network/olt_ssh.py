@@ -820,7 +820,9 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
 
     try:
         channel.send("enable\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout())
+        _read_until_prompt(
+            channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
+        )
 
         # First check if we have dual image support
         ok, msg, info = get_firmware_info(olt)
@@ -830,7 +832,9 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
             return False, "No standby firmware version available for rollback"
 
         channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout())
+        _read_until_prompt(
+            channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
+        )
 
         # Switch startup system software to standby
         # Huawei: startup system-software slave (or backup/standby depending on model)
@@ -908,7 +912,9 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
     try:
         with ssh_context as (channel, policy):
             channel.send("enable\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout())
+            _read_until_prompt(
+                channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
+            )
 
             output = _run_huawei_paged_cmd(
                 channel,
@@ -997,7 +1003,9 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
     try:
         with ssh_context as (channel, policy):
             channel.send("enable\n")
-            _read_until_prompt(channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout())
+            _read_until_prompt(
+                channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
+            )
 
             channel.send(f"{command}\n")
             output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=30)
