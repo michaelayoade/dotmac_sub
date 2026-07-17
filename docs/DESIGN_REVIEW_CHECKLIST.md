@@ -58,6 +58,7 @@ If a section does not apply, mark it `N/A` explicitly.
 - [ ] Unauthorized actions are hidden and state-ineligible actions explain why only when useful.
 - [ ] The command owner rechecks permission and eligibility at execution time.
 - [ ] High-impact actions show scope and consequences before confirmation.
+- [ ] Editor pages for money-moving, service-affecting, or irreversible transitions declare a `FormContract` (`app/services/form_contracts.py` — prerequisites near the control, consequences before the primary action) or record a conscious waiver in `HIGH_IMPACT_EDITORS`; touching a `pending` editor means adopting the contract in that change.
 - [ ] Async actions expose an operation/event ID and do not claim a false final state.
 
 ## Work Surface
