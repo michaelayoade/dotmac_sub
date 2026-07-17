@@ -290,7 +290,7 @@ class _BaseHttpAIClient:
     ) -> dict[str, Any]:
         if ai_disabled_by_env():
             raise AIClientError(
-                "AI features are disabled (AI_ENABLED=false)",
+                "AI features are disabled (integration.ai_enabled=false)",
                 provider=self.provider,
                 model=self.model,
                 endpoint=url,

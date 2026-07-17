@@ -4061,9 +4061,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     # --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) ----------
     # Every value defaults OFF/empty: the transport is inert until an operator
-    # configures a provider. ai_enabled is the stored master switch; the
-    # AI_ENABLED env var is a one-way kill switch that can only force it off
-    # (app/services/ai/security.py), never on.
+    # configures a provider. ai_enabled is the stored master switch, resolved
+    # through the named resolver — there is no env override: this repo forbids
+    # direct env decision inputs (tests/architecture/test_decision_input_
+    # ownership), and env_var below seeds the stored value at bootstrap only.
     #
     # The api_key specs are is_secret and may hold an OpenBao reference
     # (``bao://mount/path#field``) rather than a literal key — resolved by

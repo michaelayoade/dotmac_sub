@@ -25,7 +25,6 @@ Nothing here ever logs, returns, or raises a secret value.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from urllib.parse import urlparse
 
@@ -48,29 +47,12 @@ _SECRET_ASSIGNMENT_RE = re.compile(
 _SK_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b")
 
 
-def env_bool(name: str) -> bool | None:
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    normalized = raw.strip().lower()
-    if normalized in _FALSE_VALUES:
-        return False
-    if normalized in _TRUE_VALUES:
-        return True
-    return None
-
-
-def ai_disabled_by_env() -> bool:
-    """The emergency stop. ``AI_ENABLED=false`` forces AI off everywhere.
-
-    One-way by design: this never enables anything. See the module docstring.
-    """
-    return env_bool("AI_ENABLED") is False
-
-
 def ai_enabled(db: Session) -> bool:
-    if ai_disabled_by_env():
-        return False
+    """AI enablement is a stored decision, resolved through the named
+    resolver. It deliberately has NO env override: this repo forbids direct
+    env decision inputs (tests/architecture/test_decision_input_ownership),
+    and the emergency stop already exists as the default-OFF ``ai.generation``
+    control, which an operator can flip without a deploy."""
     value = resolve_value(db, SettingDomain.integration, "ai_enabled")
     if isinstance(value, bool):
         return value

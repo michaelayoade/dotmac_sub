@@ -19,7 +19,6 @@ Ported near-verbatim from dotmac_crm. Divergences:
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -49,12 +48,12 @@ from app.services.settings_spec import resolve_value
 logger = logging.getLogger(__name__)
 
 AIEndpoint = Literal["primary", "secondary"]
-_CIRCUIT_BREAKER_FAILURE_THRESHOLD = max(
-    int(os.getenv("AI_PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3")), 1
-)
-_CIRCUIT_BREAKER_COOLDOWN_SECONDS = max(
-    int(os.getenv("AI_PROVIDER_CIRCUIT_COOLDOWN_SECONDS", "60")), 1
-)
+# Per-process transport resilience, not a business decision — so these are
+# constants, not env reads (this repo forbids direct env decision inputs) and
+# not settings (a DB read at import time). Promote to settings only if an
+# operator ever needs to disagree at runtime.
+_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3
+_CIRCUIT_BREAKER_COOLDOWN_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -392,7 +391,7 @@ class AIGateway:
     ) -> AIResponse:
         if not self.enabled(db):
             raise AIClientError(
-                "AI features are disabled (AI_ENABLED=false or integration.ai_enabled=false)",
+                "AI features are disabled (integration.ai_enabled=false)",
                 failure_type="ai_disabled",
             )
 
@@ -435,7 +434,7 @@ class AIGateway:
         """
         if not self.enabled(db):
             raise AIClientError(
-                "AI features are disabled (AI_ENABLED=false or integration.ai_enabled=false)",
+                "AI features are disabled (integration.ai_enabled=false)",
                 failure_type="ai_disabled",
             )
         try:
