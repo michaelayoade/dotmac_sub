@@ -20,6 +20,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.services.secrets import resolve_secret
 from app.models.domain_settings import SettingDomain
 from app.services.settings_spec import resolve_value
 
@@ -784,13 +785,13 @@ def get_crm_client(db: Session | None = None) -> CRMClient:
     if db is not None:
         return CRMClient(
             base_url=settings.crm_base_url,
-            service_token=settings.crm_service_token,
+            service_token=resolve_secret(settings.crm_service_token),
             settings_db=db,
         )
     global _crm_client
     if _crm_client is None:
         _crm_client = CRMClient(
             base_url=settings.crm_base_url,
-            service_token=settings.crm_service_token,
+            service_token=resolve_secret(settings.crm_service_token),
         )
     return _crm_client

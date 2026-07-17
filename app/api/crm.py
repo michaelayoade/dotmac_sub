@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.services import crm_api
+from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ def require_crm_service_auth(
         )
     if not settings.crm_legacy_bearer_enabled:
         _error(status.HTTP_401_UNAUTHORIZED, "CRM API requires an X-Api-Key.")
-    expected = settings.selfcare_api_token
+    expected = resolve_secret(settings.selfcare_api_token)
     if not expected:
         _error(status.HTTP_401_UNAUTHORIZED, "CRM API bearer token is not configured.")
     scheme, _, token = str(authorization or "").partition(" ")
