@@ -280,20 +280,54 @@ def _phone_type(ticket: Ticket) -> str:
 
 
 # ── location: from what we hold, never invented ──────────────────────────────
+def _captured_lgas(subscriber: Subscriber | None) -> list[str]:
+    """Captured LGA values for a subscriber, most authoritative first.
+
+    The subscriber's own field leads: production holds 51 ``addresses`` rows
+    against 15,291 subscribers, so the subscriber's own address is the one
+    almost every complaint has. Service/primary address rows follow for the
+    minority that carry them.
+    """
+    if subscriber is None:
+        return []
+    candidates: list[str] = []
+    own = str(getattr(subscriber, "lga", "") or "").strip()
+    if own:
+        candidates.append(own)
+    addresses = list(getattr(subscriber, "addresses", None) or [])
+    addresses.sort(
+        key=lambda a: (
+            0 if getattr(a, "is_primary", False) else 1,
+            0 if str(getattr(a, "address_type", "")).endswith("service") else 1,
+        )
+    )
+    for address in addresses:
+        value = str(getattr(address, "lga", "") or "").strip()
+        if value:
+            candidates.append(value)
+    return candidates
+
+
 def _ticket_location(
     ticket: Ticket, subscriber: Subscriber | None
 ) -> tuple[str, str, str]:
     """(state, lga, town) — blank where unknown.
 
-    Only two honest sources exist in sub: the ticket's own ``region`` and the
+    State comes from two honest sources: the ticket's own ``region`` and the
     subscriber's location (via ``infer_state``, which already spends every
     address/metadata signal we have). Both are canonicalised against the NCC
     reference tables. Nothing is defaulted: CRM turned an unmatched address
     into "Municipal Area Council, FEDERAL CAPITAL TERRITORY", which reported
     subscribers we could not locate as Abuja.
 
-    LGA and Town have no captured source in sub at all — there is no field
-    holding them — so they report blank until location capture lands.
+    LGA is read from the CAPTURED ``lga`` — the subscriber's own field first,
+    then their service/primary address row — and is validated at capture, so
+    it is reported as stored rather than re-interpreted here. It is never
+    derived: an uncaptured LGA reports blank, and the workbook's validator
+    then tells the compliance officer the row is not filable.
+
+    Town has no captured field, so it stays a canonicalisation of the region
+    text against the NCC tables, or blank.
     """
     state = ""
     for candidate in (ticket.region, subscriber):
@@ -315,17 +349,30 @@ def _ticket_location(
     if not ncc_state:
         return "", "", ""
 
-    # Town/LGA are only ever a *canonicalisation of what was written* — the
-    # region text matched against NCC's own reference tables. Nothing is
-    # inferred from proximity or defaulted. An FCT district ("Wuse") maps to
-    # its area council deterministically; anything unmatched stays blank.
+    # LGA: the captured field, re-checked against the state we are actually
+    # reporting. The check is not redundant with capture-time validation — a
+    # later region change can strand a valid-for-the-old-state LGA, and filing
+    # "Eti-Osa, Kano" would be a wrong return. A stranded LGA reports blank.
     lga = ""
+    for captured in _captured_lgas(subscriber):
+        canonical = ncc_location.canonical_lga(ncc_state, captured)
+        if canonical:
+            lga = canonical
+            break
+
+    # Town is only ever a *canonicalisation of what was written* — the region
+    # text matched against NCC's own reference tables. Nothing is inferred from
+    # proximity or defaulted. An FCT district ("Wuse") maps to its area council
+    # deterministically; anything unmatched stays blank.
     town = ""
     if ncc_state == ncc_location.canonical_state("Federal Capital Territory"):
         fct = ncc_location.fct_location_for_town(ticket.region)
         if fct:
-            lga = ncc_location.canonical_lga(ncc_state, fct[0])
             town = fct[1]
+            # The FCT table names the area council, which IS the LGA. Only used
+            # when nothing was captured — a captured LGA outranks it.
+            if not lga:
+                lga = ncc_location.canonical_lga(ncc_state, fct[0])
     if not town:
         town = ncc_location.canonical_town(ticket.region)
     return ncc_state, lga, town

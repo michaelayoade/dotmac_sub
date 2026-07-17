@@ -248,6 +248,11 @@ class Subscriber(Base):
     address_line2: Mapped[str | None] = mapped_column(String(120))
     city: Mapped[str | None] = mapped_column(String(80))
     region: Mapped[str | None] = mapped_column(String(80))
+    # Local Government Area — an NCC administrative unit, required per row of
+    # the quarterly complaints return. Captured, never derived: validated
+    # against ``ncc_location`` for its ``region`` at the capture boundary, and
+    # left blank when unknown rather than guessed from address text.
+    lga: Mapped[str | None] = mapped_column(String(80))
     postal_code: Mapped[str | None] = mapped_column(String(20))
     country_code: Mapped[str | None] = mapped_column(String(2))
 
@@ -641,6 +646,9 @@ class Address(Base):
     address_line2: Mapped[str | None] = mapped_column(String(120))
     city: Mapped[str | None] = mapped_column(String(80))
     region: Mapped[str | None] = mapped_column(String(80))
+    # Local Government Area — see ``Subscriber.lga``. Captured and validated
+    # against ``region``; blank when unknown.
+    lga: Mapped[str | None] = mapped_column(String(80))
     postal_code: Mapped[str | None] = mapped_column(String(20))
     country_code: Mapped[str | None] = mapped_column(String(2))
     latitude: Mapped[float | None] = mapped_column(Float)

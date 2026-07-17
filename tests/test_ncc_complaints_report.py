@@ -340,3 +340,63 @@ def test_report_totals_agree_with_records(db_session):
     built = report.build_report(db_session, start=start, end=end)
     assert built["total_complaints"] == len(built["records"]) == 2
     assert sum(built["by_status"].values()) == 2
+
+
+# ── LGA: captured, validated against its state, never derived ───────────────
+
+
+def test_captured_lga_is_reported(db_session):
+    """The point of the column: a captured LGA reaches the filing."""
+    subscriber = _subscriber(db_session, region="Lagos", lga="Eti-Osa")
+    ticket = _ticket(db_session, subscriber)
+    record = _record_for(db_session, ticket)
+    assert record is not None
+    assert record["State"] == "LAGOS"
+    assert record["LGA"] == "Eti-Osa"
+
+
+def test_captured_lga_clears_the_workbook_lga_failure(db_session):
+    """End-to-end proof. Without a captured LGA the export tells the officer
+    the row is not filable; with one, that specific failure is gone."""
+    without = _subscriber(db_session, region="Lagos")
+    blank_record = _record_for(db_session, _ticket(db_session, without))
+    assert blank_record is not None
+    assert "LGA is required" in ncc_workbook.validation_status(blank_record)
+
+    with_lga = _subscriber(db_session, region="Lagos", lga="Eti-Osa")
+    filled_record = _record_for(db_session, _ticket(db_session, with_lga))
+    assert filled_record is not None
+    assert "LGA is required" not in ncc_workbook.validation_status(filled_record)
+
+
+def test_lga_stranded_by_a_state_change_reports_blank(db_session):
+    """Capture-time validation cannot bind forever: a later region change can
+    strand a valid-for-the-old-state LGA. Filing "Eti-Osa, Kano" would be a
+    wrong return, so the report re-checks and reports blank."""
+    subscriber = _subscriber(db_session, region="Kano", lga="Eti-Osa")
+    ticket = _ticket(db_session, subscriber)
+    record = _record_for(db_session, ticket)
+    assert record is not None
+    assert record["State"] == "KANO"
+    assert record["LGA"] == ""
+
+
+def test_uncaptured_lga_is_blank_never_guessed(db_session):
+    """A resolvable state does not license guessing the LGA within it."""
+    subscriber = _subscriber(db_session, region="Lagos", lga=None)
+    ticket = _ticket(db_session, subscriber)
+    record = _record_for(db_session, ticket)
+    assert record is not None
+    assert record["State"] == "LAGOS"
+    assert record["LGA"] == ""
+
+
+def test_captured_lga_round_trips_through_the_workbook(db_session):
+    subscriber = _subscriber(db_session, region="Lagos", lga="Eti-Osa")
+    ticket = _ticket(db_session, subscriber)
+    record = _record_for(db_session, ticket)
+    assert record is not None
+    content = ncc_workbook.build_workbook(
+        ncc_workbook.export_rows([record]), ncc_workbook.COLUMNS
+    )
+    assert b"Eti-Osa" in content
