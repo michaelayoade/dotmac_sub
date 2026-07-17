@@ -448,3 +448,26 @@ def test_customer_webhook_rejects_bad_signature(db_session):
             },
         )
     assert resp.status_code == 401
+
+
+# --- S4a: replay dedup on the previously un-deduped routes ---
+
+
+def test_ticket_webhook_replay_is_deduped(monkeypatch, db_session):
+    """A redelivery with the same delivery id must not enqueue a second pull."""
+    from app.services import control_registry
+
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": True}
+    )
+    body = {"ticket_id": "t-1"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        first = _post(body, "ticket.created", _sign(raw), db_session)
+        replay = _post(body, "ticket.created", _sign(raw), db_session)
+    assert first.status_code == 200
+    assert replay.status_code == 200 and replay.json().get("reason") == "duplicate"
+    assert enqueue.call_count == 1

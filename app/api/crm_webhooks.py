@@ -142,6 +142,10 @@ async def receive_crm_customer(request: Request, db: Session = Depends(get_db)) 
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
         )
 
+    # Deliberately NO claim_delivery here (audit S4a): the upsert is itself
+    # idempotent, and CRM's create_customer retry contract depends on a
+    # redelivered push returning the existing subscriber id — a dedup drop
+    # would break the caller's linking. Replay safety comes from the upsert.
     response = upsert_customer_from_payload(db, payload)
     response["status"] = "ok"
     return response
@@ -189,6 +193,13 @@ async def receive_crm_event(request: Request, db: Session = Depends(get_db)) -> 
     from app.tasks.crm_ticket_pull import sync_crm_ticket
 
     delivery_id = request.headers.get("X-Webhook-Delivery-Id") or ticket_id
+    # Dedup (audit S4a): the CRM's delivery task retries with the SAME
+    # X-Webhook-Delivery-Id; a replay must not enqueue a duplicate pull.
+    # (Re-pull is idempotent, so this is de-noising, not correctness.)
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type or "ticket"
+    ):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
     try:
         enqueue_task(
             sync_crm_ticket,
