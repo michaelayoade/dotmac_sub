@@ -236,8 +236,17 @@ def test_report_normalizes_ncc_pack_state_region_matrix_and_pop_totals():
     )
     assert report is not raw_report
     assert raw_report["by_state"]["Oyo"] == 5
-    assert report["by_state"] == {"Abuja": 2748, "Lagos": 114}
-    assert report["by_region"] == {"North Central": 2748, "South West": 114}
+    # Unknown-state subscribers report as Unknown. They are NOT merged into
+    # Abuja: we cannot tell the regulator a subscriber is in the FCT when we
+    # do not know where they are. FCT keeps only genuine FCT (2414), and the
+    # 334 unresolved surface as a data-capture backlog.
+    assert report["by_state"] == {"Abuja": 2414, "Lagos": 114, "Unknown": 334}
+    assert report["by_region"] == {
+        "North Central": 2414,
+        "South West": 114,
+        "Unknown": 334,
+    }
+    assert report["ncc_pack_adjustments"]["unknown_state_count"] == 334
     assert report["total_active_subscriptions"] == 2862
     assert sum(report["by_state"].values()) == report["total_active_subscriptions"]
     assert sum(report["by_region"].values()) == report["total_active_subscriptions"]
@@ -328,13 +337,19 @@ def test_report_reduces_unknowns_with_city_and_service_address_fallback(db_sessi
     r = ncc.build_ncc_subscriber_report(db_session)
 
     assert r["total_active_subscriptions"] == 3
+    # "Lekki" (city) and "Asokoro" (service address) resolve. The third
+    # subscriber's city is a postcode, so its state stays genuinely unknown
+    # and is reported as such — previously it was absorbed into Abuja, which
+    # is how an unlocatable customer became an FCT statistic.
     assert r["by_state"] == {
-        "Abuja": 2,
+        "Abuja": 1,
         "Lagos": 1,
+        "Unknown": 1,
     }
     assert r["by_region"] == {
-        "North Central": 2,
+        "North Central": 1,
         "South West": 1,
+        "Unknown": 1,
     }
 
 

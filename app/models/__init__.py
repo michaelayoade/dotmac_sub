@@ -678,6 +678,9 @@ from app.models.subscriber import (  # noqa: F401
     SubscriberCustomField,
     SubscriberStatus,
 )
+from app.models.subscriber_field_verification import (  # noqa: F401
+    SubscriberFieldVerification,
+)
 from app.models.subscription_change import (  # noqa: F401
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
