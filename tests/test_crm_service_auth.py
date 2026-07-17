@@ -14,6 +14,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from app.config import settings
+
 from app.api.crm import CRM_INTEGRATION_PERMISSION, require_crm_service_auth
 from app.models.auth import ApiKey
 from app.services.auth import hash_api_key
@@ -34,6 +36,23 @@ def _make_key(db, *, scopes, raw="raw-crm-key"):
 
 def _request():
     return SimpleNamespace(state=SimpleNamespace(), cookies={})
+
+
+@pytest.fixture
+def crm_settings():
+    """Frozen-dataclass-safe settings override, restored after the test."""
+    original_token = settings.selfcare_api_token
+    original_flag = settings.crm_legacy_bearer_enabled
+
+    def _set(token=None, bearer_enabled=None):
+        if token is not None:
+            object.__setattr__(settings, "selfcare_api_token", token)
+        if bearer_enabled is not None:
+            object.__setattr__(settings, "crm_legacy_bearer_enabled", bearer_enabled)
+
+    yield _set
+    object.__setattr__(settings, "selfcare_api_token", original_token)
+    object.__setattr__(settings, "crm_legacy_bearer_enabled", original_flag)
 
 
 def _call(db, *, x_api_key=None, authorization=None):
@@ -62,38 +81,28 @@ def test_key_without_scope_fails_closed(db_session):
     assert exc.value.status_code == 401
 
 
-def test_unknown_key_rejected_without_bearer_fallback(db_session, monkeypatch):
+def test_unknown_key_rejected_without_bearer_fallback(db_session, crm_settings):
     # An X-Api-Key attempt must not fall through to the bearer path.
-    from app.api import crm as crm_module
-
-    monkeypatch.setattr(crm_module.settings, "selfcare_api_token", "tok")
+    crm_settings(token="tok", bearer_enabled=True)
     with pytest.raises(HTTPException) as exc:
         _call(db_session, x_api_key="no-such-key", authorization="Bearer tok")
     assert exc.value.status_code == 401
 
 
-def test_legacy_bearer_accepted_while_enabled(db_session, monkeypatch):
-    from app.api import crm as crm_module
-
-    monkeypatch.setattr(crm_module.settings, "selfcare_api_token", "tok")
-    monkeypatch.setattr(crm_module.settings, "crm_legacy_bearer_enabled", True)
+def test_legacy_bearer_accepted_while_enabled(db_session, crm_settings):
+    crm_settings(token="tok", bearer_enabled=True)
     _call(db_session, authorization="Bearer tok")  # no exception
 
 
-def test_legacy_bearer_rejected_after_cutover(db_session, monkeypatch):
-    from app.api import crm as crm_module
-
-    monkeypatch.setattr(crm_module.settings, "selfcare_api_token", "tok")
-    monkeypatch.setattr(crm_module.settings, "crm_legacy_bearer_enabled", False)
+def test_legacy_bearer_rejected_after_cutover(db_session, crm_settings):
+    crm_settings(token="tok", bearer_enabled=False)
     with pytest.raises(HTTPException) as exc:
         _call(db_session, authorization="Bearer tok")
     assert exc.value.status_code == 401
 
 
-def test_no_credentials_rejected(db_session, monkeypatch):
-    from app.api import crm as crm_module
-
-    monkeypatch.setattr(crm_module.settings, "selfcare_api_token", "tok")
+def test_no_credentials_rejected(db_session, crm_settings):
+    crm_settings(token="tok", bearer_enabled=True)
     with pytest.raises(HTTPException) as exc:
         _call(db_session)
     assert exc.value.status_code == 401
