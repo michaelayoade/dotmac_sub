@@ -14,7 +14,7 @@ Idempotent: only fills rows where ``ncc_category IS NULL``, so re-running is a
 no-op and a later re-run can never overwrite an agent's correction.
 
 Revision ID: 331_ncc_ticket_categorisation
-Revises: 328_work_order_native_identity
+Revises: 330_retire_splynx_import_archive
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "331_ncc_ticket_categorisation"
-down_revision = "328_work_order_native_identity"
+down_revision = "330_retire_splynx_import_archive"
 branch_labels = None
 depends_on = None
 
