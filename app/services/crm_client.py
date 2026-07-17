@@ -20,8 +20,8 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.services.secrets import resolve_secret
 from app.models.domain_settings import SettingDomain
+from app.services.secrets import resolve_secret
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
