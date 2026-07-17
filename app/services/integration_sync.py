@@ -34,8 +34,6 @@ def _crm_client_from_job(job: IntegrationJob) -> CRMClient:
     return CRMClient(
         base_url=_value(connector.base_url if connector else None)
         or settings.crm_base_url,
-        username=_value(auth_config.get("username")) or settings.crm_username,
-        password=_value(auth_config.get("password")) or settings.crm_password,
         service_token=_value(auth_config.get("service_token"))
         or settings.crm_service_token,
         timeout=float(

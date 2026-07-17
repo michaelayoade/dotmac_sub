@@ -141,22 +141,25 @@ class CRMClient:
     def __init__(
         self,
         base_url: str,
-        username: str,
-        password: str,
+        username: str = "",
+        password: str = "",
         timeout: float = 15.0,
         settings_db: Session | None = None,
         service_token: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.username = username
-        self.password = password
-        # Static service ApiKey. When present, requests authenticate with
-        # X-API-Key and the staff session->JWT login is never used.
+        # Static service ApiKey — the ONLY service credential (auth
+        # unification S1): the staff username/password->JWT fallback is
+        # retired. The parameters remain (ignored) for one release so call
+        # sites migrate without a lockstep deploy.
+        if username or password:
+            logger.warning(
+                "CRMClient staff credentials are retired and ignored; "
+                "configure CRM_SERVICE_TOKEN"
+            )
         self.service_token = (service_token or "").strip()
         self.timeout = timeout
         self.settings_db = settings_db
-        self._token: str | None = None
-        self._token_expires_at: float = 0
         # Cache of minted read-union portal tokens, keyed by (subscriber, actor),
         # so the four mirror reconcilers reuse one token per subscriber per cycle
         # instead of minting four (P4). Value: (token, epoch_expiry).
@@ -224,53 +227,19 @@ class CRMClient:
     def _auth_headers(self) -> dict[str, str]:
         """Auth headers for a service-to-service CRM request.
 
-        Prefers a static service ApiKey (auth-unification phase 2b): when
-        configured, no staff-credential login happens at all — one header, no
-        token round-trip. Falls back to the staff session->JWT login only while
-        ``service_token`` is unset, so the cut-over is a pure config flip and
-        never a breakage window regardless of deploy order.
+        The static service ApiKey is the only service credential (auth
+        unification S1, mirroring erp->sub): the staff username/password->JWT
+        fallback is retired, so a missing key fails loudly instead of quietly
+        borrowing a person's credentials.
         """
         if not self.base_url:
             raise CRMClientError("CRM is not configured")
-        if self.service_token:
-            return {"X-API-Key": self.service_token}
-        return {"Authorization": f"Bearer {self._ensure_token()}"}
-
-    def _ensure_token(self) -> str:
-        """Get a valid JWT token, refreshing if within 60s of expiry."""
-        if self._token and time.time() < self._token_expires_at - 60:
-            return self._token
-
-        if not self.base_url or not self.username or not self.password:
-            raise CRMClientError("CRM is not configured")
-
-        if _REACHABILITY_CIRCUIT.is_open():
-            raise CRMClientError("CRM temporarily unavailable (circuit open)")
-
-        try:
-            with httpx.Client(timeout=self.timeout) as client:
-                resp = client.post(
-                    f"{self.base_url}/api/v1/auth/login",
-                    json={"username": self.username, "password": self.password},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                self._token = data["access_token"]
-                # Token lasts 15min; cache for 14min
-                self._token_expires_at = time.time() + 840
-                _REACHABILITY_CIRCUIT.reset()
-                return self._token
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "CRM login failed: %d %s", e.response.status_code, e.response.text[:200]
+        if not self.service_token:
+            raise CRMClientError(
+                "CRM service token is not configured (set CRM_SERVICE_TOKEN); "
+                "the staff-credential login fallback has been retired"
             )
-            raise CRMClientError(f"CRM login failed: {e.response.status_code}") from e
-        except httpx.RequestError as e:
-            # Connection/timeout — CRM is unreachable, trip the breaker so the
-            # rest of this request's fan-out fast-fails.
-            _REACHABILITY_CIRCUIT.trip(self.circuit_seconds)
-            logger.error("CRM login error: %s", e)
-            raise CRMClientError(f"CRM connection error: {e}") from e
+        return {"X-API-Key": self.service_token}
 
     def _request(
         self,
@@ -815,8 +784,6 @@ def get_crm_client(db: Session | None = None) -> CRMClient:
     if db is not None:
         return CRMClient(
             base_url=settings.crm_base_url,
-            username=settings.crm_username,
-            password=settings.crm_password,
             service_token=settings.crm_service_token,
             settings_db=db,
         )
@@ -824,8 +791,6 @@ def get_crm_client(db: Session | None = None) -> CRMClient:
     if _crm_client is None:
         _crm_client = CRMClient(
             base_url=settings.crm_base_url,
-            username=settings.crm_username,
-            password=settings.crm_password,
             service_token=settings.crm_service_token,
         )
     return _crm_client
