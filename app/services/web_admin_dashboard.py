@@ -471,8 +471,9 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         _rollback_after_failed_query(db)
         pending_location_requests = 0
     admin_alert_summary = admin_alerts_service.dashboard_alert_summary(db)
-    infrastructure_alerts = (admin_alert_summary.get("by_category") or {}).get(
-        "infrastructure"
+    by_category = admin_alert_summary.get("by_category")
+    infrastructure_alerts = (
+        by_category.get("infrastructure") if isinstance(by_category, dict) else None
     ) or {}
     attention_items, network_attention_items = (
         admin_attention_service.build_attention_items(
