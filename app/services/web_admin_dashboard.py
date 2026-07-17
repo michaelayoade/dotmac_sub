@@ -16,7 +16,6 @@ from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_attention as admin_attention_service
 from app.services import admin_whats_new as admin_whats_new_service
 from app.services import infrastructure_health as infrastructure_health_service
-from app.services import settings_spec
 from app.services import (
     subscriber as subscriber_service,
 )
@@ -129,15 +128,6 @@ def _build_health_thresholds(db: Session) -> dict:
     )
     values = {keys[row.key]: _float_setting(_setting_raw_value(row)) for row in rows}
     return {field: values.get(field) for field in keys.values()}
-
-
-def _network_monitoring_int_setting(db: Session, key: str, default: int) -> int:
-    raw = settings_spec.resolve_value(db, SettingDomain.network_monitoring, key)
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    return value if value > 0 else default
 
 
 def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
@@ -376,21 +366,6 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     online_customers = online_summary["customers"]
     online_sessions = online_summary["sessions"]
 
-    # --- Sync status (splynx_mapping read owner decides sync health) ---
-    try:
-        from app.services import splynx_mapping as splynx_mapping_service
-
-        sync_status = splynx_mapping_service.sync_status(
-            db,
-            healthy_age_seconds=_network_monitoring_int_setting(
-                db, "dashboard_sync_healthy_age_seconds", 7200
-            ),
-        )
-    except Exception:
-        logger.debug("Failed to load sync status for dashboard", exc_info=True)
-        _rollback_after_failed_query(db)
-        sync_status = {"last_sync": None, "total_mappings": 0, "is_healthy": False}
-
     # --- Monitoring device summary (for operations dashboard) ---
     monitoring_summary = {
         "devices_online": net_stats.get("online_count", 0),
@@ -528,7 +503,6 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "online_customers": online_customers,
         "online_sessions": online_sessions,
         "online_customer_pct": online_pct,
-        "sync_status": sync_status,
         "monitoring_summary": monitoring_summary,
         "ont_service_summary": ont_service_summary,
         "ont_olt_link_summary": ont_olt_link_summary,

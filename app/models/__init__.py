@@ -651,10 +651,6 @@ from app.models.snmp import (  # noqa: F401
     SnmpTarget,
     SnmpVersion,
 )
-from app.models.splynx_mapping import (  # noqa: F401
-    SplynxEntityType,
-    SplynxIdMapping,
-)
 from app.models.splynx_transaction import SplynxBillingTransaction  # noqa: F401
 from app.models.stored_file import StoredFile  # noqa: F401
 from app.models.subscriber import (  # noqa: F401

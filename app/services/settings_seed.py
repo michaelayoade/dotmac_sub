@@ -2506,12 +2506,6 @@ def seed_network_monitoring_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("CELERY_QUEUE_BACKLOG_THRESHOLD", "500"),
     )
-    network_monitoring_settings.ensure_by_key(
-        db,
-        key="dashboard_sync_healthy_age_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("DASHBOARD_SYNC_HEALTHY_AGE_SECONDS", "7200"),
-    )
     radius_settings.ensure_by_key(
         db,
         key="default_acct_port",

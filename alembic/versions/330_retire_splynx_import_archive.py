@@ -32,12 +32,22 @@ depends_on = None
 
 # Child tables first: FKs point child -> parent, so this order is also the
 # safe drop order.
+#
+# NOT dropped: ``splynx_billing_transactions``. It is the restore target for
+# the retained-Splynx-backup adjudication workflow that
+# ``scripts/one_off/billing_alignment_audit.py`` and
+# ``audit_void_mirror_double_reversals.py`` run in an isolated environment —
+# the latter uses the Splynx mirror as *proof* when soft-deleting contra debit
+# ledger rows. Empty in production is not the same as "the backups are gone";
+# dropping the table would remove the schema those backups load into. It
+# retires when that reconciliation is confirmed closed.
 _RETIRED_TABLES = (
     "splynx_archived_ticket_messages",
     "splynx_archived_tickets",
     "splynx_archived_quote_items",
     "splynx_archived_quotes",
     "portal_onboarding_states",
+    "splynx_id_mappings",
 )
 
 
@@ -81,6 +91,10 @@ def upgrade() -> None:
     _assert_safe_cutover(bind)
     for table_name in _RETIRED_TABLES:
         op.drop_table(table_name)
+    # splynx_id_mappings owned a native PostgreSQL enum type; dropping the
+    # table leaves the type orphaned, so retire it with its only user.
+    if bind.dialect.name == "postgresql":
+        bind.execute(sa.text("DROP TYPE IF EXISTS splynxentitytype"))
 
 
 def downgrade() -> None:
@@ -181,4 +195,45 @@ def downgrade() -> None:
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_table(
+        "splynx_id_mappings",
+        sa.Column("id", UUID(as_uuid=True), primary_key=True, nullable=False),
+        sa.Column(
+            "entity_type",
+            sa.Enum(
+                "customer",
+                "service",
+                "tariff",
+                "invoice",
+                "payment",
+                "transaction",
+                "credit_note",
+                "ticket",
+                "quote",
+                "router",
+                "location",
+                "partner",
+                "email",
+                "sms",
+                "scheduling_task",
+                "inventory_item",
+                "ip_network",
+                "radius_profile",
+                name="splynxentitytype",
+                create_constraint=False,
+            ),
+            nullable=False,
+        ),
+        sa.Column("splynx_id", sa.Integer(), nullable=False),
+        sa.Column("dotmac_id", UUID(as_uuid=True), nullable=False),
+        sa.Column("migrated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("metadata", sa.JSON(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint(
+            "entity_type", "splynx_id", name="uq_splynx_mapping_type_splynx_id"
+        ),
+        sa.UniqueConstraint(
+            "entity_type", "dotmac_id", name="uq_splynx_mapping_type_dotmac_id"
+        ),
     )

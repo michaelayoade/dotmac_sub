@@ -1,8 +1,11 @@
 # Splynx retirement decision and cutover
 
-Status: approved retirement of the import archive (Tier 1), 2026-07-17.
-Tier 2 (legacy-BSS id mapping and billing-transaction reconciliation) is
-assessed here but **not** retired; it needs an explicit decision.
+Status: approved retirement, 2026-07-17. Tier 1 (import archive) and Tier 2
+(legacy-BSS id mapping, the dashboard sync tile, and the billing-ledger
+reconciliation view) are both retired here.
+
+`splynx_billing_transactions` and `Subscriber.splynx_customer_id` are
+deliberately **preserved** — see the two carve-outs below.
 
 ## Authority change
 
@@ -13,11 +16,22 @@ the migration completed, and the `app.services.migrations`,
 already removed.
 
 What remains is import residue: read-only archive models whose tables were
-never populated (or were purged after the import), plus a portal-onboarding
-step counter carried over from the Splynx portal. They have no owner, no
-writer, and no reader.
+never populated, a portal-onboarding step counter carried over from the Splynx
+portal, and a legacy-BSS id-mapping path. They have no owner, no writer, and no
+reader.
 
-This revision removes the archive models and their tables.
+This revision removes them.
+
+### The import never ran here
+
+Production `pg_stat_user_tables` reports `n_tup_ins = 0` for
+`splynx_billing_transactions`, `splynx_customers`, and `splynx_id_mappings`:
+not "empty now", but **never written, not once**. The Splynx import was never
+executed against this database. That is the evidence base for dropping rather
+than preserving — there is no history here to lose, and there never was.
+
+(It does *not* follow that the Splynx backups themselves are gone. See the
+`splynx_billing_transactions` carve-out.)
 
 ## Preserved evidence
 
@@ -70,7 +84,7 @@ positively so that mistake fails a test rather than a filing.
 
 ## Cutover gate
 
-Revision `329_retire_splynx_import_archive` refuses to drop a table that holds
+Revision `330_retire_splynx_import_archive` refuses to drop a table that holds
 rows. It counts every target table first and raises with a per-table breakdown
 if any is non-empty, listing what it found. Production is empty today; the gate
 exists for every other environment and for the possibility that the fact
@@ -85,62 +99,111 @@ where the models (and therefore the tables) never existed.
 
 ## Fallback
 
-`downgrade()` recreates the four archive tables and `portal_onboarding_states`
-empty. That is a faithful rollback precisely because there is nothing to
-restore: the tables were empty when dropped. A code rollback to a release that
-still registers the models will therefore find the schema it expects.
+`downgrade()` recreates the four archive tables, `portal_onboarding_states`, and
+`splynx_id_mappings` (with its `splynxentitytype` enum) empty. That is a
+faithful rollback precisely because there is nothing to restore: the tables were
+empty when dropped. A code rollback to a release that still registers the models
+will therefore find the schema it expects.
 
-## Tier 2 — assessed, not retired
+`splynx_id_mappings` owned a native PostgreSQL enum type, so `upgrade()` drops
+`splynxentitytype` with its only user and `downgrade()` recreates it.
 
-These are wired into live surfaces and are **not** part of this revision. They
-are dead *at runtime* only because their tables are empty; the code paths
-execute on every request that touches them.
+## Tier 2 — retired
 
-### `splynx_id_mappings` — `legacy_bss.py`, `splynx_mapping.py`, `external_bss_adapter.py`
+### `legacy_bss.py` — unreachable, not a live write path
 
-`legacy_bss` is not an archive. It is the **backing store for a live
-subscriber attribute**: `Subscriber._legacy_bss_customer_id` is a staging
-`ClassVar`, and a `before_flush` SQLAlchemy event listener writes every set
-value into `splynx_id_mappings`. `get_customer_id()` reads back through it.
-`deleted_import_clause()` and `get_effective_created_at()` also drive
-subscriber filtering and reporting from `splynx_*` metadata keys.
+An earlier assessment recorded `legacy_bss` as "the backing store for a live
+subscriber attribute", on the reasoning that its `before_flush` listener writes
+`splynx_id_mappings` on every `Subscriber` flush. **That was wrong**, and the
+correction is the reason this tier could be retired at all.
 
-Cost of removal: this is a live write path on the `Subscriber` flush cycle, and
-`external_bss_adapter` is a declared boundary adapter with its own tests
-(`tests/test_boundary_adapters.py`). Removing it means deciding that the legacy
-external-BSS customer id is gone for good — which overlaps the
-`splynx_customer_id` carve-out above and should be settled with it, at CRM
-exit, not before.
+The listener registers *at import time*. **Nothing imports `legacy_bss`** — the
+only reference in the tree was a comment in `app/models/subscriber.py`. Verified
+by executing a full `import app.main` and inspecting SQLAlchemy's registry:
+`app.services.legacy_bss` never enters `sys.modules`, and the app registers
+**zero** `before_flush` listeners. The module could not run, and never did.
 
-Note the redundancy worth resolving *then*: `splynx_customer_id` (a column,
-99.8% populated) and `splynx_id_mappings` (a table, empty) both model "this
-subscriber's id in the legacy BSS". Two mechanisms, one fact — the column won.
+Removed with it: `Subscriber._legacy_bss_customer_id` (the staging `ClassVar`
+its only reader used), `app/services/splynx_mapping.py`,
+`app/models/splynx_mapping.py`, and the `splynx_id_mappings` table.
 
-### `splynx_billing_transactions` — `web_billing_ledger.py`
+The redundancy noted in the earlier assessment resolves here: `splynx_customer_id`
+(a column, 99.8% populated) and `splynx_id_mappings` (a table, never written)
+both modelled "this subscriber's id in the legacy BSS". Two mechanisms, one
+fact — the column won, and the table is now gone.
 
-A reconciliation view: the ledger page cross-checks imported Splynx credits
-against native `LedgerEntry` rows before a `_LEDGER_CUTOVER` date, surfacing
-imported payments that never became ledger entries. With the table empty it
-finds nothing.
+### `external_bss_adapter` — kept, splynx methods stripped
 
-Cost of removal: it is a **money-reconciliation surface**. If the import is
-genuinely complete and reconciled, it is dead weight; if anyone still expects
-to audit pre-cutover payments through this page, removing it removes the
-evidence path. Two `scripts/one_off/` audits also read the model. Settle by
-confirming the reconciliation is closed, then retire the view and the table
-together.
+The adapter has a real non-Splynx purpose: `build_reference_payload` /
+`sync_reference` handle generic external references and it is registered in
+`adapter_registry` with its own tests. Only `register_splynx_mapping` and
+`lookup_splynx_id` were Splynx-specific, and they had **no callers at all** —
+not even tests. Those two methods are gone; the adapter stays.
 
-### `web_admin_dashboard` sync-status tile
+### `web_admin_dashboard` sync tile — dead context, no tile
 
-Reads `splynx_mapping.sync_status()` and renders "last sync / total mappings /
-healthy". With zero mappings it permanently reports **unhealthy** — a red tile
-for a sync that will never run again. It is already wrapped in a
-`try/except`, so it is cosmetic, but it is actively misleading operators today
-and is the cheapest Tier 2 item to remove independently.
+The earlier assessment called this "a permanently red tile". There is no tile:
+`sync_status` was computed, placed in the dashboard context, and **never
+rendered** — no template in the tree references it (the only `sync_status` in
+`templates/` belongs to the unrelated OLT detail page). It was dead context, so
+it is simply removed; there is no UI to redesign and nothing to fake healthy.
+
+Removed with it: the orphaned `_network_monitoring_int_setting` helper and the
+`dashboard_sync_healthy_age_seconds` setting (spec + seed), which configured
+nothing once its only reader was gone. A knob that tunes a deleted computation
+is worse than no knob. A stale `domain_settings` row may remain in existing
+databases; it is inert.
+
+### `web_billing_ledger` reconciliation view — removed
+
+The ledger page cross-checked imported Splynx credits against native
+`LedgerEntry` rows before `_LEDGER_CUTOVER`, display-only. With a table that was
+never written it could only ever return an empty list, so the query and
+`_splynx_credit_as_ledger_row` are gone. `_LEDGER_CUTOVER` **stays** — it also
+bounds the invoice query and is not Splynx-specific.
+
+## The `splynx_billing_transactions` carve-out — do not drop
+
+The model and its table **stay**, and are asserted positively by
+`tests/architecture/test_splynx_retirement.py`.
+
+`scripts/one_off/billing_alignment_audit.py` and
+`audit_void_mirror_double_reversals.py` read `SplynxBillingTransaction` as
+money-adjudication evidence. The first documents running against a replica or
+an isolated environment with "source tables loaded from retained Splynx
+backups"; the second uses the Splynx mirror as **proof** that a void was already
+absorbed into `subscribers.deposit` before it will soft-delete contra debit
+ledger rows under `--apply`.
+
+Empty in production is therefore **not** the same as "the data does not exist".
+Dropping the table would remove the schema those retained backups load into, and
+with it the ability to adjudicate pre-cutover money. It retires when that
+reconciliation is confirmed closed — the view is gone, the evidence path is not.
+
+## Out of scope: the orphan tables
+
+Production holds roughly 28 further `splynx_*` tables (`splynx_customers`,
+`splynx_invoices`, `splynx_payments`, `splynx_routers`, …) that have **no
+models**. They were created by the original import tooling, not by Alembic, and
+`001_squashed` — which builds from models — never creates them. No code
+references them.
+
+They are not dropped here. Dropping tables the ORM never knew is a different
+risk class from retiring models, they may be the very tables the retained-backup
+workflow restores into, and it deserves its own decision rather than riding
+along with a code retirement.
 
 ## Enforcement
 
-`tests/architecture/test_splynx_retirement.py` keeps the removed model paths
-and their imports absent, keeps the retired tables out of the model registry,
-and positively asserts the `splynx_customer_id` carve-out so it survives future
-cleanups.
+`tests/architecture/test_splynx_retirement.py` keeps the removed model and
+service paths absent, keeps their imports and symbols out of `app/` and
+`scripts/`, keeps the retired tables out of the model registry, and positively
+asserts **both** carve-outs — `splynx_customer_id` and
+`splynx_billing_transactions` — so a future sweep that reaches for either fails
+a test rather than a regulatory filing or a money audit.
+
+The import-linter contract "Application code must not import retired Splynx
+migration runtime" (`pyproject.toml`) forbids `app.services.migrations`,
+`app.services.splynx_customer_sync`, and `app.tasks.splynx_sync`. All three were
+already gone before this retirement, so the contract guards nothing today. It is
+kept deliberately: it costs nothing and it stops them returning.

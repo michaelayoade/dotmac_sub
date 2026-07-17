@@ -185,7 +185,6 @@ app.services.service_entitlements
 app.services.service_extensions
 app.services.sla_assignment
 app.services.sms
-app.services.splynx_mapping
 app.services.stale_overdue_lock_reconcile
 app.services.subscriber
 app.services.subscription_changes

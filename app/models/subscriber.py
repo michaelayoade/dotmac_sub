@@ -2,7 +2,6 @@ import enum
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import ClassVar
 
 import sqlalchemy.orm as sa_orm
 from geoalchemy2 import Geometry
@@ -363,10 +362,6 @@ class Subscriber(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
-
-    # === Transient Attributes (not persisted) ===
-    # Used by legacy_bss.py to stage customer ID before writing ID mappings.
-    _legacy_bss_customer_id: ClassVar[int | None] = None
 
     # === Relationships ===
     reseller = relationship("Reseller", back_populates="subscribers")
