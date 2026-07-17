@@ -7,7 +7,9 @@ anything we cannot source is blank rather than invented.
 
 from __future__ import annotations
 
+import io
 import uuid
+import zipfile
 from datetime import UTC, date, datetime, timedelta
 
 from app.models.subscriber import Gender, Subscriber
@@ -399,4 +401,8 @@ def test_captured_lga_round_trips_through_the_workbook(db_session):
     content = ncc_workbook.build_workbook(
         ncc_workbook.export_rows([record]), ncc_workbook.COLUMNS
     )
-    assert b"Eti-Osa" in content
+    # The workbook is a zip: the value is deflated, so it never appears
+    # literally in the archive bytes — read the sheet out and look there.
+    with zipfile.ZipFile(io.BytesIO(content)) as parts:
+        sheet1 = parts.read("xl/worksheets/sheet1.xml").decode()
+    assert "Eti-Osa" in sheet1
