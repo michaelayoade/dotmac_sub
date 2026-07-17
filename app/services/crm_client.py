@@ -382,7 +382,7 @@ class CRMClient:
             if delay is None:
                 # Same base/cap as the old loop; jitter added so concurrent
                 # callers decorrelate (the shared engine's backoff shape).
-                jitter = random.uniform(0.0, 0.25)  # noqa: S311 - retry jitter
+                jitter = random.uniform(0.0, 0.25)  # noqa: S311  # nosec B311 - retry jitter
                 delay = min(retry_max_sleep, 0.5 * (2**attempt)) + jitter
             logger.warning(
                 retry_log_fmt,
