@@ -3191,15 +3191,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network_monitoring,
-        key="dashboard_sync_healthy_age_seconds",
-        label="Dashboard Sync Healthy Age (seconds)",
-        env_var="DASHBOARD_SYNC_HEALTHY_AGE_SECONDS",
-        value_type=SettingValueType.integer,
-        default=7200,
-        min_value=60,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network_monitoring,
         key="ont_signal_warning_dbm",
         label="ONT Signal Warning Threshold (dBm)",
         env_var="ONT_SIGNAL_WARNING_DBM",

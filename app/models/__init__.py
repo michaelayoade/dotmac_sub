@@ -502,7 +502,6 @@ from app.models.portal_message import (  # noqa: F401
     PortalMessage,
     PortalMessageStatus,
     PortalMessageType,
-    PortalOnboardingState,
 )
 from app.models.prepaid_enforcement import PrepaidEnforcementReadiness  # noqa: F401
 from app.models.prepaid_funding import (  # noqa: F401
@@ -651,16 +650,6 @@ from app.models.snmp import (  # noqa: F401
     SnmpReading,
     SnmpTarget,
     SnmpVersion,
-)
-from app.models.splynx_archive import (  # noqa: F401
-    SplynxArchivedQuote,
-    SplynxArchivedQuoteItem,
-    SplynxArchivedTicket,
-    SplynxArchivedTicketMessage,
-)
-from app.models.splynx_mapping import (  # noqa: F401
-    SplynxEntityType,
-    SplynxIdMapping,
 )
 from app.models.splynx_transaction import SplynxBillingTransaction  # noqa: F401
 from app.models.stored_file import StoredFile  # noqa: F401

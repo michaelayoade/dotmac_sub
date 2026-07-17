@@ -8,7 +8,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.external import ExternalEntityType
-from app.models.splynx_mapping import SplynxEntityType
 from app.schemas.external import ExternalReferenceSync
 from app.services.adapters import adapter_registry
 
@@ -25,7 +24,7 @@ class ExternalBssReference:
 
 
 class ExternalBssAdapter:
-    """Adapter for external OSS/BSS references and legacy imported IDs."""
+    """Adapter for external OSS/BSS references."""
 
     name = "external_bss"
 
@@ -47,36 +46,6 @@ class ExternalBssAdapter:
         from app.services.external import sync_reference
 
         return sync_reference(db, self.build_reference_payload(reference))
-
-    def register_splynx_mapping(
-        self,
-        db: Session,
-        *,
-        entity_type: SplynxEntityType,
-        splynx_id: int,
-        dotmac_id: str | UUID,
-        metadata: dict[str, object] | None = None,
-    ):
-        from app.services.splynx_mapping import splynx_mapping
-
-        return splynx_mapping.register_or_update(
-            db,
-            entity_type,
-            splynx_id,
-            dotmac_id,
-            metadata=dict(metadata or {}),
-        )
-
-    def lookup_splynx_id(
-        self,
-        db: Session,
-        *,
-        entity_type: SplynxEntityType,
-        dotmac_id: str | UUID,
-    ) -> int | None:
-        from app.services.splynx_mapping import splynx_mapping
-
-        return splynx_mapping.lookup_by_dotmac(db, entity_type, dotmac_id)
 
 
 external_bss_adapter = ExternalBssAdapter()
