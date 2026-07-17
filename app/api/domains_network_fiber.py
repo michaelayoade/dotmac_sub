@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -40,6 +40,16 @@ from app.services import network as network_service
 from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
+
+
+def _retired_direct_connectivity_mutation() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Direct termination/segment mutation is retired; use the reviewed "
+            "fiber connectivity decision and change-request workflow"
+        ),
+    )
 
 
 @router.post(
@@ -565,7 +575,8 @@ def list_fiber_splices(
 def create_fiber_termination_point(
     payload: FiberTerminationPointCreate, db: Session = Depends(get_db)
 ):
-    return network_service.fiber_termination_points.create(db, payload)
+    del payload, db
+    _retired_direct_connectivity_mutation()
 
 
 @router.get(
@@ -607,7 +618,8 @@ def list_fiber_termination_points(
 def update_fiber_termination_point(
     point_id: str, payload: FiberTerminationPointUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.fiber_termination_points.update(db, point_id, payload)
+    del point_id, payload, db
+    _retired_direct_connectivity_mutation()
 
 
 @router.delete(
@@ -617,7 +629,8 @@ def update_fiber_termination_point(
     dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def delete_fiber_termination_point(point_id: str, db: Session = Depends(get_db)):
-    network_service.fiber_termination_points.delete(db, point_id)
+    del point_id, db
+    _retired_direct_connectivity_mutation()
 
 
 @router.post(
@@ -628,7 +641,8 @@ def delete_fiber_termination_point(point_id: str, db: Session = Depends(get_db))
     dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def create_fiber_segment(payload: FiberSegmentCreate, db: Session = Depends(get_db)):
-    return network_service.fiber_segments.create(db, payload)
+    del payload, db
+    _retired_direct_connectivity_mutation()
 
 
 @router.get(
@@ -671,7 +685,8 @@ def list_fiber_segments(
 def update_fiber_segment(
     segment_id: str, payload: FiberSegmentUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.fiber_segments.update(db, segment_id, payload)
+    del segment_id, payload, db
+    _retired_direct_connectivity_mutation()
 
 
 @router.delete(
@@ -681,7 +696,8 @@ def update_fiber_segment(
     dependencies=[Depends(require_permission("network:fiber:write"))],
 )
 def delete_fiber_segment(segment_id: str, db: Session = Depends(get_db)):
-    network_service.fiber_segments.delete(db, segment_id)
+    del segment_id, db
+    _retired_direct_connectivity_mutation()
 
 
 @router.get(

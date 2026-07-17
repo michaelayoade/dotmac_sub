@@ -109,6 +109,7 @@ class FiberEndpointType(enum.Enum):
 
 class ODNEndpointType(enum.Enum):
     fdh = "fdh"
+    fiber_access_point = "fiber_access_point"
     splitter = "splitter"
     splitter_port = "splitter_port"
     pon_port = "pon_port"
@@ -1850,6 +1851,13 @@ class OntUnit(Base):
             unique=True,
             postgresql_where=text("uisp_device_id IS NOT NULL"),
         ),
+        Index(
+            "uq_ont_units_active_splitter_port",
+            "splitter_port_id",
+            unique=True,
+            postgresql_where=text("is_active AND splitter_port_id IS NOT NULL"),
+            sqlite_where=text("is_active AND splitter_port_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -2875,6 +2883,16 @@ class FiberSplice(Base):
 
 class FiberTerminationPoint(Base):
     __tablename__ = "fiber_termination_points"
+    __table_args__ = (
+        Index(
+            "uq_fiber_termination_active_endpoint",
+            "endpoint_type",
+            "ref_id",
+            unique=True,
+            postgresql_where=text("is_active AND ref_id IS NOT NULL"),
+            sqlite_where=text("is_active = 1 AND ref_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -2978,6 +2996,13 @@ class PonPortSplitterLink(Base):
     __tablename__ = "pon_port_splitter_links"
     __table_args__ = (
         UniqueConstraint("pon_port_id", name="uq_pon_port_splitter_links_pon_port"),
+        Index(
+            "uq_pon_port_splitter_links_active_input",
+            "splitter_port_id",
+            unique=True,
+            postgresql_where=text("active"),
+            sqlite_where=text("active"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

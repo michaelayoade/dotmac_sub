@@ -256,6 +256,11 @@ def build_ont_create_payload(form: FormData) -> tuple[OntUnitCreate | None, str 
         gps_latitude=form_float_or_none(form, "gps_latitude"),
         gps_longitude=form_float_or_none(form, "gps_longitude"),
     )
+    if payload.splitter_id is not None or payload.splitter_port_id is not None:
+        return payload, (
+            "Splitter attachments require the independently reviewed fiber access "
+            "attachment workflow. Create the ONT without a splitter attachment."
+        )
     if payload.olt_device_id is None:
         return payload, "Select an OLT for this ONT."
     if payload.is_active:
@@ -412,6 +417,19 @@ def update_location_details_from_form(
     except ValueError as exc:
         return OntFormResult(ont=ont, form_model=form_values, error=str(exc))
 
+    if ("splitter_id" in form or "splitter_port_number" in form) and (
+        cast(uuid.UUID | None, form_values["splitter_id"]) != ont.splitter_id
+        or splitter_port_id != ont.splitter_port_id
+    ):
+        return OntFormResult(
+            ont=ont,
+            form_model=form_values,
+            error=(
+                "Splitter attachment changes require independent review through "
+                "network.fiber_access_attachments. Other location fields were not saved."
+            ),
+        )
+
     gps_latitude = form_float_or_none(form, "gps_latitude")
     gps_longitude = form_float_or_none(form, "gps_longitude")
     address_val = (
@@ -422,8 +440,6 @@ def update_location_details_from_form(
     contact_val = str(form_values["contact"]) if form_values["contact"] else ""
     payload = OntUnitUpdate(
         zone_id=cast(uuid.UUID | None, form_values["zone_id"]),
-        splitter_id=cast(uuid.UUID | None, form_values["splitter_id"]),
-        splitter_port_id=splitter_port_id,
         name=str(form_values["name"]) if form_values["name"] else None,
         address_or_comment=build_location_address_or_comment(address_val, contact_val),
         contact=contact_val or None,

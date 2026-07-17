@@ -41,6 +41,40 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("network.outage_impact") == (
         "network.access_path",
     )
+    assert sot_relationships.dependencies_for("network.fiber_topology") == (
+        "network.identity",
+        "gis.spatial_sync",
+        "network.fiber_source_staging",
+    )
+    assert sot_relationships.dependencies_for("network.fiber_source_staging") == (
+        "gis.spatial_sync",
+    )
+    assert sot_relationships.dependencies_for("network.fiber_asset_changes") == (
+        "network.fiber_topology",
+    )
+    assert sot_relationships.dependencies_for("network.fiber_identity_decisions") == (
+        "network.fiber_topology",
+        "network.fiber_asset_changes",
+    )
+    assert sot_relationships.dependencies_for("network.fiber_identity_review") == (
+        "network.fiber_identity_decisions",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.fiber_connectivity_decisions"
+    ) == (
+        "network.fiber_topology",
+        "network.fiber_asset_changes",
+        "network.fiber_identity_decisions",
+    )
+    assert sot_relationships.dependencies_for("network.fiber_access_attachments") == (
+        "network.fiber_topology",
+        "network.fiber_connectivity_decisions",
+    )
+    assert sot_relationships.dependencies_for("network.access_path") == (
+        "network.identity",
+        "network.fiber_topology",
+        "network.fiber_access_attachments",
+    )
     assert sot_relationships.dependencies_for("network.outage_lifecycle") == (
         "network.outage_impact",
         "events.dispatcher",

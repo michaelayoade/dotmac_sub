@@ -61,7 +61,6 @@ app.services.enforcement_scheduled
 app.services.events.handlers.enforcement
 app.services.events.handlers.provisioning
 app.services.external
-app.services.fiber_change_requests
 app.services.field.attachments
 app.services.field.chat
 app.services.field.equipment

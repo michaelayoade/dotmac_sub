@@ -671,10 +671,139 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("network.identity",),
             ),
             SOTService(
+                name="network.fiber_source_staging",
+                module="app.services.network.fiber_topology_staging",
+                owns=(
+                    "immutable fiber source manifests",
+                    "normalized staged fiber source facts",
+                    "non-authoritative duplicate and canonical-match suggestions",
+                ),
+                depends_on=("gis.spatial_sync",),
+                notes=(
+                    "Staged map rows are observations with provenance. Match "
+                    "suggestions never mutate or retire canonical assets."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_topology",
+                module="app.services.fiber_topology",
+                owns=(
+                    "fiber asset identity and connectivity graph",
+                    "OLT-to-customer topology integrity",
+                    "ordered validated subscription fiber traces",
+                    "bounded fiber fault-candidate ranking",
+                    "fiber import and customer-trace cutover gates",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "gis.spatial_sync",
+                    "network.fiber_source_staging",
+                ),
+                notes=(
+                    "Electronic inventory and telemetry remain observations. "
+                    "Imported geometry is staged evidence until this owner "
+                    "validates asset identity and connectivity. Trace resolution "
+                    "fails closed on missing or ambiguous edges; fault candidates "
+                    "never declare incidents or redefine topology."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_asset_changes",
+                module="app.services.fiber_change_requests",
+                owns=(
+                    "reviewed passive-fiber asset change requests",
+                    "approved passive-fiber asset mutations",
+                ),
+                depends_on=("network.fiber_topology",),
+            ),
+            SOTService(
+                name="network.fiber_identity_decisions",
+                module="app.services.network.fiber_topology_identity",
+                owns=(
+                    "reviewed fiber source identity decisions",
+                    "canonical fiber source identity links",
+                    "fiber source identity change-request projection",
+                ),
+                depends_on=(
+                    "network.fiber_topology",
+                    "network.fiber_asset_changes",
+                ),
+                notes=(
+                    "Identity decisions are bound to immutable staged content. "
+                    "Creates emit reviewed fiber change requests; a canonical "
+                    "source link is written only after the asset exists."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_identity_review",
+                module="app.services.network.fiber_topology_review",
+                owns=(
+                    "fiber identity review queue projection",
+                    "immutable fiber identity proposal batch manifests",
+                    "fiber identity batch review attestations",
+                    "bounded fiber identity execution-run evidence",
+                    "fiber identity change-request finalization sweep",
+                ),
+                depends_on=("network.fiber_identity_decisions",),
+                notes=(
+                    "Batch review binds an independent attestation to the exact "
+                    "proposal manifest and delegates every decision transition to "
+                    "the identity owner. Bounded execution records exact outcomes. "
+                    "Neither execution nor reconciliation approves a fiber change "
+                    "request."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_connectivity_decisions",
+                module="app.services.network.fiber_topology_connectivity",
+                owns=(
+                    "reviewed staged-path connectivity decisions",
+                    "typed endpoint termination resolution",
+                    "canonical fiber segment source provenance",
+                    "fiber connectivity change-request reconciliation",
+                ),
+                depends_on=(
+                    "network.fiber_topology",
+                    "network.fiber_asset_changes",
+                    "network.fiber_identity_decisions",
+                ),
+                notes=(
+                    "Route geometry remains source evidence. Operational edges "
+                    "require two explicit typed canonical endpoint references, "
+                    "independent review, applied termination records, and an "
+                    "applied segment change request."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_access_attachments",
+                module="app.services.network.fiber_access_attachments",
+                owns=(
+                    "reviewed PON-to-splitter input attachments",
+                    "reviewed ONT-to-splitter output attachments",
+                    "canonical ONT splitter parent projection",
+                    "fiber access attachment audit results",
+                ),
+                depends_on=(
+                    "network.fiber_topology",
+                    "network.fiber_connectivity_decisions",
+                ),
+                notes=(
+                    "Only exact directed ports with agreeing ONT/PON/OLT identity "
+                    "can be attached. Preview is read-only, review is independent, "
+                    "execution revalidates under lock, and stale inputs close "
+                    "without mutation. Geometry and legacy assignments never create "
+                    "an access edge."
+                ),
+            ),
+            SOTService(
                 name="network.access_path",
                 module="app.services.network.access_path",
                 owns=("subscription access path", "last-mile path summary"),
-                depends_on=("network.identity",),
+                depends_on=(
+                    "network.identity",
+                    "network.fiber_topology",
+                    "network.fiber_access_attachments",
+                ),
             ),
             SOTService(
                 name="network.radius_sessions",
@@ -990,6 +1119,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.services.router_management.*",
             "app.tasks.network_*",
             "app.tasks.router_sync",
+            "scripts.network.audit_fiber_topology",
+            "scripts.network.review_fiber_topology_identity",
+            "scripts.network.review_fiber_topology_connectivity",
+            "scripts.network.stage_fiber_topology_kmz",
             "app.web.admin.network_*",
             "app.web.customer.connection",
             "app.api.me",
@@ -997,8 +1130,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "mobile",
         ),
         rule=(
-            "Pollers write observations; network resolvers decide state; event "
-            "services decide consequences."
+            "Pollers and map collectors write observations; the fiber-topology "
+            "owner validates identity and connectivity; network resolvers decide "
+            "state; event services decide consequences."
         ),
     ),
     DomainSOT(

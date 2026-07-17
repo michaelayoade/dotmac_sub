@@ -1224,7 +1224,14 @@ def delete_pon_port(port_id: str, db: Session = Depends(get_db)):
 def create_pon_port_splitter_link(
     payload: PonPortSplitterLinkCreate, db: Session = Depends(get_db)
 ):
-    return network_service.pon_port_splitter_links.create(db, payload)
+    del payload, db
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Direct PON/splitter attachment mutation is retired; use the reviewed "
+            "network.fiber_access_attachments workflow."
+        ),
+    )
 
 
 @router.get(
@@ -1267,7 +1274,14 @@ def list_pon_port_splitter_links(
 def update_pon_port_splitter_link(
     link_id: str, payload: PonPortSplitterLinkUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.pon_port_splitter_links.update(db, link_id, payload)
+    del link_id, payload, db
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Direct PON/splitter attachment mutation is retired; use the reviewed "
+            "network.fiber_access_attachments workflow."
+        ),
+    )
 
 
 @router.delete(
@@ -1277,7 +1291,14 @@ def update_pon_port_splitter_link(
     dependencies=[Depends(require_permission("network:pon:write"))],
 )
 def delete_pon_port_splitter_link(link_id: str, db: Session = Depends(get_db)):
-    network_service.pon_port_splitter_links.delete(db, link_id)
+    del link_id, db
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Direct PON/splitter attachment mutation is retired; use the reviewed "
+            "network.fiber_access_attachments workflow."
+        ),
+    )
 
 
 @router.post(

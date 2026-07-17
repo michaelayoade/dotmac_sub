@@ -17,6 +17,7 @@ from app.models.network import (
     PonPort,
     Splitter,
     SplitterPort,
+    SplitterPortType,
 )
 from app.services.topology.splice_inference import (
     detect_rx_droop,
@@ -39,10 +40,15 @@ def _pon(db):
 
 
 def _ont(db, olt, pon, serial, splitter_port_id=None):
+    splitter_id = None
+    if splitter_port_id is not None:
+        splitter_port = db.get(SplitterPort, splitter_port_id)
+        splitter_id = splitter_port.splitter_id
     ont = OntUnit(
         serial_number=serial,
         olt_device_id=olt.id,
         pon_port_id=pon.id,
+        splitter_id=splitter_id,
         splitter_port_id=splitter_port_id,
     )
     db.add(ont)
@@ -159,23 +165,47 @@ def test_correlated_equal_db_droop_flagged_noise_ignored(db_session):
 
 def test_reconcile_reports_record_reality_disagreement(db_session):
     olt, pon = _pon(db_session)
-    splitter = Splitter(name="SPL-A")
-    db_session.add(splitter)
+    inferred_only_a = Splitter(name="SPL-INFERRED-A")
+    inferred_only_b = Splitter(name="SPL-INFERRED-B")
+    agreeing_splitter = Splitter(name="SPL-AGREE")
+    unconfirmed_splitter = Splitter(name="SPL-UNCONFIRMED")
+    db_session.add_all(
+        [
+            inferred_only_a,
+            inferred_only_b,
+            agreeing_splitter,
+            unconfirmed_splitter,
+        ]
+    )
     db_session.flush()
-    ports = [SplitterPort(splitter_id=splitter.id, port_number=n) for n in range(1, 5)]
+    ports = [
+        SplitterPort(
+            splitter_id=splitter_id,
+            port_number=port_number,
+            port_type=SplitterPortType.output,
+        )
+        for splitter_id, port_number in (
+            (inferred_only_a.id, 1),
+            (inferred_only_b.id, 1),
+            (agreeing_splitter.id, 1),
+            (agreeing_splitter.id, 2),
+            (unconfirmed_splitter.id, 1),
+            (unconfirmed_splitter.id, 2),
+        )
+    ]
     db_session.add_all(ports)
     db_session.flush()
 
-    # A,B co-fail (telemetry branch) but records put them on DIFFERENT ports.
+    # A,B co-fail but records place them on different splitters.
     a = _ont(db_session, olt, pon, "A", splitter_port_id=ports[0].id)
     b = _ont(db_session, olt, pon, "B", splitter_port_id=ports[1].id)
-    # E,F co-fail AND records agree (same port) -> agrees.
+    # E,F co-fail and have distinct outputs on the same splitter -> agrees.
     e = _ont(db_session, olt, pon, "E", splitter_port_id=ports[2].id)
-    f = _ont(db_session, olt, pon, "F", splitter_port_id=ports[2].id)
-    # C,D share a record port but NEVER co-fail -> records claim a branch the
+    f = _ont(db_session, olt, pon, "F", splitter_port_id=ports[3].id)
+    # C,D have distinct outputs on one splitter but never co-fail -> records claim a branch the
     # telemetry can't confirm.
-    c = _ont(db_session, olt, pon, "C", splitter_port_id=ports[3].id)
-    d = _ont(db_session, olt, pon, "D", splitter_port_id=ports[3].id)
+    c = _ont(db_session, olt, pon, "C", splitter_port_id=ports[4].id)
+    d = _ont(db_session, olt, pon, "D", splitter_port_id=ports[5].id)
 
     for k in range(3):
         _episode(
@@ -201,4 +231,4 @@ def test_reconcile_reports_record_reality_disagreement(db_session):
     reality = out["missing_in_reality"]
     assert len(reality) == 1
     assert set(reality[0]["ont_unit_ids"]) == {c.id, d.id}
-    assert reality[0]["splitter_port_id"] == ports[3].id
+    assert reality[0]["splitter_id"] == unconfirmed_splitter.id

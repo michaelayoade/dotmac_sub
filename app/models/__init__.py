@@ -205,10 +205,29 @@ from app.models.external import (  # noqa: F401
     ExternalEntityType,
     ExternalReference,
 )
+from app.models.fiber_access_attachment import (  # noqa: F401
+    FiberAccessAttachmentDecision,
+)
 from app.models.fiber_change_request import (  # noqa: F401
     FiberChangeRequest,
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
+)
+from app.models.fiber_topology_connectivity import (  # noqa: F401
+    FiberTopologyConnectivityDecision,
+    FiberTopologySegmentSourceLink,
+    FiberTopologyTerminationResolution,
+)
+from app.models.fiber_topology_identity import (  # noqa: F401
+    FiberTopologyAssetSourceLink,
+    FiberTopologyIdentityBatchReview,
+    FiberTopologyIdentityDecision,
+    FiberTopologyIdentityExecutionRun,
+    FiberTopologyIdentityProposalBatch,
+)
+from app.models.fiber_topology_staging import (  # noqa: F401
+    FiberTopologySourceBatch,
+    FiberTopologyStagedFeature,
 )
 from app.models.field_asset import (  # noqa: F401
     FieldAsset,

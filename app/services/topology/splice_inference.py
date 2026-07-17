@@ -1,8 +1,7 @@
 """Splice inference — outage classifier P3 (design §6, docs/designs/OUTAGE_CLASSIFIER.md).
 
 The OLT sees every ONT's status + optical Rx, but the passive splitter's internal
-sub-split branch/splice is UNPOLLABLE and the manual ``SplitterPortAssignment``
-plant records rot (design §4). Recover that hidden sub-PON topology from OLT
+branch/splice is unpollable. Derive non-authoritative branch observations from
 per-ONT telemetry over time (``ont_signal_observations``):
 
   1. ``infer_branches``    — co-failure clustering: ONTs that repeatedly go dark
@@ -10,9 +9,9 @@ per-ONT telemetry over time (``ont_signal_observations``):
   2. ``detect_rx_droop``   — correlated Rx shift: a bend/failing splice upstream
      of a branch attenuates every ONT beyond it by the SAME dB. A cluster of
      matching Rx droop is a dying branch, caught BEFORE it cuts (predictive).
-  3. ``reconcile_with_records`` — diff the inferred grouping against the plant
-     records (diff-not-mirror). The inference BECOMES the plant map that was
-     never maintained; it only SURFACES disagreement, never writes the records.
+  3. ``reconcile_with_records`` — diff the inferred grouping against reviewed
+     canonical splitter/output records. Inference remains observation evidence:
+     it surfaces disagreement and never creates or rewrites topology.
 
 Everything here is deterministic (documented thresholds below, no randomness).
 It reads the append-only time series that
@@ -29,7 +28,13 @@ from typing import cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntSignalObservation, OntUnit, OnuOnlineStatus
+from app.models.network import (
+    OntSignalObservation,
+    OntUnit,
+    OnuOnlineStatus,
+    SplitterPort,
+    SplitterPortType,
+)
 
 # --- thresholds (design §6; tune from field data) -------------------------
 
@@ -246,23 +251,31 @@ def detect_rx_droop(
 def _record_branches(
     session: Session, pon_port_id: uuid.UUID
 ) -> dict[uuid.UUID, set[uuid.UUID]]:
-    """Plant-record grouping: ONTs on the PON keyed by their splitter port.
+    """Plant-record grouping: ONTs on the PON keyed by their splitter.
 
-    ``OntUnit.splitter_port_id`` is the maintained plant map (fed from
-    ``SplitterPortAssignment``): which splitter branch each ONT hangs off. Only
-    ports carrying >= ``MIN_BRANCH_SIZE`` ONTs are shared branches.
+    Every canonical output port serves at most one active ONT. Shared passive
+    branches therefore group distinct reviewed output ports by their parent
+    splitter; multiple ONTs on one output is invalid topology, not a branch.
+    Legacy ``SplitterPortAssignment`` rows are not accepted as canonical edges.
     """
     rows = session.execute(
-        select(OntUnit.id, OntUnit.splitter_port_id).where(
+        select(OntUnit.id, SplitterPort.splitter_id)
+        .join(SplitterPort, SplitterPort.id == OntUnit.splitter_port_id)
+        .where(
             OntUnit.pon_port_id == pon_port_id,
-            OntUnit.splitter_port_id.is_not(None),
+            OntUnit.is_active.is_(True),
+            OntUnit.splitter_id == SplitterPort.splitter_id,
+            SplitterPort.port_type == SplitterPortType.output,
+            SplitterPort.is_active.is_(True),
         )
     ).all()
-    by_port: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
-    for ont_id, port_id in rows:
-        by_port[port_id].add(ont_id)
+    by_splitter: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    for ont_id, splitter_id in rows:
+        by_splitter[splitter_id].add(ont_id)
     return {
-        port: onts for port, onts in by_port.items() if len(onts) >= MIN_BRANCH_SIZE
+        splitter: onts
+        for splitter, onts in by_splitter.items()
+        if len(onts) >= MIN_BRANCH_SIZE
     }
 
 
@@ -281,7 +294,7 @@ def reconcile_with_records(
         {
           "agrees":              [{"ont_unit_ids": [...]}],   # inference confirms record
           "missing_in_records":  [{"ont_unit_ids": [...]}],   # reality shows a branch records lack
-          "missing_in_reality":  [{"splitter_port_id", "ont_unit_ids"}],  # record telemetry can't confirm
+          "missing_in_reality":  [{"splitter_id", "ont_unit_ids"}],  # record telemetry can't confirm
         }
     """
     inferred = infer_branches(session, pon_port_id, window=window, now=now)
@@ -297,7 +310,8 @@ def reconcile_with_records(
 
     for iset in inferred_sets:
         hit = next(
-            (port for port, rset in records.items() if overlaps(iset, rset)), None
+            (splitter for splitter, rset in records.items() if overlaps(iset, rset)),
+            None,
         )
         if hit is not None:
             matched_records.add(hit)
@@ -307,9 +321,9 @@ def reconcile_with_records(
             missing_in_records.append({"ont_unit_ids": sorted(iset, key=str)})
 
     missing_in_reality = [
-        {"splitter_port_id": port, "ont_unit_ids": sorted(onts, key=str)}
-        for port, onts in records.items()
-        if port not in matched_records
+        {"splitter_id": splitter, "ont_unit_ids": sorted(onts, key=str)}
+        for splitter, onts in records.items()
+        if splitter not in matched_records
     ]
 
     return {

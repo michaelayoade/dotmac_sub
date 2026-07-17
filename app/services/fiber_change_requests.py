@@ -3,7 +3,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import Uuid, func, select
 from sqlalchemy.orm import Session
 
 from app.models.fiber_change_request import (
@@ -13,6 +13,7 @@ from app.models.fiber_change_request import (
 )
 from app.models.network import (
     FdhCabinet,
+    FiberAccessPoint,
     FiberSegment,
     FiberSplice,
     FiberSpliceClosure,
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 ASSET_MODEL_MAP = {
     "fdh_cabinet": FdhCabinet,
+    "fiber_access_point": FiberAccessPoint,
     "splice_closure": FiberSpliceClosure,
     "fiber_segment": FiberSegment,
     "fiber_splice": FiberSplice,
@@ -62,6 +64,14 @@ def _prepare_payload(model, payload: dict) -> dict:
     for key in ("route_geom", "geom"):
         if key in data and isinstance(data[key], dict):
             data[key] = _geojson_to_geom(data[key])
+    for key, value in tuple(data.items()):
+        column = model.__table__.columns.get(key)
+        if (
+            column is not None
+            and isinstance(column.type, Uuid)
+            and isinstance(value, str)
+        ):
+            data[key] = coerce_uuid(value)
     return data
 
 
@@ -81,6 +91,8 @@ def create_request(
     payload: dict,
     requested_by_person_id: str | None,
     requested_by_vendor_id: str | None,
+    *,
+    commit: bool = True,
 ):
     normalized, _ = _get_model(asset_type)
     request = FiberChangeRequest(
@@ -97,8 +109,11 @@ def create_request(
         else None,
     )
     db.add(request)
-    db.commit()
-    db.refresh(request)
+    if commit:
+        db.commit()
+        db.refresh(request)
+    else:
+        db.flush()
     return request
 
 

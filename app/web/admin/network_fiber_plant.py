@@ -1,11 +1,12 @@
 """Admin network fiber plant web routes."""
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import fiber_topology as fiber_topology_service
 from app.services import web_network_fdh as web_network_fdh_service
 from app.services import web_network_fiber as web_network_fiber_service
 from app.services import web_network_fiber_plant as web_network_fiber_plant_service
@@ -61,6 +62,43 @@ def fiber_plant_map(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="fiber-map", active_menu="fiber")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/fiber/map.html", context)
+
+
+@router.get(
+    "/fiber-trace",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def fiber_subscription_trace(
+    request: Request,
+    subscription_id: str | None = None,
+    q: str | None = Query(default=None, max_length=160),
+    db: Session = Depends(get_db),
+):
+    """Read-only validated fiber path and bounded fault-candidate view."""
+    context = _base_context(request, db, active_page="fiber-trace", active_menu="fiber")
+    context["query"] = (q or "").strip()
+    context["search_results"] = fiber_topology_service.search_fiber_trace_subscriptions(
+        db, context["query"]
+    )
+    context["selected_subscription_id"] = subscription_id
+    context["localization"] = None
+    context["candidate_asset_ids"] = set()
+    context["trace_error"] = None
+    if subscription_id:
+        try:
+            localization = fiber_topology_service.localize_fiber_fault(
+                db, subscription_id
+            )
+            context["localization"] = localization
+            context["candidate_asset_ids"] = {
+                asset_id
+                for candidate in localization.candidates
+                for asset_id in candidate.asset_ids
+            }
+        except ValueError as exc:
+            context["trace_error"] = str(exc)
+    return templates.TemplateResponse("admin/network/fiber/trace.html", context)
 
 
 @router.get(

@@ -46,6 +46,7 @@ dependencies = [
     "qrcode[pil] (==7.4.2)",
     "google-auth (>=2.30.0,<3.0.0)",
     "dotmac-integration-client",
+    "defusedxml==0.7.1",
 ]
 
 [project.optional-dependencies]

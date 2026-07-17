@@ -309,7 +309,7 @@ class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
 class PonPortSplitterLinks(CRUDManager[PonPortSplitterLink]):
     model = PonPortSplitterLink
     not_found_detail = "PON port splitter link not found"
-    soft_delete_field = "is_active"
+    soft_delete_field = "active"
     soft_delete_value = False
 
     @staticmethod
@@ -341,16 +341,48 @@ class PonPortSplitterLinks(CRUDManager[PonPortSplitterLink]):
         return apply_pagination(query, limit, offset).all()
 
     @classmethod
+    def create(cls, db: Session, payload: object, *, commit: bool = True):
+        del db, payload, commit
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Direct PON/splitter attachment mutation is retired; use the "
+                "reviewed network.fiber_access_attachments workflow."
+            ),
+        )
+
+    @classmethod
     def get(cls, db: Session, link_id: str):
         return super().get(db, link_id)
 
     @classmethod
-    def update(cls, db: Session, link_id: str, payload: PonPortSplitterLinkUpdate):
-        return super().update(db, link_id, payload)
+    def update(
+        cls,
+        db: Session,
+        link_id: str,
+        payload: PonPortSplitterLinkUpdate,
+        *,
+        commit: bool = True,
+    ):
+        del db, link_id, payload, commit
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Direct PON/splitter attachment mutation is retired; use the "
+                "reviewed network.fiber_access_attachments workflow."
+            ),
+        )
 
     @classmethod
-    def delete(cls, db: Session, link_id: str):
-        return super().delete(db, link_id)
+    def delete(cls, db: Session, link_id: str, *, commit: bool = True):
+        del db, link_id, commit
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Direct PON/splitter attachment mutation is retired; use the "
+                "reviewed network.fiber_access_attachments workflow."
+            ),
+        )
 
 
 fdh_cabinets = FdhCabinets()
