@@ -15,7 +15,7 @@ from app.models.catalog import (
     AccessType,
     BillingCycle,
     BillingMode,
-    Offer,
+    CatalogOffer,
     PriceBasis,
     ServiceType,
     Subscription,
@@ -31,8 +31,8 @@ from app.services import subscriber_data_completeness as completeness
 from app.services.subscriber_data_completeness import FieldKey, Purpose
 
 
-def _offer(db) -> Offer:
-    offer = Offer(
+def _offer(db) -> CatalogOffer:
+    offer = CatalogOffer(
         name=f"Plan {uuid.uuid4().hex[:5]}",
         code=f"P-{uuid.uuid4().hex[:6]}",
         service_type=ServiceType.residential,
