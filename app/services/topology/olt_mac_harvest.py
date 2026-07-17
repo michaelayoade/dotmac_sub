@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from types import SimpleNamespace
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -368,17 +369,30 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
         )
     ).all()
 
-    # Phase 1 — read: materialize every OLT's port context, then DETACH the
-    # loaded rows and END the transaction. The SSH walk below takes seconds
+    # Phase 1 — read: materialize every OLT's port context plus a plain-data
+    # SSH snapshot, then END the transaction. The SSH walk below takes seconds
     # per port; holding a transaction across it left this connection idle in
     # transaction for minutes, tripping the PostgreSQL health check
-    # (idle_in_transaction_over_60s) on every run. Detached rows keep their
-    # loaded column values, which is all the later phases read.
+    # (idle_in_transaction_over_60s) on every run. The snapshot carries the
+    # only fields the SSH layer reads, so phase 2 never touches the session
+    # (an expired ORM attribute access would silently begin a new
+    # transaction and reintroduce the bug).
     contexts: dict[uuid.UUID, dict[str, _PortContext]] = {}
+    ssh_snapshots: dict[uuid.UUID, SimpleNamespace] = {}
     for olt in olts:
         counters["olts_polled"] += 1
         contexts[olt.id] = _active_ports_for_olt(db, olt)
-    db.expunge_all()
+        ssh_snapshots[olt.id] = SimpleNamespace(
+            id=olt.id,
+            name=olt.name,
+            model=olt.model,
+            mgmt_ip=olt.mgmt_ip,
+            hostname=olt.hostname,
+            ssh_username=olt.ssh_username,
+            ssh_password=olt.ssh_password,
+            ssh_port=olt.ssh_port,
+            vendor=olt.vendor,
+        )
     db.commit()
 
     # Phase 2 — collect: SSH walks with NO transaction open. Raw outputs only;
@@ -387,9 +401,10 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
     for olt in olts:
         walked: list[tuple[str, str]] = []
         try:
+            snapshot = ssh_snapshots[olt.id]
             for fsp in contexts[olt.id]:
                 ok, status, output = _run_readonly_command(
-                    olt, f"display mac-address port {fsp}"
+                    snapshot, f"display mac-address port {fsp}"
                 )
                 counters["ports_walked"] += 1
                 if not ok:
