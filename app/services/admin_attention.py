@@ -21,7 +21,9 @@ _SEVERITY_TONE = {
 }
 
 # Only show offline ONTs when the count is operationally significant.
-ONT_OFFLINE_ATTENTION_THRESHOLD = 5
+# Tunable via the dashboard_attention_ont_offline_threshold setting; this is
+# the registered default (settings_spec owns the live value).
+DEFAULT_ONT_OFFLINE_ATTENTION_THRESHOLD = 5
 
 
 def _item(label: str, href: str, severity: str, domain: str) -> dict:
@@ -49,6 +51,7 @@ def build_attention_items(
     pending_location_requests: int,
     pon_outage_count: int,
     infrastructure_alerts: dict | None = None,
+    ont_offline_threshold: int = DEFAULT_ONT_OFFLINE_ATTENTION_THRESHOLD,
 ) -> tuple[list[dict], list[dict]]:
     """Decide the overview's attention items from owner-computed facts.
 
@@ -162,7 +165,7 @@ def build_attention_items(
             network=True,
         )
     ont_offline = int(ont_summary.get("offline") or 0)
-    if ont_offline > ONT_OFFLINE_ATTENTION_THRESHOLD:
+    if ont_offline > ont_offline_threshold:
         _add(
             _item(
                 f"{ont_offline} {_plural(ont_offline, 'ONT')} offline",

@@ -477,15 +477,29 @@ def _call(func, *args, **kwargs):
 
 class TestCrmEndpoint:
     def test_requires_bearer(self, crm_auth):
-        from app.api.crm import require_crm_bearer
+        # Legacy shared bearer is still accepted while crm_legacy_bearer_enabled
+        # is true (default); the bearer path uses neither request nor db.
+        from app.api.crm import require_crm_service_auth
 
         with pytest.raises(HTTPException) as excinfo:
-            require_crm_bearer(None)
+            require_crm_service_auth(
+                request=None, authorization=None, x_api_key=None, db=None
+            )
         assert excinfo.value.status_code == 401
         with pytest.raises(HTTPException) as excinfo:
-            require_crm_bearer("Bearer wrong-token")
+            require_crm_service_auth(
+                request=None,
+                authorization="Bearer wrong-token",
+                x_api_key=None,
+                db=None,
+            )
         assert excinfo.value.status_code == 401
-        assert require_crm_bearer(f"Bearer {TOKEN}") is None
+        assert (
+            require_crm_service_auth(
+                request=None, authorization=f"Bearer {TOKEN}", x_api_key=None, db=None
+            )
+            is None
+        )
 
     def test_route_declares_bearer_guard(self):
         from app.api.crm import router
@@ -500,7 +514,7 @@ class TestCrmEndpoint:
             getattr(getattr(dep, "call", None), "__name__", "")
             for dep in route.dependant.dependencies
         }
-        assert "require_crm_bearer" in names
+        assert "require_crm_service_auth" in names
 
     def test_register_created(self, db_session, subscriber, catalog_offer):
         from app.api.crm import register_subscription_radio_mac

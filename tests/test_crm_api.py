@@ -202,8 +202,19 @@ def _session(db_session, subscription: Subscription) -> None:
 
 
 def test_ping_requires_bearer_token(crm_auth):
-    missing = _call_route(crm_routes.require_crm_bearer)
-    valid = _call_route(crm_routes.require_crm_bearer, f"Bearer {TOKEN}")
+    from types import SimpleNamespace
+
+    def _auth(authorization=None):
+        return _call_route(
+            crm_routes.require_crm_service_auth,
+            request=SimpleNamespace(state=SimpleNamespace(), cookies={}),
+            authorization=authorization,
+            x_api_key=None,
+            db=None,
+        )
+
+    missing = _auth()
+    valid = _auth(f"Bearer {TOKEN}")
 
     assert missing.status_code == 401
     assert valid.status_code == 200
