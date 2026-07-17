@@ -139,6 +139,9 @@ def test_suggestions_never_complete_a_field(db_session):
     """Even with a suggester registered, a suggestion is unconfirmed evidence —
     it must not make a subscriber complete."""
     subscriber = _subscriber(db_session, address_line1="Nothing to match")
+    # queue() is scoped to subscribers with an active subscription, so the
+    # row only appears once this one is actually a customer.
+    _subscribe(db_session, subscriber, _offer(db_session))
     fake = completeness.Suggestion(
         key=FieldKey.state,
         value="Lagos",
