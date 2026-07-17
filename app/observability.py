@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import uuid
+from contextvars import ContextVar
 
 from jose import JWTError, jwt
 from starlette.datastructures import MutableHeaders
@@ -12,6 +13,16 @@ from app.metrics import REQUEST_COUNT, REQUEST_ERRORS, REQUEST_LATENCY
 
 logger = logging.getLogger(__name__)
 _SKIP_OBSERVABILITY_PATHS = {"/health", "/metrics"}
+
+# The current request's x-request-id, for propagation onto outbound
+# integration calls (crm, erp). Set by ObservabilityMiddleware; empty outside
+# a request (e.g. Celery workers), in which case outbound headers omit it.
+request_id_var: ContextVar[str] = ContextVar("request_id", default="")
+
+
+def get_request_id() -> str:
+    """The active request's x-request-id, or '' when not in a request."""
+    return request_id_var.get()
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -76,6 +87,7 @@ class ObservabilityMiddleware:
         request = Request(scope)
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
         scope.setdefault("state", {})["request_id"] = request_id
+        request_id_var.set(request_id)
         path = _request_path(request)
         if _should_skip_observability(path):
             await self.app(scope, receive, send)

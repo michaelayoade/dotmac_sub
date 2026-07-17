@@ -16,8 +16,7 @@ import logging
 from collections.abc import Collection
 
 import httpx
-
-from app.services.integration_http import IntegrationHttpClient
+from dotmac_integration import IntegrationHttpClient
 
 logger = logging.getLogger(__name__)
 
