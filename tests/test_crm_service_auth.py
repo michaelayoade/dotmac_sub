@@ -14,9 +14,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.config import settings
-
 from app.api.crm import CRM_INTEGRATION_PERMISSION, require_crm_service_auth
+from app.config import settings
 from app.models.auth import ApiKey
 from app.services.auth import hash_api_key
 
