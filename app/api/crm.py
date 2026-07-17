@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.services import crm_api
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/crm", tags=["crm-api"])
 
@@ -26,7 +29,35 @@ def _error(
     raise HTTPException(status_code=status_code, detail=detail)
 
 
-def require_crm_bearer(authorization: str | None = Header(default=None)) -> None:
+CRM_INTEGRATION_PERMISSION = "integration:crm"
+
+
+def require_crm_service_auth(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
+    db: Session = Depends(get_db),
+) -> None:
+    """Authenticate the CRM service caller.
+
+    Preferred: a scoped, rotatable ``ApiKey`` (fail-closed — the key must hold
+    the ``integration:crm`` permission, wildcard-aware). During migration the
+    legacy shared bearer (``selfcare_api_token``) is still accepted while
+    ``settings.crm_legacy_bearer_enabled`` is true; flip it off after CRM
+    switches to ``X-Api-Key`` to retire the unscoped credential.
+    """
+    if isinstance(x_api_key, str) and x_api_key:
+        from app.services.auth_dependencies import _api_key_principal, has_permission
+
+        auth = _api_key_principal(db, x_api_key, request)
+        if auth is not None and has_permission(auth, db, CRM_INTEGRATION_PERMISSION):
+            return
+        _error(
+            status.HTTP_401_UNAUTHORIZED,
+            "Invalid or insufficiently scoped API key.",
+        )
+    if not settings.crm_legacy_bearer_enabled:
+        _error(status.HTTP_401_UNAUTHORIZED, "CRM API requires an X-Api-Key.")
     expected = settings.selfcare_api_token
     if not expected:
         _error(status.HTTP_401_UNAUTHORIZED, "CRM API bearer token is not configured.")
@@ -35,6 +66,11 @@ def require_crm_bearer(authorization: str | None = Header(default=None)) -> None
         _error(status.HTTP_401_UNAUTHORIZED, "Missing bearer token.")
     if not hmac.compare_digest(token, expected):
         _error(status.HTTP_401_UNAUTHORIZED, "Invalid bearer token.")
+    logger.warning(
+        "crm api authenticated via legacy shared bearer (deprecated); "
+        "provision a scoped ApiKey with %s and set CRM_LEGACY_BEARER_ENABLED=false",
+        CRM_INTEGRATION_PERMISSION,
+    )
 
 
 def _envelope(data: Any, meta: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -172,12 +208,12 @@ def _subscriber_or_404(db: Session, subscriber_id: str):
     return subscriber
 
 
-@router.get("/ping", dependencies=[Depends(require_crm_bearer)])
+@router.get("/ping", dependencies=[Depends(require_crm_service_auth)])
 def ping() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/subscribers", dependencies=[Depends(require_crm_bearer)])
+@router.get("/subscribers", dependencies=[Depends(require_crm_service_auth)])
 def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     page, per_page, meta = _pagination(request)
     includes = _include_values(
@@ -215,7 +251,7 @@ def list_subscribers(request: Request, db: Session = Depends(get_db)) -> dict[st
     return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/subscribers/search", dependencies=[Depends(require_crm_bearer)])
+@router.get("/subscribers/search", dependencies=[Depends(require_crm_service_auth)])
 def search_subscribers(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -245,7 +281,7 @@ def search_subscribers(
     return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/subscribers/online", dependencies=[Depends(require_crm_bearer)])
+@router.get("/subscribers/online", dependencies=[Depends(require_crm_service_auth)])
 def online_subscribers(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -257,7 +293,7 @@ def online_subscribers(
     return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_bearer)])
+@router.get("/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_service_auth)])
 def subscriber_detail(
     subscriber_id: str, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -278,7 +314,7 @@ def subscriber_detail(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/services", dependencies=[Depends(require_crm_bearer)]
+    "/subscribers/{subscriber_id}/services", dependencies=[Depends(require_crm_service_auth)]
 )
 def subscriber_services(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -288,7 +324,7 @@ def subscriber_services(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/billing", dependencies=[Depends(require_crm_bearer)]
+    "/subscribers/{subscriber_id}/billing", dependencies=[Depends(require_crm_service_auth)]
 )
 def subscriber_billing(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -298,7 +334,7 @@ def subscriber_billing(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/sessions", dependencies=[Depends(require_crm_bearer)]
+    "/subscribers/{subscriber_id}/sessions", dependencies=[Depends(require_crm_service_auth)]
 )
 def subscriber_sessions(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -309,7 +345,7 @@ def subscriber_sessions(
 
 @router.get(
     "/subscribers/{subscriber_id}/statistics",
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_statistics(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -319,7 +355,7 @@ def subscriber_statistics(
 
 
 @router.patch(
-    "/subscribers/{subscriber_id}/status", dependencies=[Depends(require_crm_bearer)]
+    "/subscribers/{subscriber_id}/status", dependencies=[Depends(require_crm_service_auth)]
 )
 def update_subscriber_status(
     subscriber_id: str,
@@ -353,14 +389,14 @@ def update_subscriber_status(
     )
 
 
-@router.get("/locations", dependencies=[Depends(require_crm_bearer)])
+@router.get("/locations", dependencies=[Depends(require_crm_service_auth)])
 def locations(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     page, per_page, meta = _pagination(request)
     data, total = crm_api.locations(db, page=page, per_page=per_page)
     return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/billing-risk-source", dependencies=[Depends(require_crm_bearer)])
+@router.get("/billing-risk-source", dependencies=[Depends(require_crm_service_auth)])
 def billing_risk_source(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -372,7 +408,7 @@ def billing_risk_source(
 @router.post(
     "/payments",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
     tags=["payments"],
 )
 def record_crm_payment(
@@ -453,7 +489,7 @@ def record_crm_payment(
 @router.post(
     "/subscriptions",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
     tags=["subscriptions"],
 )
 def create_crm_subscription(
@@ -517,7 +553,7 @@ def create_crm_subscription(
     )
 
 
-@router.get("/offers", dependencies=[Depends(require_crm_bearer)])
+@router.get("/offers", dependencies=[Depends(require_crm_service_auth)])
 def catalog_offers(
     q: str | None = None,
     active_only: bool = True,
@@ -528,7 +564,7 @@ def catalog_offers(
     return _envelope(crm_api.list_catalog_offers(db, q=q, active_only=active_only))
 
 
-@router.get("/infrastructure/assets", dependencies=[Depends(require_crm_bearer)])
+@router.get("/infrastructure/assets", dependencies=[Depends(require_crm_service_auth)])
 def infrastructure_assets(
     q: str | None = None,
     db: Session = Depends(get_db),
@@ -538,7 +574,7 @@ def infrastructure_assets(
     return _envelope(crm_api.list_infrastructure_assets(db, q=q))
 
 
-@router.get("/ncc/subscribers", dependencies=[Depends(require_crm_bearer)])
+@router.get("/ncc/subscribers", dependencies=[Depends(require_crm_service_auth)])
 def ncc_subscriber_report(
     as_of: str | None = None,
     statuses: str | None = None,
@@ -569,7 +605,7 @@ def ncc_subscriber_report(
     return _envelope(ncc.build_ncc_subscriber_report(db, params))
 
 
-@router.get("/outages/impact", dependencies=[Depends(require_crm_bearer)])
+@router.get("/outages/impact", dependencies=[Depends(require_crm_service_auth)])
 def outage_impact(
     node_id: str | None = None,
     basestation_id: str | None = None,
@@ -629,7 +665,7 @@ def outage_impact(
     )
 
 
-@router.get("/outages", dependencies=[Depends(require_crm_bearer)])
+@router.get("/outages", dependencies=[Depends(require_crm_service_auth)])
 def list_outages(
     status_filter: str | None = None,
     basestation_id: str | None = None,
@@ -671,7 +707,7 @@ def list_outages(
     return _envelope(rows, {"page": page, "per_page": per_page, "total": total})
 
 
-@router.get("/outages/{incident_id}", dependencies=[Depends(require_crm_bearer)])
+@router.get("/outages/{incident_id}", dependencies=[Depends(require_crm_service_auth)])
 def outage_detail(
     incident_id: str,
     limit: int = 200,
@@ -687,7 +723,7 @@ def outage_detail(
     return _envelope(row)
 
 
-@router.get("/service-extensions", dependencies=[Depends(require_crm_bearer)])
+@router.get("/service-extensions", dependencies=[Depends(require_crm_service_auth)])
 def service_extensions(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -697,7 +733,7 @@ def service_extensions(
 
 
 @router.get(
-    "/service-extensions/{extension_id}", dependencies=[Depends(require_crm_bearer)]
+    "/service-extensions/{extension_id}", dependencies=[Depends(require_crm_service_auth)]
 )
 def service_extension_detail(
     extension_id: str, db: Session = Depends(get_db)
@@ -710,7 +746,7 @@ def service_extension_detail(
 
 @router.get(
     "/subscribers/{subscriber_id}/service-extensions",
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_service_extensions(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -719,7 +755,7 @@ def subscriber_service_extensions(
     return _envelope(crm_api.service_extensions_for_subscriber(db, subscriber.id))
 
 
-@router.get("/finance/transactions", dependencies=[Depends(require_crm_bearer)])
+@router.get("/finance/transactions", dependencies=[Depends(require_crm_service_auth)])
 def finance_transactions(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -735,7 +771,7 @@ def finance_transactions(
     return _envelope(rows, {**meta, "total": total})
 
 
-@router.get("/finance/payments", dependencies=[Depends(require_crm_bearer)])
+@router.get("/finance/payments", dependencies=[Depends(require_crm_service_auth)])
 def finance_payments(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     page, per_page, meta = _pagination(request)
     rows, total = crm_api.payment_rows(
@@ -752,7 +788,7 @@ def finance_payments(request: Request, db: Session = Depends(get_db)) -> dict[st
 @router.post(
     "/credits",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
     tags=["credits"],
 )
 def create_crm_credit(
@@ -817,7 +853,7 @@ def create_crm_credit(
 @router.post(
     "/invoices",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
     tags=["invoices"],
 )
 def create_crm_invoice(
@@ -878,7 +914,7 @@ def create_crm_invoice(
 @router.post(
     "/subscriptions/{subscription_id}/radio-mac",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_crm_bearer)],
+    dependencies=[Depends(require_crm_service_auth)],
     tags=["provisioning"],
 )
 def register_subscription_radio_mac(
