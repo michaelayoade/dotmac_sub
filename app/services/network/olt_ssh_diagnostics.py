@@ -365,6 +365,7 @@ def _run_readonly_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
+        _setup_prompt_timeout,
     )
 
     try:
@@ -374,9 +375,9 @@ def _run_readonly_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]
 
     try:
         channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
         channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
         return True, "ok", _run_huawei_cmd(channel, command)
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
