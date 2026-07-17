@@ -4068,6 +4068,25 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Referrals: native write path (Phase 3 flip flag)",
     ),
+    # Reverse-geocoding for location capture. Unset means no geocoder: the
+    # reconciler reports every field unverifiable rather than failing a
+    # capture, so this is safe to leave blank until the service is reachable.
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="nominatim_base_url",
+        env_var="NOMINATIM_BASE_URL",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Nominatim base URL (reverse-geocoding for location capture)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="nominatim_timeout_seconds",
+        env_var="NOMINATIM_TIMEOUT_SECONDS",
+        value_type=SettingValueType.integer,
+        default=5,
+        label="Nominatim request timeout (seconds)",
+    ),
 ]
 
 # Tombstone the settings-registry surfaces whose decisions moved to canonical
