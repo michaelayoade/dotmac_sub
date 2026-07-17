@@ -379,8 +379,10 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
     # transaction and reintroduce the bug).
     contexts: dict[uuid.UUID, dict[str, _PortContext]] = {}
     ssh_snapshots: dict[uuid.UUID, SimpleNamespace] = {}
+    orm_olts: dict[uuid.UUID, OLTDevice] = {}
     for olt in olts:
         counters["olts_polled"] += 1
+        orm_olts[olt.id] = olt
         contexts[olt.id] = _active_ports_for_olt(db, olt)
         ssh_snapshots[olt.id] = SimpleNamespace(
             id=olt.id,
@@ -397,12 +399,14 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
 
     # Phase 2 — collect: SSH walks with NO transaction open. Raw outputs only;
     # per-OLT failures are isolated so one bad OLT can't sink the run.
-    collected: list[tuple[OLTDevice, list[tuple[str, str]]]] = []
-    for olt in olts:
+    # Iterate the plain snapshots, never the ORM rows: post-commit, even
+    # ``olt.id`` is an expired attribute whose refresh would silently begin a
+    # new transaction (the regression test proved it).
+    collected: list[tuple[uuid.UUID, list[tuple[str, str]]]] = []
+    for olt_id, snapshot in ssh_snapshots.items():
         walked: list[tuple[str, str]] = []
         try:
-            snapshot = ssh_snapshots[olt.id]
-            for fsp in contexts[olt.id]:
+            for fsp in contexts[olt_id]:
                 ok, status, output = _run_readonly_command(
                     snapshot, f"display mac-address port {fsp}"
                 )
@@ -411,7 +415,7 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
                     logger.warning(
                         "olt_mac_harvest_port_read_failed "
                         "olt_device_id=%s fsp=%s status=%s",
-                        olt.id,
+                        olt_id,
                         fsp,
                         status,
                     )
@@ -419,19 +423,18 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
                 walked.append((fsp, output))
         except Exception:  # noqa: BLE001 - isolate per-OLT failure, keep going
             counters["olt_errors"] += 1
-            logger.exception(
-                "olt_mac_harvest_olt_failed olt_device_id=%s", getattr(olt, "id", "?")
-            )
+            logger.exception("olt_mac_harvest_olt_failed olt_device_id=%s", olt_id)
             continue
-        collected.append((olt, walked))
+        collected.append((olt_id, walked))
 
     # Phase 3 — write: parse + upsert + drift in per-OLT SAVEPOINTs on a fresh
     # transaction (begun implicitly by the first query). The caller owns the
     # outer commit, as before.
-    for olt, walked in collected:
+    for olt_id, walked in collected:
+        olt = orm_olts[olt_id]
         savepoint = db.begin_nested()
         try:
-            ports = contexts[olt.id]
+            ports = contexts[olt_id]
             for fsp, output in walked:
                 ctx = ports[fsp]
                 for entry in parse_mac_address_port(output):
