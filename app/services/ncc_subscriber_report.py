@@ -177,9 +177,10 @@ _CORPORATE = {
 }
 _MAX_PLAUSIBLE_SPEED_MBPS = 10_000
 _NCC_PACK_EXCLUDED_STATE_KEYS = {"oyo", "anambra"}
+# Only genuine FCT spellings map to the pack's "Abuja" label. An unresolved
+# state is NOT one of them: reporting a subscriber we cannot locate as FCT
+# states a fact to the regulator that we do not have. Unknown stays Unknown.
 _NCC_PACK_ABUJA_STATE_KEYS = {
-    "",
-    "unknown",
     "fct",
     "f c t",
     "federal capital territory",
@@ -204,6 +205,8 @@ def zone_for_state(state: str) -> str:
 
 
 def _ncc_pack_state_label(value: object) -> str:
+    """Pack display label for a state. Unresolvable input reports as
+    ``Unknown`` — never as a state we merely assume."""
     key = _normalize_location_key(value)
     if key in _NCC_PACK_ABUJA_STATE_KEYS:
         return _NCC_PACK_ABUJA_LABEL
@@ -213,7 +216,7 @@ def _ncc_pack_state_label(value: object) -> str:
     if state != _UNKNOWN:
         return state
     label = str(value or "").strip()
-    return label or _NCC_PACK_ABUJA_LABEL
+    return label or _UNKNOWN
 
 
 def _ncc_pack_zone_for_state(state: str) -> str:
@@ -294,7 +297,11 @@ def normalize_ncc_pack_subscriber_report(report: dict) -> dict:
     normalized["ncc_pack_adjustments"] = {
         "excluded_states": dict(sorted(excluded_states.items())),
         "excluded_count": excluded_count,
-        "merged_unknown_into": _NCC_PACK_ABUJA_LABEL,
+        # Subscribers whose state we cannot resolve are reported as Unknown,
+        # not merged into a state we merely assume. A non-zero count means the
+        # return is not yet filable: the gap is a data-capture task, not a
+        # display problem.
+        "unknown_state_count": adjusted_by_state.get(_UNKNOWN, 0),
     }
 
     matrix = normalized.get("subscription_matrix")
