@@ -1621,6 +1621,35 @@ Rule: support routes and jobs translate requests and delegate ticket decisions
 to `app.services.support`. Events and notifications are consequences requested
 by that owner, not alternate ticket writers.
 
+## Customer Data Completeness
+
+1. `customer.data_completeness` (`app.services.subscriber_data_completeness`)
+   owns the declared answer to "is this subscriber's data good enough for X?":
+   the purpose → required-field policy (`ncc_filing`, `kyc`), the derivation of
+   what is missing, the capture backlog (`queue`), and the pre-filing readiness
+   counts (`readiness`). One declarative policy — callers ask it rather than
+   re-deciding what "complete" means.
+
+Rule: completeness is **derived, never stored**. It asks the same resolver the
+consuming report asks (state completeness reuses
+`ncc_subscriber_report.infer_state`), so a subscriber cannot be complete here
+and Unknown in the return.
+
+Rule: the module is **read-only**. Capture flows through the subscriber owner;
+this owner reports gaps and never fills them.
+
+Rule: **suggestions are never auto-applied.** A suggestion is unconfirmed
+evidence carrying its source, offered to a human who decides. Reporting a
+subscriber we cannot locate as though we know where they are is the
+fabrication removed from the NCC return (unresolved state was filed as
+"Abuja"); a suggestion that silently became a stored fact would reintroduce it
+one layer up. A suggester must also use a signal the presence check does not
+already exhaust, or it is dead code by construction.
+
+Not yet declared in `sot_relationships`: the registry requires every declared
+owner to have a real application caller, and nothing wires this module yet.
+The slice that adds the cleanup surface adds the `SOTService` entry with it.
+
 ## AI Control Plane
 
 AI is advisory: it observes, derives, and recommends; it never decides domain
