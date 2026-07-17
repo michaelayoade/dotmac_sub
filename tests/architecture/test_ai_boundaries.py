@@ -34,10 +34,18 @@ _SESSION_TOKENS = {"db", "session", "db_session"}
 
 
 def _ai_modules() -> list[Path]:
+    """Every AI service module: the ``ai*``-named files AND the ``ai`` package.
+
+    The package clause is load-bearing. Matching on filename alone covered
+    only ``ai_operations.py`` — ``app/services/ai/engine.py`` and
+    ``.../gateway.py`` are named ``engine``/``gateway``, so the generation
+    slice would have imported the whole guard's blind spot.
+    """
     return [
         p
         for p in SERVICES.rglob("*.py")
-        if p.name.startswith("ai") and "__pycache__" not in p.parts
+        if "__pycache__" not in p.parts
+        and (p.name.startswith("ai") or "ai" in p.relative_to(SERVICES).parts[:-1])
     ]
 
 

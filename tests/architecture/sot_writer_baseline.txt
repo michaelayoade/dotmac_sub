@@ -1,11 +1,12 @@
 # Existing service modules with persistence-like mutations and no declared
-# source-of-truth owner. This is migration debt, not an allowlist: new entries
 # require an explicit ownership review, and the architecture test requires
 # resolved/non-writing entries to be removed. Keep this file sorted.
+# source-of-truth owner. This is migration debt, not an allowlist: new entries
 app.services.account_deletion
 app.services.account_status_reconcile
 app.services.admin_alerts
 app.services.admin_whats_new
+app.services.ai.engine
 app.services.analytics
 app.services.auth
 app.services.auth_flow
