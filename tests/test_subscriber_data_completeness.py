@@ -1,13 +1,18 @@
 """Subscriber data completeness: derived, never stored; suggestions never bind.
 
-The invariant under test is that "complete" here means exactly what the
-consuming report means — a subscriber cannot be complete for ``ncc_filing``
-while the NCC return files them as Unknown.
+Two invariants under test:
+
+1. "complete" here means exactly what the consuming report means — a
+   subscriber cannot be complete for ``ncc_filing`` while the NCC return files
+   them as Unknown.
+2. **complete is not verified.** A value we inferred and nobody confirmed is
+   complete and unverified, and it belongs in the revalidation queue.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -27,8 +32,9 @@ from app.models.subscriber import (
     SubscriberCategory,
     SubscriberNINVerification,
 )
+from app.models.subscriber_field_verification import SubscriberFieldVerification
 from app.services import subscriber_data_completeness as completeness
-from app.services.subscriber_data_completeness import FieldKey, Purpose
+from app.services.subscriber_data_completeness import FieldKey, Provenance, Purpose
 
 
 def _offer(db) -> CatalogOffer:
@@ -75,6 +81,32 @@ def _subscribe(db, subscriber, offer, *, status=SubscriptionStatus.active):
         offer_id=offer.id,
         status=status,
         billing_mode=BillingMode.prepaid,
+    )
+    db.add(row)
+    db.commit()
+    return row
+
+
+def _capture(
+    db,
+    subscriber,
+    *,
+    key=FieldKey.state,
+    value="Lagos",
+    source="customer_portal",
+    verified_at=None,
+    evidence=None,
+):
+    """Append a confirmation to the ledger — what the capture slice will do."""
+    row = SubscriberFieldVerification(
+        subscriber_id=subscriber.id,
+        field_key=key.value,
+        value=value,
+        source=source,
+        verified_at=verified_at or datetime.now(UTC),
+        verified_by_actor_id="actor-1",
+        verified_by_actor_name="Ada Operator",
+        evidence=evidence,
     )
     db.add(row)
     db.commit()
@@ -211,8 +243,10 @@ def test_queue_covers_only_active_subscription_subscribers(db_session):
         db_session, incomplete_canceled, offer, status=SubscriptionStatus.canceled
     )
 
-    complete_active = _subscriber(db_session, region="Lagos")
-    _subscribe(db_session, complete_active, offer)
+    # Confirmed and fresh — the only reason to leave the queue.
+    verified_active = _subscriber(db_session, region="Lagos")
+    _subscribe(db_session, verified_active, offer)
+    _capture(db_session, verified_active, value="Lagos")
 
     no_subscription = _subscriber(db_session, address_line1="Nothing to match")
 
@@ -221,7 +255,7 @@ def test_queue_covers_only_active_subscription_subscribers(db_session):
 
     assert str(incomplete_active.id) in ids
     assert str(incomplete_canceled.id) not in ids  # not in scope
-    assert str(complete_active.id) not in ids  # nothing missing
+    assert str(verified_active.id) not in ids  # confirmed, fresh
     assert str(no_subscription.id) not in ids  # not in scope
     assert total == len(rows) == 1
 
@@ -267,3 +301,200 @@ def test_every_purpose_declares_why_each_field_is_required(purpose):
     for requirement in requirements:
         assert requirement.label.strip()
         assert requirement.why.strip()
+
+
+# ── provenance ──────────────────────────────────────────────────────────────
+
+
+def test_a_ledger_row_makes_a_field_captured(db_session):
+    subscriber = _subscriber(db_session, region="Lagos")
+    _capture(db_session, subscriber, value="Lagos", source="customer_portal")
+
+    (state,) = completeness.state_of(db_session, subscriber, Purpose.ncc_filing)
+    assert state.provenance is Provenance.captured
+    assert state.value == "Lagos"
+    assert state.source == "customer_portal"
+    assert state.verified_at is not None
+    assert state.is_stale is False
+    assert state.needs_revalidation is False
+
+
+def test_inferred_state_is_complete_but_not_verified(db_session):
+    """The heart of it: 3,558 production locations look like this — a value
+    matched out of an address string that nobody ever confirmed. Complete,
+    and not a fact."""
+    subscriber = _subscriber(db_session, region="Lagos")
+
+    (state,) = completeness.state_of(db_session, subscriber, Purpose.ncc_filing)
+    assert state.provenance is Provenance.inferred
+    assert state.needs_revalidation is True
+
+    assert completeness.is_complete(subscriber, Purpose.ncc_filing) is True
+    assert completeness.is_verified(db_session, subscriber, Purpose.ncc_filing) is False
+
+
+def test_unresolvable_state_is_absent(db_session):
+    subscriber = _subscriber(db_session, address_line1="Nothing to match")
+    (state,) = completeness.state_of(db_session, subscriber, Purpose.ncc_filing)
+    assert state.provenance is Provenance.absent
+    assert state.needs_revalidation is True
+
+
+def test_latest_capture_wins_over_earlier_ones(db_session):
+    """The ledger is append-only: a customer who moves is re-confirmed, not
+    overwritten, and the newest confirmation is the current one."""
+    subscriber = _subscriber(db_session, region="Lagos")
+    now = datetime.now(UTC)
+    _capture(
+        db_session,
+        subscriber,
+        value="Kano",
+        source="agent",
+        verified_at=now - timedelta(days=30),
+    )
+    _capture(
+        db_session,
+        subscriber,
+        value="Lagos",
+        source="customer_portal",
+        verified_at=now,
+    )
+
+    (state,) = completeness.state_of(db_session, subscriber, Purpose.ncc_filing)
+    assert state.value == "Lagos"
+    assert state.source == "customer_portal"
+
+
+def test_capture_carries_its_evidence(db_session):
+    """A GPS fix travels with its accuracy so a consumer can refuse to derive
+    an LGA from a fix too coarse to distinguish one."""
+    subscriber = _subscriber(db_session, region="Lagos")
+    row = _capture(
+        db_session,
+        subscriber,
+        source="field_gps",
+        evidence={"lat": 6.45, "lng": 3.39, "accuracy_m": 8},
+    )
+    db_session.refresh(row)
+    assert row.evidence["accuracy_m"] == 8
+
+
+# ── freshness ───────────────────────────────────────────────────────────────
+
+
+def test_a_stale_capture_needs_revalidation(db_session):
+    subscriber = _subscriber(db_session, region="Lagos")
+    window = completeness.requirements_for(Purpose.ncc_filing)[0].revalidate_after
+    assert window is not None
+    _capture(
+        db_session,
+        subscriber,
+        verified_at=datetime.now(UTC) - window - timedelta(days=1),
+    )
+
+    (state,) = completeness.state_of(db_session, subscriber, Purpose.ncc_filing)
+    assert state.provenance is Provenance.captured
+    assert state.is_stale is True
+    assert state.needs_revalidation is True
+    assert completeness.is_verified(db_session, subscriber, Purpose.ncc_filing) is False
+
+
+def test_a_fresh_capture_is_verified(db_session):
+    subscriber = _subscriber(db_session, region="Lagos")
+    _capture(db_session, subscriber, verified_at=datetime.now(UTC))
+    assert completeness.is_verified(db_session, subscriber, Purpose.ncc_filing) is True
+
+
+def test_a_stale_capture_re_enters_the_queue(db_session):
+    offer = _offer(db_session)
+    subscriber = _subscriber(db_session, region="Lagos")
+    _subscribe(db_session, subscriber, offer)
+    window = completeness.requirements_for(Purpose.ncc_filing)[0].revalidate_after
+    assert window is not None
+    _capture(
+        db_session,
+        subscriber,
+        verified_at=datetime.now(UTC) - window - timedelta(days=1),
+    )
+
+    rows, total = completeness.queue(db_session, Purpose.ncc_filing)
+    assert total == 1
+    assert rows[0].subscriber_id == str(subscriber.id)
+    assert rows[0].missing == ()  # nothing absent — it is stale, not missing
+
+
+# ── revalidate everyone ─────────────────────────────────────────────────────
+
+
+def test_queue_includes_inferred_subscribers_not_just_absent(db_session):
+    """ "Revalidate all customers, not just the ones we don't have." An inferred
+    subscriber is a guess we are filing to a regulator, so it queues too."""
+    offer = _offer(db_session)
+
+    inferred = _subscriber(db_session, region="Lagos")
+    _subscribe(db_session, inferred, offer)
+
+    absent = _subscriber(db_session, address_line1="Nothing to match")
+    _subscribe(db_session, absent, offer)
+
+    captured = _subscriber(db_session, region="Kano")
+    _subscribe(db_session, captured, offer)
+    _capture(db_session, captured, value="Kano")
+
+    rows, total = completeness.queue(db_session, Purpose.ncc_filing)
+    ids = {r.subscriber_id for r in rows}
+
+    assert str(inferred.id) in ids  # complete, unconfirmed — still queued
+    assert str(absent.id) in ids
+    assert str(captured.id) not in ids  # confirmed and fresh
+    assert total == 2
+
+
+def test_readiness_separates_verified_from_merely_complete(db_session):
+    offer = _offer(db_session)
+
+    captured = _subscriber(db_session, region="Kano")
+    _subscribe(db_session, captured, offer)
+    _capture(db_session, captured, value="Kano")
+
+    for _ in range(2):
+        inferred = _subscriber(db_session, region="Lagos")
+        _subscribe(db_session, inferred, offer)
+
+    absent = _subscriber(db_session, address_line1="Nothing to match")
+    _subscribe(db_session, absent, offer)
+
+    report = completeness.readiness(db_session, Purpose.ncc_filing)
+
+    assert report["total_in_scope"] == 4
+    # Three have a state; only one is a fact.
+    assert report["complete"] == 3
+    assert report["verified"] == 1
+    assert report["needs_revalidation"] == 3
+    assert report["incomplete"] == 1
+    assert report["fields_by_provenance"] == {
+        Provenance.captured.value: 1,
+        Provenance.inferred.value: 2,
+        Provenance.absent.value: 1,
+    }
+    assert sum(report["fields_by_provenance"].values()) == 4  # one field each
+    assert report["verified"] + report["needs_revalidation"] == report["total_in_scope"]
+    assert report["stale_fields"] == 0
+
+
+def test_readiness_counts_stale_fields(db_session):
+    offer = _offer(db_session)
+    subscriber = _subscriber(db_session, region="Lagos")
+    _subscribe(db_session, subscriber, offer)
+    window = completeness.requirements_for(Purpose.ncc_filing)[0].revalidate_after
+    assert window is not None
+    _capture(
+        db_session,
+        subscriber,
+        verified_at=datetime.now(UTC) - window - timedelta(days=1),
+    )
+
+    report = completeness.readiness(db_session, Purpose.ncc_filing)
+    assert report["stale_fields"] == 1
+    assert report["verified"] == 0
+    assert report["fields_by_provenance"][Provenance.captured.value] == 1
