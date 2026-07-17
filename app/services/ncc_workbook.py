@@ -27,7 +27,7 @@ from __future__ import annotations
 import io
 import re
 from datetime import UTC, datetime
-from xml.sax.saxutils import escape
+from xml.sax.saxutils import escape  # nosec B406 — escaping XML output, never parsing
 from zipfile import ZIP_DEFLATED, ZipFile
 
 # TODO: operator identity is per-deployment; promote to a setting when a
@@ -2023,7 +2023,7 @@ def _data_validations_xml(
         validations.append(
             # noqa is for S608: this is generated spreadsheet XML, not SQL —
             # "sqref" is Excel's cell-range attribute. Values are escaped above.
-            f'<dataValidation type="list" allowBlank="{allow_blank}" showErrorMessage="1" '  # noqa: S608
+            f'<dataValidation type="list" allowBlank="{allow_blank}" showErrorMessage="1" '  # noqa: S608  # nosec B608
             f'errorTitle="Invalid {escape(column)}" '
             f'error="Select an accepted NCC value from the dropdown." '
             f'sqref="{report_letter}2:{report_letter}{max_row}">'
