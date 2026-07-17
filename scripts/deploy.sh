@@ -10,6 +10,9 @@
 #   deploy.sh sha-abc1234        deploy this image tag (CI builds one per commit on main)
 #   deploy.sh --status           show pinned vs running image
 #   SKIP_BACKUP=1 deploy.sh ...  skip the pre-migration DB backup (NOT recommended)
+#   HEALTH_CURL_TIMEOUT=N ...    cap each health-check curl attempt at N seconds
+#                                (default 5) so a hung health endpoint can't stall
+#                                a retry indefinitely
 #
 # RUN IT DETACHED over SSH -- `nohup ./scripts/deploy.sh sha-... &` or inside
 # tmux. A dropped SSH session sends SIGHUP and kills the deploy mid-flight; the
@@ -33,6 +36,11 @@ IMAGE_REPO="ghcr.io/michaelayoade/dotmac_sub"
 APP_CONTAINER="dotmac_sub_app"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/health}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
+# Per-attempt cap on the health-check curl itself, distinct from the overall
+# HEALTH_TIMEOUT_SECONDS retry budget above — without it a hung health
+# endpoint stalls a single curl call indefinitely instead of failing fast
+# into the next retry.
+HEALTH_CURL_TIMEOUT="${HEALTH_CURL_TIMEOUT:-5}"
 IMAGE_RETAIN_COUNT="${IMAGE_RETAIN_COUNT:-5}"
 # Every service that runs the app image and must be recreated on a new build.
 APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
@@ -208,7 +216,19 @@ repin_prev() {
   restore_env_value APP_IMAGE "${PREV_IMAGE_PRESENT}" "${PREV_IMAGE}"
   restore_env_value GIT_SHA "${PREV_GIT_SHA_PRESENT}" "${PREV_GIT_SHA}"
 }
-trap 'repin_prev; echo "Deploy FAILED — APP_IMAGE/GIT_SHA restored to the previous release (running containers untouched)" >&2' ERR
+# A failure on or after `up -d` (below) may already have replaced/stopped the
+# previous containers — repinning .env alone does not bring anything back up.
+# Recreate on the restored pin too, same as the health-gate rollback further
+# down. `|| true`: this trap must not itself fail partway and lose the
+# repin/log that already ran; `set -e`'s normal exit-code propagation still
+# reports the ORIGINAL failure once the trap returns.
+restore_prev() {
+  repin_prev
+  if [[ -n "${PREV_IMAGE}" ]]; then
+    "${COMPOSE[@]}" up -d "${APP_SERVICES[@]}" || true
+  fi
+}
+trap 'restore_prev; echo "Deploy FAILED — APP_IMAGE/GIT_SHA restored to the previous release; previous image brought back up where possible" >&2' ERR
 
 # From here on APP_IMAGE may already be pinned, so an interrupt must restore it
 # too -- not just terminate the backup child. (Migrations are NOT reverted; new
@@ -250,7 +270,8 @@ log "Waiting for app health at ${HEALTH_URL} (timeout ${HEALTH_TIMEOUT_SECONDS}s
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
 healthy=0
 while ((SECONDS < deadline)); do
-  if curl -fsS -o /dev/null "${HEALTH_URL}" 2>/dev/null; then
+  if curl -fsS --connect-timeout "${HEALTH_CURL_TIMEOUT}" --max-time "${HEALTH_CURL_TIMEOUT}" \
+    -o /dev/null "${HEALTH_URL}" 2>/dev/null; then
     healthy=1
     break
   fi
