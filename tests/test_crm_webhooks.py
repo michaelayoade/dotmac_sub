@@ -448,3 +448,46 @@ def test_customer_webhook_rejects_bad_signature(db_session):
             },
         )
     assert resp.status_code == 401
+
+
+# --- S4a: replay dedup on the previously un-deduped routes ---
+
+
+def test_customer_webhook_replay_is_deduped(monkeypatch, db_session):
+    """A byte-identical redelivery of a customer push must not re-upsert."""
+    import app.api.crm_webhooks as wh
+
+    calls = {"n": 0}
+
+    def _fake_upsert(db, payload):
+        calls["n"] += 1
+        return {"customer_id": "c1"}
+
+    monkeypatch.setattr(wh, "upsert_customer_from_payload", _fake_upsert)
+    body = {"external_id": "c1", "email": "x@y.z"}
+    with _with_secret(SECRET):
+        first = _post_customer(db_session, body)
+        replay = _post_customer(db_session, body)
+    assert first.status_code == 200 and first.json().get("status") == "ok"
+    assert replay.status_code == 200 and replay.json().get("reason") == "duplicate"
+    assert calls["n"] == 1
+
+
+def test_ticket_webhook_replay_is_deduped(monkeypatch, db_session):
+    """A redelivery with the same delivery id must not enqueue a second pull."""
+    from app.services import control_registry
+
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.ticket_pull": True}
+    )
+    body = {"ticket_id": "t-1"}
+    raw = json.dumps(body).encode()
+    with (
+        _with_secret(SECRET),
+        patch("app.services.queue_adapter.enqueue_task") as enqueue,
+    ):
+        first = _post(body, "ticket.updated", _sign(raw), db_session)
+        replay = _post(body, "ticket.updated", _sign(raw), db_session)
+    assert first.status_code == 200
+    assert replay.status_code == 200 and replay.json().get("reason") == "duplicate"
+    assert enqueue.call_count == 1

@@ -142,6 +142,14 @@ async def receive_crm_customer(request: Request, db: Session = Depends(get_db)) 
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
         )
 
+    # Dedup (audit S4a): the customer upsert is a real side effect; a
+    # redelivered push (selfcare bodies are sort_keys-canonical, so the
+    # signature-derived delivery id is stable) must not re-apply it.
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type or "customer"
+    ):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
+
     response = upsert_customer_from_payload(db, payload)
     response["status"] = "ok"
     return response
@@ -189,6 +197,13 @@ async def receive_crm_event(request: Request, db: Session = Depends(get_db)) -> 
     from app.tasks.crm_ticket_pull import sync_crm_ticket
 
     delivery_id = request.headers.get("X-Webhook-Delivery-Id") or ticket_id
+    # Dedup (audit S4a): the CRM's delivery task retries with the SAME
+    # X-Webhook-Delivery-Id; a replay must not enqueue a duplicate pull.
+    # (Re-pull is idempotent, so this is de-noising, not correctness.)
+    if not crm_webhook_deliveries.claim_delivery(
+        db, _delivery_uuid(request), event_type or "ticket"
+    ):
+        return {"status": "ignored", "reason": "duplicate", "event": event_type}
     try:
         enqueue_task(
             sync_crm_ticket,
