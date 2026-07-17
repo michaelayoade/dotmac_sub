@@ -113,7 +113,8 @@ def test_age_gets_a_custom_range_validation():
 def test_validation_extends_beyond_the_data_so_pasted_rows_stay_constrained():
     content = ncc_workbook.build_workbook([_valid_record()], ncc_workbook.COLUMNS)
     sheet1 = _workbook_parts(content).read("xl/worksheets/sheet1.xml").decode()
-    assert ":1000" in sheet1
+    # sqref spans to row 1000 (e.g. Z2:Z1000) so pasted rows stay validated.
+    assert re.search(r'sqref="[A-Z]+2:[A-Z]+1000"', sheet1)
 
 
 def test_row_shading_follows_validation_outcome():

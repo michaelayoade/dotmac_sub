@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.services import ncc_regulatory_pack
@@ -167,8 +166,10 @@ def test_financials_section_degrades_when_erp_unreachable(db_session):
 
 def test_complaints_section_uses_the_native_report(db_session):
     report = {"total_complaints": 3, "by_category": {"Billing": 3}}
-    fake = SimpleNamespace(build_report=lambda db, *, start, end: report)
-    with patch.dict("sys.modules", {"app.services.ncc_complaints_report": fake}):
+    with patch(
+        "app.services.ncc_complaints_report.build_report",
+        lambda db, *, start, end: report,
+    ):
         section = ncc_regulatory_pack.complaints_section(db_session, _START, _END)
 
     assert section["available"] is True
@@ -180,8 +181,7 @@ def test_complaints_section_degrades_when_the_report_raises(db_session):
     def _raise(db, *, start, end):
         raise RuntimeError("no tickets")
 
-    fake = SimpleNamespace(build_report=_raise)
-    with patch.dict("sys.modules", {"app.services.ncc_complaints_report": fake}):
+    with patch("app.services.ncc_complaints_report.build_report", _raise):
         section = ncc_regulatory_pack.complaints_section(db_session, _START, _END)
     assert section["available"] is False
     assert "no tickets" in section["error"]
