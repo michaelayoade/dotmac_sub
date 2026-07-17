@@ -1392,19 +1392,56 @@ Dependency order:
 1. `network.identity`: resolves cross-model network/customer links.
 2. `network.monitoring_inventory`: owns monitoring inventory, metric records,
    alert rules, and alert state mutations.
-3. `network.access_path`: resolves `subscriber/subscription -> access path`.
-4. `network.radius_sessions`: resolves online-now state from active sessions.
-5. `network.ont_runtime_status`: owns Huawei bulk ONT status observations, the
+3. `network.fiber_source_staging`: owns immutable source manifests, normalized
+   staged map facts, and non-authoritative duplicate/match suggestions. Staging
+   preserves evidence; it cannot create, merge, retire, or delete canonical
+   assets.
+4. `network.fiber_topology`: owns fiber asset identity and connectivity, the
+   OLT-to-customer topology integrity contract, ordered validated subscription
+   traces, bounded fault-candidate ranking, and import/customer-trace cutover
+   gates. Electronic inventory, telemetry, and imported map geometry are
+   observations until this owner validates their identity and edges. Missing or
+   ambiguous edges remain explicit gaps; ranking does not declare an incident.
+5. `network.fiber_asset_changes`: owns reviewed passive-fiber change requests
+   and their approved mutations. Direct map imports are not a second writer.
+6. `network.fiber_identity_decisions`: owns dual-reviewed source identity
+   decisions and canonical source links. Point-asset creates become pending
+   `network.fiber_asset_changes` requests; the source link is projected only
+   after the approved asset exists.
+7. `network.fiber_identity_review`: owns the latest-source review queue,
+   immutable batch proposal manifests, exact-manifest independent review
+   attestations, bounded execution-run evidence, and idempotent finalization
+   sweep. It delegates each decision transition to
+   `network.fiber_identity_decisions`; execution and reconciliation never
+   approve the resulting asset change request.
+8. `network.fiber_connectivity_decisions`: owns reviewed staged-path endpoint
+   decisions, shared typed termination resolution, canonical segment source
+   provenance, and connectivity reconciliation. Geometry never supplies an
+   endpoint. A canonical edge exists only after two explicit endpoint
+   references and their segment mutation are independently reviewed and
+   applied through `network.fiber_asset_changes`. Direct termination/segment
+   API mutations are retired; read endpoints remain projections.
+9. `network.fiber_access_attachments`: owns preview, independent review,
+   execution, and audit evidence for exact PON-to-splitter-input and
+   ONT-to-splitter-output attachments. It is the only writer for active
+   `PonPortSplitterLink` records and the ONT splitter projection. It requires
+   exact ONT/PON/OLT agreement, directed active ports, same-splitter continuity,
+   and one-to-one occupancy. Geometry, proximity, and legacy splitter
+   assignments never create an edge; stale execution closes without mutation.
+10. `network.access_path`: resolves `subscriber/subscription -> access path`
+   from identity plus the validated fiber topology.
+11. `network.radius_sessions`: resolves online-now state from active sessions.
+12. `network.ont_runtime_status`: owns Huawei bulk ONT status observations, the
    Huawei OLT pollability predicate, and admission of those poll tasks. Scheduled
    sweeps and stale inventory reads request the same retry-safe infrastructure
    observation poll through this owner. These bulk reads are not tracked device
    commands; operator-requested single-ONT refresh remains operation-backed.
-6. `network.device_state`: derives NOC operational state, retry state, and alarm
+13. `network.device_state`: derives NOC operational state, retry state, and alarm
    classification from administrative intent and monitoring observations, and
    owns the `up/degraded/down/maintenance` vocabulary. Retry-pending gaps stay
    binary but are non-alarming; presentation renders retry-pending `down` as
    warning/clock rather than a confirmed negative failure.
-7. `network.ont_status_refresh`: owns admission of stale ONT runtime-status
+14. `network.ont_status_refresh`: owns admission of stale ONT runtime-status
    refresh requests from read surfaces. ONT inventory may request a refresh when
    displayed evidence is stale, but it must not poll OLTs directly. Huawei ONTs
    request the `network.ont_runtime_status` infrastructure observation poll with
@@ -1412,20 +1449,20 @@ Dependency order:
    topology sync source. `Status refresh pending` means the displayed value is
    retained or derived and needs asynchronous confirmation, not that the page
    performed a live check.
-8. `network.outage_impact`: resolves affected customers from topology.
-9. `network.device_groups`: owns device-group mutations, membership, and bulk
+15. `network.outage_impact`: resolves affected customers from topology.
+16. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
-10. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
+17. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
    incident transitions, escalation planning, and outage event emission.
-11. `network.connection_health`: combines authoritative path, live-session,
+18. `network.connection_health`: combines authoritative path, live-session,
    last-mile, impact, and active-incident inputs into the customer-safe
    `connected/trouble/outage` verdict plus headline/message/advice. It does not
    own device operational state or raw online-session observations.
-12. `network.control_plane_intent`: owns the shared desired-state delivery
+19. `network.control_plane_intent`: owns the shared desired-state delivery
    lifecycle, control-plane target/revision identity, and vendor status
    projections. Vendor adapters project through this one
    desired-to-readback lifecycle.
-13. `network.huawei_cli_response`: owns Huawei CLI response classification,
+20. `network.huawei_cli_response`: owns Huawei CLI response classification,
    stable error codes, expected-absence predicates, unsupported-command
    detection, and idempotent response semantics. Huawei SSH sessions, protocol
    adapters, readback verification, and web workflows consume these projections
@@ -1434,11 +1471,11 @@ Dependency order:
    still require the control-plane intent readback contract. Protocol adapter,
    authorization, provisioning, and reconcile history persist the sanitized
    classifier projection as operation evidence; raw CLI output is not retained.
-14. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+21. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
    and it projects through `network.control_plane_intent`.
-15. `network.operation_ledger`: owns the tracked device operation lifecycle and
+22. `network.operation_ledger`: owns the tracked device operation lifecycle and
    status vocabulary, the terminal-transition guard, correlation-key duplicate
    suppression, stale-active reclamation, parent/child rollup, and whether an
    operation may run, resume, or be re-executed. Celery is transport: tasks
@@ -1457,7 +1494,7 @@ Dependency order:
    single-ONT status refresh. Firmware, configuration, lifecycle, and other
    device writes remain ineligible until their owning service provides
    current-state validation and replay safety.
-16. `network.operation_dispatch`: owns transactional staging and transport for
+23. `network.operation_dispatch`: owns transactional staging and transport for
    operation-backed network commands. The operation and its exact versioned
    command are committed together in `network_operation_dispatches`; request
    handlers never commit an operation and then publish its device task. The
@@ -1475,19 +1512,19 @@ Dependency order:
    is observation polling owned by `network.ont_runtime_status`, not an
    operation-backed command. Firmware verification/readback continuations retain
    their own state machines and are not parallel command-origination paths.
-17. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
+24. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
    for ONT authorization, baseline repair, and bootstrap verification commands.
    It commits each operation and typed dispatch atomically. Admin, API, and bulk
    callers receive operation/dispatch identifiers and never publish the device
    task themselves.
-18. `network.ont_provisioning_execution`: owns the tracked authorization,
+25. `network.ont_provisioning_execution`: owns the tracked authorization,
    baseline-repair, DB-only baseline preview, bootstrap retry, parent rollup,
    and bulk-item transitions.
    Celery workers claim an existing dispatch and delegate execution here; they
    do not create operations or decide a parallel retry policy. Delayed bootstrap
    attempts are separate immutable dispatch rows on the same child operation,
    while Inform-driven completion uses the same parent projection.
-19. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
+26. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
    owns IP-pool utilization reads — the daily utilization snapshots and the
    live per-pool used/total counts consumed by the network report. The live
    count (assignment-join basis) is deliberately distinct from the snapshot's
@@ -1506,8 +1543,9 @@ device code. Remove this compatibility adapter after one maximum broker-retentio
 window has elapsed after production cutover. The old direct-publish and
 worker-owned-operation paths have no fallback authority and must not return.
 
-Rule: pollers write observations; resolver services decide state; event services
-decide consequences. Customer-facing outage, SLA, expiry suppression, support
+Rule: pollers and map collectors write observations; `network.fiber_topology`
+validates asset identity and connectivity; resolver services decide state; event
+services decide consequences. Customer-facing outage, SLA, expiry suppression, support
 context, and escalation should consume these network SOT layers.
 Outage list/detail projections add `StatusPresentation` from the raw lifecycle
 state; templates and CRM consumers do not maintain their own state-to-severity

@@ -13,7 +13,6 @@ except ImportError:  # pragma: no cover - optional dependency for local env file
     load_dotenv: Callable[..., bool] | None = None
 else:
     load_dotenv = _load_dotenv
-from app.models.vendor import AsBuiltRoute
 from sqlalchemy import func
 
 from app.db import SessionLocal
@@ -24,13 +23,7 @@ from app.models.network import (
     FiberCableType,
     FiberSegment,
     FiberSegmentType,
-    FiberSplice,
     FiberSpliceClosure,
-    FiberSpliceTray,
-    PonPortSplitterLink,
-    Splitter,
-    SplitterPort,
-    SplitterPortAssignment,
 )
 from app.models.wireless_mast import WirelessMast
 
@@ -102,7 +95,7 @@ def parse_args():
     parser.add_argument(
         "--purge",
         action="store_true",
-        help="Delete existing FiberSegment/FdhCabinet/FiberSpliceClosure rows before import.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--limit", type=int, default=None, help="Limit placemarks per file."
@@ -600,30 +593,17 @@ def main():
     if load_dotenv is not None:
         load_dotenv()
     args = parse_args()
+    if args.purge:
+        raise SystemExit(
+            "--purge is retired: topology cleanup must preserve reviewed asset identity"
+        )
+    if not args.dry_run:
+        raise SystemExit(
+            "Direct KMZ writes are retired. Use --dry-run to preview a source; "
+            "approved imports must use the staged fiber-topology cutover workflow."
+        )
     db = SessionLocal()
     try:
-        if args.purge:
-            # Delete in dependency order: child tables before parent tables
-            # Splitter hierarchy: PonPortSplitterLink/SplitterPortAssignment -> SplitterPort -> Splitter -> FdhCabinet
-            db.query(PonPortSplitterLink).delete()
-            db.query(SplitterPortAssignment).delete()
-            db.query(SplitterPort).delete()
-            db.query(Splitter).delete()
-            db.query(FdhCabinet).delete()
-            # Splice hierarchy: FiberSplice -> FiberSpliceTray -> FiberSpliceClosure
-            db.query(FiberSplice).delete()
-            db.query(FiberSpliceTray).delete()
-            db.query(FiberSpliceClosure).delete()
-            # Clear FK references before deleting segments
-            db.query(AsBuiltRoute).filter(
-                AsBuiltRoute.fiber_segment_id.isnot(None)
-            ).update({AsBuiltRoute.fiber_segment_id: None})
-            db.query(FiberSegment).delete()
-            # New tables (no dependencies)
-            db.query(FiberAccessPoint).delete()
-            db.query(WirelessMast).delete()
-            db.query(ServiceBuilding).delete()
-
         cabinet_paths = [Path(p) for p in args.cabinet_kmz]
         splice_paths = [Path(p) for p in args.splice_kmz]
         segment_paths = [Path(p) for p in args.paths_kmz]
@@ -686,12 +666,8 @@ def main():
             total_updated += updated
             total_skipped += skipped
 
-        if args.dry_run:
-            db.rollback()
-            print("Dry run complete. No changes written.")
-        else:
-            db.commit()
-            print("Import complete.")
+        db.rollback()
+        print("Preview complete. No changes written.")
 
         print(
             f"Created: {total_created} Updated: {total_updated} Skipped: {total_skipped}"

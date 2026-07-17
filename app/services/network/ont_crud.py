@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import and_, exists, func, not_, or_, select
 from sqlalchemy.orm import Session, aliased, defer, joinedload
 
@@ -54,6 +55,22 @@ class OntUnits(CRUDManager[OntUnit]):
 
     def __init__(self, subscriber_validator: SubscriberValidator | None = None) -> None:
         self._subscriber_validator = subscriber_validator
+
+    @classmethod
+    def create(cls, db: Session, payload: object, *, commit: bool = True) -> OntUnit:
+        values = cls._payload_dict(payload, exclude_unset=False)
+        if (
+            values.get("splitter_id") is not None
+            or values.get("splitter_port_id") is not None
+        ):
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Direct ONT/splitter attachment mutation is retired; use the "
+                    "reviewed network.fiber_access_attachments workflow."
+                ),
+            )
+        return super().create(db, payload, commit=commit)
 
     @staticmethod
     def list(
@@ -320,8 +337,24 @@ class OntUnits(CRUDManager[OntUnit]):
         return super().get(db, unit_id)
 
     @classmethod
-    def update(cls, db: Session, unit_id: str, payload: OntUnitUpdate) -> OntUnit:  # type: ignore[override]
-        return super().update(db, unit_id, payload)
+    def update(
+        cls,
+        db: Session,
+        unit_id: str,
+        payload: OntUnitUpdate,
+        *,
+        commit: bool = True,
+    ) -> OntUnit:  # type: ignore[override]
+        values = cls._payload_dict(payload, exclude_unset=True)
+        if {"splitter_id", "splitter_port_id"} & values.keys():
+            raise HTTPException(
+                status_code=410,
+                detail=(
+                    "Direct ONT/splitter attachment mutation is retired; use the "
+                    "reviewed network.fiber_access_attachments workflow."
+                ),
+            )
+        return super().update(db, unit_id, payload, commit=commit)
 
     @classmethod
     def delete(cls, db: Session, unit_id: str) -> None:  # type: ignore[override]
