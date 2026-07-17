@@ -27,7 +27,7 @@ from app.metrics import (
     observe_ai_provider_request,
     observe_ai_provider_retry_exhaustion,
 )
-from app.services.ai.security import ai_disabled_by_env, redact_secret_text
+from app.services.ai.security import redact_secret_text
 
 logger = logging.getLogger(__name__)
 
@@ -288,14 +288,9 @@ class _BaseHttpAIClient:
     def _request_json(
         self, *, method: str, url: str, headers: dict[str, str], payload: dict[str, Any]
     ) -> dict[str, Any]:
-        if ai_disabled_by_env():
-            raise AIClientError(
-                "AI features are disabled (integration.ai_enabled=false)",
-                provider=self.provider,
-                model=self.model,
-                endpoint=url,
-                failure_type="ai_disabled",
-            )
+        # No enablement check here: the client is a TRANSPORT. Whether AI may
+        # run is the gateway's decision (ai_enabled -> the named resolver), and
+        # a transport that re-decides policy is the layering AI_SOT.md forbids.
         attempts = max(self.max_retries, 0) + 1
         for attempt in range(1, attempts + 1):
             start = perf_counter()
