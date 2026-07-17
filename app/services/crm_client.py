@@ -384,7 +384,7 @@ class CRMClient:
                 # callers decorrelate (the shared engine's backoff shape).
                 delay = min(retry_max_sleep, 0.5 * (2**attempt)) + random.uniform(
                     0.0, 0.25
-                )  # nosec B311 - jitter, not security
+                )  # noqa: S311 - retry jitter, not crypto
             logger.warning(
                 retry_log_fmt,
                 method,
