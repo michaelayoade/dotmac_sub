@@ -188,7 +188,9 @@ class TestRateLimitRetry:
         sleep.assert_not_called()
 
     def test_scheduler_setting_can_disable_retries(self):
-        c = CRMClient("https://crm.example", service_token="svc", settings_db=MagicMock())
+        c = CRMClient(
+            "https://crm.example", service_token="svc", settings_db=MagicMock()
+        )
         c._token = "tok"
         c._token_expires_at = 10**12
         req = httpx.Request("GET", "https://crm.example/api/v1/tickets")
