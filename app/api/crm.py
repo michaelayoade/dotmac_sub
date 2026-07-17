@@ -293,7 +293,9 @@ def online_subscribers(
     return _finish_read_response(db, _envelope(data, {**meta, "total": total}))
 
 
-@router.get("/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_service_auth)])
+@router.get(
+    "/subscribers/{subscriber_id}", dependencies=[Depends(require_crm_service_auth)]
+)
 def subscriber_detail(
     subscriber_id: str, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
@@ -314,7 +316,8 @@ def subscriber_detail(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/services", dependencies=[Depends(require_crm_service_auth)]
+    "/subscribers/{subscriber_id}/services",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_services(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -324,7 +327,8 @@ def subscriber_services(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/billing", dependencies=[Depends(require_crm_service_auth)]
+    "/subscribers/{subscriber_id}/billing",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_billing(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -334,7 +338,8 @@ def subscriber_billing(
 
 
 @router.get(
-    "/subscribers/{subscriber_id}/sessions", dependencies=[Depends(require_crm_service_auth)]
+    "/subscribers/{subscriber_id}/sessions",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def subscriber_sessions(
     subscriber_id: str, db: Session = Depends(get_db)
@@ -355,7 +360,8 @@ def subscriber_statistics(
 
 
 @router.patch(
-    "/subscribers/{subscriber_id}/status", dependencies=[Depends(require_crm_service_auth)]
+    "/subscribers/{subscriber_id}/status",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def update_subscriber_status(
     subscriber_id: str,
@@ -733,7 +739,8 @@ def service_extensions(
 
 
 @router.get(
-    "/service-extensions/{extension_id}", dependencies=[Depends(require_crm_service_auth)]
+    "/service-extensions/{extension_id}",
+    dependencies=[Depends(require_crm_service_auth)],
 )
 def service_extension_detail(
     extension_id: str, db: Session = Depends(get_db)
