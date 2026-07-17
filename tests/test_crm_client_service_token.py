@@ -25,7 +25,7 @@ def _reset_circuit():
 
 
 def _capturing_client(captured: dict):
-    """httpx.Client factory that records the headers of the outbound request."""
+    """Pooled-client stand-in that records the headers of the outbound request."""
 
     def factory(*_a, **_k):
         inner = MagicMock()
@@ -39,10 +39,7 @@ def _capturing_client(captured: dict):
             return resp
 
         inner.request.side_effect = _request
-        cm = MagicMock()
-        cm.__enter__ = MagicMock(return_value=inner)
-        cm.__exit__ = MagicMock(return_value=False)
-        return cm
+        return inner
 
     return factory
 
@@ -50,7 +47,7 @@ def _capturing_client(captured: dict):
 def test_service_token_sends_api_key():
     client = CRMClient("https://crm.example", service_token="svc-key-123")
     captured: dict = {}
-    with patch("app.services.crm_client.httpx.Client", _capturing_client(captured)):
+    with patch("app.services.crm_client._pooled_client", _capturing_client(captured)):
         client._request("GET", "/api/v1/subscribers")
 
     assert captured["headers"]["X-API-Key"] == "svc-key-123"
@@ -68,7 +65,7 @@ def test_per_request_headers_still_override_but_api_key_stays():
     """Portal-scoped reads pass their own Authorization; the key rides alongside."""
     client = CRMClient("https://crm.example", service_token="svc-key-123")
     captured: dict = {}
-    with patch("app.services.crm_client.httpx.Client", _capturing_client(captured)):
+    with patch("app.services.crm_client._pooled_client", _capturing_client(captured)):
         client._request(
             "GET", "/api/v1/portal/x", headers={"Authorization": "Bearer portal-tok"}
         )

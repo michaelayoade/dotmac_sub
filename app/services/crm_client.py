@@ -11,16 +11,20 @@ import hashlib
 import json
 import logging
 import os
+import random
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, ClassVar, cast
 
 import httpx
+from dotmac_integration import IntegrationHttpClient
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.domain_settings import SettingDomain
+from app.observability import get_request_id
 from app.services.secrets import resolve_secret
 from app.services.settings_spec import resolve_value
 
@@ -70,6 +74,21 @@ def _resolve_scheduler_int(
         return _env_int(env_name, default)
 
 
+def _retry_after_seconds(resp: httpx.Response, *, max_sleep: float) -> float | None:
+    """Parsed numeric ``Retry-After`` seconds, clamped to ``max_sleep``.
+
+    ``None`` when the header is absent or non-numeric (the HTTP-date form is
+    rare here), so callers fall back to exponential backoff.
+    """
+    retry_after = resp.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return min(max_sleep, max(0.0, float(retry_after)))
+        except ValueError:
+            pass
+    return None
+
+
 def _retry_delay(
     resp: httpx.Response,
     attempt: int,
@@ -82,13 +101,9 @@ def _retry_delay(
     backoff (0.5s, 1s, 2s, …). Always clamped to ``_RETRY_MAX_SLEEP``.
     """
     sleep_cap = _RETRY_MAX_SLEEP if max_sleep is None else max(0.0, max_sleep)
-    retry_after = resp.headers.get("Retry-After")
-    if retry_after:
-        try:
-            return min(sleep_cap, max(0.0, float(retry_after)))
-        except ValueError:
-            # HTTP-date form is rare here; fall through to backoff.
-            pass
+    parsed = _retry_after_seconds(resp, max_sleep=sleep_cap)
+    if parsed is not None:
+        return parsed
     return min(sleep_cap, 0.5 * (2**attempt))
 
 
@@ -130,6 +145,98 @@ class _CRMReachabilityCircuit:
 
 
 _REACHABILITY_CIRCUIT = _CRMReachabilityCircuit()
+
+
+# Pooled outbound HTTP clients, keyed by timeout (the only per-instance
+# transport knob). Replaces the old per-request ``httpx.Client`` construction
+# so connections are reused across calls and retry attempts.
+_HTTP_CLIENT_LOCK = threading.Lock()
+_HTTP_CLIENTS: dict[float, httpx.Client] = {}
+
+
+def _pooled_client(timeout: float) -> httpx.Client:
+    with _HTTP_CLIENT_LOCK:
+        client = _HTTP_CLIENTS.get(timeout)
+        if client is None:
+            client = httpx.Client(timeout=timeout)
+            _HTTP_CLIENTS[timeout] = client
+        return client
+
+
+def _outbound_request_id() -> str | None:
+    """Propagate the inbound x-request-id onto outbound CRM calls.
+
+    ``None`` outside a request (Celery workers), so the header is omitted.
+    """
+    return get_request_id() or None
+
+
+class _RetryableStatusError(CRMClientError):
+    """Internal: a 429/503 response, distinguishable so the shared retry
+    engine retries it.
+
+    Never escapes ``CRMClient`` — exhausted retries surface exactly like the
+    old hand-rolled loop (``CRM API error: {status}`` from ``_request``; the
+    final raw response returned from ``_raw_request``).
+    """
+
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__(f"CRM retryable status: {response.status_code}")
+        self.response = response
+
+
+class _CRMTransport:
+    """Engine-facing client adapter: pooled ``httpx.Client`` + this edge's
+    transport policy.
+
+    Connection/timeout failures are deliberately NOT retried on this edge
+    (unchanged from the old loop): the portal/reseller pages fan out across N
+    accounts, so one outage must cost one timeout, not attempts × timeout.
+    The first ``httpx.RequestError`` trips the reachability breaker and
+    surfaces immediately as ``CRMClientError`` — before the shared engine's
+    transport-retry path can see it.
+    """
+
+    def __init__(
+        self,
+        client: httpx.Client,
+        *,
+        circuit_seconds: float,
+        path: str,
+        log_label: str = "request",
+        content: bytes | None = None,
+    ) -> None:
+        self._client = client
+        self._circuit_seconds = circuit_seconds
+        self._path = path
+        self._log_label = log_label
+        self._content = content
+
+    def request(
+        self,
+        *,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+        json: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        try:
+            if self._content is not None:
+                return self._client.request(
+                    method, url, content=self._content, headers=headers or {}
+                )
+            return self._client.request(
+                method, url, params=params, json=json, headers=headers
+            )
+        except httpx.RequestError as exc:
+            # Connection/timeout — CRM is unreachable, trip the breaker so the
+            # rest of this request's fan-out fast-fails.
+            _REACHABILITY_CIRCUIT.trip(self._circuit_seconds)
+            logger.error(
+                "CRM %s error %s %s: %s", self._log_label, method, self._path, exc
+            )
+            raise CRMClientError(f"CRM connection error: {exc}") from exc
 
 
 class CRMClient:
@@ -242,6 +349,68 @@ class CRMClient:
             )
         return {"X-API-Key": self.service_token}
 
+    def _build_engine(
+        self,
+        *,
+        method: str,
+        path: str,
+        transport: _CRMTransport,
+        handler: Callable[..., Any],
+        pending: dict[str, httpx.Response],
+        auth_headers: dict[str, str] | None = None,
+        retry_log_fmt: str = "CRM %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
+    ) -> IntegrationHttpClient:
+        """One shared-engine instance for one logical CRM request.
+
+        The engine (``dotmac-integration-client``) owns the retry loop, header
+        merging (per-request headers override the service key, exactly like the
+        old ``{**auth, **headers}``), and x-request-id propagation. This
+        builder keeps the edge's policy verbatim: retry statuses {429, 503}
+        ONLY, ``CRM_RETRY_MAX_ATTEMPTS`` extra tries, numeric ``Retry-After``
+        honoured and capped at ``CRM_RETRY_MAX_SLEEP_SECONDS``, and no
+        transport retries (see ``_CRMTransport``).
+        """
+        retry_max_attempts = self.retry_max_attempts
+        retry_max_sleep = self.retry_max_sleep
+
+        def _backoff(attempt: int) -> float:
+            resp = pending.pop("response", None)
+            status = resp.status_code if resp is not None else 0
+            delay: float | None = None
+            if resp is not None:
+                delay = _retry_after_seconds(resp, max_sleep=retry_max_sleep)
+            if delay is None:
+                # Same base/cap as the old loop; jitter added so concurrent
+                # callers decorrelate (the shared engine's backoff shape).
+                jitter = random.uniform(0.0, 0.25)  # noqa: S311  # nosec B311 - retry jitter
+                delay = min(retry_max_sleep, 0.5 * (2**attempt)) + jitter
+            logger.warning(
+                retry_log_fmt,
+                method,
+                path,
+                status,
+                delay,
+                attempt + 1,
+                retry_max_attempts,
+            )
+            # The engine performs the single ``time.sleep(delay)`` per retry.
+            # Tests that patch ``app.services.crm_client.time.sleep`` still
+            # neutralise it: that target is the shared ``time`` module object,
+            # the same one the engine calls.
+            return delay
+
+        return IntegrationHttpClient(
+            client_factory=lambda: transport,
+            response_handler=handler,
+            backoff=_backoff,
+            max_attempts=retry_max_attempts + 1,
+            retryable_excs=(_RetryableStatusError,),
+            non_retryable_excs=(CRMClientError, httpx.HTTPStatusError),
+            auth_headers=auth_headers,
+            edge="sub->crm",
+            request_id_provider=_outbound_request_id,
+        )
+
     def _request(
         self,
         method: str,
@@ -263,44 +432,45 @@ class CRMClient:
 
         auth_headers = self._auth_headers()
         url = f"{self.base_url}{path}"
+        pending: dict[str, httpx.Response] = {}
+
+        def _handle(resp: httpx.Response) -> Any:
+            if resp.status_code in _RETRY_STATUSES:
+                pending["response"] = resp
+                raise _RetryableStatusError(resp)
+            resp.raise_for_status()
+            _REACHABILITY_CIRCUIT.reset()
+            if not resp.text:
+                return {}
+            return resp.json()
+
+        engine = self._build_engine(
+            method=method,
+            path=path,
+            transport=_CRMTransport(
+                _pooled_client(self.timeout),
+                circuit_seconds=self.circuit_seconds,
+                path=path,
+            ),
+            handler=_handle,
+            pending=pending,
+            auth_headers=auth_headers,
+        )
         try:
-            attempt = 0
-            while True:
-                with httpx.Client(timeout=self.timeout) as client:
-                    resp = client.request(
-                        method,
-                        url,
-                        params=params,
-                        json=json_data,
-                        headers={
-                            **auth_headers,
-                            **(headers or {}),
-                        },
-                    )
-                retry_max_attempts = self.retry_max_attempts
-                if resp.status_code in _RETRY_STATUSES and attempt < retry_max_attempts:
-                    delay = _retry_delay(
-                        resp,
-                        attempt,
-                        max_sleep=self.retry_max_sleep,
-                    )
-                    logger.warning(
-                        "CRM %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
-                        method,
-                        path,
-                        resp.status_code,
-                        delay,
-                        attempt + 1,
-                        retry_max_attempts,
-                    )
-                    time.sleep(delay)
-                    attempt += 1
-                    continue
-                resp.raise_for_status()
-                _REACHABILITY_CIRCUIT.reset()
-                if not resp.text:
-                    return {}
-                return resp.json()
+            return engine.request(
+                method, url, params=params, json_data=json_data, headers=headers
+            )
+        except _RetryableStatusError as e:
+            # Retries exhausted: same error surface as the old loop's final
+            # ``raise_for_status()``.
+            logger.error(
+                "CRM API error %s %s: %d %s",
+                method,
+                path,
+                e.response.status_code,
+                e.response.text[:200],
+            )
+            raise CRMClientError(f"CRM API error: {e.response.status_code}") from e
         except httpx.HTTPStatusError as e:
             logger.error(
                 "CRM API error %s %s: %d %s",
@@ -310,12 +480,6 @@ class CRMClient:
                 e.response.text[:200],
             )
             raise CRMClientError(f"CRM API error: {e.response.status_code}") from e
-        except httpx.RequestError as e:
-            # Connection/timeout — CRM is unreachable, trip the breaker so the
-            # rest of this request's fan-out fast-fails.
-            _REACHABILITY_CIRCUIT.trip(self.circuit_seconds)
-            logger.error("CRM request error %s %s: %s", method, path, e)
-            raise CRMClientError(f"CRM connection error: {e}") from e
 
     def _raw_request(
         self,
@@ -332,41 +496,36 @@ class CRMClient:
             raise CRMClientError("CRM is not configured")
 
         url = f"{self.base_url}{path}"
+        pending: dict[str, httpx.Response] = {}
+
+        def _handle(resp: httpx.Response) -> httpx.Response:
+            if resp.status_code in _RETRY_STATUSES:
+                pending["response"] = resp
+                raise _RetryableStatusError(resp)
+            _REACHABILITY_CIRCUIT.reset()
+            return resp
+
+        engine = self._build_engine(
+            method=method,
+            path=path,
+            transport=_CRMTransport(
+                _pooled_client(self.timeout),
+                circuit_seconds=self.circuit_seconds,
+                path=path,
+                log_label="raw request",
+                content=content,
+            ),
+            handler=_handle,
+            pending=pending,
+            retry_log_fmt="CRM raw %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
+        )
         try:
-            attempt = 0
-            while True:
-                with httpx.Client(timeout=self.timeout) as client:
-                    resp = client.request(
-                        method,
-                        url,
-                        content=content,
-                        headers=headers or {},
-                    )
-                retry_max_attempts = self.retry_max_attempts
-                if resp.status_code in _RETRY_STATUSES and attempt < retry_max_attempts:
-                    delay = _retry_delay(
-                        resp,
-                        attempt,
-                        max_sleep=self.retry_max_sleep,
-                    )
-                    logger.warning(
-                        "CRM raw %s %s -> %d, retrying in %.1fs (attempt %d/%d)",
-                        method,
-                        path,
-                        resp.status_code,
-                        delay,
-                        attempt + 1,
-                        retry_max_attempts,
-                    )
-                    time.sleep(delay)
-                    attempt += 1
-                    continue
-                _REACHABILITY_CIRCUIT.reset()
-                return resp
-        except httpx.RequestError as exc:
-            _REACHABILITY_CIRCUIT.trip(self.circuit_seconds)
-            logger.error("CRM raw request error %s %s: %s", method, path, exc)
-            raise CRMClientError(f"CRM connection error: {exc}") from exc
+            return engine.request(method, url, headers=headers or {})
+        except _RetryableStatusError as e:
+            # Retries exhausted: the old loop returned the final 429/503
+            # response to the caller rather than raising.
+            _REACHABILITY_CIRCUIT.reset()
+            return e.response
 
     def _cached_get(
         self,

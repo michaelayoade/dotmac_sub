@@ -62,6 +62,13 @@ class FieldKey(StrEnum):
     a queue row, and a readiness breakdown all key on these."""
 
     state = "state"
+    #: The NCC's administrative unit, required per row on the complaints
+    #: return. Captured from a reconciled GPS pin — never derived from address
+    #: text, which is how unlocatable customers became FCT statistics.
+    lga = "lga"
+    #: A human-entered NIPOST code. Never machine-proposed: see
+    #: ``geocode_reconciler._POSTCODE_NOTE``.
+    postal_code = "postal_code"
     email = "email"
     phone = "phone"
     identity = "identity"

@@ -4059,6 +4059,181 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Referrals: native write path (Phase 3 flip flag)",
     ),
+    # --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) ----------
+    # Every value defaults OFF/empty: the transport is inert until an operator
+    # configures a provider. ai_enabled is the stored master switch, resolved
+    # through the named resolver — there is no env override: this repo forbids
+    # direct env decision inputs (tests/architecture/test_decision_input_
+    # ownership), and env_var below seeds the stored value at bootstrap only.
+    #
+    # The api_key specs are is_secret and may hold an OpenBao reference
+    # (``bao://mount/path#field``) rather than a literal key — resolved by
+    # ai.security.resolve_provider_api_key via secrets.resolve_secret. Their
+    # env_var is a seed/bootstrap input only; runtime never reads it as an
+    # override (see the SettingSpec docstring).
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="ai_enabled",
+        env_var="AI_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="AI features enabled",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_label",
+        env_var="VLLM_LABEL",
+        value_type=SettingValueType.string,
+        default="primary",
+        label="AI primary: provider label (audit/telemetry only)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_base_url",
+        env_var="VLLM_BASE_URL",
+        value_type=SettingValueType.string,
+        default=None,
+        label="AI primary: OpenAI-compatible base URL",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_model",
+        env_var="VLLM_MODEL",
+        value_type=SettingValueType.string,
+        default=None,
+        label="AI primary: model name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_api_key",
+        env_var="VLLM_API_KEY",
+        value_type=SettingValueType.string,
+        default=None,
+        label="AI primary: API key (literal or OpenBao reference)",
+        is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_require_api_key",
+        env_var="VLLM_REQUIRE_API_KEY",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="AI primary: refuse to call the provider without an API key",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_timeout_seconds",
+        env_var="VLLM_TIMEOUT_SECONDS",
+        value_type=SettingValueType.integer,
+        default=30,
+        label="AI primary: request timeout (seconds)",
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_max_retries",
+        env_var="VLLM_MAX_RETRIES",
+        value_type=SettingValueType.integer,
+        default=2,
+        label="AI primary: retry attempts for transient failures",
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_max_tokens",
+        env_var="VLLM_MAX_TOKENS",
+        value_type=SettingValueType.integer,
+        default=2048,
+        label="AI primary: max response tokens",
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_secondary_label",
+        env_var="VLLM_SECONDARY_LABEL",
+        value_type=SettingValueType.string,
+        default="secondary",
+        label="AI secondary: provider label (audit/telemetry only)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_secondary_base_url",
+        env_var="VLLM_SECONDARY_BASE_URL",
+        value_type=SettingValueType.string,
+        default=None,
+        label="AI secondary: OpenAI-compatible base URL (fallback endpoint)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_secondary_model",
+        env_var="VLLM_SECONDARY_MODEL",
+        value_type=SettingValueType.string,
+        default=None,
+        label="AI secondary: model name",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_secondary_api_key",
+        env_var="VLLM_SECONDARY_API_KEY",
+        value_type=SettingValueType.string,
+        default=None,
+        label="AI secondary: API key (literal or OpenBao reference)",
+        is_secret=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_secondary_require_api_key",
+        env_var="VLLM_SECONDARY_REQUIRE_API_KEY",
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="AI secondary: refuse to call the provider without an API key",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_secondary_timeout_seconds",
+        env_var="VLLM_SECONDARY_TIMEOUT_SECONDS",
+        value_type=SettingValueType.integer,
+        default=30,
+        label="AI secondary: request timeout (seconds)",
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_secondary_max_retries",
+        env_var="VLLM_SECONDARY_MAX_RETRIES",
+        value_type=SettingValueType.integer,
+        default=1,
+        label="AI secondary: retry attempts for transient failures",
+        min_value=0,
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="vllm_secondary_max_tokens",
+        env_var="VLLM_SECONDARY_MAX_TOKENS",
+        value_type=SettingValueType.integer,
+        default=2048,
+        label="AI secondary: max response tokens",
+        min_value=1,
+    ),
+    # Reverse-geocoding for location capture. Unset means no geocoder: the
+    # reconciler reports every field unverifiable rather than failing a
+    # capture, so this is safe to leave blank until the service is reachable.
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="nominatim_base_url",
+        env_var="NOMINATIM_BASE_URL",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Nominatim base URL (reverse-geocoding for location capture)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.integration,
+        key="nominatim_timeout_seconds",
+        env_var="NOMINATIM_TIMEOUT_SECONDS",
+        value_type=SettingValueType.integer,
+        default=5,
+        label="Nominatim request timeout (seconds)",
+    ),
 ]
 
 # Tombstone the settings-registry surfaces whose decisions moved to canonical

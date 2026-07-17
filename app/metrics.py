@@ -1,4 +1,4 @@
-from prometheus_client import REGISTRY, Counter, Histogram
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 from prometheus_client.registry import Collector
 
 
@@ -955,3 +955,129 @@ def record_customer_identity_resolution(
         confidence=str(confidence or "NONE"),
         inbound_channel=str(inbound_channel or "unknown"),
     ).inc()
+
+
+# --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) --------------
+# The gateway is a transport; these record how the external provider behaves,
+# never anything about an insight's content.
+#
+# CAVEAT on the two circuit gauges: the circuit breaker is per-process,
+# in-memory state on the AIGateway singleton. A circuit opened inside a Celery
+# worker is therefore invisible to the web process that serves /metrics — the
+# same limitation documented on _SuspensionAuditCollector above (no
+# multiprocess mode, workers recycle). The gauges are still correct for the
+# process that scrapes them, and AI_PROVIDER_FAILURES/REQUESTS are Counters,
+# so provider trouble in a worker remains visible there. Exporting worker
+# circuit state would need the Redis-backed collector pattern; that belongs
+# with the slice that actually runs generation in a worker.
+AI_PROVIDER_REQUESTS = Counter(
+    "ai_provider_requests_total",
+    "AI provider requests by outcome",
+    ["provider", "model", "endpoint", "outcome"],
+)
+AI_PROVIDER_REQUEST_LATENCY = Histogram(
+    "ai_provider_request_duration_seconds",
+    "AI provider request latency",
+    ["provider", "model", "endpoint", "outcome"],
+)
+AI_PROVIDER_FAILURES = Counter(
+    "ai_provider_failures_total",
+    "AI provider failures by classified failure type",
+    ["provider", "model", "endpoint", "failure_type"],
+)
+AI_PROVIDER_RETRY_EXHAUSTION = Counter(
+    "ai_provider_retry_exhaustion_total",
+    "AI provider calls that exhausted their retry budget",
+    ["provider", "model", "endpoint", "failure_type"],
+)
+AI_PROVIDER_FALLBACKS = Counter(
+    "ai_provider_fallbacks_total",
+    "AI generations that fell back from one endpoint to another",
+    ["from_endpoint", "to_endpoint", "reason"],
+)
+AI_PROVIDER_CIRCUIT_OPEN = Gauge(
+    "ai_provider_circuit_open",
+    "1 when the AI provider circuit breaker is open, 0 when closed",
+    ["provider", "model", "endpoint"],
+)
+AI_PROVIDER_CIRCUIT_OPEN_DURATION = Gauge(
+    "ai_provider_circuit_open_duration_seconds",
+    "Seconds the AI provider circuit breaker has been open (0 when closed)",
+    ["provider", "model", "endpoint"],
+)
+
+
+def observe_ai_provider_request(
+    *,
+    provider: str | None,
+    model: str | None,
+    endpoint: str | None,
+    outcome: str,
+    latency_ms: float,
+) -> None:
+    labels = {
+        "provider": str(provider or "unknown"),
+        "model": str(model or "unknown"),
+        "endpoint": str(endpoint or "unknown"),
+        "outcome": outcome,
+    }
+    AI_PROVIDER_REQUESTS.labels(**labels).inc()
+    # Callers measure in milliseconds; Prometheus (and every other histogram
+    # in this file) uses seconds.
+    AI_PROVIDER_REQUEST_LATENCY.labels(**labels).observe(max(latency_ms, 0.0) / 1000.0)
+
+
+def observe_ai_provider_failure(
+    *, provider: str | None, model: str | None, endpoint: str | None, failure_type: str
+) -> None:
+    AI_PROVIDER_FAILURES.labels(
+        provider=str(provider or "unknown"),
+        model=str(model or "unknown"),
+        endpoint=str(endpoint or "unknown"),
+        failure_type=str(failure_type or "unknown"),
+    ).inc()
+
+
+def observe_ai_provider_retry_exhaustion(
+    *, provider: str | None, model: str | None, endpoint: str | None, failure_type: str
+) -> None:
+    AI_PROVIDER_RETRY_EXHAUSTION.labels(
+        provider=str(provider or "unknown"),
+        model=str(model or "unknown"),
+        endpoint=str(endpoint or "unknown"),
+        failure_type=str(failure_type or "unknown"),
+    ).inc()
+
+
+def observe_ai_provider_fallback(
+    *, from_endpoint: str | None, to_endpoint: str | None, reason: str | None
+) -> None:
+    AI_PROVIDER_FALLBACKS.labels(
+        from_endpoint=str(from_endpoint or "unknown"),
+        to_endpoint=str(to_endpoint or "unknown"),
+        reason=str(reason or "unknown"),
+    ).inc()
+
+
+def set_ai_provider_circuit_open(
+    *, provider: str | None, model: str | None, endpoint: str | None, is_open: bool
+) -> None:
+    AI_PROVIDER_CIRCUIT_OPEN.labels(
+        provider=str(provider or "unknown"),
+        model=str(model or "unknown"),
+        endpoint=str(endpoint or "unknown"),
+    ).set(1.0 if is_open else 0.0)
+
+
+def set_ai_provider_circuit_open_duration(
+    *,
+    provider: str | None,
+    model: str | None,
+    endpoint: str | None,
+    duration_seconds: float,
+) -> None:
+    AI_PROVIDER_CIRCUIT_OPEN_DURATION.labels(
+        provider=str(provider or "unknown"),
+        model=str(model or "unknown"),
+        endpoint=str(endpoint or "unknown"),
+    ).set(max(duration_seconds, 0.0))

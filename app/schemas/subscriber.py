@@ -145,6 +145,9 @@ class SubscriberBase(BaseModel):
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
+    # NCC Local Government Area. Validated against `region` by the subscriber
+    # service (the merged-state gate); blank when unknown, never guessed.
+    lga: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
 
@@ -245,6 +248,9 @@ class SubscriberUpdate(BaseModel):
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
+    # NCC Local Government Area. Validated against `region` by the subscriber
+    # service (the merged-state gate); blank when unknown, never guessed.
+    lga: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
 
@@ -393,6 +399,8 @@ class AddressBase(BaseModel):
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
+    # NCC Local Government Area — see SubscriberBase.lga.
+    lga: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
     latitude: float | None = None
@@ -413,6 +421,8 @@ class AddressUpdate(BaseModel):
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
+    # NCC Local Government Area — see SubscriberBase.lga.
+    lga: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
     latitude: float | None = None

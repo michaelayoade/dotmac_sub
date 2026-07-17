@@ -45,6 +45,7 @@ dependencies = [
     "sentry-sdk[celery,fastapi,sqlalchemy] (>=2.57.0,<3.0.0)",
     "qrcode[pil] (==7.4.2)",
     "google-auth (>=2.30.0,<3.0.0)",
+    "dotmac-integration-client",
 ]
 
 [project.optional-dependencies]
@@ -63,6 +64,12 @@ dev = [
 
 [tool.poetry]
 package-mode = false
+
+# Source enrichment for the PEP-621 dependency above: the shared integration
+# transport engine (retry/jitter/circuit/request-id) consumed by the sub->crm
+# and sub->erp edges. Pinned by tag; bump deliberately.
+[tool.poetry.dependencies]
+dotmac-integration-client = { git = "https://github.com/michaelayoade/dotmac-integration-client.git", tag = "v0.1.1" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"

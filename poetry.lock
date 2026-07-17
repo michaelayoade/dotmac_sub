@@ -1042,6 +1042,25 @@ trio = ["trio (>=0.30)"]
 wmi = ["wmi (>=1.5.1) ; platform_system == \"Windows\""]
 
 [[package]]
+name = "dotmac-integration-client"
+version = "0.1.1"
+description = "Canonical HTTP transport for Dotmac inter-service integration edges: policy-driven retry with jitter, Retry-After, reachability circuit, idempotency keys, request-id propagation, and metrics hooks."
+optional = false
+python-versions = "^3.11"
+groups = ["main"]
+files = []
+develop = false
+
+[package.dependencies]
+httpx = ">=0.24"
+
+[package.source]
+type = "git"
+url = "https://github.com/michaelayoade/dotmac-integration-client.git"
+reference = "v0.1.1"
+resolved_reference = "4714d9411e7512cc00944fd44583bc38812e9839"
+
+[[package]]
 name = "ecdsa"
 version = "0.19.1"
 description = "ECDSA cryptographic signature library (pure python)"
@@ -5028,4 +5047,4 @@ dev = ["bandit", "import-linter", "mypy", "playwright", "pre-commit", "pytest", 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "fe5a3be16498712ad9d1d01ccec4c60e660c08b2d1f0410ae9aa9b19ace2a5d8"
+content-hash = "262726ac3ecc9e2ee770edf47320e1eb33502c5e7a5bc9e1179d1a7ee05200da"

@@ -636,6 +636,16 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Accept quote writes through the native quote/sales pipeline.",
     ),
     Control(
+        key="ai.generation",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        description=(
+            "Generate AI insights (owned report projection -> LLM gateway -> ai.insights). "
+            "Fails CLOSED: absent means no provider call and no spend."
+        ),
+    ),
+    Control(
         key="referrals.native_read",
         layer=Layer.feature,
         default=False,

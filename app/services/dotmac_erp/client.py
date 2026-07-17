@@ -16,8 +16,7 @@ import logging
 from collections.abc import Collection
 
 import httpx
-
-from app.services.integration_http import IntegrationHttpClient
+from dotmac_integration import IntegrationHttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -491,6 +490,54 @@ class DotMacERPClient:
             payload,
             expected_status_codes={200},
         )
+
+    # ============ NCC regulatory read surface (ERP owns finance + HR) ============
+    #
+    # The NCC annual year-end return's Section F (financials) and Section G
+    # (staff head-count) are ERP data. Sub reads them over the API for the
+    # regulatory pack and keeps no copy — ERP stays the owner.
+    #
+    # The paths keep ERP's existing ``/sync/crm/ncc/*`` names rather than sub's
+    # usual ``/sync/sub/*``: those are the endpoints ERP exposes today (a legacy
+    # of the CRM-era caller). The data is not CRM's; renaming belongs on ERP's
+    # side of the contract, not guessed at from here.
+
+    def get_ncc_financials(
+        self,
+        *,
+        year: int | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        as_of_date: str | None = None,
+    ) -> dict:
+        """Fetch the NCC year-end return's Section F financials from ERP.
+
+        Composed by ERP from its income-statement / balance-sheet /
+        expense-summary services. Pass ``year`` for the annual return, or an
+        explicit ``start_date``/``end_date``/``as_of_date`` range.
+
+        Returns:
+            dict with keys: period, summary, detail, note
+        """
+        params: dict[str, object] = {}
+        if year is not None:
+            params["year"] = year
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        if as_of_date:
+            params["as_of_date"] = as_of_date
+        return self.get("/api/v1/sync/crm/ncc/financials", params=params or None)
+
+    def get_ncc_staff_headcount(self) -> dict:
+        """Fetch the NCC year-end return's Section G staff head-count from ERP.
+
+        Returns:
+            dict with keys: total_active, by_category
+            (category -> nationality -> gender -> count)
+        """
+        return self.get("/api/v1/sync/crm/ncc/staff-headcount")
 
 
 def build_erp_client(db) -> DotMacERPClient:
