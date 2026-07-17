@@ -154,7 +154,7 @@ def _stub_plan_change_side_effects(
     )
 
 
-def _confirmation_kwargs(db_session, subscription, target_offer) -> dict[str, str]:
+def _confirmation_kwargs(db_session, subscription, target_offer) -> dict[str, object]:
     from app.services.prepaid_plan_changes import resolve_prepaid_plan_change
 
     decision = resolve_prepaid_plan_change(
@@ -162,6 +162,7 @@ def _confirmation_kwargs(db_session, subscription, target_offer) -> dict[str, st
     )
     return {
         "preview_fingerprint": decision.fingerprint,
+        "preview_effective_at": decision.effective_at,
         "idempotency_key": f"test-plan-{uuid4()}",
         "confirmation_origin": "test",
     }
@@ -385,6 +386,11 @@ def test_prepaid_upgrade_returns_insufficient_balance_without_mutation(
         change_service.subscription_change_requests, "apply", apply_mock
     )
 
+    confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
+    # The customer can spend time reading the preview. Confirmation must reuse
+    # its frozen pricing timestamp instead of recalculating three seconds later.
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC))
+
     result = apply_instant_plan_change(
         db_session,
         {
@@ -393,7 +399,7 @@ def test_prepaid_upgrade_returns_insufficient_balance_without_mutation(
         },
         str(subscription.id),
         str(target_offer.id),
-        **_confirmation_kwargs(db_session, subscription, target_offer),
+        **confirmation,
     )
 
     db_session.refresh(subscription)
@@ -441,6 +447,22 @@ def test_proration_uses_exact_cycle_seconds(db_session, subscriber, monkeypatch)
     assert proration["charge_amount"] == Decimal("100.00")
     assert proration["net_amount"] == Decimal("50.00")
 
+    from app.services.prepaid_plan_changes import resolve_prepaid_plan_change
+
+    first = resolve_prepaid_plan_change(
+        db_session,
+        subscription,
+        str(target_offer.id),
+        effective_at=datetime(2026, 5, 16, 12, 0, 0, tzinfo=UTC),
+    )
+    tampered = resolve_prepaid_plan_change(
+        db_session,
+        subscription,
+        str(target_offer.id),
+        effective_at=datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC),
+    )
+    assert first.fingerprint != tampered.fingerprint
+
 
 def test_prepaid_upgrade_with_exact_funding_preserves_anniversary_and_posts_debit(
     db_session, subscriber, monkeypatch
@@ -480,6 +502,8 @@ def test_prepaid_upgrade_with_exact_funding_preserves_anniversary_and_posts_debi
     )
     db_session.commit()
 
+    confirmation = _confirmation_kwargs(db_session, subscription, target_offer)
+    _freeze_subscription_now(monkeypatch, datetime(2026, 5, 16, 12, 0, 3, tzinfo=UTC))
     result = apply_instant_plan_change(
         db_session,
         {
@@ -488,7 +512,7 @@ def test_prepaid_upgrade_with_exact_funding_preserves_anniversary_and_posts_debi
         },
         str(subscription.id),
         str(target_offer.id),
-        **_confirmation_kwargs(db_session, subscription, target_offer),
+        **confirmation,
     )
 
     db_session.refresh(subscription)
@@ -518,6 +542,9 @@ def test_prepaid_upgrade_with_exact_funding_preserves_anniversary_and_posts_debi
     assert change_request.confirmation_snapshot["postpaid_receivables"] == "0.00"
     assert change_request.confirmation_snapshot["ledger_entry_type"] == "debit"
     assert change_request.confirmation_snapshot["ledger_source"] == "adjustment"
+    assert change_request.confirmation_snapshot["effective_at"] == (
+        "2026-05-16T12:00:00+00:00"
+    )
     assert change_request.account_adjustment_id == adjustment.id
     assert change_request.ledger_entry_id == debits[0].id
     assert change_request.credit_note_id is None

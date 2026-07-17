@@ -1192,7 +1192,11 @@ def update_offer_with_audit(
                 "amount": offer_data["price_amount"],
                 "currency": offer_data["price_currency"],
                 "billing_cycle": offer_data.get("price_billing_cycle"),
-                "unit": offer_data.get("price_unit"),
+                # The edit form represents an unset optional unit as "" while
+                # the database stores it as NULL. Normalize before governance
+                # comparison so a non-financial offer edit does not look like
+                # a protected price-unit mutation.
+                "unit": offer_data.get("price_unit") or None,
             }
             price_changes = catalog_billing_governance.billing_field_changes(
                 existing_price,

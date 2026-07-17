@@ -122,6 +122,7 @@ def _build_plan_change_quote(
     target_offer: CatalogOffer,
     *,
     prepaid_funding_before: Decimal | None = None,
+    effective_at: datetime | None = None,
 ) -> dict[str, object]:
     from app.services.subscription_lifecycle import (
         SubscriptionCommandKind,
@@ -136,6 +137,7 @@ def _build_plan_change_quote(
             kind=SubscriptionCommandKind.change_plan,
             source="customer_portal:plan_change_quote",
             target_offer_id=str(target_offer.id),
+            effective_at=effective_at,
         ),
         current_balance=prepaid_funding_before,
     )
@@ -162,6 +164,7 @@ def _serialize_plan_change_quote(quote: dict[str, object]) -> dict[str, object]:
             quote.get("postpaid_receivables", Decimal("0.00"))
         ),
         "currency": str(quote.get("currency") or "NGN"),
+        "preview_effective_at": str(quote.get("preview_effective_at") or ""),
         "shortfall": _to_float(quote.get("shortfall", Decimal("0.00"))),
         "collection_blocking_balance": _to_float(
             quote.get("collection_blocking_balance", Decimal("0.00"))
@@ -716,6 +719,7 @@ def apply_instant_plan_change(
     notes: str | None = None,
     *,
     preview_fingerprint: str,
+    preview_effective_at: datetime | None = None,
     idempotency_key: str,
     confirmation_origin: str,
 ) -> dict:
@@ -824,11 +828,17 @@ def apply_instant_plan_change(
         if financial_position is not None
         else Decimal("0.00")
     )
+    if preview_effective_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Plan-change preview effective timestamp is required",
+        )
     quote = _build_plan_change_quote(
         db,
         subscription,
         new_offer,
         prepaid_funding_before=prepaid_funding,
+        effective_at=preview_effective_at,
     )
     if str(quote.get("preview_fingerprint") or "") != preview_fingerprint.strip():
         raise HTTPException(
@@ -865,6 +875,7 @@ def apply_instant_plan_change(
         subscription_id=subscription_id,
         new_offer_id=offer_id,
         preview_fingerprint=preview_fingerprint,
+        preview_effective_at=preview_effective_at,
         idempotency_key=idempotency_key,
         confirmation_origin=confirmation_origin,
         confirmation_snapshot=_serialize_plan_change_quote(quote),

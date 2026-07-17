@@ -2595,6 +2595,7 @@ def customer_submit_change_plan(
     offer_id: str = Form(...),
     notes: str = Form(None),
     preview_fingerprint: str = Form(...),
+    preview_effective_at: datetime = Form(...),
     idempotency_key: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -2612,6 +2613,7 @@ def customer_submit_change_plan(
             offer_id=offer_id,
             notes=notes,
             preview_fingerprint=preview_fingerprint,
+            preview_effective_at=preview_effective_at,
             idempotency_key=idempotency_key,
             confirmation_origin="customer_web",
         )

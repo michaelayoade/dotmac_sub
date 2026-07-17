@@ -112,6 +112,7 @@
         <input type="hidden" name="requested_offer_id" x-model="selectedOfferId">
         <input type="hidden" name="target_family" x-model="selectedOfferFamily">
         <input type="hidden" name="preview_fingerprint" :value="changeQuote?.preview_fingerprint || ''">
+        <input type="hidden" name="preview_effective_at" :value="changeQuote?.preview_effective_at || ''">
         <input type="hidden" name="idempotency_key" x-model="confirmationKey">
         <!-- Available Plans -->
         <div>

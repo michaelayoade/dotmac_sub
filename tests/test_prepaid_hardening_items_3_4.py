@@ -107,6 +107,7 @@ def _prepare_upgrade(
         old_offer_name="Old Plan",
         operation_key=f"hardening-{billing_mode.value}-{subscription.id}",
         expected_preview_fingerprint=preview.fingerprint,
+        effective_at=preview.effective_at,
     )
 
 

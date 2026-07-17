@@ -319,6 +319,7 @@
                         body.set('expected_head', this.preview.expected_head);
                         if (this.kind === 'change_plan' && this.effectiveTiming === 'immediate') {
                             body.set('preview_fingerprint', this.billingQuote().preview_fingerprint);
+                            body.set('effective_at', this.preview.effective_at);
                         }
                         const resp = await fetch(`/admin/catalog/subscriptions/${this.subscriptionId}/lifecycle/execute`, {
                             method: 'POST',

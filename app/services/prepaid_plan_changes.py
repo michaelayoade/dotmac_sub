@@ -51,6 +51,7 @@ class PrepaidPlanChangeDecision:
     subscription_status: str
     billing_mode: str
     currency: str
+    effective_at: datetime
     proration: dict[str, Any]
     prepaid_funding_before: Decimal
     postpaid_receivables: Decimal
@@ -115,10 +116,9 @@ class PrepaidPlanChangeDecision:
     def fingerprint(self) -> str:
         """Fingerprint the exact human-visible financial decision.
 
-        Exact cycle seconds are deliberately excluded: they continue to tick
-        while a person reads the confirmation. The displayed, rounded monetary
-        result and policy decision remain bound; crossing a pricing-cent,
-        funding, receivable, eligibility, or catalog boundary makes it stale.
+        The preview's frozen effective timestamp and displayed monetary result
+        are bound together. Confirmation reuses that timestamp while re-reading
+        funding, receivables, eligibility, and catalog state.
         """
         values = {
             "account_id": self.account_id,
@@ -128,6 +128,7 @@ class PrepaidPlanChangeDecision:
             "subscription_status": self.subscription_status,
             "billing_mode": self.billing_mode,
             "currency": self.currency,
+            "effective_at": self.effective_at.isoformat(),
             "credit_amount": _money(self.proration.get("credit_amount")),
             "charge_amount": _money(self.proration.get("charge_amount")),
             "net_amount": _money(self.net_amount),
@@ -166,6 +167,7 @@ class PrepaidPlanChangeDecision:
             "subscription_status": self.subscription_status,
             "billing_mode": self.billing_mode,
             "currency": self.currency,
+            "effective_at": self.effective_at.isoformat(),
             "prepaid_funding_before": _money(self.prepaid_funding_before),
             "prepaid_funding_after": _money(self.prepaid_funding_after),
             "postpaid_receivables": _money(self.postpaid_receivables),
@@ -196,6 +198,7 @@ class PrepaidPlanChangeDecision:
             "prepaid_funding_after": self.prepaid_funding_after,
             "postpaid_receivables": self.postpaid_receivables,
             "currency": self.currency,
+            "preview_effective_at": self.effective_at.isoformat(),
             "shortfall": self.shortfall,
             "collection_blocking_balance": self.collection_blocking_balance,
             "charge_amount": round_money(
@@ -301,6 +304,7 @@ def resolve_prepaid_plan_change(
         target_offer_id,
         effective_at=effective_at,
     )
+    frozen_effective_at = proration["effective_at"]
     proration = _apply_plan_change_policy(
         db,
         proration,
@@ -353,6 +357,7 @@ def resolve_prepaid_plan_change(
         subscription_status=subscription_status,
         billing_mode=billing_mode,
         currency=target_currency,
+        effective_at=frozen_effective_at,
         proration=proration,
         prepaid_funding_before=available,
         postpaid_receivables=round_money(position.open_invoice_balance),
