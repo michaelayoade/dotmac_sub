@@ -501,12 +501,13 @@ def build_erp_client(db) -> DotMacERPClient:
     """
     from app.models.domain_settings import SettingDomain
     from app.services import settings_spec
+    from app.services.secrets import resolve_secret
 
     base_url = settings_spec.resolve_value(
         db, SettingDomain.integration, "dotmac_erp_base_url"
     )
-    token = settings_spec.resolve_value(
-        db, SettingDomain.integration, "dotmac_erp_token"
+    token = resolve_secret(
+        settings_spec.resolve_value(db, SettingDomain.integration, "dotmac_erp_token")
     )
     if not base_url or not token:
         raise ValueError(
