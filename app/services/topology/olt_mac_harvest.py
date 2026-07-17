@@ -368,12 +368,26 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
         )
     ).all()
 
+    # Phase 1 — read: materialize every OLT's port context, then DETACH the
+    # loaded rows and END the transaction. The SSH walk below takes seconds
+    # per port; holding a transaction across it left this connection idle in
+    # transaction for minutes, tripping the PostgreSQL health check
+    # (idle_in_transaction_over_60s) on every run. Detached rows keep their
+    # loaded column values, which is all the later phases read.
+    contexts: dict[uuid.UUID, dict[str, _PortContext]] = {}
     for olt in olts:
         counters["olts_polled"] += 1
-        savepoint = db.begin_nested()
+        contexts[olt.id] = _active_ports_for_olt(db, olt)
+    db.expunge_all()
+    db.commit()
+
+    # Phase 2 — collect: SSH walks with NO transaction open. Raw outputs only;
+    # per-OLT failures are isolated so one bad OLT can't sink the run.
+    collected: list[tuple[OLTDevice, list[tuple[str, str]]]] = []
+    for olt in olts:
+        walked: list[tuple[str, str]] = []
         try:
-            ports = _active_ports_for_olt(db, olt)
-            for fsp, ctx in ports.items():
+            for fsp in contexts[olt.id]:
                 ok, status, output = _run_readonly_command(
                     olt, f"display mac-address port {fsp}"
                 )
@@ -387,6 +401,24 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
                         status,
                     )
                     continue
+                walked.append((fsp, output))
+        except Exception:  # noqa: BLE001 - isolate per-OLT failure, keep going
+            counters["olt_errors"] += 1
+            logger.exception(
+                "olt_mac_harvest_olt_failed olt_device_id=%s", getattr(olt, "id", "?")
+            )
+            continue
+        collected.append((olt, walked))
+
+    # Phase 3 — write: parse + upsert + drift in per-OLT SAVEPOINTs on a fresh
+    # transaction (begun implicitly by the first query). The caller owns the
+    # outer commit, as before.
+    for olt, walked in collected:
+        savepoint = db.begin_nested()
+        try:
+            ports = contexts[olt.id]
+            for fsp, output in walked:
+                ctx = ports[fsp]
                 for entry in parse_mac_address_port(output):
                     ont = ctx.onts_by_ont_id.get(entry.ont_id)
                     pon_port_id = (
