@@ -91,6 +91,12 @@ class Settings:
     # This is intentionally separate from CRM_WEBHOOK_SECRET, which protects
     # inbound HMAC-signed webhook deliveries.
     selfcare_api_token: str = os.getenv("SELFCARE_API_TOKEN", "")
+    # Migration flag for the crm->sub auth cutover: while true, the legacy
+    # shared bearer (selfcare_api_token) is still accepted alongside scoped
+    # ApiKeys; flip false after CRM sends X-Api-Key to retire the bearer.
+    crm_legacy_bearer_enabled: bool = (
+        os.getenv("CRM_LEGACY_BEARER_ENABLED", "true").lower() != "false"
+    )
     # During CRM absorption, sub can read/import CRM tickets natively before it
     # owns writes. Keep user/admin mutations blocked for CRM-origin tickets until
     # the ticket vertical cutover flips writes to sub.
