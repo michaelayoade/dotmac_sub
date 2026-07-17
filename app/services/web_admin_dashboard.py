@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.services import admin_alerts as admin_alerts_service
+from app.services import admin_attention as admin_attention_service
 from app.services import admin_whats_new as admin_whats_new_service
 from app.services import infrastructure_health as infrastructure_health_service
 from app.services import settings_spec
@@ -452,102 +453,13 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         logger.error("Failed to load service order stats for dashboard", exc_info=True)
         _rollback_after_failed_query(db)
 
-    # --- Attention items (things needing action) ---
-    attention_items: list[dict] = []
-    network_attention_items: list[dict] = []
+    # --- Attention items (admin_attention owns inclusion/severity/order) ---
     total_alarms = (
         net_stats["alarms_critical"]
         + net_stats["alarms_major"]
         + net_stats["alarms_minor"]
         + net_stats["alarms_warning"]
     )
-    if net_stats["alarms_critical"] > 0:
-        item = {
-            "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
-            "href": "/admin/network/alarms",
-            "severity": "critical",
-            "domain": "network",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if net_stats["alarms_major"] > 0:
-        item = {
-            "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
-            "href": "/admin/network/alarms",
-            "severity": "major",
-            "domain": "network",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if net_stats.get("offline_count", 0) > 0:
-        item = {
-            "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
-            "href": "/admin/network/monitoring",
-            "severity": "warning",
-            "domain": "network",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if overdue_amount > 0:
-        attention_items.append(
-            {
-                "label": f"₦{overdue_amount:,.0f} overdue receivables",
-                "href": "/admin/billing",
-                "severity": "warning",
-                "domain": "billing",
-            }
-        )
-    if sub_stats["suspended_count"] > 0:
-        attention_items.append(
-            {
-                "label": f"{sub_stats['suspended_count']} suspended account{'s' if sub_stats['suspended_count'] != 1 else ''}",
-                "href": "/admin/customers",
-                "severity": "info",
-                "domain": "customers",
-            }
-        )
-    if pending_orders > 0:
-        attention_items.append(
-            {
-                "label": f"{pending_orders} pending service order{'s' if pending_orders != 1 else ''}",
-                "href": "/admin/provisioning",
-                "severity": "info",
-                "domain": "provisioning",
-            }
-        )
-
-    # --- ONT attention items ---
-    ont_low_signal = ont_service_summary.get("low_signal", 0)
-    ont_offline = ont_service_summary.get("offline", 0)
-    if ont_low_signal > 0:
-        item = {
-            "label": f"{ont_low_signal} ONT{'s' if ont_low_signal != 1 else ''} with low signal",
-            "href": "/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc",
-            "severity": "warning",
-            "domain": "network",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if ont_offline > 5:
-        # Only show if significant number of offline ONTs
-        item = {
-            "label": f"{ont_offline} ONT{'s' if ont_offline != 1 else ''} offline",
-            "href": "/admin/network/onts?view=list&olt_status=offline",
-            "severity": "warning",
-            "domain": "network",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-    if unconfigured_ont_count > 0:
-        item = {
-            "label": f"{unconfigured_ont_count} unconfigured ONT{'s' if unconfigured_ont_count != 1 else ''} awaiting authorization",
-            "href": "/admin/network/onts?view=unconfigured",
-            "severity": "info",
-            "domain": "network",
-        }
-        attention_items.append(item)
-        network_attention_items.append(item)
-
     try:
         pending_location_requests = web_admin_service._count_pending_location_requests(
             db
@@ -558,18 +470,26 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         )
         _rollback_after_failed_query(db)
         pending_location_requests = 0
-    if pending_location_requests > 0:
-        attention_items.append(
-            {
-                "label": (
-                    f"{pending_location_requests} pending pin "
-                    f"correction{'s' if pending_location_requests != 1 else ''}"
-                ),
-                "href": "/admin/gis?tab=customer-requests&status=pending",
-                "severity": "info",
-                "domain": "customers",
-            }
+    admin_alert_summary = admin_alerts_service.dashboard_alert_summary(db)
+    infrastructure_alerts = (admin_alert_summary.get("by_category") or {}).get(
+        "infrastructure"
+    ) or {}
+    attention_items, network_attention_items = (
+        admin_attention_service.build_attention_items(
+            net_stats=net_stats,
+            overdue_amount=overdue_amount,
+            suspended_count=sub_stats["suspended_count"],
+            pending_orders=pending_orders,
+            ont_summary=ont_service_summary,
+            unconfigured_ont_count=unconfigured_ont_count,
+            pending_location_requests=pending_location_requests,
+            pon_outage_count=len(pon_outages),
+            infrastructure_alerts=infrastructure_alerts,
+            ont_offline_threshold=_network_monitoring_int_setting(
+                db, "dashboard_attention_ont_offline_threshold", 5
+            ),
         )
+    )
 
     online_pct = (
         round((online_customers / active_subscribers) * 100, 1)
@@ -579,7 +499,6 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     whats_new_items = admin_whats_new_service.serialize_for_dashboard(
         admin_whats_new_service.get_visible_items(db, limit=4)
     )
-    admin_alert_summary = admin_alerts_service.dashboard_alert_summary(db)
 
     return {
         "stats": stats,
