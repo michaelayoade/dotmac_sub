@@ -93,6 +93,10 @@ class TicketUpdate(BaseModel):
     status: str | None = None
     priority: str | None = None
     ticket_type: str | None = Field(default=None, max_length=80)
+    # NCC complaints-return correction: setting either marks it agent-owned,
+    # and it is never re-derived from the ticket text afterwards.
+    ncc_category: str | None = Field(default=None, max_length=80)
+    ncc_subcategory: str | None = Field(default=None, max_length=120)
     channel: TicketChannel | None = None
     tags: list[str] | None = None
     metadata_: dict | None = Field(
@@ -141,6 +145,10 @@ class TicketRead(BaseModel):
     status: str
     priority: str
     ticket_type: str | None
+    ncc_category: str | None = None
+    ncc_category_source: str | None = None
+    ncc_subcategory: str | None = None
+    ncc_subcategory_source: str | None = None
     channel: TicketChannel
     tags: list[str] | None = None
     metadata_: dict | None = Field(

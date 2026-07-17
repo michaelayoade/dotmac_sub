@@ -113,6 +113,15 @@ class Ticket(Base):
         nullable=False,
     )
     ticket_type: Mapped[str | None] = mapped_column(String(120))
+    # NCC quarterly complaints return (①): the classification is derived from
+    # the ticket's text on save and STORED here, so the filing projects a
+    # captured decision instead of re-guessing at report time. ``*_source`` is
+    # "derived" or "agent"; an agent value is never re-derived.
+    # See app/services/ncc_categorisation.py.
+    ncc_category: Mapped[str | None] = mapped_column(String(80))
+    ncc_category_source: Mapped[str | None] = mapped_column(String(16))
+    ncc_subcategory: Mapped[str | None] = mapped_column(String(120))
+    ncc_subcategory_source: Mapped[str | None] = mapped_column(String(16))
     erpnext_id: Mapped[str | None] = mapped_column(String(100))
     channel: Mapped[TicketChannel] = mapped_column(
         Enum(TicketChannel, values_callable=lambda x: [e.value for e in x]),

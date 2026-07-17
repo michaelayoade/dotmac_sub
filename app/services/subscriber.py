@@ -267,6 +267,54 @@ def _validate_tax_rate(db: Session, tax_rate_id: str | None):
     return rate
 
 
+def _apply_validated_lga(data: dict, *, current_region=None, current_lga=None) -> dict:
+    """Validate and canonicalise a captured LGA against its state.
+
+    LGA is an NCC administrative unit that the quarterly complaints return
+    files per row, so a wrong one is a wrong regulatory filing. It is captured,
+    never derived: CRM guessed the LGA from address text and defaulted the
+    unmatched to Abuja, and we do not repeat that. Here an LGA is only accepted
+    when it is a real LGA *of its state*, and it is stored in the reference
+    table's canonical spelling so the return does not have to re-interpret it.
+
+    Validation runs against the MERGED state — the incoming patch over what is
+    already stored — because a partial update can send an LGA without resending
+    its region, and validating the patch alone would let ``{"lga": "Eti-Osa"}``
+    through onto a Kano subscriber.
+
+    Clearing (``lga=None``/``""``) is always allowed: blank is the honest value
+    for "we do not know", and the NCC return reports the gap rather than
+    inventing a location.
+    """
+    if "lga" not in data:
+        return data
+
+    from app.services import ncc_location
+
+    lga = (str(data.get("lga") or "")).strip()
+    if not lga:
+        data["lga"] = None
+        return data
+
+    region = data.get("region", current_region)
+    if not (str(region or "").strip()):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "An LGA cannot be validated without a state: set region alongside lga."
+            ),
+        )
+
+    canonical = ncc_location.canonical_lga(region, lga)
+    if not canonical:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{lga!r} is not a Local Government Area of {region!r}.",
+        )
+    data["lga"] = canonical
+    return data
+
+
 def _normalize_subscriber_identity_fields(data: dict) -> dict:
     normalized = dict(data)
     if "email" in normalized:
@@ -437,6 +485,9 @@ class Subscribers(ListResponseMixin):
             data = _normalize_subscriber_identity_fields(
                 payload.model_dump(exclude_unset=True, exclude={"person_id"})
             )
+            data = _apply_validated_lga(
+                data, current_region=subscriber.region, current_lga=subscriber.lga
+            )
             requested_status = data.pop("status", None)
             requested_is_active = data.pop("is_active", None)
             category = data.pop("category", None)
@@ -491,6 +542,7 @@ class Subscribers(ListResponseMixin):
             return subscriber
 
         data = _normalize_subscriber_identity_fields(payload.model_dump())
+        data = _apply_validated_lga(data)
         requested_status = data.pop("status", SubscriberStatus.active)
         data.pop("is_active", None)
         category = data.pop("category", None)
@@ -881,6 +933,9 @@ class Subscribers(ListResponseMixin):
         previous_status = subscriber.status
         data = _normalize_subscriber_identity_fields(
             payload.model_dump(exclude_unset=True)
+        )
+        data = _apply_validated_lga(
+            data, current_region=subscriber.region, current_lga=subscriber.lga
         )
         updated_fields = list(data.keys())
         requested_status = data.pop("status", None)
@@ -1400,6 +1455,7 @@ class Addresses(ListResponseMixin):
         if payload.tax_rate_id:
             _validate_tax_rate(db, str(payload.tax_rate_id))
         data = payload.model_dump()
+        data = _apply_validated_lga(data)
         fields_set = payload.model_fields_set
         if "address_type" not in fields_set:
             default_type = settings_spec.resolve_value(
@@ -1455,6 +1511,9 @@ class Addresses(ListResponseMixin):
         if not address:
             raise HTTPException(status_code=404, detail="Address not found")
         data = payload.model_dump(exclude_unset=True)
+        data = _apply_validated_lga(
+            data, current_region=address.region, current_lga=address.lga
+        )
         if "subscriber_id" in data:
             subscriber = db.get(Subscriber, data["subscriber_id"])
             if not subscriber:

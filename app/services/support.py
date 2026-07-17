@@ -706,6 +706,20 @@ class Tickets:
                 ticket.closed_at = _now()
 
     @staticmethod
+    def _apply_ncc_categorisation(
+        ticket: Ticket, explicit_data: dict[str, Any]
+    ) -> None:
+        """Store the NCC complaints-return classification on write.
+
+        The ticket owner applies it so the filing reads a captured decision
+        rather than re-deriving from free text at report time. An
+        agent-supplied category is marked as such and never re-derived.
+        """
+        from app.services import ncc_categorisation
+
+        ncc_categorisation.apply_to_ticket(ticket, explicit_data=explicit_data)
+
+    @staticmethod
     def _replace_assignees(db: Session, ticket: Ticket, person_ids: list[UUID]) -> None:
         deduped: list[UUID] = []
         seen: set[str] = set()
@@ -1184,6 +1198,7 @@ class Tickets:
 
             sla_assignment.create_sla_clock_for_ticket(db, ticket)
         Tickets._apply_status_timestamp_rules(ticket, data)
+        Tickets._apply_ncc_categorisation(ticket, data)
 
         from app.models.support import AutomationTrigger
         from app.services import support_automation
@@ -1779,6 +1794,7 @@ class Tickets:
             setattr(ticket, key, value)
 
         Tickets._apply_status_timestamp_rules(ticket, data)
+        Tickets._apply_ncc_categorisation(ticket, data)
 
         if assignee_person_ids is not None:
             Tickets._replace_assignees(db, ticket, assignee_person_ids)
