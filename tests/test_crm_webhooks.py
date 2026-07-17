@@ -486,8 +486,8 @@ def test_ticket_webhook_replay_is_deduped(monkeypatch, db_session):
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        first = _post(body, "ticket.updated", _sign(raw), db_session)
-        replay = _post(body, "ticket.updated", _sign(raw), db_session)
+        first = _post(body, "ticket.created", _sign(raw), db_session)
+        replay = _post(body, "ticket.created", _sign(raw), db_session)
     assert first.status_code == 200
     assert replay.status_code == 200 and replay.json().get("reason") == "duplicate"
     assert enqueue.call_count == 1
