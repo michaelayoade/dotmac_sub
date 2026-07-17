@@ -34,6 +34,7 @@ from app.services.form_contracts import (
     FormConsequence,
     FormContract,
     FormPrerequisite,
+    register as register_form_contract,
 )
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,8 @@ def _build_migration_offers(
 # Editor contract for the customer plan-change form (ui.form_contracts pilot).
 # The command owner (apply_instant_plan_change) re-checks every prerequisite at
 # execution time; this rendered contract is disclosure, not enforcement.
-PLAN_CHANGE_FORM = FormContract(
+PLAN_CHANGE_FORM = register_form_contract(
+    FormContract(
     key="customer.plan_change",
     title="Change plan",
     entity="subscription",
@@ -265,9 +267,10 @@ PLAN_CHANGE_FORM = FormContract(
         FormConsequence(
             "cross_family",
             "Choosing a plan from a different family submits a migration "
-            "request for our team instead of changing instantly",
+                "request for our team instead of changing instantly",
+            ),
         ),
-    ),
+    )
 )
 
 

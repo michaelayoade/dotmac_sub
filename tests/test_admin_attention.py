@@ -67,3 +67,16 @@ def test_absorbed_template_items_pon_and_infra():
     items, _ = _build(infrastructure_alerts={"total": 2, "critical": 0})
     infra = next(i for i in items if "infrastructure" in i["label"])
     assert infra["severity"] == "warning"
+
+
+def test_ont_offline_threshold_is_configurable():
+    # The significance threshold is a parameter (settings-owned at the caller);
+    # the module constant is only the registered default.
+    items, _ = _build(
+        ont_summary={"low_signal": 0, "offline": 3}, ont_offline_threshold=2
+    )
+    assert any("3 ONTs offline" == i["label"] for i in items)
+    items, _ = _build(
+        ont_summary={"low_signal": 0, "offline": 3}, ont_offline_threshold=10
+    )
+    assert not any("offline" in i["label"] for i in items)

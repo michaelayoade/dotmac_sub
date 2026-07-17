@@ -297,7 +297,12 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     try:
         from app.services import network_monitoring as network_monitoring_service
 
-        total_bps = network_monitoring_service.bandwidth_summary(db)["total_bps"]
+        total_bps = network_monitoring_service.bandwidth_summary(
+            db,
+            window_seconds=_network_monitoring_int_setting(
+                db, "dashboard_bandwidth_window_seconds", 600
+            ),
+        )["total_bps"]
         if total_bps > 1e9:
             bw_current = f"{total_bps / 1e9:.1f} Gbps"
         elif total_bps > 1e6:
