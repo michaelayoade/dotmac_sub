@@ -1,0 +1,136 @@
+# Channel & webhook observability alerts (docs/designs/CHANNEL_OBSERVABILITY.md).
+#
+# Deploy-ready Prometheus rule group for the dotmac-observe stack. Thresholds
+# are starting points sized to known baselines (email ~40-60/day, WhatsApp
+# ~1,300/day) and MUST be tuned against real series before the silence rule is
+# trusted for paging rather than ticketing. Prometheus has no native
+# business-hours predicate, so the silence rule uses a generous window and a
+# per-channel override pattern rather than a clock; add tighter overrides per
+# channel once baselines are known.
+groups:
+  - name: channel_observability
+    rules:
+      # --- The dead-man's-switch: a channel that was producing has gone quiet.
+      # This is the signal the originating incident lacked. Default threshold is
+      # deliberately generous; override per channel via a copy of this rule with
+      # a scope matcher (e.g. whatsapp should alert far sooner than email).
+      - alert: ChannelIngestionSilent
+        expr: >
+          observability_state{domain="channel_ingestion",signal="seconds_since_last_inbound"} > 3600
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Inbound channel {{ $labels.scope }} has received nothing recently"
+          description: >
+            No inbound message on channel {{ $labels.scope }} for
+            {{ $value | humanizeDuration }}. If this channel is normally active
+            now, its webhook endpoint or intake process is likely down —
+            messages may be silently dropping before anyone notices.
+
+      # If the observer itself stops, silence detection goes blind. Alert when
+      # the freshness snapshot stops refreshing (beat task or worker down).
+      - alert: ChannelObserverStale
+        expr: observability_snapshot_age_seconds{domain="channel_ingestion"} > 300
+        for: 5m
+        labels:
+          severity: critical
+          area: channel-observability
+        annotations:
+          summary: "Channel-health observer is not refreshing"
+          description: >
+            The channel_ingestion snapshot is {{ $value | humanizeDuration }}
+            old. Silence detection is blind until the observer runs again —
+            check the channel_health_observer beat task and the worker.
+
+      # --- Inline webhook latency approaching the provider's timeout: the point
+      # at which the provider starts retrying and eventually dropping.
+      - alert: WebhookProcessingSlow
+        expr: >
+          histogram_quantile(
+            0.95,
+            sum by (le, provider, event) (rate(sub_webhook_processing_seconds_bucket[5m]))
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Webhook {{ $labels.provider }}/{{ $labels.event }} p95 latency high"
+          description: >
+            p95 inline processing is {{ $value | humanize }}s. Sub processes
+            webhooks inline, so rising latency predicts provider-side timeouts
+            and dropped deliveries.
+
+      - alert: WebhookErrorRateHigh
+        expr: >
+          sum by (provider, event) (rate(sub_webhook_events_total{outcome="error"}[5m]))
+            /
+          clamp_min(sum by (provider, event) (rate(sub_webhook_events_total[5m])), 1e-9)
+            > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          area: channel-observability
+        annotations:
+          summary: "Webhook {{ $labels.provider }}/{{ $labels.event }} error rate high"
+          description: >
+            Over 5% of {{ $labels.provider }} webhooks are failing processing.
+            The provider believes these were delivered; we are losing them.
+
+      # A run of rejected receipts is usually a rotated/misconfigured secret —
+      # every delivery bounces at signature verification.
+      - alert: WebhookRejectedSustained
+        expr: sum by (provider, event) (rate(sub_webhook_events_total{outcome="rejected"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Webhook {{ $labels.provider }}/{{ $labels.event }} deliveries being rejected"
+          description: >
+            {{ $labels.provider }} deliveries are failing verification for 15m —
+            typically a rotated app secret or verify token that was not updated.
+
+      # The Sub-native signature of a provider retry storm (the push-model
+      # analogue of the incident's flood): a spike in suppressed duplicates.
+      - alert: InboundRedeliverySpike
+        expr: sum by (channel) (rate(sub_inbound_dedup_suppressed_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Inbound redelivery storm on {{ $labels.channel }}"
+          description: >
+            {{ $labels.channel }} is suppressing {{ $value | humanize }}
+            duplicate inbound/s — the provider is re-delivering. Dedup is
+            holding, but investigate the upstream retry cause.
+
+      # --- Async worker stall (the incident's WhatsApp cause, in Sub's other
+      # queues): a queue that keeps growing means its consumer is not draining.
+      - alert: CeleryQueueDepthHigh
+        expr: observability_state{domain="celery_queues",signal="queue_depth"} > 1000
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Celery queue {{ $labels.scope }} is backing up"
+          description: >
+            Queue {{ $labels.scope }} depth is {{ $value | humanize }} and not
+            draining — a stalled or under-provisioned worker. This is the
+            failure mode that, on restart, dumps a backlog all at once.
+
+      - alert: CeleryQueueObserverDegraded
+        expr: observability_snapshot_status{domain="celery_queues",status="degraded"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          area: channel-observability
+        annotations:
+          summary: "Queue-depth observer cannot read the broker"
+          description: >
+            The queue-depth snapshot is degraded — the observer could not read
+            Redis. Queue backlog is invisible until this recovers.

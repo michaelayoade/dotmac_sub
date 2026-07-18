@@ -348,6 +348,12 @@ def receive_inbound_channel(
         external_message_id=payload.external_message_id,
     )
     if duplicate is not None:
+        # A suppressed duplicate is the signature of a provider retry storm;
+        # counting it here (the web-process webhook path) makes redelivery
+        # pressure visible without any duplicate reaching an agent's inbox.
+        from app.metrics import record_inbound_dedup_suppressed
+
+        record_inbound_dedup_suppressed(channel_type)
         return InboundChannelReceiveResult(
             kind="duplicate",
             conversation_id=str(duplicate.conversation_id),
