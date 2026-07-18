@@ -23,7 +23,7 @@ One Person may therefore have a SystemUser principal, a reseller principal, a
 vendor context, a customer account, and linked-contact relationships without
 duplicating identity or combining permissions implicitly.
 
-## Migration 343
+## Migration 353
 
 Migration `353_party_principal_context_bindings` is schema-only.
 
@@ -152,5 +152,5 @@ Runtime cutover requires all of the following:
 
 Only after parity may legacy person UUID resolution, fake-subscriber principal
 fallbacks, duplicated OrganizationMembership decisions, the unused VendorUser
-path, or compatibility vendor bridges be retired. Migration 343 alone is not a
+path, or compatibility vendor bridges be retired. Migration 353 alone is not a
 cutover and authorizes no production backfill or deployment.

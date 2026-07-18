@@ -232,8 +232,9 @@ def localize_outage(
 
     survivors_elsewhere = any(online_by_node[nid] > 0 for nid in node_ids)
 
-    # Deepest = furthest from core over the LLDP graph. Nodes with no known
-    # distance sort shallowest so we never over-deepen on missing topology.
+    # Deepest = furthest from a declared core/border root. Nodes without an
+    # agreeing authoritative path sort shallowest; observations cannot deepen
+    # an outage boundary on their own.
     dist = _dist_to_core(session)
 
     def _depth_key(nid):

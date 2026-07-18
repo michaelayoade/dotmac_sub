@@ -540,6 +540,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.topology_lldp.run_lldp_topology_poll": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.forwarding_control_observations.run_forwarding_control_observation_poll": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Periodic observation refresh; expiring facts are recomputed and a later "
+        "beat run repairs a missed or failed collection.",
+    ),
     "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),

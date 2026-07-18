@@ -1,4 +1,4 @@
-"""Preview and execute reviewed PON-input and ONT-output attachments."""
+"""Preview and execute reviewed electronic and splitter-cascade attachments."""
 
 from __future__ import annotations
 
@@ -24,13 +24,18 @@ from app.services.network.fiber_access_attachments import (  # noqa: E402
 
 def _attachment_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--attachment-type", choices=("pon_input", "ont_output"), required=True
+        "--attachment-type",
+        choices=("pon_input", "ont_output", "splitter_cascade"),
+        required=True,
     )
     parser.add_argument("--action", choices=("attach", "detach"), required=True)
     parser.add_argument(
         "--subject-id",
         required=True,
-        help="PON port UUID for pon_input or ONT UUID for ont_output.",
+        help=(
+            "PON port UUID for pon_input, ONT UUID for ont_output, or upstream "
+            "splitter output-port UUID for splitter_cascade."
+        ),
     )
     parser.add_argument(
         "--splitter-port-id",

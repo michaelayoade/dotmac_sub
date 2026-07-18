@@ -41,6 +41,10 @@ from app.models.network import (
     SplitterPort,
 )
 from app.models.work_order import WorkOrder
+from app.services.network.fiber_field_verification_job_scope import (
+    FiberFieldVerificationJobScopeError,
+    assert_feature_in_planned_scope,
+)
 
 POINT_ASSET_TYPES = frozenset(
     {
@@ -613,6 +617,10 @@ def record_fiber_field_observation(
         recorded_by_person_id=recorded_by_person_id,
         recorded_by_system_user_id=recorded_by_system_user_id,
     )
+    try:
+        assert_feature_in_planned_scope(work_order, feature)
+    except FiberFieldVerificationJobScopeError as exc:
+        raise FiberTopologyFieldObservationError(str(exc)) from exc
     normalized_scope = _required_text(
         verification_scope, "verification_scope", limit=32
     ).lower()

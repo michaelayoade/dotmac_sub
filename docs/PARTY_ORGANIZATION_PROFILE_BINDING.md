@@ -31,7 +31,7 @@ collaboration and never becomes a reseller alias or permission shortcut.
 
 ## Schema and binding contract
 
-Migration 342 adds the following nullable fields to all four profile tables:
+Migration 352 adds the following nullable fields to all four profile tables:
 
 - `party_id`;
 - `party_bound_at`;
@@ -111,7 +111,7 @@ Current runtime owners remain temporarily unchanged:
 | Vendor operational state | `Vendor.is_active` and vendor services | vendor domain profile + Party role contract |
 | Vendor portal projection | `FieldVendor.is_active` and string UUID bridge | Party-linked vendor membership/auth context |
 
-The shadow phase begins only after migration 342 is applied and reviewed
+The shadow phase begins only after migration 352 is applied and reviewed
 profile bindings/roles are populated. Cutover requires:
 
 1. every in-scope profile has reviewed binding provenance;
@@ -124,7 +124,7 @@ profile bindings/roles are populated. Cutover requires:
 
 Only then may `Organization.account_type` stop driving role decisions and the
 FieldVendor string bridge be retired. No current read path changes merely
-because migration 342 or a nullable link exists.
+because migration 352 or a nullable link exists.
 
 The additive people/principal slice now consumes these reviewed Organization
 Party bindings; see `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`. Backfill and

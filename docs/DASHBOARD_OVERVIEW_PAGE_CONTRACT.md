@@ -102,24 +102,24 @@ Read gate: `require_any_permission("billing:invoice:read", "monitoring:read",
 (`show_financials` / `show_network` / `show_subscribers`). Visibility hides
 cards; it does not change the numbers (single-instance model).
 
-## Phased migration plan
+## Migration plan
 
 Incremental per the standard's "Migration of existing screens":
 
-- **Phase 0 (this contract).** Record current contract + gaps. ✅
-- **Phase 1 — highest-value SOT fix (next).** Route Revenue, AR aging, Online
+- **Contract and gap baseline.** Record the current contract and gaps. ✅
+- **Core dashboard read ownership.** Route Revenue, AR aging, Online
   customers, and Bandwidth through read owners (add `radius_sessions.online_
   summary` and `network_monitoring.bandwidth_summary`); surface real
   `refreshed_at`. Delete the dead `_build_dashboard_stats_summary` path and the
   duplicate recent-activity builder. No visual change beyond correct freshness.
-- **Phase 2 — owner-owned status.** Move attention-item severities, key-section
+- **Owner-provided status semantics.** Move attention-item severities, key-section
   health, and the network-health ring into owner-provided `status/reason/tone`;
   templates map tone→color only; de-duplicate the infra status vocabulary.
-- **Phase 3 — remaining raw reads.** ONT/PON/OLT/unconfigured/pending-orders/
+- **Remaining raw-read retirement.** ONT/PON/OLT/unconfigured/pending-orders/
   sync move behind network and provisioning/integration owners.
-- **Phase 4 — UX contract.** Cut to 4–6 KPIs, lead with the attention queue +
+- **Overview UX contract.** Cut to 4–6 KPIs, lead with the attention queue +
   one work surface, remove the module-directory grid, wire KPI→cohort links.
-- **Phase 5 — guardrail.** Architecture test failing if `web_admin_dashboard`
+- **Composition guardrail.** Architecture test failing if `web_admin_dashboard`
   issues ORM aggregates or derives domain status/eligibility; contract/browser
   tests for KPI-cohort parity and empty/stale/partial/unauthorized states.
 

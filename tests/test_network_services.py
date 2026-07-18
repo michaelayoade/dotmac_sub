@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.models.network import IPVersion
+from app.models.network import FiberSegment, FiberTerminationPoint, IPVersion
 from app.schemas.network import (
     FdhCabinetCreate,
     FiberSegmentCreate,
@@ -173,14 +173,13 @@ def test_create_fiber_splice_closure(db_session):
 
 
 def test_create_fiber_segment(db_session):
-    """Test creating a fiber segment."""
-    segment = network_service.fiber_segments.create(
-        db_session,
-        FiberSegmentCreate(
-            name="Segment-A-B",
-        ),
-    )
-    assert segment.name == "Segment-A-B"
+    """Direct fiber segment creation is retired."""
+    with pytest.raises(HTTPException) as exc_info:
+        network_service.fiber_segments.create(
+            db_session,
+            FiberSegmentCreate(name="Segment-A-B"),
+        )
+    assert exc_info.value.status_code == 410
 
 
 # =============================================================================
@@ -700,16 +699,16 @@ class TestFiberSpliceClosuresCRUD:
 
 
 class TestFiberSegmentsCRUD:
-    """Tests for FiberSegments CRUD operations."""
+    """Reviewed connectivity decisions are the only segment writer."""
 
     def test_get_segment(self, db_session):
         """Test getting fiber segment by ID."""
-        segment = network_service.fiber_segments.create(
-            db_session,
-            FiberSegmentCreate(name="Get Segment"),
-        )
-        fetched = network_service.fiber_segments.get(db_session, str(segment.id))
-        assert fetched.id == segment.id
+        segment = FiberSegment(name="Get Segment", is_active=False)
+        db_session.add(segment)
+        db_session.commit()
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.fiber_segments.get(db_session, str(segment.id))
+        assert exc_info.value.status_code == 404
 
     def test_get_segment_not_found(self, db_session):
         """Test 404 for non-existent segment."""
@@ -718,54 +717,49 @@ class TestFiberSegmentsCRUD:
         assert exc_info.value.status_code == 404
 
     def test_update_segment(self, db_session):
-        """Test updating fiber segment."""
-        segment = network_service.fiber_segments.create(
-            db_session,
-            FiberSegmentCreate(name="Update Segment"),
-        )
-        updated = network_service.fiber_segments.update(
-            db_session, str(segment.id), FiberSegmentUpdate(name="Updated Segment")
-        )
-        assert updated.name == "Updated Segment"
+        """Direct segment updates are retired."""
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.fiber_segments.update(
+                db_session,
+                str(uuid.uuid4()),
+                FiberSegmentUpdate(name="Updated Segment"),
+            )
+        assert exc_info.value.status_code == 410
 
     def test_update_segment_not_found(self, db_session):
-        """Test 404 for updating non-existent segment."""
+        """Retired direct updates do not expose an identity oracle."""
         with pytest.raises(HTTPException) as exc_info:
             network_service.fiber_segments.update(
                 db_session, str(uuid.uuid4()), FiberSegmentUpdate(name="test")
             )
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.status_code == 410
 
     def test_delete_segment_soft(self, db_session):
-        """Test soft deleting fiber segment (sets is_active=False)."""
-        segment = network_service.fiber_segments.create(
-            db_session,
-            FiberSegmentCreate(name="Delete Segment"),
-        )
-        segment_id = str(segment.id)
-        network_service.fiber_segments.delete(db_session, segment_id)
-        db_session.refresh(segment)
-        assert segment.is_active is False
-
-    def test_delete_segment_not_found(self, db_session):
-        """Test 404 for deleting non-existent segment."""
+        """Direct segment retirement is retired."""
         with pytest.raises(HTTPException) as exc_info:
             network_service.fiber_segments.delete(db_session, str(uuid.uuid4()))
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.status_code == 410
+
+    def test_delete_segment_not_found(self, db_session):
+        """Retired direct deletion does not expose an identity oracle."""
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.fiber_segments.delete(db_session, str(uuid.uuid4()))
+        assert exc_info.value.status_code == 410
 
     def test_list_segments(self, db_session):
         """Test listing fiber segments."""
-        network_service.fiber_segments.create(
-            db_session, FiberSegmentCreate(name="List Segment 1")
+        db_session.add_all(
+            [
+                FiberSegment(name="List Segment 1", is_active=False),
+                FiberSegment(name="List Segment 2", is_active=False),
+            ]
         )
-        network_service.fiber_segments.create(
-            db_session, FiberSegmentCreate(name="List Segment 2")
-        )
+        db_session.commit()
         segments = network_service.fiber_segments.list(
             db_session,
             segment_type=None,
             fiber_strand_id=None,
-            is_active=None,
+            is_active=False,
             order_by="created_at",
             order_dir="asc",
             limit=100,
@@ -1162,15 +1156,19 @@ class TestOntUnitsCRUD:
         assert len(onts) >= 2
 
 
+def _strand_segment(db_session, name: str) -> FiberSegment:
+    segment = FiberSegment(name=name, fiber_count=12, is_active=False)
+    db_session.add(segment)
+    db_session.commit()
+    return segment
+
+
 class TestFiberStrandsCRUD:
     """Tests for FiberStrands CRUD operations."""
 
     def test_create_fiber_strand(self, db_session):
         """Test creating a fiber strand."""
-        segment = network_service.fiber_segments.create(
-            db_session,
-            FiberSegmentCreate(name="Strand Segment"),
-        )
+        segment = _strand_segment(db_session, "Strand Segment")
         strand = network_service.fiber_strands.create(
             db_session,
             FiberStrandCreate(segment_id=segment.id, strand_number=1),
@@ -1180,10 +1178,7 @@ class TestFiberStrandsCRUD:
 
     def test_get_fiber_strand(self, db_session):
         """Test getting fiber strand by ID."""
-        segment = network_service.fiber_segments.create(
-            db_session,
-            FiberSegmentCreate(name="Get Strand Segment"),
-        )
+        segment = _strand_segment(db_session, "Get Strand Segment")
         strand = network_service.fiber_strands.create(
             db_session,
             FiberStrandCreate(segment_id=segment.id, strand_number=2),
@@ -1199,10 +1194,7 @@ class TestFiberStrandsCRUD:
 
     def test_update_fiber_strand(self, db_session):
         """Test updating fiber strand."""
-        segment = network_service.fiber_segments.create(
-            db_session,
-            FiberSegmentCreate(name="Update Strand Segment"),
-        )
+        segment = _strand_segment(db_session, "Update Strand Segment")
         strand = network_service.fiber_strands.create(
             db_session,
             FiberStrandCreate(segment_id=segment.id, strand_number=3),
@@ -1222,10 +1214,7 @@ class TestFiberStrandsCRUD:
 
     def test_delete_fiber_strand_soft(self, db_session):
         """Test soft deleting fiber strand."""
-        segment = network_service.fiber_segments.create(
-            db_session,
-            FiberSegmentCreate(name="Delete Strand Segment"),
-        )
+        segment = _strand_segment(db_session, "Delete Strand Segment")
         strand = network_service.fiber_strands.create(
             db_session,
             FiberStrandCreate(segment_id=segment.id, strand_number=5),
@@ -1243,10 +1232,7 @@ class TestFiberStrandsCRUD:
 
     def test_list_fiber_strands(self, db_session):
         """Test listing fiber strands."""
-        segment = network_service.fiber_segments.create(
-            db_session,
-            FiberSegmentCreate(name="List Strands Segment"),
-        )
+        segment = _strand_segment(db_session, "List Strands Segment")
         network_service.fiber_strands.create(
             db_session,
             FiberStrandCreate(segment_id=segment.id, strand_number=6),
@@ -1499,22 +1485,22 @@ class TestFiberSpliceTraysCRUD:
 
 
 class TestFiberTerminationPointsCRUD:
-    """Tests for FiberTerminationPoints CRUD operations."""
+    """Reviewed connectivity decisions are the only termination writer."""
 
     def test_create_fiber_termination_point(self, db_session):
-        """Test creating a fiber termination point."""
-        point = network_service.fiber_termination_points.create(
-            db_session,
-            FiberTerminationPointCreate(name="Term Point 1"),
-        )
-        assert point.name == "Term Point 1"
+        """Direct termination creation is retired."""
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.fiber_termination_points.create(
+                db_session,
+                FiberTerminationPointCreate(name="Term Point 1"),
+            )
+        assert exc_info.value.status_code == 410
 
     def test_get_fiber_termination_point(self, db_session):
         """Test getting fiber termination point by ID."""
-        point = network_service.fiber_termination_points.create(
-            db_session,
-            FiberTerminationPointCreate(name="Get Term Point"),
-        )
+        point = FiberTerminationPoint(name="Get Term Point", is_active=True)
+        db_session.add(point)
+        db_session.commit()
         fetched = network_service.fiber_termination_points.get(
             db_session, str(point.id)
         )
@@ -1528,16 +1514,13 @@ class TestFiberTerminationPointsCRUD:
 
     def test_update_fiber_termination_point(self, db_session):
         """Test updating fiber termination point."""
-        point = network_service.fiber_termination_points.create(
-            db_session,
-            FiberTerminationPointCreate(name="Update Term Point"),
-        )
-        updated = network_service.fiber_termination_points.update(
-            db_session,
-            str(point.id),
-            FiberTerminationPointUpdate(name="Updated Term Point"),
-        )
-        assert updated.name == "Updated Term Point"
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.fiber_termination_points.update(
+                db_session,
+                str(uuid.uuid4()),
+                FiberTerminationPointUpdate(name="Updated Term Point"),
+            )
+        assert exc_info.value.status_code == 410
 
     def test_update_fiber_termination_point_not_found(self, db_session):
         """Test 404 for updating non-existent fiber termination point."""
@@ -1545,19 +1528,15 @@ class TestFiberTerminationPointsCRUD:
             network_service.fiber_termination_points.update(
                 db_session, str(uuid.uuid4()), FiberTerminationPointUpdate(name="test")
             )
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.status_code == 410
 
     def test_delete_fiber_termination_point(self, db_session):
-        """Test deleting fiber termination point (hard delete)."""
-        point = network_service.fiber_termination_points.create(
-            db_session,
-            FiberTerminationPointCreate(name="Delete Term Point"),
-        )
-        point_id = str(point.id)
-        network_service.fiber_termination_points.delete(db_session, point_id)
+        """Direct termination retirement is retired."""
         with pytest.raises(HTTPException) as exc_info:
-            network_service.fiber_termination_points.get(db_session, point_id)
-        assert exc_info.value.status_code == 404
+            network_service.fiber_termination_points.delete(
+                db_session, str(uuid.uuid4())
+            )
+        assert exc_info.value.status_code == 410
 
     def test_delete_fiber_termination_point_not_found(self, db_session):
         """Test 404 for deleting non-existent fiber termination point."""
@@ -1565,22 +1544,21 @@ class TestFiberTerminationPointsCRUD:
             network_service.fiber_termination_points.delete(
                 db_session, str(uuid.uuid4())
             )
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.status_code == 410
 
     def test_list_fiber_termination_points(self, db_session):
         """Test listing fiber termination points."""
-        network_service.fiber_termination_points.create(
-            db_session,
-            FiberTerminationPointCreate(name="List Term Point 1"),
+        db_session.add_all(
+            [
+                FiberTerminationPoint(name="List Term Point 1", is_active=False),
+                FiberTerminationPoint(name="List Term Point 2", is_active=False),
+            ]
         )
-        network_service.fiber_termination_points.create(
-            db_session,
-            FiberTerminationPointCreate(name="List Term Point 2"),
-        )
+        db_session.commit()
         points = network_service.fiber_termination_points.list(
             db_session,
             endpoint_type=None,
-            is_active=None,
+            is_active=False,
             order_by="created_at",
             order_dir="asc",
             limit=100,

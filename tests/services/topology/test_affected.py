@@ -1,4 +1,4 @@
-"""affected_customers reverse traversal (Phase 4a, P4.1)."""
+"""Affected-customer reverse traversal from authoritative infrastructure."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from app.models.network import (
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
-    NetworkTopologyLink,
     PopSite,
 )
 from app.models.subscriber import Address, Subscriber
@@ -29,6 +28,7 @@ from app.services.topology.affected import (
     fdh_impact_rows,
     impact_breakdown,
 )
+from tests.services.topology.forwarding_test_support import declare_forwarding_edge
 
 
 def _node(db, name, mtype=None, mid=None, pop_site_id=None, role=DeviceRole.edge):
@@ -66,16 +66,16 @@ def _sub(
     return sub
 
 
-def _link(db, a, b):
-    db.add(
-        NetworkTopologyLink(
-            source_device_id=a.id,
-            target_device_id=b.id,
-            source="lldp_neighbor",
-            is_active=True,
-        )
+def _link(db, upstream, downstream):
+    declare_forwarding_edge(
+        db,
+        downstream,
+        upstream,
+        downstream_role=(
+            "access" if downstream.matched_device_type is not None else "aggregation"
+        ),
+        upstream_role=("core" if upstream.role == DeviceRole.core else "aggregation"),
     )
-    db.flush()
 
 
 def test_nas_node_affected(db_session, catalog_offer):
@@ -135,8 +135,8 @@ def test_fdh_affected_via_splitter_port_assignments(db_session, catalog_offer):
     other_fdh = FdhCabinet(name="FDH Beta", code="FDH-B")
     db_session.add_all([fdh, other_fdh])
     db_session.flush()
-    splitter = Splitter(name="SPL-A", fdh_id=fdh.id)
-    other_splitter = Splitter(name="SPL-B", fdh_id=other_fdh.id)
+    splitter = Splitter(name="SPL-A", fdh_id=fdh.id, splitter_ratio="1:8")
+    other_splitter = Splitter(name="SPL-B", fdh_id=other_fdh.id, splitter_ratio="1:8")
     db_session.add_all([splitter, other_splitter])
     db_session.flush()
     ports = [
@@ -180,7 +180,7 @@ def test_fdh_affected_via_direct_ont_splitter_reference(
     db_session, subscriber, catalog_offer
 ):
     fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
-    splitter = Splitter(name="SPL-A", fdh=fdh)
+    splitter = Splitter(name="SPL-A", fdh=fdh, splitter_ratio="1:8")
     db_session.add_all([fdh, splitter])
     db_session.flush()
     ont = OntUnit(serial_number="SN-FDH", splitter_id=splitter.id)
@@ -201,7 +201,7 @@ def test_fdh_impact_rows_include_customer_and_plant_details(
     db_session, subscriber, catalog_offer
 ):
     fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
-    splitter = Splitter(name="SPL-A", fdh=fdh)
+    splitter = Splitter(name="SPL-A", fdh=fdh, splitter_ratio="1:8")
     olt = OLTDevice(name="OLT Alpha", hostname="olt-alpha", mgmt_ip="10.0.0.8")
     db_session.add_all([fdh, splitter, olt])
     db_session.flush()

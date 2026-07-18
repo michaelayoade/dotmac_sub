@@ -1,8 +1,8 @@
-"""Canonical fiber-topology integrity and cutover readiness owner.
+"""Canonical fiber-topology integrity, trace, and fault-evidence owner.
 
-The service is deliberately read-only in the first cutover slice.  It names the
-authoritative edges, measures legacy/fallback drift, and exposes the gates that
-must pass before imported map geometry can become operational topology.
+The service is read-only. It names authoritative edges, measures legacy or
+fallback drift, and exposes exact evidence for the separate versioned numeric
+cutover-readiness owner.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.fiber_access_attachment import SplitterCascadeLink
 from app.models.network import (
     FdhCabinet,
     FiberAccessPoint,
@@ -45,6 +46,11 @@ from app.models.network import (
 )
 from app.models.network_monitoring import NetworkDevice
 from app.models.subscriber import Subscriber
+from app.services.network.fiber_splitter_topology import (
+    FiberSplitterTopologyError,
+    resolve_splitter_chain,
+    traceable_splitter_pairs,
+)
 from app.services.network.identity import identity_for_ont_assignment
 
 
@@ -59,6 +65,7 @@ class FiberTopologyInventory:
     active_splitter_ports: int
     active_splitter_port_assignments: int
     active_pon_splitter_links: int
+    active_splitter_cascade_links: int
     active_access_points: int
     active_splice_closures: int
     splice_trays: int
@@ -96,11 +103,22 @@ class PassivePlantIntegrity:
     pon_links_to_non_input_port: int
     ont_links_to_output_port: int
     ont_links_to_non_output_port: int
+    cascade_links_to_directed_ports: int
+    cascade_links_to_invalid_ports: int
+    cascade_links_in_cycles: int
+    cascade_port_role_conflicts: int
+    cascade_splitters_missing_loss: int
+    cascade_splitters_with_ambiguous_inputs: int
+    cascade_downstreams_with_multiple_upstreams: int
+    cascade_downstreams_with_pon_roots: int
     strands_with_both_endpoints: int
     terminations_with_asset_reference: int
     segments_with_both_endpoints: int
     segments_with_route_geometry: int
     connected_segments_with_geometry: int
+    segments_with_declared_capacity: int
+    segments_with_complete_core_inventory: int
+    splitters_with_valid_declared_capacity: int
 
 
 @dataclass(frozen=True)
@@ -125,7 +143,8 @@ class FiberTopologyAudit:
         return not any(finding.severity == "blocker" for finding in self.findings)
 
     @property
-    def customer_trace_cutover_ready(self) -> bool:
+    def customer_trace_evidence_complete(self) -> bool:
+        """Whether the exhaustive active-fiber trace evidence is complete."""
         coverage = self.trace_coverage
         return bool(
             self.aggregate_preconditions_ready
@@ -142,7 +161,9 @@ class FiberTopologyAudit:
                 self.trace_coverage.coverage_ratio
             )
         payload["aggregate_preconditions_ready"] = self.aggregate_preconditions_ready
-        payload["customer_trace_cutover_ready"] = self.customer_trace_cutover_ready
+        payload["customer_trace_evidence_complete"] = (
+            self.customer_trace_evidence_complete
+        )
         return payload
 
 
@@ -156,6 +177,9 @@ class FiberTraceHop:
     evidence: str
     validation: str = "validated"
     operational_state: str | None = None
+    splitter_stage: int | None = None
+    insertion_loss_db: str | None = None
+    cumulative_splitter_loss_db: str | None = None
 
 
 @dataclass(frozen=True)
@@ -702,38 +726,28 @@ def trace_fiber_subscription(
             )
         )
         return finish()
-    if output_port.splitter_id != input_port.splitter_id:
+    try:
+        splitter_chain = resolve_splitter_chain(db, pon.id, output_port.splitter_id)
+    except FiberSplitterTopologyError as exc:
         gaps.append(
             FiberTraceGap(
-                "splitter_identity_conflict",
-                "The PON input and ONT output belong to different splitters.",
+                "splitter_chain_invalid",
+                f"The exact reviewed splitter chain is invalid: {exc}",
                 "pon_port",
                 pon.id,
             )
         )
         return finish()
-    splitter = db.get(Splitter, input_port.splitter_id)
-    if splitter is None or not splitter.is_active:
+    if splitter_chain.stages[0].input_port_id != input_port.id:
         gaps.append(
             FiberTraceGap(
-                "active_splitter_missing",
-                "The validated ports do not resolve to an active splitter.",
+                "splitter_root_input_conflict",
+                "The rooted splitter chain disagrees with the PON input edge.",
                 "pon_port",
                 pon.id,
             )
         )
         return finish()
-    fdh = db.get(FdhCabinet, splitter.fdh_id) if splitter.fdh_id else None
-    if fdh is None or not fdh.is_active:
-        gaps.append(
-            FiberTraceGap(
-                "active_fdh_missing",
-                "The splitter is not attached to an active FDH/FAT cabinet.",
-                "splitter",
-                splitter.id,
-            )
-        )
-        return finish(electronic_complete=True)
 
     feeder_path = _validated_segment_path(
         db,
@@ -763,32 +777,160 @@ def trace_fiber_subscription(
         )
     else:
         hops.extend(feeder_path.hops)
+    distribution_paths_complete = True
+    for stage in splitter_chain.stages:
+        stage_splitter = db.get(Splitter, stage.splitter_id)
+        stage_input = db.get(SplitterPort, stage.input_port_id)
+        if stage_splitter is None or stage_input is None:
+            gaps.append(
+                FiberTraceGap(
+                    "active_splitter_missing",
+                    "The rooted chain does not resolve to active splitter inventory.",
+                    "pon_port",
+                    pon.id,
+                )
+            )
+            return finish()
 
-    hops.extend(
-        (
-            FiberTraceHop(
-                kind="fdh",
-                label=fdh.code or fdh.name,
-                asset_id=fdh.id,
-                evidence="Splitter.fdh_id resolves to an active reviewed cabinet",
-            ),
-            FiberTraceHop(
-                kind="splitter",
-                label=splitter.name,
-                asset_id=splitter.id,
-                evidence="PON input and ONT output resolve to the same active splitter",
-            ),
-            FiberTraceHop(
-                kind="splitter_input",
-                label=f"Input {input_port.port_number}",
-                asset_id=input_port.id,
-                evidence="active PonPortSplitterLink to an input port",
-            ),
-            FiberTraceHop(
-                kind="splitter_output",
-                label=f"Output {output_port.port_number}",
-                asset_id=output_port.id,
-                evidence="OntUnit.splitter_port_id to an output port",
+        if stage.incoming_cascade_link_id is not None:
+            upstream_output = db.get(SplitterPort, stage.upstream_output_port_id)
+            cascade_link = db.get(SplitterCascadeLink, stage.incoming_cascade_link_id)
+            if upstream_output is None or cascade_link is None:
+                gaps.append(
+                    FiberTraceGap(
+                        "splitter_cascade_edge_missing",
+                        "The reviewed cascade edge no longer resolves exactly.",
+                        "splitter",
+                        splitter_chain.stages[stage.stage - 2].splitter_id,
+                    )
+                )
+                return finish()
+            hops.append(
+                FiberTraceHop(
+                    kind="splitter_output",
+                    label=f"Output {upstream_output.port_number}",
+                    asset_id=upstream_output.id,
+                    evidence="active reviewed output endpoint of a splitter cascade",
+                    splitter_stage=stage.stage - 1,
+                )
+            )
+            distribution_path = _validated_segment_path(
+                db,
+                start_type=ODNEndpointType.splitter_port,
+                start_ref_id=upstream_output.id,
+                end_type=ODNEndpointType.splitter_port,
+                end_ref_id=stage_input.id,
+                segment_kind="distribution_segment",
+            )
+            if distribution_path.error_code:
+                distribution_paths_complete = False
+                gaps.append(
+                    FiberTraceGap(
+                        distribution_path.error_code.replace(
+                            "fiber_", "distribution_", 1
+                        ),
+                        distribution_path.error_message
+                        or "Validated cascade distribution path is incomplete.",
+                        "splitter_output",
+                        upstream_output.id,
+                    )
+                )
+                hops.append(
+                    FiberTraceHop(
+                        kind="gap",
+                        label="Cascade distribution path requires review",
+                        asset_id=None,
+                        evidence=gaps[-1].message,
+                        validation="gap",
+                    )
+                )
+            else:
+                hops.extend(distribution_path.hops)
+            hops.append(
+                FiberTraceHop(
+                    kind="splitter_cascade",
+                    label=f"Cascade to stage {stage.stage}",
+                    asset_id=cascade_link.id,
+                    evidence=(
+                        "active reviewed SplitterCascadeLink between exact "
+                        "output and input ports"
+                    ),
+                    splitter_stage=stage.stage,
+                    cumulative_splitter_loss_db=(
+                        str(stage.cumulative_loss_db)
+                        if stage.cumulative_loss_db is not None
+                        else None
+                    ),
+                )
+            )
+
+        fdh = (
+            db.get(FdhCabinet, stage_splitter.fdh_id) if stage_splitter.fdh_id else None
+        )
+        if fdh is None or not fdh.is_active:
+            gaps.append(
+                FiberTraceGap(
+                    "active_fdh_missing",
+                    "A splitter stage is not attached to an active FDH/FAT cabinet.",
+                    "splitter",
+                    stage_splitter.id,
+                )
+            )
+            return finish(electronic_complete=True)
+        loss = (
+            str(stage.insertion_loss_db)
+            if stage.insertion_loss_db is not None
+            else None
+        )
+        cumulative_loss = (
+            str(stage.cumulative_loss_db)
+            if stage.cumulative_loss_db is not None
+            else None
+        )
+        hops.extend(
+            (
+                FiberTraceHop(
+                    kind="fdh",
+                    label=fdh.code or fdh.name,
+                    asset_id=fdh.id,
+                    evidence=("Splitter.fdh_id resolves to an active reviewed cabinet"),
+                    splitter_stage=stage.stage,
+                ),
+                FiberTraceHop(
+                    kind="splitter",
+                    label=stage_splitter.name,
+                    asset_id=stage_splitter.id,
+                    evidence="exact rooted splitter stage",
+                    splitter_stage=stage.stage,
+                    insertion_loss_db=loss,
+                    cumulative_splitter_loss_db=cumulative_loss,
+                ),
+                FiberTraceHop(
+                    kind="splitter_input",
+                    label=f"Input {stage_input.port_number}",
+                    asset_id=stage_input.id,
+                    evidence=(
+                        "active PON root input"
+                        if stage.stage == 1
+                        else "active reviewed downstream cascade input"
+                    ),
+                    splitter_stage=stage.stage,
+                    cumulative_splitter_loss_db=cumulative_loss,
+                ),
+            )
+        )
+
+    hops.append(
+        FiberTraceHop(
+            kind="splitter_output",
+            label=f"Output {output_port.port_number}",
+            asset_id=output_port.id,
+            evidence="OntUnit.splitter_port_id to an exact leaf output port",
+            splitter_stage=splitter_chain.leaf.stage,
+            cumulative_splitter_loss_db=(
+                str(splitter_chain.leaf.cumulative_loss_db)
+                if splitter_chain.leaf.cumulative_loss_db is not None
+                else None
             ),
         )
     )
@@ -857,7 +999,9 @@ def trace_fiber_subscription(
     return finish(
         electronic_complete=True,
         physical_complete=(
-            feeder_path.error_code is None and drop_path.error_code is None
+            feeder_path.error_code is None
+            and distribution_paths_complete
+            and drop_path.error_code is None
         ),
     )
 
@@ -984,7 +1128,7 @@ def localize_fiber_fault(
     """Rank bounded candidate scopes from a validated trace and fresh OLT facts.
 
     The result is diagnostic evidence. It does not create an outage, change
-    topology, or claim which individual passive segment has failed.
+    topology, or claim a nominated passive segment has failed.
     """
     evaluated_at = _as_utc(now) if now is not None else datetime.now(UTC)
     assert evaluated_at is not None
@@ -1055,6 +1199,7 @@ def localize_fiber_fault(
             OntUnit.pon_port_id,
             SplitterPort.splitter_id,
             Splitter.fdh_id,
+            Subscription.id,
         )
         .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
         .join(Subscription, Subscription.id == OntAssignment.subscription_id)
@@ -1123,6 +1268,81 @@ def localize_fiber_fault(
         return "low"
 
     candidates: list[FiberFaultCandidate] = []
+
+    def segment_ids(candidate_trace: FiberSubscriptionTrace) -> tuple[object, ...]:
+        if not candidate_trace.customer_trace_complete:
+            return ()
+        return tuple(
+            hop.asset_id
+            for hop in candidate_trace.hops
+            if hop.asset_id is not None and hop.kind.endswith("segment")
+        )
+
+    selected_pon_rows = [row for row in cohort_rows if row[4] == ont.pon_port_id]
+    fresh_selected_pon_rows = [
+        row
+        for row in selected_pon_rows
+        if (seen := _as_utc(row[2])) is not None and seen >= cutoff
+    ]
+    # Keep correlation bounded to one PON cohort. Above the bound, the broader
+    # PON candidate still applies and no partial exact-segment claim is emitted.
+    if len(fresh_selected_pon_rows) <= 256:
+        offline_subscription_ids = sorted(
+            {
+                row[7]
+                for row in fresh_selected_pon_rows
+                if row[1] != OnuOnlineStatus.online and row[7] is not None
+            },
+            key=str,
+        )
+        online_subscription_ids = sorted(
+            {
+                row[7]
+                for row in fresh_selected_pon_rows
+                if row[1] == OnuOnlineStatus.online and row[7] is not None
+            },
+            key=str,
+        )
+        offline_paths = [
+            path
+            for candidate_id in offline_subscription_ids
+            if (path := segment_ids(trace_fiber_subscription(db, candidate_id)))
+        ]
+        online_paths = [
+            path
+            for candidate_id in online_subscription_ids
+            if (path := segment_ids(trace_fiber_subscription(db, candidate_id)))
+        ]
+        if len(offline_paths) >= 2 and online_paths:
+            shared_offline = set(offline_paths[0]).intersection(
+                *(set(path) for path in offline_paths[1:])
+            )
+            used_by_online = set().union(*(set(path) for path in online_paths))
+            isolated = shared_offline - used_by_online
+            selected_order = segment_ids(trace)
+            deepest = next(
+                (
+                    asset_id
+                    for asset_id in reversed(selected_order)
+                    if asset_id in isolated
+                ),
+                None,
+            )
+            if deepest is not None:
+                candidates.append(
+                    FiberFaultCandidate(
+                        "shared_segment_candidate",
+                        "Smallest validated cable branch shared by fresh offline ONTs",
+                        (deepest,),
+                        100,
+                        "high",
+                        pon_evidence,
+                        "This exact segment is shared by every fresh offline trace "
+                        "in the evaluated PON cohort and absent from every complete "
+                        "fresh online comparison trace. It is a field-verification "
+                        "candidate, not a declaration that the cable has failed.",
+                    )
+                )
     fresh_pon_ids = {
         row[4]
         for row in cohort_rows
@@ -1264,7 +1484,7 @@ def audit_fiber_trace_coverage(
     """Exhaustively evaluate the active-fiber cohort unless a limit is explicit.
 
     This is an operator audit, not a request-path helper. A limited run is useful
-    for shadow sampling but can never satisfy the cutover gate.
+    for shadow sampling but can never establish complete cohort evidence.
     """
     subscription_ids = list(
         db.scalars(
@@ -1312,6 +1532,44 @@ def _active_fiber_subscription_filter():
         Subscription.status == SubscriptionStatus.active,
         CatalogOffer.access_type == AccessType.fiber,
     )
+
+
+def _subscriptions_traceable_to_splitter(db: Session, active_fiber) -> int:
+    output_port = aliased(SplitterPort)
+    rows = db.execute(
+        select(
+            active_fiber.c.id,
+            OntUnit.pon_port_id,
+            output_port.splitter_id,
+        )
+        .select_from(active_fiber)
+        .join(
+            OntAssignment,
+            (OntAssignment.subscription_id == active_fiber.c.id)
+            & OntAssignment.active.is_(True),
+        )
+        .join(
+            OntUnit,
+            (OntUnit.id == OntAssignment.ont_unit_id) & OntUnit.is_active.is_(True),
+        )
+        .join(
+            output_port,
+            (output_port.id == OntUnit.splitter_port_id)
+            & output_port.is_active.is_(True)
+            & (output_port.port_type == SplitterPortType.output),
+        )
+    ).all()
+    subscriptions_by_pair: dict[tuple[uuid.UUID, uuid.UUID], set[uuid.UUID]] = {}
+    for subscription_id, pon_port_id, splitter_id in rows:
+        if pon_port_id is None:
+            continue
+        subscriptions_by_pair.setdefault((pon_port_id, splitter_id), set()).add(
+            subscription_id
+        )
+    traceable: set[uuid.UUID] = set()
+    for pair in traceable_splitter_pairs(db, subscriptions_by_pair):
+        traceable.update(subscriptions_by_pair[pair])
+    return len(traceable)
 
 
 def _electronic_integrity(db: Session) -> ElectronicPathIntegrity:
@@ -1369,42 +1627,8 @@ def _electronic_integrity(db: Session) -> ElectronicPathIntegrity:
 
     assignment_pon = aliased(PonPort)
     assignment_ont = aliased(OntUnit)
-    output_port = aliased(SplitterPort)
-    input_port = aliased(SplitterPort)
-
-    subscriptions_traceable_to_splitter = int(
-        db.scalar(
-            select(func.count(func.distinct(active_fiber.c.id)))
-            .select_from(active_fiber)
-            .join(
-                OntAssignment,
-                (OntAssignment.subscription_id == active_fiber.c.id)
-                & OntAssignment.active.is_(True),
-            )
-            .join(
-                OntUnit,
-                (OntUnit.id == OntAssignment.ont_unit_id) & OntUnit.is_active.is_(True),
-            )
-            .join(
-                output_port,
-                (output_port.id == OntUnit.splitter_port_id)
-                & output_port.is_active.is_(True)
-                & (output_port.port_type == SplitterPortType.output),
-            )
-            .join(
-                PonPortSplitterLink,
-                (PonPortSplitterLink.pon_port_id == OntUnit.pon_port_id)
-                & PonPortSplitterLink.active.is_(True),
-            )
-            .join(
-                input_port,
-                (input_port.id == PonPortSplitterLink.splitter_port_id)
-                & input_port.is_active.is_(True)
-                & (input_port.port_type == SplitterPortType.input)
-                & (input_port.splitter_id == output_port.splitter_id),
-            )
-        )
-        or 0
+    subscriptions_traceable_to_splitter = _subscriptions_traceable_to_splitter(
+        db, active_fiber
     )
 
     active_olt_nodes = (
@@ -1547,7 +1771,165 @@ def _electronic_integrity(db: Session) -> ElectronicPathIntegrity:
     )
 
 
+@dataclass(frozen=True)
+class _CascadeIntegrityCounts:
+    directed: int
+    invalid: int
+    cycles: int
+    role_conflicts: int
+    missing_loss: int
+    ambiguous_inputs: int
+    multiple_upstreams: int
+    downstream_pon_roots: int
+
+
+def _cascade_integrity(db: Session) -> _CascadeIntegrityCounts:
+    links = list(
+        db.scalars(
+            select(SplitterCascadeLink).where(SplitterCascadeLink.active.is_(True))
+        )
+    )
+    ports = {port.id: port for port in db.scalars(select(SplitterPort)).all()}
+    splitters = {
+        splitter.id: splitter for splitter in db.scalars(select(Splitter)).all()
+    }
+    valid_edges: list[tuple[SplitterCascadeLink, SplitterPort, SplitterPort]] = []
+    participants: set[uuid.UUID] = set()
+    for link in links:
+        output = ports.get(link.upstream_output_port_id)
+        input_port = ports.get(link.downstream_input_port_id)
+        if (
+            output is None
+            or input_port is None
+            or not output.is_active
+            or not input_port.is_active
+            or output.port_type != SplitterPortType.output
+            or input_port.port_type != SplitterPortType.input
+            or output.splitter_id == input_port.splitter_id
+            or output.splitter_id not in splitters
+            or input_port.splitter_id not in splitters
+            or not splitters[output.splitter_id].is_active
+            or not splitters[input_port.splitter_id].is_active
+        ):
+            continue
+        valid_edges.append((link, output, input_port))
+        participants.update((output.splitter_id, input_port.splitter_id))
+
+    adjacency: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for _link, output, input_port in valid_edges:
+        adjacency.setdefault(output.splitter_id, set()).add(input_port.splitter_id)
+
+    def reaches(start_id: uuid.UUID, target_id: uuid.UUID) -> bool:
+        pending = [start_id]
+        seen: set[uuid.UUID] = set()
+        while pending:
+            candidate_id = pending.pop()
+            if candidate_id == target_id:
+                return True
+            if candidate_id in seen:
+                continue
+            seen.add(candidate_id)
+            pending.extend(adjacency.get(candidate_id, ()))
+        return False
+
+    cycle_links = sum(
+        1
+        for _link, output, input_port in valid_edges
+        if reaches(input_port.splitter_id, output.splitter_id)
+    )
+    missing_loss = sum(
+        1
+        for splitter_id in participants
+        if splitters[splitter_id].insertion_loss_db is None
+    )
+    ambiguous_inputs = sum(
+        1 for splitter_id in participants if splitters[splitter_id].input_ports != 1
+    )
+    downstream_counts: dict[uuid.UUID, int] = {}
+    for _link, _output, input_port in valid_edges:
+        downstream_counts[input_port.splitter_id] = (
+            downstream_counts.get(input_port.splitter_id, 0) + 1
+        )
+    active_ont_output_ids = set(
+        db.scalars(
+            select(OntUnit.splitter_port_id).where(
+                OntUnit.is_active.is_(True),
+                OntUnit.splitter_port_id.is_not(None),
+            )
+        ).all()
+    )
+    active_pon_input_ids = set(
+        db.scalars(
+            select(PonPortSplitterLink.splitter_port_id).where(
+                PonPortSplitterLink.active.is_(True)
+            )
+        ).all()
+    )
+    role_conflicts = sum(
+        1
+        for _link, output, input_port in valid_edges
+        if output.id in active_ont_output_ids or input_port.id in active_pon_input_ids
+    )
+    pon_root_splitters = {
+        ports[port_id].splitter_id
+        for port_id in active_pon_input_ids
+        if port_id in ports
+    }
+    downstream_pon_roots = sum(
+        1 for splitter_id in downstream_counts if splitter_id in pon_root_splitters
+    )
+    return _CascadeIntegrityCounts(
+        directed=len(valid_edges),
+        invalid=len(links) - len(valid_edges),
+        cycles=cycle_links,
+        role_conflicts=role_conflicts,
+        missing_loss=missing_loss,
+        ambiguous_inputs=ambiguous_inputs,
+        multiple_upstreams=sum(1 for count in downstream_counts.values() if count > 1),
+        downstream_pon_roots=downstream_pon_roots,
+    )
+
+
 def _passive_integrity(db: Session) -> PassivePlantIntegrity:
+    cascade = _cascade_integrity(db)
+    active_segments = list(
+        db.scalars(select(FiberSegment).where(FiberSegment.is_active.is_(True))).all()
+    )
+    active_splitters = list(
+        db.scalars(select(Splitter).where(Splitter.is_active.is_(True))).all()
+    )
+    active_port_counts = {
+        (splitter_id, port_type): int(count)
+        for splitter_id, port_type, count in db.execute(
+            select(
+                SplitterPort.splitter_id,
+                SplitterPort.port_type,
+                func.count(SplitterPort.id),
+            )
+            .where(SplitterPort.is_active.is_(True))
+            .group_by(SplitterPort.splitter_id, SplitterPort.port_type)
+        ).all()
+    }
+    strand_counts = {
+        segment_id: int(count)
+        for segment_id, count in db.execute(
+            select(FiberStrand.segment_id, func.count(FiberStrand.id))
+            .where(FiberStrand.segment_id.is_not(None))
+            .group_by(FiberStrand.segment_id)
+        ).all()
+        if segment_id is not None
+    }
+    strand_numbers: dict[uuid.UUID, set[int]] = {
+        segment.id: set() for segment in active_segments
+    }
+    if strand_numbers:
+        for segment_id, strand_number in db.execute(
+            select(FiberStrand.segment_id, FiberStrand.strand_number).where(
+                FiberStrand.segment_id.in_(strand_numbers)
+            )
+        ).all():
+            if segment_id is not None:
+                strand_numbers[segment_id].add(strand_number)
     return PassivePlantIntegrity(
         fdh_with_coordinates=_count(
             db,
@@ -1618,6 +2000,14 @@ def _passive_integrity(db: Session) -> PassivePlantIntegrity:
             )
             or 0
         ),
+        cascade_links_to_directed_ports=cascade.directed,
+        cascade_links_to_invalid_ports=cascade.invalid,
+        cascade_links_in_cycles=cascade.cycles,
+        cascade_port_role_conflicts=cascade.role_conflicts,
+        cascade_splitters_missing_loss=cascade.missing_loss,
+        cascade_splitters_with_ambiguous_inputs=cascade.ambiguous_inputs,
+        cascade_downstreams_with_multiple_upstreams=cascade.multiple_upstreams,
+        cascade_downstreams_with_pon_roots=cascade.downstream_pon_roots,
         strands_with_both_endpoints=_count(
             db,
             FiberStrand,
@@ -1653,6 +2043,30 @@ def _passive_integrity(db: Session) -> PassivePlantIntegrity:
             FiberSegment.from_point_id.is_not(None),
             FiberSegment.to_point_id.is_not(None),
             FiberSegment.route_geom.is_not(None),
+        ),
+        segments_with_declared_capacity=sum(
+            1
+            for segment in active_segments
+            if segment.fiber_count is not None and segment.fiber_count > 0
+        ),
+        segments_with_complete_core_inventory=sum(
+            1
+            for segment in active_segments
+            if segment.fiber_count is not None
+            and strand_counts.get(segment.id, 0) == segment.fiber_count
+            and strand_numbers[segment.id] == set(range(1, segment.fiber_count + 1))
+        ),
+        splitters_with_valid_declared_capacity=sum(
+            1
+            for splitter in active_splitters
+            if splitter.input_ports > 0
+            and splitter.output_ports > 0
+            and splitter.splitter_ratio
+            == f"{splitter.input_ports}:{splitter.output_ports}"
+            and active_port_counts.get((splitter.id, SplitterPortType.input), 0)
+            <= splitter.input_ports
+            and active_port_counts.get((splitter.id, SplitterPortType.output), 0)
+            <= splitter.output_ports
         ),
     )
 
@@ -1756,6 +2170,49 @@ def _findings(
         "An ONT-to-splitter edge terminates on a non-output splitter port.",
     )
     add(
+        "splitter_cascade_invalid_ports",
+        "blocker",
+        passive.cascade_links_to_invalid_ports,
+        "A cascade edge must connect one active splitter output to one active "
+        "downstream splitter input.",
+    )
+    add(
+        "splitter_cascade_cycle",
+        "blocker",
+        passive.cascade_links_in_cycles,
+        "A directed splitter cascade contains a cycle and cannot be traced.",
+    )
+    add(
+        "splitter_cascade_loss_missing",
+        "blocker",
+        passive.cascade_splitters_missing_loss,
+        "Every splitter participating in a cascade needs explicit insertion loss.",
+    )
+    add(
+        "splitter_cascade_port_role_conflict",
+        "blocker",
+        passive.cascade_port_role_conflicts,
+        "A cascade port cannot also be an active PON input or ONT output.",
+    )
+    add(
+        "splitter_cascade_ambiguous_inputs",
+        "blocker",
+        passive.cascade_splitters_with_ambiguous_inputs,
+        "Cascade traversal requires explicit single-input splitter inventory.",
+    )
+    add(
+        "splitter_cascade_multiple_upstreams",
+        "blocker",
+        passive.cascade_downstreams_with_multiple_upstreams,
+        "A downstream splitter has more than one active upstream cascade.",
+    )
+    add(
+        "splitter_cascade_downstream_pon_root",
+        "blocker",
+        passive.cascade_downstreams_with_pon_roots,
+        "A downstream cascaded splitter cannot also have an active PON root.",
+    )
+    add(
         "active_olt_without_pop_site",
         "blocker",
         max(0, inventory.active_olts - electronic.active_olts_with_pop_site),
@@ -1772,6 +2229,15 @@ def _findings(
         "blocker",
         max(0, inventory.active_splitters - passive.splitters_with_fdh),
         "An active splitter is not attached to an FDH/FAT asset.",
+    )
+    add(
+        "splitter_capacity_invalid",
+        "blocker",
+        max(
+            0,
+            inventory.active_splitters - passive.splitters_with_valid_declared_capacity,
+        ),
+        "Every active splitter needs an exact input:output capacity declaration.",
     )
 
     if electronic.active_fiber_subscriptions and not inventory.active_fdh_cabinets:
@@ -1794,6 +2260,18 @@ def _findings(
             "blocker",
             inventory.active_segments - passive.connected_segments_with_geometry,
             "Every operational segment needs geometry and two referenced termination points.",
+        )
+        add(
+            "segment_capacity_missing",
+            "blocker",
+            inventory.active_segments - passive.segments_with_declared_capacity,
+            "Every operational cable needs a positive declared fiber_count.",
+        )
+        add(
+            "segment_core_inventory_incomplete",
+            "blocker",
+            inventory.active_segments - passive.segments_with_complete_core_inventory,
+            "Every operational cable needs exact numbered cores matching fiber_count.",
         )
 
     return tuple(findings)
@@ -1825,6 +2303,9 @@ def audit_fiber_topology(
         ),
         active_pon_splitter_links=_count(
             db, PonPortSplitterLink, PonPortSplitterLink.active.is_(True)
+        ),
+        active_splitter_cascade_links=_count(
+            db, SplitterCascadeLink, SplitterCascadeLink.active.is_(True)
         ),
         active_access_points=_count(
             db, FiberAccessPoint, FiberAccessPoint.is_active.is_(True)

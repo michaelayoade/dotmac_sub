@@ -4,6 +4,7 @@ import logging
 from uuid import UUID
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -17,7 +18,9 @@ from app.models.network import (
 from app.schemas.network import (
     FdhCabinetUpdate,
     PonPortSplitterLinkUpdate,
+    SplitterCreate,
     SplitterPortAssignmentUpdate,
+    SplitterPortCreate,
     SplitterPortUpdate,
     SplitterUpdate,
 )
@@ -28,6 +31,12 @@ from app.services.common import (
     validate_enum,
 )
 from app.services.crud import CRUDManager
+from app.services.network.fiber_plant_integrity import (
+    FiberPlantIntegrityError,
+    splitter_capacity,
+    validate_splitter_capacity,
+    validate_splitter_port_capacity,
+)
 from app.services.query_builders import (
     apply_active_state,
     apply_optional_equals,
@@ -86,6 +95,28 @@ class Splitters(CRUDManager[Splitter]):
     soft_delete_field = "is_active"
     soft_delete_value = False
 
+    @classmethod
+    def create(cls, db: Session, payload, *, commit: bool = True):
+        try:
+            normalized = SplitterCreate.model_validate(
+                cls._payload_dict(payload, exclude_unset=False)
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        splitter = Splitter(**normalized.model_dump())
+        try:
+            validate_splitter_capacity(db, splitter)
+        except FiberPlantIntegrityError as exc:
+            db.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        db.add(splitter)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        db.refresh(splitter)
+        return splitter
+
     @staticmethod
     def list(
         db: Session,
@@ -119,12 +150,31 @@ class Splitters(CRUDManager[Splitter]):
         return super().get(db, splitter_id)
 
     @classmethod
-    def update(cls, db: Session, splitter_id: str, payload: SplitterUpdate):
-        return super().update(db, splitter_id, payload)
+    def update(
+        cls,
+        db: Session,
+        splitter_id: str,
+        payload: SplitterUpdate | dict,
+        *,
+        commit: bool = True,
+    ):
+        splitter = cls._get_or_404(db, splitter_id)
+        for key, value in cls._payload_dict(payload, exclude_unset=True).items():
+            setattr(splitter, key, value)
+        try:
+            validate_splitter_capacity(db, splitter)
+        except FiberPlantIntegrityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        db.refresh(splitter)
+        return splitter
 
     @classmethod
-    def delete(cls, db: Session, splitter_id: str):
-        return super().delete(db, splitter_id)
+    def delete(cls, db: Session, splitter_id: str, *, commit: bool = True):
+        return super().delete(db, splitter_id, commit=commit)
 
 
 class SplitterPorts(CRUDManager[SplitterPort]):
@@ -132,6 +182,27 @@ class SplitterPorts(CRUDManager[SplitterPort]):
     not_found_detail = "Splitter port not found"
     soft_delete_field = "is_active"
     soft_delete_value = False
+
+    @classmethod
+    def create(cls, db: Session, payload, *, commit: bool = True):
+        try:
+            normalized = SplitterPortCreate.model_validate(
+                cls._payload_dict(payload, exclude_unset=False)
+            )
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        port = SplitterPort(**normalized.model_dump())
+        try:
+            validate_splitter_port_capacity(db, port)
+        except FiberPlantIntegrityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        db.add(port)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        db.refresh(port)
+        return port
 
     @staticmethod
     def list(
@@ -170,12 +241,32 @@ class SplitterPorts(CRUDManager[SplitterPort]):
         return super().get(db, port_id)
 
     @classmethod
-    def update(cls, db: Session, port_id: str, payload: SplitterPortUpdate):
-        return super().update(db, port_id, payload)
+    def update(
+        cls,
+        db: Session,
+        port_id: str,
+        payload: SplitterPortUpdate | dict,
+        *,
+        commit: bool = True,
+    ):
+        port = cls._get_or_404(db, port_id)
+        for key, value in cls._payload_dict(payload, exclude_unset=True).items():
+            setattr(port, key, value)
+        try:
+            validate_splitter_port_capacity(db, port, omit_id=port.id)
+        except FiberPlantIntegrityError as exc:
+            db.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        db.refresh(port)
+        return port
 
     @classmethod
-    def delete(cls, db: Session, port_id: str):
-        return super().delete(db, port_id)
+    def delete(cls, db: Session, port_id: str, *, commit: bool = True):
+        return super().delete(db, port_id, commit=commit)
 
     @staticmethod
     def utilization(db: Session, splitter_id: str | None):
@@ -188,6 +279,18 @@ class SplitterPorts(CRUDManager[SplitterPort]):
                 raise HTTPException(
                     status_code=400, detail="Invalid splitter_id"
                 ) from exc
+
+        if splitter_uuid is not None:
+            capacity = splitter_capacity(db, splitter_uuid)
+            return {
+                "splitter_id": splitter_id,
+                "input_capacity": capacity.input_capacity,
+                "output_capacity": capacity.output_capacity,
+                "modeled_inputs": capacity.modeled_inputs,
+                "modeled_outputs": capacity.modeled_outputs,
+                "occupied_outputs": capacity.occupied_outputs,
+                "spare_outputs": capacity.spare_outputs,
+            }
 
         ports_query = db.query(SplitterPort).filter(SplitterPort.is_active.is_(True))
         if splitter_uuid:

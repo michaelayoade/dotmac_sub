@@ -8,7 +8,7 @@
 
 ## Outcome
 
-Migration 344 gives a reviewed `SubscriberContact` row an optional Person Party
+Migration 354 gives a reviewed `SubscriberContact` row an optional Person Party
 binding, then records exactly which canonical relationship and contact points
 represent its legacy fields. It also lets an existing `InboxContactLink` point
 to reviewed canonical reachability without changing how Inbox currently routes
@@ -21,7 +21,7 @@ verification, and consent remain unchanged.
 
 ## Authority boundary
 
-| Fact or decision | Canonical owner after migration 344 | Current-runtime position |
+| Fact or decision | Canonical owner after migration 354 | Current-runtime position |
 | --- | --- | --- |
 | Person/Organization identity | `party.registry` | Additive Party foundation; reviewed bindings only |
 | `SubscriberContact` to Person Party binding | `party.registry` | Nullable shadow link; legacy contact reads remain |
@@ -140,7 +140,7 @@ change authentication/authorization.
 
 ## Migration and cutover gates
 
-1. **Install schema:** apply migration 344. It adds nullable columns/tables and
+1. **Install schema:** apply migration 354. It adds nullable columns/tables and
    writes no business rows.
 2. **Measure:** run the read-only aggregate audit and retain the report as the
    baseline. Production execution requires Michael to explicitly name the host

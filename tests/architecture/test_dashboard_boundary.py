@@ -1,6 +1,6 @@
 """Guardrail: the dashboard web service composes owners, it does not derive.
 
-Phase 5 of docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md. Every number on the
+The composition guardrail in docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md. Every number on the
 overview comes from a domain read owner; this service may resolve settings and
 assemble context, but it may not aggregate domain tables or run raw SQL. This
 test keeps the migration from regressing.

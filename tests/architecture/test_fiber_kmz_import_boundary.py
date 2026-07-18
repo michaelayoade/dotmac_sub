@@ -81,6 +81,9 @@ ACCESS_API = PROJECT_ROOT / "app" / "api" / "domains_network_access.py"
 SPLITTER_SERVICE = PROJECT_ROOT / "app" / "services" / "network" / "splitters.py"
 ONT_SERVICE = PROJECT_ROOT / "app" / "services" / "network" / "ont_crud.py"
 NETWORK_MODELS = PROJECT_ROOT / "app" / "models" / "network.py"
+ACCESS_ATTACHMENT_MODELS = (
+    PROJECT_ROOT / "app" / "models" / "fiber_access_attachment.py"
+)
 
 
 def test_legacy_kmz_importer_is_preview_only() -> None:
@@ -189,6 +192,7 @@ def test_access_attachment_owner_is_the_only_canonical_attachment_writer() -> No
 
     assert "FiberAccessAttachmentDecision(" in source
     assert "PonPortSplitterLink(" in source
+    assert "SplitterCascadeLink(" in source
     assert "ont.splitter_port_id =" in source
     assert "ont.splitter_id =" in source
     for constructor in (
@@ -209,8 +213,13 @@ def test_access_attachment_owner_is_the_only_canonical_attachment_writer() -> No
 
     for path in (PROJECT_ROOT / "app").rglob("*.py"):
         candidate = path.read_text(encoding="utf-8")
-        if path not in {ACCESS_ATTACHMENT_OWNER, NETWORK_MODELS}:
+        if path not in {
+            ACCESS_ATTACHMENT_OWNER,
+            ACCESS_ATTACHMENT_MODELS,
+            NETWORK_MODELS,
+        }:
             assert "PonPortSplitterLink(" not in candidate
+            assert "SplitterCascadeLink(" not in candidate
             assert "ont.splitter_port_id =" not in candidate
             assert "ont.splitter_id =" not in candidate
 

@@ -165,10 +165,10 @@ def test_correlated_equal_db_droop_flagged_noise_ignored(db_session):
 
 def test_reconcile_reports_record_reality_disagreement(db_session):
     olt, pon = _pon(db_session)
-    inferred_only_a = Splitter(name="SPL-INFERRED-A")
-    inferred_only_b = Splitter(name="SPL-INFERRED-B")
-    agreeing_splitter = Splitter(name="SPL-AGREE")
-    unconfirmed_splitter = Splitter(name="SPL-UNCONFIRMED")
+    inferred_only_a = Splitter(name="SPL-INFERRED-A", splitter_ratio="1:8")
+    inferred_only_b = Splitter(name="SPL-INFERRED-B", splitter_ratio="1:8")
+    agreeing_splitter = Splitter(name="SPL-AGREE", splitter_ratio="1:8")
+    unconfirmed_splitter = Splitter(name="SPL-UNCONFIRMED", splitter_ratio="1:8")
     db_session.add_all(
         [
             inferred_only_a,

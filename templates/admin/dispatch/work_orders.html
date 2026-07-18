@@ -187,11 +187,9 @@
                     <td class="min-w-[28rem] px-5 py-4 align-top">
                         <form method="post" action="/admin/dispatch/work-orders/{{ wo.public_id }}" class="grid grid-cols-2 gap-2">
                             <input name="title" value="{{ wo.title }}" required maxlength="200" class="col-span-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
-                            <select name="status" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
-                                {% for option in statuses %}
-                                <option value="{{ option }}" {% if wo.status == option %}selected{% endif %}>{{ option|replace('_', ' ')|title }}</option>
-                                {% endfor %}
-                            </select>
+                            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                                Status: {{ wo.status|replace('_', ' ')|title }}
+                            </div>
                             <select name="priority" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                                 {% for option in priorities %}
                                 <option value="{{ option }}" {% if wo.priority == option %}selected{% endif %}>{{ option|replace('_', ' ')|title }}</option>
@@ -199,8 +197,6 @@
                             </select>
                             <input type="datetime-local" name="scheduled_start" value="{{ dt_value(wo.scheduled_start) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                             <input type="datetime-local" name="scheduled_end" value="{{ dt_value(wo.scheduled_end) }}" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
-                            <input name="assigned_to_name" value="{{ wo.assigned_to_name or '' }}" maxlength="160" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white" placeholder="Assignee">
-                            <input name="technician_phone" value="{{ wo.technician_phone or '' }}" maxlength="40" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white" placeholder="Phone">
                             <input name="address" value="{{ wo.address or '' }}" maxlength="255" class="col-span-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white" placeholder="Site">
                             <input type="hidden" name="work_type" value="{{ wo.work_type or 'install' }}">
                             <button class="col-span-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700 dark:bg-cyan-600 dark:hover:bg-cyan-700">Save</button>

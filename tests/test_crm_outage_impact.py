@@ -134,7 +134,7 @@ def test_impact_by_fdh_returns_customer_and_detail_rows(db_session, catalog_offe
     from app.models.subscriber import Subscriber
 
     fdh = FdhCabinet(name="FDH CRM", code="FDH-CRM")
-    splitter = Splitter(name="SPL-CRM", fdh=fdh)
+    splitter = Splitter(name="SPL-CRM", fdh=fdh, splitter_ratio="1:8")
     olt = OLTDevice(name="OLT CRM")
     db_session.add_all([fdh, splitter, olt])
     db_session.flush()

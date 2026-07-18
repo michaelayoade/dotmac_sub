@@ -3,12 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
 
 from app.api import domains_network_access
-from app.models.fiber_access_attachment import FiberAccessAttachmentDecision
+from app.models.fiber_access_attachment import (
+    FiberAccessAttachmentDecision,
+    SplitterCascadeLink,
+)
 from app.models.network import (
     OLTDevice,
     OntUnit,
@@ -39,8 +43,10 @@ def _plant(db_session):
     db_session.add(olt)
     db_session.flush()
     pon = PonPort(olt_id=olt.id, name=f"pon-{suffix}", is_active=True)
-    splitter = Splitter(name=f"Splitter {suffix}", is_active=True)
-    other_splitter = Splitter(name=f"Other splitter {suffix}", is_active=True)
+    splitter = Splitter(name=f"Splitter {suffix}", splitter_ratio="1:8", is_active=True)
+    other_splitter = Splitter(
+        name=f"Other splitter {suffix}", splitter_ratio="1:8", is_active=True
+    )
     db_session.add_all([pon, splitter, other_splitter])
     db_session.flush()
     input_port = SplitterPort(
@@ -311,6 +317,124 @@ def test_reviewed_detach_clears_port_and_denormalized_splitter(db_session):
     assert applied.previous_splitter_port_id == plant["output_1"].id
     assert plant["ont_1"].splitter_port_id is None
     assert plant["ont_1"].splitter_id is None
+
+
+def test_reviewed_cascade_is_exact_auditable_and_leaf_first(db_session):
+    plant = _plant(db_session)
+    plant["splitter"].insertion_loss_db = Decimal("3.500")
+    plant["other_splitter"].insertion_loss_db = Decimal("4.000")
+    db_session.commit()
+    _attach_pon(db_session, plant)
+
+    preview = preview_access_attachment(
+        db_session,
+        "splitter_cascade",
+        "attach",
+        plant["output_1"].id,
+        plant["other_input"].id,
+    )
+    assert preview.upstream_splitter_id == plant["splitter"].id
+    assert preview.splitter_id == plant["other_splitter"].id
+    assert preview.splitter_stage == 2
+    assert preview.cumulative_loss_db == Decimal("7.500")
+    assert db_session.query(SplitterCascadeLink).count() == 0
+
+    decision = propose_access_attachment(
+        db_session,
+        "splitter_cascade",
+        "attach",
+        plant["output_1"].id,
+        plant["other_input"].id,
+        proposed_by="planner@example.com",
+        reason="Exact upstream output and downstream input labels verified",
+    )
+    applied = _review_and_execute(db_session, decision)
+    link = db_session.query(SplitterCascadeLink).one()
+    assert applied.status == "applied"
+    assert link.active is True
+    assert link.created_by_decision_id == decision.id
+    assert applied.result_payload["link_id"] == str(link.id)
+    assert applied.result_payload["splitter_stage"] == 2
+    assert applied.result_payload["cumulative_loss_db"] == "7.500"
+
+    ont_decision = propose_access_attachment(
+        db_session,
+        "ont_output",
+        "attach",
+        plant["ont_1"].id,
+        plant["other_output"].id,
+        proposed_by="planner@example.com",
+        reason="Leaf output and customer drop verified",
+    )
+    _review_and_execute(db_session, ont_decision)
+    with pytest.raises(FiberAccessAttachmentError, match="detach active ONTs"):
+        preview_access_attachment(
+            db_session,
+            "splitter_cascade",
+            "detach",
+            plant["output_1"].id,
+        )
+
+    ont_detach = propose_access_attachment(
+        db_session,
+        "ont_output",
+        "detach",
+        plant["ont_1"].id,
+        proposed_by="fieldlead@example.com",
+        reason="Customer drop removal independently verified",
+    )
+    _review_and_execute(db_session, ont_detach)
+    cascade_detach = propose_access_attachment(
+        db_session,
+        "splitter_cascade",
+        "detach",
+        plant["output_1"].id,
+        proposed_by="fieldlead@example.com",
+        reason="Cascade removal independently verified",
+    )
+    detached = _review_and_execute(db_session, cascade_detach)
+    db_session.refresh(link)
+    assert detached.status == "applied"
+    assert link.active is False
+    assert link.retired_by_decision_id == cascade_detach.id
+    assert detached.result_payload["after_downstream_input_port_id"] is None
+
+
+def test_cascade_rejects_cycles_and_output_role_conflicts(db_session):
+    plant = _plant(db_session)
+    plant["splitter"].insertion_loss_db = Decimal("3.500")
+    plant["other_splitter"].insertion_loss_db = Decimal("4.000")
+    db_session.commit()
+    _attach_pon(db_session, plant)
+    cascade = propose_access_attachment(
+        db_session,
+        "splitter_cascade",
+        "attach",
+        plant["output_1"].id,
+        plant["other_input"].id,
+        proposed_by="planner@example.com",
+        reason="Exact cascade endpoints independently verified",
+    )
+    _review_and_execute(db_session, cascade)
+
+    with pytest.raises(FiberAccessAttachmentError, match="create a cycle"):
+        preview_access_attachment(
+            db_session,
+            "splitter_cascade",
+            "attach",
+            plant["other_output"].id,
+            plant["input"].id,
+        )
+    with pytest.raises(
+        FiberAccessAttachmentError, match="supplies a downstream splitter"
+    ):
+        preview_access_attachment(
+            db_session,
+            "ont_output",
+            "attach",
+            plant["ont_1"].id,
+            plant["output_1"].id,
+        )
 
 
 def test_direct_attachment_writers_are_retired(db_session):

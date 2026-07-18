@@ -21,6 +21,7 @@ from app.models.network import (
     FiberSpliceClosure,
     FiberTerminationPoint,
     ODNEndpointType,
+    PonPort,
 )
 from app.services.network.fiber_topology_connectivity import (
     propose_connectivity_decision,
@@ -193,6 +194,7 @@ def test_create_path_waiting_for_terminations_is_not_cutover_ready(db_session):
                 "start_endpoint_ref_id": str(cabinet.id),
                 "end_endpoint_type": "fiber_access_point",
                 "end_endpoint_ref_id": str(access_point.id),
+                "fiber_count": 12,
                 "reason": "Field-verified path endpoints",
             }
         ],
@@ -257,16 +259,19 @@ def test_standalone_decision_is_exact_but_missing_phase16_batch_evidence(db_sess
     assert report.ready_for_connectivity_cutover_review is False
 
 
-def test_link_existing_requires_current_segment_source_provenance(db_session):
+def test_link_existing_requires_current_segment_source_provenance(
+    db_session, olt_device
+):
     path = _stage_path(db_session, "SPAN-COVERAGE-APPLIED")
-    cabinet = FdhCabinet(name="Applied cabinet", code="APPLIED-CAB")
+    olt_device.is_active = True
+    pon = PonPort(olt_id=olt_device.id, name="0/1/0", is_active=True)
     closure = FiberSpliceClosure(name="Applied closure")
-    db_session.add_all([cabinet, closure])
+    db_session.add_all([pon, closure])
     db_session.commit()
     start = FiberTerminationPoint(
         name="Applied start",
-        endpoint_type=ODNEndpointType.fdh,
-        ref_id=cabinet.id,
+        endpoint_type=ODNEndpointType.pon_port,
+        ref_id=pon.id,
     )
     end = FiberTerminationPoint(
         name="Applied end",
@@ -278,6 +283,7 @@ def test_link_existing_requires_current_segment_source_provenance(db_session):
         from_point=start,
         to_point=end,
         route_geom="LINESTRING(7.40 9.00, 7.42 9.02)",
+        fiber_count=24,
     )
     db_session.add(segment)
     db_session.commit()
@@ -288,8 +294,8 @@ def test_link_existing_requires_current_segment_source_provenance(db_session):
                 "action": "link_existing",
                 "expected_feature_content_sha256": path.content_sha256,
                 "staged_feature_id": str(path.id),
-                "start_endpoint_type": "fdh",
-                "start_endpoint_ref_id": str(cabinet.id),
+                "start_endpoint_type": "pon_port",
+                "start_endpoint_ref_id": str(pon.id),
                 "end_endpoint_type": "splice_closure",
                 "end_endpoint_ref_id": str(closure.id),
                 "target_segment_id": str(segment.id),

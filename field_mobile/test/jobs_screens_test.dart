@@ -539,6 +539,8 @@ void main() {
       expect(find.text('Navigation targets'), findsOneWidget);
       expect(find.text('Customer site'), findsOneWidget);
       expect(find.text('POP Lekki-01'), findsOneWidget);
+      expect(find.byKey(const Key('open-fiber-evidence-map')), findsOneWidget);
+      expect(find.text('Open evidence map'), findsOneWidget);
       expect(find.text('Job context'), findsOneWidget);
       expect(
         find.text('Ask estate security for rack room key.'),

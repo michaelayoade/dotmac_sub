@@ -117,7 +117,7 @@ def test_field_work_order_docs_do_not_present_crm_as_authoritative():
             if pattern in text:
                 offenders.append(f"{path}: contains {pattern!r}")
     assert not offenders, (
-        "Phase 2 work-order execution is sub-authoritative. CRM may import or "
+        "Native work-order execution is Sub-authoritative. CRM may import or "
         "backfill legacy headers, but field modules must not describe CRM as "
         "the owner for native field activity:\n  " + "\n  ".join(offenders)
     )

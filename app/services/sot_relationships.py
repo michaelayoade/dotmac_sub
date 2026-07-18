@@ -1017,7 +1017,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "OLT-to-customer topology integrity",
                     "ordered validated subscription fiber traces",
                     "bounded fiber fault-candidate ranking",
-                    "fiber import and customer-trace cutover gates",
+                    "cross-customer exact shared-cable fault candidates",
+                    "customer-trace evidence completeness",
                 ),
                 depends_on=(
                     "network.identity",
@@ -1029,7 +1030,40 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Imported geometry is staged evidence until this owner "
                     "validates asset identity and connectivity. Trace resolution "
                     "fails closed on missing or ambiguous edges; fault candidates "
-                    "never declare incidents or redefine topology."
+                    "never declare incidents or redefine topology. Numeric cutover "
+                    "review readiness is owned by network.fiber_cutover_readiness."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_plant_integrity",
+                module="app.services.network.fiber_plant_integrity",
+                owns=(
+                    "active passive-cable endpoint, geometry, and size validation",
+                    "serving PON/OLT rootedness and safe cable retirement",
+                    "exact numbered cable-core materialization and capacity projection",
+                    "splitter ratio, port-count, and declared-capacity validation",
+                ),
+                depends_on=("network.fiber_topology",),
+                notes=(
+                    "This is the invariant and exact-capacity owner called by "
+                    "reviewed asset changes and splitter commands. Cable names are "
+                    "display metadata only; name or proximity matching never creates "
+                    "an endpoint, core assignment, or rooted topology edge."
+                ),
+            ),
+            SOTService(
+                name="network.splitter_inventory",
+                module="app.services.network.splitters",
+                owns=(
+                    "splitter identity and declared ratio/capacity mutations",
+                    "splitter port identity and bounded port mutations",
+                    "splitter utilization and spare-output projection",
+                ),
+                depends_on=("network.fiber_plant_integrity",),
+                notes=(
+                    "API and admin form adapters delegate here. Reviewed attachment "
+                    "owners remain authoritative for PON inputs, cascades, and ONT "
+                    "outputs; this inventory owner does not infer those edges."
                 ),
             ),
             SOTService(
@@ -1038,8 +1072,40 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "reviewed passive-fiber asset change requests",
                     "approved passive-fiber asset mutations",
+                    "reviewed requests for operational cable size and lifecycle state",
                 ),
-                depends_on=("network.fiber_topology",),
+                depends_on=(
+                    "network.fiber_topology",
+                    "network.fiber_plant_integrity",
+                    "network.splitter_inventory",
+                    "network.fiber_support_structures",
+                ),
+                notes=(
+                    "This workflow owns review and application. It delegates cable "
+                    "and splitter invariants plus exact core materialization to their "
+                    "named owners instead of maintaining parallel mutation rules."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_support_structures",
+                module="app.services.network.fiber_support_structures",
+                owns=(
+                    "canonical fiber support identity and operational state",
+                    "support lifecycle, inspection, ownership, and lease projection",
+                    "reviewed exact passive-asset-to-support mount decisions",
+                    "canonical ordered support mount edges and result evidence",
+                ),
+                depends_on=(
+                    "network.fiber_topology",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Imported poles remain staged observations. Canonical support "
+                    "creates and state changes are applied here only after reviewed "
+                    "passive-asset requests. Mounts require exact asset/support IDs, "
+                    "preview confirmation, independent review, locked revalidation, "
+                    "and audit evidence; geometry and proximity never create an edge."
+                ),
             ),
             SOTService(
                 name="network.fiber_identity_decisions",
@@ -1052,6 +1118,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "network.fiber_topology",
                     "network.fiber_asset_changes",
+                    "network.fiber_support_structures",
                 ),
                 notes=(
                     "Identity decisions are bound to immutable staged content. "
@@ -1089,6 +1156,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=(
                     "network.fiber_source_staging",
                     "operations.work_orders",
+                    "network.fiber_field_verification_job_scope",
                 ),
                 notes=(
                     "Every observation binds exact staged content, work order, "
@@ -1097,6 +1165,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "observations remain evidence. This owner cannot infer identity "
                     "or endpoints, generate decisions, approve changes, mutate "
                     "canonical topology, or establish cutover thresholds."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_field_verification_job_scope",
+                module=("app.services.network.fiber_field_verification_job_scope"),
+                owns=(
+                    "fiber field-verification work-order scope metadata contract",
+                    "exact planned staged-feature observation boundary",
+                ),
+                notes=(
+                    "Legacy jobs without an explicit plan retain their existing "
+                    "observation behavior. Once a plan is present, observations "
+                    "must name one of its exact staged feature IDs with unchanged "
+                    "content; names, labels, geometry, and proximity never expand "
+                    "the scope."
                 ),
             ),
             SOTService(
@@ -1121,6 +1204,30 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.fiber_field_verification_jobs",
+                module=("app.services.network.fiber_field_verification_job_plans"),
+                owns=(
+                    "exact fiber field-verification job-plan previews",
+                    "confirmed staged-source-to-native-job plan execution",
+                    "fiber field-verification job-plan audit evidence",
+                ),
+                depends_on=(
+                    "network.fiber_field_verification_worklist",
+                    "network.fiber_field_verification_job_scope",
+                    "operations.work_order_commands",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "The owner binds at most 100 explicitly selected current "
+                    "worklist rows, exact row/content/geometry hashes, and the "
+                    "complete worklist report hash. Execute re-previews and "
+                    "requires the exact plan digest, then delegates create and "
+                    "optional assignment to operations.work_order_commands in one "
+                    "transaction. It never writes work-order tables directly and "
+                    "does not add actions to the read-only worklist or map."
+                ),
+            ),
+            SOTService(
                 name="network.fiber_field_verification_map",
                 module="app.services.network.fiber_topology_field_map",
                 owns=(
@@ -1142,6 +1249,34 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.fiber_work_order_evidence_map",
+                module=("app.services.network.fiber_topology_work_order_evidence_map"),
+                owns=(
+                    "technician-scoped native work-order fiber evidence overlay",
+                    "exact work-order observation-to-map lineage projection",
+                    "work-order fiber evidence feature and report digests",
+                    "work-order evidence and geometry presentation semantics",
+                ),
+                depends_on=(
+                    "operations.work_orders",
+                    "network.fiber_field_observations",
+                    "network.fiber_field_verification_map",
+                ),
+                notes=(
+                    "This read-only projection selects only field-verification "
+                    "map features represented by immutable observations for one explicitly "
+                    "scoped native Sub work order. Every observation must map "
+                    "exactly once; other jobs' evidence is removed. Current and "
+                    "superseded source context remains distinct. It cannot assign "
+                    "work, record observations, repair geometry, infer topology, "
+                    "mutate state, establish thresholds, or decide customer impact."
+                    " The field mobile client renders this contract and may cache "
+                    "only one exact public-work-order/report-hash snapshot per "
+                    "authenticated principal; its offline cache is explicitly "
+                    "stale and never an authority."
+                ),
+            ),
+            SOTService(
                 name="network.fiber_identity_coverage",
                 module="app.services.network.fiber_topology_identity_coverage",
                 owns=(
@@ -1155,13 +1290,14 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.fiber_field_observations",
                     "network.fiber_identity_decisions",
                     "network.fiber_identity_review",
+                    "network.fiber_support_structures",
                 ),
                 notes=(
                     "One repeatable read-only snapshot keeps canonical-model support, "
                     "source coverage, decision lifecycle, change-request state, and "
-                    "provenance validity separate. Cabinets, FATs, closures, and "
-                    "buildings use their current canonical models; poles/supports "
-                    "remain explicitly reject-only. The owner cannot infer identity, "
+                    "provenance validity separate. Cabinets, FATs, closures, "
+                    "buildings, and supports use their current canonical models. "
+                    "The owner cannot infer identity, "
                     "create or advance decisions, approve change requests, mutate "
                     "assets, or authorize production cutover."
                 ),
@@ -1226,6 +1362,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "validity separate. It cannot infer endpoints, create or advance "
                     "decisions, approve change requests, mutate topology, or authorize "
                     "production cutover."
+                ),
+            ),
+            SOTService(
+                name="network.fiber_cutover_readiness",
+                module=("app.services.network.fiber_topology_cutover_readiness"),
+                owns=(
+                    "versioned numeric fiber cutover-readiness policy",
+                    "complete global fiber cutover cohort evidence projection",
+                    "fiber topology cutover-review readiness decision",
+                ),
+                depends_on=(
+                    "network.fiber_topology",
+                    "network.fiber_identity_coverage",
+                    "network.fiber_connectivity_coverage",
+                    "network.fiber_field_verification_worklist",
+                ),
+                notes=(
+                    "The initial policy accepts only the complete global cohort, "
+                    "requires exact current identity/connectivity/result/provenance "
+                    "and customer traces, and applies zero-tolerance blockers. All "
+                    "latest staged rows remain mandatory until an authoritative "
+                    "dormant-low-risk classifier exists. Missing POP/OLT, splitter, "
+                    "and customer-endpoint field contracts fail closed. A passing "
+                    "report is evidence for independent review and cannot authorize "
+                    "or execute a production cutover."
                 ),
             ),
             SOTService(
@@ -1422,9 +1583,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.network.fiber_access_attachments",
                 owns=(
                     "reviewed PON-to-splitter input attachments",
+                    "reviewed splitter-output-to-downstream-input cascade links",
                     "reviewed ONT-to-splitter output attachments",
                     "canonical ONT splitter parent projection",
-                    "fiber access attachment audit results",
+                    "splitter stage and cumulative optical-loss evidence",
+                    "fiber access attachment result evidence",
                 ),
                 depends_on=(
                     "network.fiber_topology",
@@ -1433,23 +1596,33 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.ont_assignment_identity",
                 ),
                 notes=(
-                    "Only exact directed ports with agreeing ONT/PON/OLT identity "
-                    "can be attached. Preview is read-only, review is independent, "
-                    "execution revalidates under lock, and stale inputs close "
-                    "without mutation. Geometry and legacy assignments never create "
-                    "an access edge."
+                    "Only exact directed ports in one rooted, acyclic splitter "
+                    "tree with agreeing ONT/PON/OLT identity can be attached. "
+                    "Cascade construction is root-first, removal is leaf-first, "
+                    "and each participating splitter has explicit insertion loss. "
+                    "Preview is read-only, review is independent, execution "
+                    "revalidates under lock, and stale inputs close without "
+                    "mutation. Geometry, cabinets, ratios, names, and legacy "
+                    "assignments never create an access edge."
                 ),
             ),
             SOTService(
                 name="network.access_path",
                 module="app.services.network.access_path",
-                owns=("subscription access path", "last-mile path summary"),
+                owns=(
+                    "subscription access path",
+                    "last-mile path summary",
+                    "composed ONT-to-passive-fiber-to-NAS-to-core/border path",
+                    "typed cross-domain path gaps and combined evidence hash",
+                    "distinct provisioning-NAS and live-session-NAS evidence",
+                ),
                 depends_on=(
                     "network.identity",
                     "network.fiber_topology",
                     "network.ont_assignment_commands",
                     "network.ont_assignment_identity",
                     "network.fiber_access_attachments",
+                    "network.forwarding_topology",
                 ),
             ),
             SOTService(
@@ -1659,6 +1832,39 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.forwarding_topology",
+                module="app.services.network.forwarding_topology",
+                owns=(
+                    "reviewed downstream-to-upstream forwarding declarations",
+                    "normalized BGP-peer and routing-table observations",
+                    "forwarding declaration agreement and drift projection",
+                    "authoritative core, border, NAS, site, interface, and VRF graph",
+                    "official customer upstream path and outage ancestry",
+                ),
+                depends_on=(
+                    "network.identity",
+                    "network.monitoring_inventory",
+                    "network.radius_sessions",
+                    "network.control_plane_intent",
+                    "network.routeros_sot",
+                ),
+                notes=(
+                    "Declarations bind exact devices, interfaces, sites, roles, "
+                    "VRFs, configuration intent, and where applicable peer, "
+                    "route, and NAS identity. Preview is write-free; proposal "
+                    "and review are separated; execution locks and revalidates "
+                    "exact evidence. LLDP, BGP, routing-table, and RADIUS data "
+                    "remain observations and cannot create or retire official "
+                    "path. Configuration remains owned by control-plane intent "
+                    "and RouterOS SOT. Customer paths, reachability, and outage "
+                    "blast radius consume only agreeing declarations. The "
+                    "RouterOS collector is a GET-only, declaration-scoped "
+                    "observation adapter behind the fail-closed "
+                    "network.forwarding_observation_collection control; enabling "
+                    "it starts evidence shadowing, not authority cutover."
+                ),
+            ),
+            SOTService(
                 name="network.nas_inventory",
                 module="app.services.nas.devices",
                 owns=("NAS administrative lifecycle state", "NAS inventory reads"),
@@ -1700,7 +1906,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="network.outage_impact",
                 module="app.services.network.outage_impact",
                 owns=("affected-customer impact", "outage scope impact"),
-                depends_on=("network.access_path",),
+                depends_on=(
+                    "network.access_path",
+                    "network.forwarding_topology",
+                ),
             ),
             SOTService(
                 name="network.device_groups",
@@ -1769,6 +1978,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "scripts.network.audit_fiber_topology",
             "scripts.network.review_fiber_topology_identity",
             "scripts.network.review_fiber_topology_connectivity",
+            "scripts.network.review_forwarding_topology",
             "scripts.network.stage_fiber_topology_kmz",
             "app.web.admin.network_*",
             "app.web.customer.connection",
@@ -2439,6 +2649,29 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.work_order_commands",
+                module="app.services.work_order_commands",
+                owns=(
+                    "native work-order creation and header commands",
+                    "work-order assignment decisions and projection",
+                    "work-order assignment-queue transitions",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "operations.work_order_status",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Dispatch API/web and field-manager adapters authorize and "
+                    "delegate here. The owner validates a read-only assignment "
+                    "preview, locks the work order, changes queue and assignee "
+                    "projection atomically, records exact actor audit evidence, "
+                    "and treats equivalent retries as replays. CRM mirror ingest "
+                    "remains a provenance importer; field execution statuses remain "
+                    "owned by operations.field_completion."
+                ),
+            ),
+            SOTService(
                 name="operations.work_orders",
                 module="app.services.work_order_views",
                 owns=("work-order read models", "customer work-order linkage"),
@@ -2447,11 +2680,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.work_order_status",
                 ),
                 notes=(
-                    "This registration owns reads only. Native work-order create, "
-                    "assignment, and assignment-queue mutation still run through "
-                    "dispatch CRUD without a named SOT mutation owner. New "
-                    "cross-domain actions must not adopt that path as authority; "
-                    "the writer boundary requires an explicit decision."
+                    "This registration owns reads only. Native mutations delegate "
+                    "to operations.work_order_commands; imported CRM identifiers "
+                    "remain provenance and never become native command authority."
                 ),
             ),
             SOTService(
@@ -2500,6 +2731,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.api.field.*",
             "app.services.web_projects",
             "app.services.web_dispatch_work_orders",
+            "app.services.work_order_commands",
             "field_mobile",
         ),
         rule=(
@@ -2507,7 +2739,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "shared context layer before executing workflow steps. Native project "
             "mutation adapters delegate to Projects.update for lifecycle consequences. "
             "Field clients consume completion_requirements from authenticated job "
-            "detail and leave completion eligibility to the field transition service."
+            "detail and leave completion eligibility to the field transition service. "
+            "Dispatch adapters delegate native work-order and assignment writes to "
+            "operations.work_order_commands."
         ),
     ),
     DomainSOT(
@@ -3144,9 +3378,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "work_order_views.query_work_orders owns the canonical filtered "
                     "and sorted work-order query; this projection declares list "
                     "capabilities, normalizes request state, and delegates the read "
-                    "(it issues no SQL of its own). Read-only: work orders are a CRM "
-                    "mirror with no Sub-owned admin bulk command, so no selection or "
-                    "bulk is declared. Each dispatch route is granularly gated "
+                    "(it issues no SQL of its own). Native form mutations delegate to "
+                    "operations.work_order_commands; no bulk command is declared. "
+                    "Each dispatch route is granularly gated "
                     "(operations:dispatch:read/write/assign)."
                 ),
             ),

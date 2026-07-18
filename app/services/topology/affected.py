@@ -1,11 +1,11 @@
-"""Reverse traversal: infrastructure -> affected customers (Phase 4a).
+"""Reverse traversal from authoritative infrastructure to affected customers.
 
 The mirror of resolve_customer_path. Given a failing node or basestation,
 enumerate the active subscriptions downstream of it — the engine for outage
 impact assessment. Read-only; manual use (no auto-detection). An upstream
-node expands to its downstream access nodes via the LLDP graph (moving away
-from core), so an aggregation/core failure captures everything below it; with
-no usable graph it degrades safely to the node itself.
+node expands to downstream access nodes through the reviewed, observation-
+agreeing forwarding projection. Raw LLDP observations never expand customer
+impact. With no usable authoritative graph the result degrades to the node.
 """
 
 from __future__ import annotations
@@ -29,19 +29,17 @@ from app.models.network import (
     SplitterPort,
     SplitterPortAssignment,
 )
-from app.models.network_monitoring import (
-    DeviceRole,
-    NetworkDevice,
-    NetworkTopologyLink,
-    PopSite,
-)
+from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Address
+from app.services.network.forwarding_topology import (
+    ForwardingGraph,
+    project_authoritative_forwarding_graph,
+)
 from app.services.network.signal_thresholds import (
     classify_signal,
     normalize_optical_signal_dbm,
 )
-from app.services.topology.lldp_poller import SOURCE as LLDP_SOURCE
 
 logger = logging.getLogger(__name__)
 
@@ -76,47 +74,28 @@ def list_network_nodes(session: Session) -> list[NetworkDevice]:
     )
 
 
-def lldp_adjacency(session: Session) -> dict:
-    """Whole-graph undirected adjacency over active LLDP edges, from ONE query.
+def forwarding_graph_projection(session: Session) -> ForwardingGraph:
+    """Return the Sub-owned, reviewed and currently observation-agreeing graph."""
 
-    The graph walks below take this as an optional precomputed parameter so a
-    fleet-wide sweep (e.g. the outage auto-detect scan, which walks the graph
-    for several candidates in one run) issues one links query total instead of
-    one per visited node per walk.
-    """
-    adjacency: dict = {}
-    for source_id, target_id in (
-        session.query(
-            NetworkTopologyLink.source_device_id, NetworkTopologyLink.target_device_id
-        )
-        .filter(
-            NetworkTopologyLink.source == LLDP_SOURCE,
-            NetworkTopologyLink.is_active.is_(True),
-        )
-        .all()
-    ):
-        adjacency.setdefault(source_id, set()).add(target_id)
-        adjacency.setdefault(target_id, set()).add(source_id)
-    return adjacency
+    return project_authoritative_forwarding_graph(session)
 
 
-def _dist_to_core(session: Session, *, adjacency: dict | None = None) -> dict:
-    """BFS hop-distance to the nearest core node over the LLDP graph.
+def _dist_to_core(
+    session: Session,
+    *,
+    adjacency: dict | None = None,
+    root_ids: set | frozenset | None = None,
+) -> dict:
+    """BFS distance to a declared core/border root over authoritative edges."""
 
-    One links query (via ``lldp_adjacency``) + one cores query; pass a
-    precomputed ``adjacency`` to skip the links query too.
-    """
-    cores = (
-        session.query(NetworkDevice)
-        .filter(
-            NetworkDevice.role == DeviceRole.core, NetworkDevice.is_active.is_(True)
-        )
-        .all()
-    )
-    if adjacency is None:
-        adjacency = lldp_adjacency(session)
-    dist: dict = {c.id: 0 for c in cores}
-    queue: deque = deque((c.id, 0) for c in cores)
+    if adjacency is None or root_ids is None:
+        graph = forwarding_graph_projection(session)
+        if adjacency is None:
+            adjacency = graph.adjacency
+        if root_ids is None:
+            root_ids = graph.root_device_ids
+    dist: dict = dict.fromkeys(root_ids, 0)
+    queue: deque = deque((root_id, 0) for root_id in root_ids)
     while queue:
         nid, d = queue.popleft()
         for nb in adjacency.get(nid, ()):
@@ -135,15 +114,14 @@ def downstream_nodes(
 ) -> set:
     """Node ids at/below ``root`` — root plus nodes reachable moving strictly
     away from core (increasing distance-to-core). Degrades to {root} when the
-    graph/core is unknown, so we never over-scope an outage.
+    authoritative graph/root is unknown, so we never over-scope an outage.
 
     ``dist`` is the (root-independent) distance-to-core map and ``adjacency``
-    the LLDP adjacency; callers that invoke this repeatedly in one request or
-    scan can compute them once (``_dist_to_core`` / ``lldp_adjacency``) and
-    pass them in to avoid a full-graph BFS + neighbor queries per call.
+    the authoritative adjacency; callers that invoke this repeatedly can pass
+    both maps to avoid repeating reconciliation and graph traversal.
     """
     if adjacency is None:
-        adjacency = lldp_adjacency(session)
+        adjacency = forwarding_graph_projection(session).adjacency
     if dist is None:
         dist = _dist_to_core(session, adjacency=adjacency)
     result = {root.id}

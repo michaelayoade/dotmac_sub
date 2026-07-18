@@ -1,4 +1,4 @@
-"""Reachability classification over the LLDP graph (Phase 5a).
+"""Reachability classification over Sub's authoritative forwarding graph.
 
 Monitoring polls sites *through* their upstream router, so when one router dies
 everything behind it also reads ``down`` — simultaneity is lost visibility,
@@ -10,9 +10,8 @@ device is classified
 - ``unreachable_upstream``: some ancestor on its path to core is down — the
   root cause is the TOPMOST down ancestor (the one nearest core).
 
-Batched and read-only: two queries (devices, LLDP links); all graph work is
-in memory. No per-node queries — this runs against the whole fleet inside
-the outage auto-detect scan.
+Raw LLDP cannot establish ancestry. Only reviewed forwarding declarations with
+current exact observation agreement participate in root-cause projection.
 """
 
 from __future__ import annotations
@@ -22,8 +21,8 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.models.network_monitoring import DeviceRole, NetworkDevice
-from app.services.topology.affected import lldp_adjacency
+from app.models.network_monitoring import NetworkDevice
+from app.services.topology.affected import forwarding_graph_projection
 from app.services.topology.live_status import DOWN
 
 CLASS_DOWN = "down"
@@ -39,27 +38,21 @@ class Reachability:
 
 
 def core_parent_map(
-    session: Session, *, adjacency: dict | None = None, core_ids: list | None = None
+    session: Session,
+    *,
+    adjacency: dict | None = None,
+    root_ids: list | set | frozenset | None = None,
 ) -> dict:
-    """Multi-source BFS from the cores over the LLDP graph: ``parent[n]`` is
-    n's next hop TOWARD core (None for cores themselves), so following
-    parents from any node walks its shortest path to core. Shared by the
-    classifier and the auto-detect scan (which also derives upstream chains
-    from it) so a fleet sweep runs the BFS once, in memory."""
-    if adjacency is None:
-        adjacency = lldp_adjacency(session)
-    if core_ids is None:
-        core_ids = [
-            r[0]
-            for r in session.query(NetworkDevice.id)
-            .filter(
-                NetworkDevice.role == DeviceRole.core,
-                NetworkDevice.is_active.is_(True),
-            )
-            .all()
-        ]
-    parent: dict = dict.fromkeys(core_ids)
-    queue: deque = deque(core_ids)
+    """Map every reachable node to its next hop toward a declared root."""
+
+    if adjacency is None or root_ids is None:
+        graph = forwarding_graph_projection(session)
+        if adjacency is None:
+            adjacency = graph.adjacency
+        if root_ids is None:
+            root_ids = graph.root_device_ids
+    parent: dict = dict.fromkeys(root_ids)
+    queue: deque = deque(root_ids)
     while queue:
         nid = queue.popleft()
         for nb in adjacency.get(nid, ()):
@@ -69,25 +62,33 @@ def core_parent_map(
     return parent
 
 
-def classify_down_devices(session: Session, *, adjacency: dict | None = None) -> dict:
+def classify_down_devices(
+    session: Session,
+    *,
+    adjacency: dict | None = None,
+    root_ids: list | set | frozenset | None = None,
+) -> dict:
     """Classify every active down device as ``down`` or ``unreachable_upstream``.
 
     Returns ``{device_id: Reachability}`` — one entry per device whose cached
-    ``live_status`` is ``down``. A device with no path to a core node (graph
-    not built / island) cannot have provable down ancestry, so it degrades to
+    ``live_status`` is ``down``. A device with no path to a declared root
+    cannot have provable down ancestry, so it degrades to
     ``down`` (its own root cause) rather than being silently swallowed —
     mirroring how ``downstream_nodes`` degrades to the node itself.
     """
     rows = (
-        session.query(NetworkDevice.id, NetworkDevice.role, NetworkDevice.live_status)
+        session.query(NetworkDevice.id, NetworkDevice.live_status)
         .filter(NetworkDevice.is_active.is_(True))
         .all()
     )
-    down_ids = {r[0] for r in rows if r[2] == DOWN}
+    down_ids = {r[0] for r in rows if r[1] == DOWN}
     if not down_ids:
         return {}
-    core_ids = [r[0] for r in rows if r[1] == DeviceRole.core]
-    parent = core_parent_map(session, adjacency=adjacency, core_ids=core_ids)
+    parent = core_parent_map(
+        session,
+        adjacency=adjacency,
+        root_ids=root_ids,
+    )
 
     result: dict = {}
     for device_id in down_ids:

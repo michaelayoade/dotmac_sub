@@ -227,6 +227,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert contact_inbox_audit.name == "party.contact_inbox_audit"
     assert sot_relationships.dependencies_for("network.outage_impact") == (
         "network.access_path",
+        "network.forwarding_topology",
     )
     assert sot_relationships.dependencies_for("network.fiber_topology") == (
         "network.identity",
@@ -236,12 +237,26 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("network.fiber_source_staging") == (
         "gis.spatial_sync",
     )
+    assert sot_relationships.dependencies_for("network.fiber_plant_integrity") == (
+        "network.fiber_topology",
+    )
+    assert sot_relationships.dependencies_for("network.splitter_inventory") == (
+        "network.fiber_plant_integrity",
+    )
     assert sot_relationships.dependencies_for("network.fiber_asset_changes") == (
         "network.fiber_topology",
+        "network.fiber_plant_integrity",
+        "network.splitter_inventory",
+        "network.fiber_support_structures",
+    )
+    assert sot_relationships.dependencies_for("network.fiber_support_structures") == (
+        "network.fiber_topology",
+        "observability.audit_log",
     )
     assert sot_relationships.dependencies_for("network.fiber_identity_decisions") == (
         "network.fiber_topology",
         "network.fiber_asset_changes",
+        "network.fiber_support_structures",
     )
     assert sot_relationships.dependencies_for("network.fiber_identity_review") == (
         "network.fiber_identity_decisions",
@@ -249,6 +264,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("network.fiber_field_observations") == (
         "network.fiber_source_staging",
         "operations.work_orders",
+        "network.fiber_field_verification_job_scope",
     )
     assert sot_relationships.dependencies_for(
         "network.fiber_field_verification_worklist"
@@ -257,10 +273,25 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.fiber_field_observations",
     )
     assert sot_relationships.dependencies_for(
+        "network.fiber_field_verification_jobs"
+    ) == (
+        "network.fiber_field_verification_worklist",
+        "network.fiber_field_verification_job_scope",
+        "operations.work_order_commands",
+        "observability.audit_log",
+    )
+    assert sot_relationships.dependencies_for(
         "network.fiber_field_verification_map"
     ) == (
         "network.fiber_source_staging",
         "network.fiber_field_verification_worklist",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.fiber_work_order_evidence_map"
+    ) == (
+        "operations.work_orders",
+        "network.fiber_field_observations",
+        "network.fiber_field_verification_map",
     )
     assert sot_relationships.dependencies_for("network.fiber_identity_coverage") == (
         "network.fiber_source_staging",
@@ -268,6 +299,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.fiber_field_observations",
         "network.fiber_identity_decisions",
         "network.fiber_identity_review",
+        "network.fiber_support_structures",
     )
     assert sot_relationships.dependencies_for(
         "network.fiber_connectivity_decisions"
@@ -345,6 +377,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.ont_assignment_commands",
         "network.ont_assignment_identity",
         "network.fiber_access_attachments",
+        "network.forwarding_topology",
     )
     assert sot_relationships.dependencies_for("network.outage_lifecycle") == (
         "network.outage_impact",
@@ -573,6 +606,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "events.dispatcher",
         "communications.staff_notifications",
     )
+    assert sot_relationships.dependencies_for("operations.work_order_commands") == (
+        "customer.identity_scope",
+        "operations.work_order_status",
+        "observability.audit_log",
+    )
     assert sot_relationships.dependencies_for("operations.field_completion") == (
         "operations.work_orders",
         "operations.work_order_status",
@@ -650,11 +688,24 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert work_order_status is not None
     assert work_order_status.name == "operations.work_order_status"
 
+    work_order_commands = sot_relationships.owning_service_for(
+        "work-order assignment decisions and projection"
+    )
+    assert work_order_commands is not None
+    assert work_order_commands.name == "operations.work_order_commands"
+    assert work_order_commands.module == "app.services.work_order_commands"
+
     work_order_presentation = sot_relationships.owning_service_for(
         "field work-order status labels, semantic tones, and icon keys"
     )
     assert work_order_presentation is not None
     assert work_order_presentation.name == "ui.status_presentation"
+
+    fiber_evidence_presentation = sot_relationships.owning_service_for(
+        "work-order evidence and geometry presentation semantics"
+    )
+    assert fiber_evidence_presentation is not None
+    assert fiber_evidence_presentation.name == "network.fiber_work_order_evidence_map"
 
     ticket_lifecycle = sot_relationships.owning_service_for(
         "guarded ticket status transitions"

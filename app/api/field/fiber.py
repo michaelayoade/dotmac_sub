@@ -8,6 +8,7 @@ from app.schemas.field import (
     FieldFiberSourceObservationRead,
     FieldFiberTestCreate,
     FieldFiberTestRead,
+    FieldFiberWorkOrderEvidenceMapRead,
     FieldSpliceCreate,
     FieldSpliceProposalResponse,
 )
@@ -142,3 +143,20 @@ def list_field_fiber_source_observations(
         staged_feature_id=staged_feature_id,
     )
     return {"items": items, "count": len(items), "limit": len(items), "offset": 0}
+
+
+@router.get(
+    "/work-order-evidence-map",
+    response_model=FieldFiberWorkOrderEvidenceMapRead,
+)
+def get_field_fiber_work_order_evidence_map(
+    work_order_id: str = Query(min_length=1, max_length=64),
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    report = field_fiber.get_work_order_evidence_map(
+        db,
+        auth,
+        work_order_public_id=work_order_id,
+    )
+    return report.to_dict()

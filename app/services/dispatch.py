@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -16,7 +15,6 @@ from app.models.dispatch import (
     WorkOrderAssignmentQueue,
 )
 from app.models.service_team import ServiceTeam
-from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
@@ -39,6 +37,7 @@ from app.schemas.dispatch import (
 )
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
 from app.services.response import ListResponseMixin
+from app.services.work_order_commands import work_order_commands
 
 
 def _data(payload: Any, *, exclude_unset: bool = False) -> dict[str, Any]:
@@ -72,15 +71,6 @@ def _ensure_service_team(db: Session, service_team_id) -> None:
         _get_or_404(db, ServiceTeam, service_team_id, "Service team not found")
 
 
-def _ensure_rule(db: Session, rule_id) -> None:
-    if rule_id is not None:
-        _get_or_404(db, DispatchRule, rule_id, "Dispatch rule not found")
-
-
-def _ensure_subscriber(db: Session, subscriber_id) -> None:
-    _get_or_404(db, Subscriber, subscriber_id, "Subscriber not found")
-
-
 def _normalize_skill_ids(db: Session, data: dict[str, Any]) -> None:
     if "skill_ids" not in data:
         return
@@ -89,26 +79,6 @@ def _normalize_skill_ids(db: Session, data: dict[str, Any]) -> None:
         skill = _ensure_skill(db, skill_id)
         normalized.append(str(skill.id))
     data["skill_ids"] = normalized
-
-
-def _resolve_work_order(
-    db: Session, payload: WorkOrderAssignmentQueueCreate
-) -> WorkOrder:
-    if payload.work_order_mirror_id is not None:
-        return _get_or_404(
-            db,
-            WorkOrder,
-            payload.work_order_mirror_id,
-            "Work order mirror not found",
-        )
-    row = (
-        db.query(WorkOrder)
-        .filter(WorkOrder.public_id == payload.crm_work_order_id)
-        .one_or_none()
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Work order mirror not found")
-    return row
 
 
 class Skills(ListResponseMixin):
@@ -410,27 +380,21 @@ class DispatchRules(ListResponseMixin):
 
 class WorkOrderHeaders(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: WorkOrderHeaderCreate) -> WorkOrder:
-        data = _data(payload)
-        public_id = (data.pop("public_id", None) or f"sub-{uuid4().hex}").strip()
-        _ensure_subscriber(db, data["subscriber_id"])
-        existing = db.query(WorkOrder).filter_by(public_id=public_id).first()
-        if existing is not None:
-            raise HTTPException(status_code=409, detail="Work order id already exists")
-        metadata = dict(data.pop("metadata_", None) or {})
-        metadata["native_source"] = "sub"
-        # Native rows have NO CRM upstream: crm_work_order_id stays NULL, which
-        # is exactly what is_sub_authoritative uses as the native marker.
-        row = WorkOrder(
-            public_id=public_id,
-            metadata_=metadata,
-            work_order_created_at=data.get("work_order_created_at"),
-            **data,
+    def create(
+        db: Session,
+        payload: WorkOrderHeaderCreate,
+        *,
+        auth: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> WorkOrder:
+        return work_order_commands.create(
+            db,
+            payload,
+            auth=auth,
+            request_id=request_id,
+            idempotency_key=idempotency_key,
         )
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-        return row
 
     @staticmethod
     def get(db: Session, work_order_id: str) -> WorkOrder:
@@ -464,43 +428,37 @@ class WorkOrderHeaders(ListResponseMixin):
 
     @staticmethod
     def update(
-        db: Session, work_order_id: str, payload: WorkOrderHeaderUpdate
+        db: Session,
+        work_order_id: str,
+        payload: WorkOrderHeaderUpdate,
+        *,
+        auth: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> WorkOrder:
-        row = WorkOrderHeaders.get(db, work_order_id)
-        data = _data(payload, exclude_unset=True)
-        if "subscriber_id" in data:
-            _ensure_subscriber(db, data["subscriber_id"])
-        if "metadata_" in data:
-            metadata = dict(row.metadata_ or {})
-            metadata.update(data.pop("metadata_") or {})
-            metadata.setdefault("native_source", "sub")
-            row.metadata_ = metadata
-        for key, value in data.items():
-            setattr(row, key, value)
-        db.commit()
-        db.refresh(row)
-        return row
+        return work_order_commands.update_header(
+            db,
+            work_order_id,
+            payload,
+            auth=auth,
+            request_id=request_id,
+        )
 
 
 class AssignmentQueue(ListResponseMixin):
     @staticmethod
     def create(
-        db: Session, payload: WorkOrderAssignmentQueueCreate
+        db: Session,
+        payload: WorkOrderAssignmentQueueCreate,
+        *,
+        auth: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> WorkOrderAssignmentQueue:
-        work_order = _resolve_work_order(db, payload)
-        data = _data(payload)
-        data["work_order_mirror_id"] = work_order.id
-        # ``crm_work_order_id`` remains an input compatibility name for field
-        # clients, but the child row stores only the authoritative native FK.
-        data.pop("crm_work_order_id", None)
-        _ensure_rule(db, data.get("dispatch_rule_id"))
-        if data.get("assigned_technician_id") is not None:
-            _ensure_technician(db, data["assigned_technician_id"])
-        row = WorkOrderAssignmentQueue(**data)
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-        return row
+        return work_order_commands.create_queue_entry(
+            db,
+            payload,
+            auth=auth,
+            request_id=request_id,
+        )
 
     @staticmethod
     def list(
@@ -534,20 +492,20 @@ class AssignmentQueue(ListResponseMixin):
 
     @staticmethod
     def update(
-        db: Session, queue_id: str, payload: WorkOrderAssignmentQueueUpdate
+        db: Session,
+        queue_id: str,
+        payload: WorkOrderAssignmentQueueUpdate,
+        *,
+        auth: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> WorkOrderAssignmentQueue:
-        row = _get_or_404(
-            db, WorkOrderAssignmentQueue, queue_id, "Queue item not found"
+        return work_order_commands.update_queue_entry(
+            db,
+            queue_id,
+            payload,
+            auth=auth,
+            request_id=request_id,
         )
-        data = _data(payload, exclude_unset=True)
-        _ensure_rule(db, data.get("dispatch_rule_id"))
-        if data.get("assigned_technician_id") is not None:
-            _ensure_technician(db, data["assigned_technician_id"])
-        for key, value in data.items():
-            setattr(row, key, value)
-        db.commit()
-        db.refresh(row)
-        return row
 
 
 skills = Skills()

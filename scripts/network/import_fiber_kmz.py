@@ -286,6 +286,7 @@ def import_segments(
                     route_geom=_geojson_to_geom(geojson),
                     length_m=length_m,
                     notes=notes,
+                    is_active=False,
                 )
                 db.add(segment)
                 created += 1

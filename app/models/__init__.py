@@ -212,11 +212,17 @@ from app.models.external import (  # noqa: F401
 )
 from app.models.fiber_access_attachment import (  # noqa: F401
     FiberAccessAttachmentDecision,
+    SplitterCascadeLink,
 )
 from app.models.fiber_change_request import (  # noqa: F401
     FiberChangeRequest,
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
+)
+from app.models.fiber_support import (  # noqa: F401
+    FiberSupportMount,
+    FiberSupportMountDecision,
+    FiberSupportStructure,
 )
 from app.models.fiber_topology_connectivity import (  # noqa: F401
     FiberTopologyConnectivityDecision,
@@ -280,6 +286,11 @@ from app.models.field_vendor import (  # noqa: F401
     FieldVendorUser,
 )
 from app.models.field_worklog import FieldWorkLog  # noqa: F401
+from app.models.forwarding_topology import (  # noqa: F401
+    ForwardingControlObservation,
+    ForwardingTopologyDecision,
+    ForwardingTopologyDeclaration,
+)
 from app.models.fup import (  # noqa: F401
     FupAction,
     FupConsumptionPeriod,

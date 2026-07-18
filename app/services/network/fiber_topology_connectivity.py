@@ -258,6 +258,15 @@ def _validate_existing_segment(
         raise FiberTopologyConnectivityError(
             "canonical target segment has an invalid termination reference"
         )
+    from app.services.network.fiber_plant_integrity import (
+        FiberPlantIntegrityError,
+        validate_active_segment,
+    )
+
+    try:
+        validate_active_segment(db, segment)
+    except FiberPlantIntegrityError as exc:
+        raise FiberTopologyConnectivityError(str(exc)) from exc
     return segment, start, end
 
 
@@ -342,10 +351,13 @@ def preview_connectivity_decision(
                 ).value
             except ValueError as exc:
                 raise FiberTopologyConnectivityError("invalid cable_type") from exc
-        if fiber_count is not None:
-            if fiber_count < 1:
-                raise FiberTopologyConnectivityError("fiber_count must be positive")
-            normalized_fiber_count = fiber_count
+        if fiber_count is None:
+            raise FiberTopologyConnectivityError(
+                "fiber_count is required for an operational cable"
+            )
+        if fiber_count < 1:
+            raise FiberTopologyConnectivityError("fiber_count must be positive")
+        normalized_fiber_count = fiber_count
         if length_m is not None:
             if length_m <= 0:
                 raise FiberTopologyConnectivityError("length_m must be positive")

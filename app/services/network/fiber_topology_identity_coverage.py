@@ -17,6 +17,7 @@ from typing import Any, cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from app.models.fiber_support import FiberSupportStructure
 from app.models.fiber_topology_identity import (
     FiberTopologyAssetSourceLink,
     FiberTopologyIdentityBatchReview,
@@ -36,20 +37,19 @@ from app.services.network.fiber_topology_field_observations import (
 )
 
 SUPPORTED_CREATE_OR_LINK_TYPES = frozenset(
-    {"fdh_cabinet", "fiber_access_point", "splice_closure"}
+    {"fdh_cabinet", "fiber_access_point", "splice_closure", "support_structure"}
 )
 SUPPORTED_LINK_ONLY_TYPES = frozenset({"service_building"})
-REJECT_ONLY_TYPES = frozenset({"support_structure"})
 POINT_ASSET_TYPES = (
     *sorted(SUPPORTED_CREATE_OR_LINK_TYPES),
     *sorted(SUPPORTED_LINK_ONLY_TYPES),
-    *sorted(REJECT_ONLY_TYPES),
 )
 CANONICAL_MODELS: dict[str, Any] = {
     "fdh_cabinet": FdhCabinet,
     "fiber_access_point": FiberAccessPoint,
     "service_building": ServiceBuilding,
     "splice_closure": FiberSpliceClosure,
+    "support_structure": FiberSupportStructure,
 }
 
 COVERAGE_STATES = (
@@ -93,7 +93,6 @@ class FiberTopologyIdentityCoverageReport:
     coverage_report_sha256: str
     staged_point_count: int
     supported_point_count: int
-    reject_only_point_count: int
     source_batch_count: int
     assets: tuple[dict[str, object], ...]
     lineages: tuple[dict[str, object], ...]
@@ -121,8 +120,7 @@ class FiberTopologyIdentityCoverageReport:
             "ready_for_point_identity_cutover_review": (
                 self.ready_for_point_identity_cutover_review
             ),
-            "reject_only_point_count": self.reject_only_point_count,
-            "schema_version": 1,
+            "schema_version": 2,
             "source_batch_count": self.source_batch_count,
             "staged_point_count": self.staged_point_count,
             "supported_point_count": self.supported_point_count,
@@ -684,7 +682,9 @@ def _model_state(asset_type: str) -> str:
         return "supported_create_or_link"
     if asset_type in SUPPORTED_LINK_ONLY_TYPES:
         return "supported_link_only"
-    return "unsupported_reject_only"
+    raise FiberTopologyIdentityCoverageError(
+        f"unsupported staged point asset type: {asset_type}"
+    )
 
 
 def _source_blocked(feature: FiberTopologyStagedFeature) -> bool:
@@ -921,9 +921,6 @@ def reconcile_fiber_identity_coverage(
         asset_type_counts[asset_type]
         for asset_type in (*SUPPORTED_CREATE_OR_LINK_TYPES, *SUPPORTED_LINK_ONLY_TYPES)
     )
-    reject_only_count = sum(
-        asset_type_counts[asset_type] for asset_type in REJECT_ONLY_TYPES
-    )
     cohort_nonempty = bool(features)
     source_reviewable = coverage_counts["source_blocked"] == 0
     exact_once = coverage_counts["exact"] == len(features)
@@ -948,14 +945,14 @@ def reconcile_fiber_identity_coverage(
         all(
             row["lifecycle_state"] in {"applied_current", "rejected_current"}
             for row in asset_rows
-            if row["asset_type"] not in REJECT_ONLY_TYPES
+            if row["asset_type"] in POINT_ASSET_TYPES
         )
         and supported_count > 0
     )
-    reject_only_terminal = all(
-        row["lifecycle_state"] == "rejected_current"
+    support_structure_terminal = all(
+        row["lifecycle_state"] in {"applied_current", "rejected_current"}
         for row in asset_rows
-        if row["asset_type"] in REJECT_ONLY_TYPES
+        if row["asset_type"] == "support_structure"
     )
     gates = (
         _gate(
@@ -996,12 +993,12 @@ def reconcile_fiber_identity_coverage(
         _gate(
             "supported_point_identities_terminal_current",
             supported_terminal,
-            "Every supported cabinet, FAT, closure, or building is applied with current provenance or explicitly reviewed and rejected.",
+            "Every supported cabinet, FAT, closure, building, or support is applied with current provenance or explicitly reviewed and rejected.",
         ),
         _gate(
-            "unsupported_support_structures_reviewed_reject_only",
-            reject_only_terminal,
-            "Every staged pole/support identity is explicitly reviewed and rejected until a canonical owner and model are approved.",
+            "support_structure_identities_terminal_current",
+            support_structure_terminal,
+            "Every staged pole/support identity is applied to the canonical support owner with current provenance or explicitly reviewed and rejected.",
         ),
     )
     ready = all(bool(gate["ready"]) for gate in gates)
@@ -1016,8 +1013,7 @@ def reconcile_fiber_identity_coverage(
         "lifecycle_counts": lifecycle_counts,
         "lineages": lineage_rows,
         "ready_for_point_identity_cutover_review": ready,
-        "reject_only_point_count": reject_only_count,
-        "schema_version": 1,
+        "schema_version": 2,
         "source_batch_count": len(source_batch_ids),
         "staged_point_count": len(features),
         "supported_point_count": supported_count,
@@ -1026,7 +1022,6 @@ def reconcile_fiber_identity_coverage(
         coverage_report_sha256=_digest(report_payload),
         staged_point_count=len(features),
         supported_point_count=supported_count,
-        reject_only_point_count=reject_only_count,
         source_batch_count=len(source_batch_ids),
         assets=tuple(asset_rows),
         lineages=tuple(lineage_rows),
@@ -1045,7 +1040,6 @@ __all__ = [
     "COVERAGE_STATES",
     "LIFECYCLE_STATES",
     "POINT_ASSET_TYPES",
-    "REJECT_ONLY_TYPES",
     "SUPPORTED_CREATE_OR_LINK_TYPES",
     "SUPPORTED_LINK_ONLY_TYPES",
     "FiberTopologyIdentityCoverageError",

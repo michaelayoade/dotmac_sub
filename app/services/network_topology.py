@@ -1,4 +1,8 @@
-"""Network topology service — link CRUD, graph projection, utilization."""
+"""Observed/manual adjacency CRUD, display graph projection, and utilization.
+
+These projections support inventory and weathermap presentation. Official
+upstream path and outage ancestry belong to `network.forwarding_topology`.
+"""
 
 from __future__ import annotations
 
@@ -50,7 +54,7 @@ TOPOLOGY_DEFAULT_TYPES = {
 
 
 class TopologyLinks:
-    """Manager for network topology link records."""
+    """Manager for observed/manual adjacency records, not forwarding intent."""
 
     @staticmethod
     def list(

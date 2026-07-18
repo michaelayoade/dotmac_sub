@@ -7,6 +7,21 @@ import 'token_store.dart';
 /// Decode a JWT's exp claim without verifying the signature (the server
 /// verifies; the client only needs the expiry for proactive refresh).
 DateTime? jwtExpiry(String token) {
+  final claims = _jwtClaims(token);
+  final exp = claims?['exp'];
+  if (exp is! int) return null;
+  return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
+}
+
+/// Stable authenticated subject used only to isolate local projection caches.
+/// Authorization remains server-owned; this never validates or trusts the JWT.
+String? jwtSubject(String token) {
+  final subject = _jwtClaims(token)?['sub'];
+  if (subject is! String || subject.trim().isEmpty) return null;
+  return subject.trim();
+}
+
+Map<String, dynamic>? _jwtClaims(String token) {
   final parts = token.split('.');
   if (parts.length != 3) return null;
   try {
@@ -15,10 +30,9 @@ DateTime? jwtExpiry(String token) {
       payload += '=';
     }
     final claims = jsonDecode(utf8.decode(base64.decode(payload)));
-    final exp = claims['exp'];
-    if (exp is! int) return null;
-    return DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true);
-  } on FormatException {
+    if (claims is! Map) return null;
+    return claims.cast<String, dynamic>();
+  } on Object {
     return null;
   }
 }

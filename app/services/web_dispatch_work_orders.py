@@ -249,7 +249,13 @@ def list_page(
     }
 
 
-def create_from_form(db: Session, form: dict[str, Any]) -> WorkOrder:
+def create_from_form(
+    db: Session,
+    form: dict[str, Any],
+    *,
+    auth: dict[str, Any] | None = None,
+    request_id: str | None = None,
+) -> WorkOrder:
     payload = WorkOrderHeaderCreate(
         public_id=_clean(form.get("public_id")),
         subscriber_id=coerce_uuid(str(form.get("subscriber_id"))),
@@ -270,20 +276,26 @@ def create_from_form(db: Session, form: dict[str, Any]) -> WorkOrder:
         tags=_split_csv(form.get("tags")),
         access_notes=_clean(form.get("access_notes")),
     )
-    return dispatch_service.work_order_headers.create(db, payload)
+    return dispatch_service.work_order_headers.create(
+        db,
+        payload,
+        auth=auth,
+        request_id=request_id,
+    )
 
 
 def update_from_form(
-    db: Session, work_order_id: str, form: dict[str, Any]
+    db: Session,
+    work_order_id: str,
+    form: dict[str, Any],
+    *,
+    auth: dict[str, Any] | None = None,
+    request_id: str | None = None,
 ) -> WorkOrder:
     payload = WorkOrderHeaderUpdate(
         title=_clean(form.get("title")),
-        status=_clean(form.get("status")),
         priority=_clean(form.get("priority")),
         work_type=_clean(form.get("work_type")),
-        assigned_to_name=_clean(form.get("assigned_to_name")),
-        technician_name=_clean(form.get("technician_name")),
-        technician_phone=_clean(form.get("technician_phone")),
         address=_clean(form.get("address")),
         scheduled_start=_parse_dt(form.get("scheduled_start")),
         scheduled_end=_parse_dt(form.get("scheduled_end")),
@@ -297,11 +309,22 @@ def update_from_form(
         tags=_split_csv(form.get("tags")),
         access_notes=_clean(form.get("access_notes")),
     )
-    return dispatch_service.work_order_headers.update(db, work_order_id, payload)
+    return dispatch_service.work_order_headers.update(
+        db,
+        work_order_id,
+        payload,
+        auth=auth,
+        request_id=request_id,
+    )
 
 
 def queue_assignment_from_form(
-    db: Session, work_order_id: str, form: dict[str, Any]
+    db: Session,
+    work_order_id: str,
+    form: dict[str, Any],
+    *,
+    auth: dict[str, Any] | None = None,
+    request_id: str | None = None,
 ) -> WorkOrderAssignmentQueue:
     technician_id = _clean(form.get("assigned_technician_id"))
     if technician_id is None:
@@ -312,4 +335,9 @@ def queue_assignment_from_form(
         assigned_technician_id=coerce_uuid(technician_id),
         reason=_clean(form.get("reason")),
     )
-    return dispatch_service.assignment_queue.create(db, payload)
+    return dispatch_service.assignment_queue.create(
+        db,
+        payload,
+        auth=auth,
+        request_id=request_id,
+    )

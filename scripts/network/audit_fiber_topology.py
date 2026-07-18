@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Resolve every active fiber subscription before evaluating the "
-            "customer-trace cutover gate. This can be expensive."
+            "customer-trace evidence completeness gate. This can be expensive."
         ),
     )
     parser.add_argument(
@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Bound a shadow trace sample. A limited run is never cutover-ready "
+            "Bound a shadow trace sample. A limited run is never complete "
             "even when every sampled path is complete."
         ),
     )
@@ -64,7 +64,7 @@ def main() -> int:
             sort_keys=True,
         )
     )
-    return 0 if report.customer_trace_cutover_ready else 2
+    return 0 if report.customer_trace_evidence_complete else 2
 
 
 if __name__ == "__main__":
