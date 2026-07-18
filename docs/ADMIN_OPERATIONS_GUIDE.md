@@ -986,6 +986,14 @@ then apply the exact full-cohort manifest before starting the enforcement
 release. Missing pre-cutover opening balances fail closed; never enter zero for
 an unknown balance.
 
+If the exact blocker manifest reports only
+`source_service_without_paid_through_period` and the authorized service review
+confirms those services have never been paid through, use the hash-bound
+`no_paid_through_due_immediately` adjudication workflow in the reconstruction
+design. It preserves every opening balance and makes the affected services due
+immediately. It cannot clear another blocker class or act as a suspension
+allowlist.
+
 The audit exporter must seal the clean full-cohort manifest with an Ed25519
 private key resolved from an audit-only OpenBao reference. Configure
 `billing.prepaid_reconstruction_attestation_public_key_ref` with a separate

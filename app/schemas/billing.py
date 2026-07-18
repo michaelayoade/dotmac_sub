@@ -1276,6 +1276,7 @@ class LedgerEntryBase(BaseModel):
     currency: str = Field(default="NGN", min_length=3, max_length=3)
     memo: str | None = None
     is_active: bool = True
+    effective_date: datetime | None = None
 
 
 class LedgerEntryCreate(LedgerEntryBase):

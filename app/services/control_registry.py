@@ -232,6 +232,16 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Monthly prepaid invoice generation.",
     ),
     Control(
+        key="billing.prepaid_service_renewals",
+        layer=Layer.feature,
+        owner_module="billing",
+        default=False,
+        on_missing=False,
+        description=(
+            "Fund due prepaid monthly periods from verified customer position."
+        ),
+    ),
+    Control(
         key="billing.direct_bank_transfer",
         layer=Layer.feature,
         owner_module="billing",

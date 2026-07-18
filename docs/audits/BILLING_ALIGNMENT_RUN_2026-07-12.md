@@ -13,6 +13,65 @@ rejected as current-production evidence. The accepted D12 pass then ran against
 the explicitly named Sub production host `selfcare.dotmac.io`; both passes
 destroyed their session-local tables and temporary files (§7).
 
+The 2026-07-18 continuation used a fresh logical copy of production facts on
+the same approved host. It wrote three proof-only reconciliation rows inside
+the isolated audit database; production remained read-only. Those rows and the
+later replay validate mechanics only and are not a production snapshot because
+the copy was frozen before the proof timestamp.
+
+---
+
+## 0. 2026-07-18 continuation — service-cycle and 92-account adjudication
+
+| Check | Result |
+|---|---:|
+| Live active prepaid baselines | 4,265 |
+| Live authority-cutover batches | 1 |
+| Fresh audit candidates at 09:43:32 UTC | 4,072 |
+| Positive-money service-cycle gaps | 3 accounts / ₦112,875 |
+| Zero-charge observations excluded from financial repair | 4 periods |
+| Initial apparent no-paid-through blockers | 92 |
+| Current-only vs reviewed 92 set | 0 |
+| Reviewed-only vs current 92 set | 0 |
+| Direct-source services with no transaction of any category | 85 |
+| Direct-source services with other period evidence | 7 |
+| Accounts with Splynx payment receipts | 43 / ₦37,976,204.53 |
+| Accepted post-adjudication blockers | **not zero; 7 unresolved** |
+
+The exact 92-account set SHA-256 is
+`a8fe7d207be0b5a89059d34c15c0fc303077941ea6711f8c5e907e8b71e20675`.
+Every row initially had the one reason
+`source_service_without_paid_through_period`, but exact-set equality proved only
+that the same rows had been reviewed. It did not verify the reason. The all-92
+action packet is withdrawn and must not be signed or applied.
+
+The exact 92 source service IDs were then queried directly in the retained final
+Splynx database. There are zero normal category-1 Service charges. However,
+seven services carry other period evidence: two category-2 Discount debits
+totaling ₦313,586.96 and six zero-value category-5 Correction rows across five
+services. The other 85 have no service-linked transaction. Separately, 43
+accounts have real Splynx payment receipts; therefore “92 customers never paid”
+is false even though those receipts do not prove a paid period for a particular
+service. The aggregate, non-identifying verification SQL SHA-256 is
+`a4c9fc17b83ffe71da7c55697eda8ce0a2232040d49ac7a9b197ae1b4cf19c3d`.
+
+The corrected replay now treats those seven as
+`source_service_has_noncanonical_period_evidence`; only the 85 evidence-clean
+services may be reviewed as no-paid-through / due immediately. The seven remain
+blocked until their Discount/Correction evidence is explicitly resolved.
+
+The three-entry positive-money plan has SHA-256
+`b401456cb0d6b0bf1b23679d5eb4b008eeb2e7efd300fcec9730a5a007c20bc3`.
+A read-only live preview returned ready with zero blocked accounts. In the
+isolated database, first application posted three owner-controlled debits and
+entitlements; replay posted zero duplicates. No production apply occurred.
+
+The post-repair replay at 11:55:20 UTC intentionally stopped before signing.
+Because its source copy ended at 09:43:32 UTC, it cannot authorize a production
+supersession. A final run must use a fresh temporally complete copy after the
+three owner repairs, reproduce and resolve the source-backed 85/7 split, then
+pass the normal signing/materialization/readiness gates.
+
 ---
 
 ## 1. Run provenance

@@ -120,8 +120,10 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    A pre-cutover account without an approved opening balance fails closed; an
    account created after cutover starts at zero and accumulates native events.
    Customer statements and scalar funding previews use that reviewed position
-   as their opening event and include only later native events in its currency;
-   they never replay the archived mirror or older duplicate projections.
+   as their opening event. A native fact crosses that boundary when its
+   economic timestamp or its Sub `created_at` is later, so late-entered,
+   backdated money is not hidden by the opening position. They never replay the
+   archived mirror or older duplicate projections.
    Portal outstanding-balance views consume its collection-blocking
    value; a capped invoice display list never caps or redefines the amount.
    Billing reporting applies the same collectible/non-proforma boundary and
@@ -151,6 +153,27 @@ OpenBao settings migration boundary. Bootstrap writes defaults through
    account or policy-set grace remains authoritative. Supplied snapshots are
    complete-or-error for that cohort and never fill missing accounts from a
    different balance source.
+   A reviewed never-paid decision may resolve only an exact hash-bound
+   `source_service_without_paid_through_period` cohort: it preserves the source
+   opening balance, makes the service due immediately, and is bound into the
+   signed artifact. Exact-set equality is not evidence that the reason is true:
+   the final source service must also have no charge, discount, correction, or
+   other service-linked period transaction. Any such evidence gets a separate
+   blocker and cannot consume the never-paid disposition. Account-level payment
+   receipts remain in opening funding but do not prove a particular service
+   period. The disposition is not a generic blocker override.
+   After authority cutover, an affordable reconstructed service-cycle charge
+   must have an active `ServiceEntitlement` for the same subscription and
+   billing-period start, linked either to a paid `financial.invoices` line or
+   an exact customer-position wallet debit. Missing or amount-mismatched funding
+   evidence blocks reconstruction; the reconstruction owner never substitutes
+   an undocumented charge.
+   `financial.prepaid_service_renewals` owns the non-payment-triggered case:
+   when reviewed funding already exists as a monthly period becomes due, it
+   previews against the verified position, posts one idempotent service debit,
+   links one active entitlement, and advances the exact subscription period.
+   The daily adapter is control-gated and refuses anchors more than two days
+   stale; historical cycles require a reviewed hash-bound reconciliation plan.
 10. `financial.billing_reporting` (`app/services/billing/reporting.py`) owns
    every money figure the admin reports and overview render: overview and
    payments/collections summaries, AR aging and outstanding receivables,

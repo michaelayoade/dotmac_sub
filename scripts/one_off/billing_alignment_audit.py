@@ -93,9 +93,11 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models.billing import (
+    AccountAdjustment,
     CreditNote,
     CreditNoteStatus,
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
@@ -103,7 +105,10 @@ from app.models.billing import (
     Payment,
     PaymentAllocation,
     PaymentStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
 )
+from app.models.prepaid_funding import PrepaidFundingReconstructionBatch
 from app.models.subscriber import Subscriber
 
 ZERO = Decimal("0.00")
@@ -542,6 +547,7 @@ def _batch_customer_positions(
 class _ReplayService:
     service_id: int
     account_id: str
+    subscription_id: str | None
     next_due: date
     cycle_days: int
     charge: Decimal
@@ -555,6 +561,21 @@ class ReconstructedPositions:
     service_charges: dict[str, Decimal]
     post_legacy_credits: dict[str, Decimal]
     incomplete: dict[str, set[str]]
+    service_cycle_gaps: tuple[_ReplayServiceCycleGap, ...]
+
+
+@dataclass(frozen=True)
+class _ReplayServiceCycleGap:
+    """One affordable source-derived cycle lacking canonical funding evidence."""
+
+    account_id: str
+    subscription_id: str | None
+    period_start: date
+    period_end: date
+    amount: Decimal
+    funding_before: Decimal
+    currency: str
+    reason: str
 
 
 def _batch_reconstructed_positions(
@@ -600,6 +621,13 @@ def _batch_reconstructed_positions(
     if snapshot_at < LEGACY_FINANCIAL_REPLAY_AT:
         raise ValueError("replay snapshot predates the final legacy handoff")
     snapshot_date = snapshot_at.date()
+    authority_position_at = _aware(
+        db.scalar(
+            select(PrepaidFundingReconstructionBatch.position_at).where(
+                PrepaidFundingReconstructionBatch.is_authority_cutover.is_(True)
+            )
+        )
+    )
 
     final_balances = table(
         "audit_splynx_final_balances",
@@ -616,6 +644,14 @@ def _batch_reconstructed_positions(
         column("last_charge_total", Numeric(19, 4)),
         column("last_period_from", Date),
         column("last_period_to", Date),
+        column("noncharge_transaction_rows"),
+        column("noncharge_period_rows"),
+        column("last_noncharge_transaction_id"),
+        column("last_noncharge_type"),
+        column("last_noncharge_category_id"),
+        column("last_noncharge_total", Numeric(19, 4)),
+        column("last_noncharge_period_from", Date),
+        column("last_noncharge_period_to", Date),
     )
 
     opening_stmt = select(
@@ -634,10 +670,78 @@ def _batch_reconstructed_positions(
     service_charges: dict[str, Decimal] = defaultdict(lambda: ZERO)
     post_legacy_credits: dict[str, Decimal] = defaultdict(lambda: ZERO)
     financial_events: dict[str, list[tuple[datetime, Decimal]]] = defaultdict(list)
+    native_zero_accounts: set[Any] = set()
+
+    # Accounts born entirely in Sub after the legacy handoff have no Splynx
+    # opening row by construction.  Their opening position is provably zero
+    # only when the account existed by the requested snapshot, has no Splynx
+    # identity or service evidence, and has no native financial fact predating
+    # the handoff.  This is the same authority rule used by the runtime reader
+    # for post-cutover accounts; it is not a missing-baseline fallback.
+    requested_ids = list(account_ids or [])
+    if requested_ids:
+        source_service_accounts = set(
+            db.scalars(
+                select(final_services.c.subscriber_id).where(
+                    final_services.c.subscriber_id.in_(requested_ids),
+                    final_services.c.subscriber_id.isnot(None),
+                )
+            ).all()
+        )
+        native_candidates = (
+            set(
+                db.scalars(
+                    select(Subscriber.id).where(
+                        Subscriber.id.in_(requested_ids),
+                        Subscriber.splynx_customer_id.is_(None),
+                        Subscriber.created_at <= snapshot_at,
+                    )
+                ).all()
+            )
+            - source_service_accounts
+        )
+        pre_handoff_accounts: set[Any] = set()
+        if native_candidates:
+            pre_handoff_accounts.update(
+                db.scalars(
+                    select(Payment.account_id).where(
+                        Payment.account_id.in_(native_candidates),
+                        Payment.created_at < LEGACY_FINANCIAL_REPLAY_AT,
+                    )
+                ).all()
+            )
+            pre_handoff_accounts.update(
+                db.scalars(
+                    select(Invoice.account_id).where(
+                        Invoice.account_id.in_(native_candidates),
+                        Invoice.created_at < LEGACY_FINANCIAL_REPLAY_AT,
+                    )
+                ).all()
+            )
+            pre_handoff_accounts.update(
+                db.scalars(
+                    select(CreditNote.account_id).where(
+                        CreditNote.account_id.in_(native_candidates),
+                        CreditNote.created_at < LEGACY_FINANCIAL_REPLAY_AT,
+                    )
+                ).all()
+            )
+            pre_handoff_accounts.update(
+                db.scalars(
+                    select(LedgerEntry.account_id).where(
+                        LedgerEntry.account_id.in_(native_candidates),
+                        LedgerEntry.affects_customer_position.is_(True),
+                        LedgerEntry.created_at < LEGACY_FINANCIAL_REPLAY_AT,
+                    )
+                ).all()
+            )
+        native_zero_accounts = native_candidates - pre_handoff_accounts
+        for native_account_id in native_zero_accounts:
+            positions.setdefault(str(native_account_id), ZERO)
 
     replay_ids = list(positions)
     if not replay_ids:
-        return ReconstructedPositions({}, {}, {}, {})
+        return ReconstructedPositions({}, {}, {}, {}, ())
 
     payment_stmt = select(
         Payment.account_id,
@@ -656,16 +760,26 @@ def _batch_reconstructed_positions(
                 PaymentStatus.refunded,
             ]
         ),
-        func.coalesce(Payment.paid_at, Payment.created_at)
-        >= LEGACY_FINANCIAL_REPLAY_AT,
+        Payment.created_at <= snapshot_at,
+        or_(
+            func.coalesce(Payment.paid_at, Payment.created_at)
+            >= LEGACY_FINANCIAL_REPLAY_AT,
+            Payment.created_at >= LEGACY_FINANCIAL_REPLAY_AT,
+        ),
         func.coalesce(Payment.paid_at, Payment.created_at) <= snapshot_at,
     )
     for payment_row in db.execute(payment_stmt):
         account_id = str(payment_row.account_id)
         occurred_at = _aware(payment_row.paid_at or payment_row.created_at)
+        recorded_at = _aware(payment_row.created_at)
         if occurred_at is None:
             incomplete[account_id].add("payment_without_event_time")
             continue
+        if recorded_at is None:
+            incomplete[account_id].add("payment_without_recorded_time")
+            continue
+        if recorded_at >= LEGACY_FINANCIAL_REPLAY_AT:
+            occurred_at = max(occurred_at, LEGACY_FINANCIAL_REPLAY_AT)
         net = _money(payment_row.amount) - _money(payment_row.refunded_amount)
         financial_events[account_id].append((occurred_at, net))
         post_legacy_credits[account_id] += net
@@ -678,8 +792,7 @@ def _batch_reconstructed_positions(
         select(
             Invoice.account_id,
             PaymentAllocation.amount,
-            Payment.paid_at,
-            Payment.created_at,
+            PaymentAllocation.created_at.label("allocation_created_at"),
         )
         .join(Invoice, Invoice.id == PaymentAllocation.invoice_id)
         .join(Payment, Payment.id == PaymentAllocation.payment_id)
@@ -695,14 +808,13 @@ def _batch_reconstructed_positions(
                     PaymentStatus.refunded,
                 ]
             ),
-            func.coalesce(Payment.paid_at, Payment.created_at)
-            >= LEGACY_FINANCIAL_REPLAY_AT,
-            func.coalesce(Payment.paid_at, Payment.created_at) <= snapshot_at,
+            PaymentAllocation.created_at >= LEGACY_FINANCIAL_REPLAY_AT,
+            PaymentAllocation.created_at <= snapshot_at,
         )
     )
     for allocation_row in db.execute(allocation_stmt):
         account_id = str(allocation_row.account_id)
-        occurred_at = _aware(allocation_row.paid_at or allocation_row.created_at)
+        occurred_at = _aware(allocation_row.allocation_created_at)
         if occurred_at is None:
             incomplete[account_id].add("allocation_without_event_time")
             continue
@@ -739,24 +851,52 @@ def _batch_reconstructed_positions(
 
     adjustment_stmt = select(
         LedgerEntry.account_id,
+        LedgerEntry.entry_type,
+        LedgerEntry.amount,
         LedgerEntry.effective_date,
         LedgerEntry.created_at,
     ).where(
         LedgerEntry.account_id.in_(replay_ids),
         LedgerEntry.is_active.is_(True),
+        LedgerEntry.affects_customer_position.is_(True),
         LedgerEntry.invoice_id.is_(None),
         LedgerEntry.source.in_([LedgerSource.adjustment, LedgerSource.other]),
-        func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
-        >= LEGACY_FINANCIAL_REPLAY_AT,
+        LedgerEntry.currency == "NGN",
+        # ``effective_date`` is the real-world date represented by an entry,
+        # while ``created_at`` is when that fact became part of Sub.  A
+        # backdated row written after the requested snapshot must not leak into
+        # an earlier reconstruction.
+        LedgerEntry.created_at <= snapshot_at,
+        or_(
+            func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
+            >= LEGACY_FINANCIAL_REPLAY_AT,
+            LedgerEntry.created_at >= LEGACY_FINANCIAL_REPLAY_AT,
+        ),
         func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
         <= snapshot_at,
     )
     for adjustment_row in db.execute(adjustment_stmt):
-        incomplete[str(adjustment_row.account_id)].add(
-            "post_legacy_adjustment_requires_provenance"
+        account_id = str(adjustment_row.account_id)
+        occurred_at = _aware(adjustment_row.effective_date or adjustment_row.created_at)
+        recorded_at = _aware(adjustment_row.created_at)
+        if occurred_at is None:
+            incomplete[account_id].add("adjustment_without_event_time")
+            continue
+        if recorded_at is None:
+            incomplete[account_id].add("adjustment_without_recorded_time")
+            continue
+        if recorded_at >= LEGACY_FINANCIAL_REPLAY_AT:
+            occurred_at = max(occurred_at, LEGACY_FINANCIAL_REPLAY_AT)
+        amount = _money(adjustment_row.amount)
+        signed = (
+            amount if adjustment_row.entry_type == LedgerEntryType.credit else -amount
         )
+        financial_events[account_id].append((occurred_at, signed))
+        if signed > ZERO:
+            post_legacy_credits[account_id] += signed
 
     extension_days: dict[str, int] = defaultdict(int)
+    extension_accounts: set[str] = set()
     extension_rows = db.execute(
         select(
             ServiceExtensionEntry.subscription_id,
@@ -777,6 +917,7 @@ def _batch_reconstructed_positions(
         )
     )
     for extension_row in extension_rows:
+        extension_accounts.add(str(extension_row.subscriber_id))
         if extension_row.previous_next_billing_at and extension_row.new_next_billing_at:
             delta = (
                 extension_row.new_next_billing_at
@@ -795,6 +936,8 @@ def _batch_reconstructed_positions(
         final_services.c.last_charge_total,
         final_services.c.last_period_from,
         final_services.c.last_period_to,
+        final_services.c.noncharge_transaction_rows,
+        final_services.c.noncharge_period_rows,
     ).where(
         final_services.c.subscriber_id.in_(replay_ids),
         final_services.c.source_status == "active",
@@ -803,7 +946,15 @@ def _batch_reconstructed_positions(
     for service_row in db.execute(service_stmt):
         account_id = str(service_row.subscriber_id)
         if service_row.last_period_from is None or service_row.last_period_to is None:
-            incomplete[account_id].add("source_service_without_paid_through_period")
+            if int(service_row.noncharge_transaction_rows or 0) > 0:
+                reason = (
+                    "source_service_has_noncanonical_period_evidence"
+                    if int(service_row.noncharge_period_rows or 0) > 0
+                    else "source_service_has_noncanonical_activity"
+                )
+                incomplete[account_id].add(reason)
+            else:
+                incomplete[account_id].add("source_service_without_paid_through_period")
             continue
         cycle_days = (
             service_row.last_period_to - service_row.last_period_from
@@ -814,6 +965,10 @@ def _batch_reconstructed_positions(
         if service_row.last_charge_total is None:
             incomplete[account_id].add("source_service_without_charge")
             continue
+        charge = _money(service_row.last_charge_total)
+        if charge < ZERO:
+            incomplete[account_id].add("source_service_negative_charge")
+            continue
         next_due = max(
             service_row.last_period_to + timedelta(days=1),
             LEGACY_FINANCIAL_REPLAY_AT.date(),
@@ -822,17 +977,109 @@ def _batch_reconstructed_positions(
             next_due += timedelta(
                 days=extension_days.get(str(service_row.subscription_id), 0)
             )
-        else:
+        elif account_id in extension_accounts:
             incomplete[account_id].add("source_service_not_mapped_to_subscription")
         services[account_id].append(
             _ReplayService(
                 service_id=int(service_row.splynx_service_id),
                 account_id=account_id,
+                subscription_id=(
+                    str(service_row.subscription_id)
+                    if service_row.subscription_id is not None
+                    else None
+                ),
                 next_due=next_due,
                 cycle_days=cycle_days,
-                charge=_money(service_row.last_charge_total),
+                charge=charge,
             )
         )
+
+    entitlement_owned_cycles: dict[tuple[str, date], list[Decimal]] = defaultdict(list)
+    replay_subscription_ids = {
+        service.subscription_id
+        for account_services in services.values()
+        for service in account_services
+        if service.subscription_id is not None
+    }
+    if authority_position_at is not None and replay_subscription_ids:
+        native_entitlement_rows = db.execute(
+            select(
+                ServiceEntitlement.subscription_id,
+                ServiceEntitlement.starts_at,
+                ServiceEntitlement.amount_funded,
+                ServiceEntitlement.source_invoice_line_id,
+                ServiceEntitlement.source_ledger_entry_id,
+                InvoiceLine.amount.label("invoice_line_amount"),
+                InvoiceLine.is_active.label("invoice_line_active"),
+                Invoice.status.label("invoice_status"),
+                Invoice.is_active.label("invoice_active"),
+                Invoice.is_proforma.label("invoice_proforma"),
+                LedgerEntry.amount.label("ledger_amount"),
+                LedgerEntry.entry_type.label("ledger_entry_type"),
+                LedgerEntry.source.label("ledger_source"),
+                LedgerEntry.is_active.label("ledger_active"),
+                LedgerEntry.affects_customer_position.label(
+                    "ledger_affects_customer_position"
+                ),
+                AccountAdjustment.origin.label("ledger_adjustment_origin"),
+            )
+            .outerjoin(
+                InvoiceLine,
+                InvoiceLine.id == ServiceEntitlement.source_invoice_line_id,
+            )
+            .outerjoin(Invoice, Invoice.id == InvoiceLine.invoice_id)
+            .outerjoin(
+                LedgerEntry,
+                LedgerEntry.id == ServiceEntitlement.source_ledger_entry_id,
+            )
+            .outerjoin(
+                AccountAdjustment,
+                AccountAdjustment.ledger_entry_id == LedgerEntry.id,
+            )
+            .where(
+                ServiceEntitlement.subscription_id.in_(replay_subscription_ids),
+                ServiceEntitlement.status == ServiceEntitlementStatus.active,
+                ServiceEntitlement.starts_at <= snapshot_at,
+                ServiceEntitlement.created_at <= snapshot_at,
+            )
+        )
+        for entitlement_row in native_entitlement_rows:
+            period_start = _aware(entitlement_row.starts_at)
+            if period_start is None:
+                continue
+            entitlement_amount: Decimal | None = None
+            if entitlement_row.source_invoice_line_id is not None:
+                if not (
+                    entitlement_row.invoice_line_active
+                    and entitlement_row.invoice_active
+                    and not entitlement_row.invoice_proforma
+                    and entitlement_row.invoice_status == InvoiceStatus.paid
+                ):
+                    continue
+                entitlement_amount = _money(entitlement_row.invoice_line_amount)
+            elif entitlement_row.source_ledger_entry_id is not None:
+                if not (
+                    entitlement_row.ledger_active
+                    and entitlement_row.ledger_affects_customer_position
+                    and entitlement_row.ledger_entry_type == LedgerEntryType.debit
+                    and (
+                        entitlement_row.ledger_source == LedgerSource.invoice
+                        or (
+                            entitlement_row.ledger_source == LedgerSource.adjustment
+                            and entitlement_row.ledger_adjustment_origin
+                            == "prepaid_service_renewal"
+                        )
+                    )
+                ):
+                    continue
+                entitlement_amount = _money(entitlement_row.ledger_amount)
+            if entitlement_amount is None or abs(
+                entitlement_amount - _money(entitlement_row.amount_funded)
+            ) > Decimal("0.01"):
+                continue
+            entitlement_owned_cycles[
+                (str(entitlement_row.subscription_id), period_start.date())
+            ].append(entitlement_amount)
 
     # A native service with no source service id is a real post-handoff domain
     # decision. Until its price/schedule event is replayed explicitly, the
@@ -872,6 +1119,30 @@ def _batch_reconstructed_positions(
         if event_account_id is not None:
             incomplete[str(event_account_id)].add("plan_decision_not_replayed")
 
+    service_cycle_gaps: dict[
+        tuple[str, str | None, date, str], _ReplayServiceCycleGap
+    ] = {}
+
+    def add_service_cycle_gap(
+        account_id: str,
+        service: _ReplayService,
+        reason: str,
+    ) -> None:
+        key = (account_id, service.subscription_id, service.next_due, reason)
+        service_cycle_gaps.setdefault(
+            key,
+            _ReplayServiceCycleGap(
+                account_id=account_id,
+                subscription_id=service.subscription_id,
+                period_start=service.next_due,
+                period_end=service.next_due + timedelta(days=service.cycle_days),
+                amount=service.charge,
+                funding_before=positions[account_id],
+                currency="NGN",
+                reason=reason,
+            ),
+        )
+
     def attempt_due(account_id: str, through: date) -> None:
         account_services = services.get(account_id, [])
         if not account_services:
@@ -897,6 +1168,32 @@ def _batch_reconstructed_positions(
             for service in due:
                 if service.charge > positions[account_id]:
                     continue
+                due_at = datetime.combine(service.next_due, time.min, tzinfo=UTC)
+                if (
+                    service.charge > ZERO
+                    and authority_position_at is not None
+                    and due_at > authority_position_at
+                ):
+                    if service.subscription_id is None:
+                        reason = "due_service_charge_without_subscription_owner"
+                        incomplete[account_id].add(reason)
+                        add_service_cycle_gap(account_id, service, reason)
+                    else:
+                        owned_amounts = entitlement_owned_cycles.get(
+                            (service.subscription_id, service.next_due), []
+                        )
+                        if not owned_amounts:
+                            reason = "due_service_charge_without_native_entitlement"
+                            incomplete[account_id].add(reason)
+                            add_service_cycle_gap(account_id, service, reason)
+                        elif len(owned_amounts) != 1 or abs(
+                            owned_amounts[0] - service.charge
+                        ) > Decimal("0.01"):
+                            reason = (
+                                "due_service_charge_native_entitlement_amount_mismatch"
+                            )
+                            incomplete[account_id].add(reason)
+                            add_service_cycle_gap(account_id, service, reason)
                 positions[account_id] -= service.charge
                 service_charges[account_id] += service.charge
                 service.next_due += timedelta(days=service.cycle_days)
@@ -916,6 +1213,9 @@ def _batch_reconstructed_positions(
         service_charges=dict(service_charges),
         post_legacy_credits=dict(post_legacy_credits),
         incomplete={key: set(value) for key, value in incomplete.items()},
+        service_cycle_gaps=tuple(
+            service_cycle_gaps[key] for key in sorted(service_cycle_gaps)
+        ),
     )
 
 
@@ -1055,6 +1355,7 @@ def d2_unbacked_deactivated_credits(db: Session) -> Finding:
             LedgerEntry.is_active.is_(False),
             LedgerEntry.invoice_id.is_(None),
             LedgerEntry.entry_type == LedgerEntryType.credit,
+            LedgerEntry.amount > ZERO,
             payment_accounts.c.account_id.is_(None),
         )
     ).all()

@@ -468,6 +468,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_service_renewals",
+                module="app.services.prepaid_service_renewals",
+                owns=(
+                    "due prepaid service-cycle funding preview",
+                    "locked and idempotent prepaid renewal debit",
+                    "exact debit-to-entitlement evidence",
+                    "prepaid subscription paid-through advancement",
+                    "bounded scheduled renewal catch-up",
+                ),
+                depends_on=(
+                    "financial.account_adjustments",
+                    "financial.prepaid_funding_reconstruction",
+                ),
+            ),
+            SOTService(
                 name="financial.addon_purchases",
                 module="app.services.customer_portal_flow_addons",
                 owns=(
