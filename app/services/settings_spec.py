@@ -12,6 +12,9 @@ from app.services.brand_theme import (
     DEFAULT_SECONDARY_HEX,
     DEFAULT_SEMANTIC_COLORS,
 )
+from app.services.channel_health_contracts import (
+    DEFAULT_CHANNEL_HEALTH_CONTRACTS,
+)
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
 from app.services.settings_specs.integration import build_integration_specs
@@ -4212,6 +4215,72 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.integer,
         default=5,
         label="Nominatim request timeout (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="channel_health_contracts",
+        label="Sensitive channel health contracts",
+        env_var=None,
+        value_type=SettingValueType.json,
+        default=DEFAULT_CHANNEL_HEALTH_CONTRACTS,
+    ),
+    # How long "remind me later" hides the location-confirmation prompt
+    # (docs/designs/LOYALTY_AND_CAPTURE.md). Payment re-prompts regardless.
+    SettingSpec(
+        domain=SettingDomain.subscriber,
+        key="loyalty_capture_prompt_snooze_days",
+        env_var="LOYALTY_CAPTURE_PROMPT_SNOOZE_DAYS",
+        value_type=SettingValueType.integer,
+        default=30,
+        label="Location prompt snooze (days)",
+    ),
+    # Weekly NCC complaints digest email — default OFF. Sends a summary + a
+    # link to the filing workbook (Monday 08:00 in the celery timezone).
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_enabled",
+        env_var="NCC_REPORT_EMAIL_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
+        # Service-owned idempotency cursor. This must be registered because
+        # resolve_value deliberately ignores unregistered database keys.
+        domain=SettingDomain.notification,
+        key="ncc_report_email_last_sent_local_date",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="NCC report email last sent date (managed)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_lookback_days",
+        env_var="NCC_REPORT_EMAIL_LOOKBACK_DAYS",
+        value_type=SettingValueType.integer,
+        default=7,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_subject",
+        env_var="NCC_REPORT_EMAIL_SUBJECT",
+        value_type=SettingValueType.string,
+        default="Weekly NCC Report",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_timezone",
+        env_var="NCC_REPORT_EMAIL_TIMEZONE",
+        value_type=SettingValueType.string,
+        default="Africa/Lagos",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_to",
+        env_var="NCC_REPORT_EMAIL_TO",
+        value_type=SettingValueType.string,
+        default="",
     ),
 ]
 
