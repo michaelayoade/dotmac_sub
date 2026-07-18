@@ -283,6 +283,7 @@ def reseller_account_status_update(
     db: Session,
     account_id: str,
     action: str,
+    preview_fingerprint: str,
 ):
     from urllib.parse import quote_plus
 
@@ -291,12 +292,12 @@ def reseller_account_status_update(
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     try:
-        result = reseller_portal.update_customer_account_status(
+        proposal = reseller_portal.preview_customer_account_status_confirmation(
             db,
             reseller_id=str(context["reseller"].id),
             account_id=account_id,
             action=action,
-            actor_id=context["principal_id"],
+            expected_preview_fingerprint=preview_fingerprint,
         )
     except ValueError as exc:
         message = str(exc) or "Unsupported status action"
@@ -306,6 +307,66 @@ def reseller_account_status_update(
         )
     except Exception:
         logger.warning("reseller_account_status_update_failed", exc_info=True)
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unable to preview account status change')}",
+            status_code=303,
+        )
+
+    if not proposal:
+        return templates.TemplateResponse(
+            "reseller/errors/404.html",
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "reseller/accounts/status_confirm.html",
+        {
+            "request": request,
+            "active_page": "accounts",
+            "current_user": context["current_user"],
+            "reseller": context["reseller"],
+            "proposal": proposal,
+        },
+    )
+
+
+def reseller_account_status_confirm(
+    request: Request,
+    db: Session,
+    account_id: str,
+    action: str,
+    preview_fingerprint: str,
+    idempotency_key: str,
+):
+    from urllib.parse import quote_plus
+
+    context = _require_reseller_context(request, db)
+    if not context:
+        return RedirectResponse(url="/reseller/auth/login", status_code=303)
+
+    try:
+        result = reseller_portal.confirm_customer_account_status_action(
+            db,
+            reseller_id=str(context["reseller"].id),
+            account_id=account_id,
+            action=action,
+            actor_id=context["principal_id"],
+            expected_preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+        )
+    except ValueError as exc:
+        message = str(exc) or "Unsupported status action"
+        return RedirectResponse(
+            url=f"/reseller/accounts/{account_id}?status_error={quote_plus(message)}",
+            status_code=303,
+        )
+    except Exception:
+        logger.warning("reseller_account_status_confirm_failed", exc_info=True)
         return RedirectResponse(
             url=f"/reseller/accounts/{account_id}?status_error={quote_plus('Unable to update account status')}",
             status_code=303,
@@ -325,8 +386,9 @@ def reseller_account_status_update(
     status_label = str(result.get("status") or "updated").replace("_", " ").title()
     if action.strip().lower() == "deactivate":
         status_label = "Deactivated"
+    suffix = " (already processed)" if result.get("replayed") else ""
     return RedirectResponse(
-        url=f"/reseller/accounts/{account_id}?status_success={quote_plus(f'Account status changed to {status_label}')}",
+        url=f"/reseller/accounts/{account_id}?status_success={quote_plus(f'Account status changed to {status_label}{suffix}')}",
         status_code=303,
     )
 

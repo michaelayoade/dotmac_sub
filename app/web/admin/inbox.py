@@ -57,6 +57,8 @@ def team_inbox_queue(
     priority_at_most: int | None = Query(default=None, ge=0, le=999),
     muted: bool | None = Query(default=None),
     snoozed: bool | None = Query(default=None),
+    open_only: bool = Query(default=False),
+    unassigned: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -72,6 +74,8 @@ def team_inbox_queue(
     )
     clean_muted = muted if isinstance(muted, bool) else None
     clean_snoozed = snoozed if isinstance(snoozed, bool) else None
+    clean_open_only = open_only if isinstance(open_only, bool) else False
+    clean_unassigned = unassigned if isinstance(unassigned, bool) else False
     offset = (page - 1) * per_page
     result = team_inbox_read.list_conversations(
         db,
@@ -85,6 +89,8 @@ def team_inbox_queue(
         priority_at_most=clean_priority_at_most,
         muted=clean_muted,
         snoozed=clean_snoozed,
+        open_only=clean_open_only,
+        unassigned=clean_unassigned,
         limit=per_page,
         offset=offset,
     )
@@ -108,6 +114,8 @@ def team_inbox_queue(
             "priority_at_most": clean_priority_at_most,
             "muted": clean_muted,
             "snoozed": clean_snoozed,
+            "open_only": clean_open_only,
+            "unassigned": clean_unassigned,
             "service_team_options": team_inbox_metrics.active_service_team_options(db),
             "status_options": [item.value for item in InboxConversationStatus],
             "channel_options": [item.value for item in InboxChannelType],
@@ -516,9 +524,13 @@ def team_inbox_saved_filter_create(
     priority_at_most: int | None = Form(default=None),
     muted: bool | None = Form(default=None),
     snoozed: bool | None = Form(default=None),
+    open_only: bool = Form(default=False),
+    unassigned: bool = Form(default=False),
     is_shared: bool = Form(default=False),
     db: Session = Depends(get_db),
 ):
+    clean_open_only = open_only if isinstance(open_only, bool) else False
+    clean_unassigned = unassigned if isinstance(unassigned, bool) else False
     try:
         team_inbox_commands.save_filter(
             db,
@@ -533,6 +545,8 @@ def team_inbox_saved_filter_create(
                 "priority_at_most": priority_at_most,
                 "muted": muted,
                 "snoozed": snoozed,
+                "open_only": clean_open_only,
+                "unassigned": clean_unassigned,
             },
             actor_person_id=_actor_id_from_request(request),
             is_shared=is_shared,

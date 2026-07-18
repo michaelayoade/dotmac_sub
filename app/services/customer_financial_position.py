@@ -13,17 +13,29 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice
+from app.models.billing import Invoice, InvoiceStatus
 from app.services.common import coerce_uuid
 from app.services.invoice_collectibility import (
     collection_blocking_balance,
     due_invoice_balance,
+    invoice_balance_sum,
     list_open_invoices,
     open_invoice_balance,
+    open_invoice_filters,
     overdue_debt_balance,
+    overdue_debt_filters,
     overdue_status_count,
+)
+
+_BILLED_INVOICE_STATUSES = (
+    InvoiceStatus.issued,
+    InvoiceStatus.partially_paid,
+    InvoiceStatus.paid,
+    InvoiceStatus.overdue,
+    InvoiceStatus.written_off,
 )
 
 
@@ -82,6 +94,69 @@ class NativeCustomerFinancialBalance:
     @property
     def automation_safe(self) -> bool:
         return not self.other_currency_balances
+
+
+@dataclass(frozen=True)
+class CustomerBillingSummary:
+    """Currency-typed customer billing headline projection.
+
+    A single read owner supplies every amount rendered together. Draft, void,
+    pro-forma, inactive, and other-currency rows are deliberately excluded so
+    the portal never presents unlike nominal values as one financial total.
+    """
+
+    account_id: UUID
+    currency: str
+    total_billed: Decimal
+    outstanding: Decimal
+    overdue: Decimal
+    overdue_count: int
+
+
+def get_customer_billing_summary(
+    db: Session,
+    account_id: object,
+    *,
+    currency: str | None = None,
+    now: datetime | None = None,
+) -> CustomerBillingSummary:
+    """Return the complete customer billing cohort in one explicit currency."""
+    from app.services import display_format
+
+    account_uuid = coerce_uuid(account_id)
+    unit = display_format.currency_code(currency or display_format.default_currency(db))
+    currency_filter = func.upper(Invoice.currency) == unit
+    billed_filters = (
+        Invoice.account_id == account_uuid,
+        Invoice.is_active.is_(True),
+        Invoice.is_proforma.is_not(True),
+        Invoice.status.in_(_BILLED_INVOICE_STATUSES),
+        currency_filter,
+    )
+    total_billed = db.scalar(
+        select(func.coalesce(func.sum(Invoice.total), Decimal("0.00"))).where(
+            *billed_filters
+        )
+    )
+    outstanding_filters = (
+        *open_invoice_filters(account_uuid),
+        Invoice.is_proforma.is_not(True),
+        currency_filter,
+    )
+    overdue_filters = (
+        *overdue_debt_filters(account_uuid, now=now),
+        Invoice.is_proforma.is_not(True),
+        currency_filter,
+    )
+    overdue_count = db.scalar(select(func.count(Invoice.id)).where(*overdue_filters))
+    return CustomerBillingSummary(
+        account_id=account_uuid,
+        currency=unit,
+        total_billed=Decimal(str(total_billed or "0.00")),
+        outstanding=invoice_balance_sum(db, outstanding_filters),
+        overdue=invoice_balance_sum(db, overdue_filters),
+        overdue_count=int(overdue_count or 0),
+    )
 
 
 def get_customer_financial_position(

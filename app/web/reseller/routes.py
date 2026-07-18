@@ -151,10 +151,30 @@ def reseller_account_status_update(
     request: Request,
     account_id: str,
     action: str = Form(...),
+    preview_fingerprint: str = Form(...),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_account_status_update(
-        request, db, account_id, action
+        request, db, account_id, action, preview_fingerprint
+    )
+
+
+@router.post("/accounts/{account_id}/status/confirm", response_class=HTMLResponse)
+def reseller_account_status_confirm(
+    request: Request,
+    account_id: str,
+    action: str = Form(...),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_account_status_confirm(
+        request,
+        db,
+        account_id,
+        action,
+        preview_fingerprint,
+        idempotency_key,
     )
 
 

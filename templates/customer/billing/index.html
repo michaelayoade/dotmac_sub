@@ -4,7 +4,7 @@
 {% block title %}Billing - My Account{% endblock %}
 
 {% block content %}
-{% set currency_label = default_currency|default('NGN') %}
+{% set currency_label = billing_stats.currency if billing_stats.available else default_currency|default('NGN') %}
 {# Headline KPIs are resolved by the billing read service over the complete
    invoice set (billing_stats), never summed here over the paginated page. #}
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from starlette.requests import Request
 
@@ -209,3 +211,52 @@ def test_queue_metrics_counts_open_work(db_session):
     assert metrics.needs_response == 2
     assert metrics.unassigned_open == 2
     assert metrics.failed_outbound == 1
+
+
+def test_queue_metric_drilldown_filters_match_exact_open_cohorts(db_session):
+    team = _team(db_session)
+    open_unassigned = _conversation(db_session, subject="Open unassigned")
+    open_unassigned.is_muted = True
+    open_unassigned.snoozed_until = datetime.now(UTC) + timedelta(hours=1)
+    resolved_unassigned = _conversation(db_session, subject="Resolved unassigned")
+    resolved_unassigned.status = InboxConversationStatus.resolved.value
+    resolved_unassigned.is_muted = True
+    resolved_unassigned.snoozed_until = datetime.now(UTC) + timedelta(hours=1)
+    open_assigned = _conversation(db_session, subject="Open assigned")
+    db_session.add(
+        InboxConversationAssignment(
+            conversation_id=open_assigned.id,
+            service_team_id=team.id,
+            person_id=uuid.uuid4(),
+            is_active=True,
+        )
+    )
+    db_session.flush()
+
+    metrics = team_inbox_operations.queue_metrics(db_session)
+    open_rows = team_inbox_read.list_conversations(db_session, open_only=True)
+    unassigned_rows = team_inbox_read.list_conversations(
+        db_session, open_only=True, unassigned=True
+    )
+    muted_rows = team_inbox_read.list_conversations(
+        db_session, open_only=True, muted=True
+    )
+    snoozed_rows = team_inbox_read.list_conversations(
+        db_session, open_only=True, snoozed=True
+    )
+
+    assert open_rows.count == metrics.total_open == 2
+    assert unassigned_rows.count == metrics.unassigned_open == 1
+    assert muted_rows.count == metrics.muted_open == 1
+    assert snoozed_rows.count == metrics.snoozed_open == 1
+    assert unassigned_rows.items[0].id == str(open_unassigned.id)
+
+
+def test_queue_metric_cards_link_to_exact_cohorts():
+    template = Path("templates/admin/inbox/index.html").read_text()
+
+    assert '"href": "/admin/inbox?open_only=true"' in template
+    assert '"href": "/admin/inbox?open_only=true&unassigned=true"' in template
+    assert '"href": "/admin/inbox/reports/outbox-failures"' in template
+    assert '"href": "/admin/inbox?open_only=true&snoozed=true"' in template
+    assert '"href": "/admin/inbox?open_only=true&muted=true"' in template

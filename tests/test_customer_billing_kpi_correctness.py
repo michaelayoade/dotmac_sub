@@ -18,7 +18,7 @@ from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import BillingMode
 from app.models.subscriber import Subscriber
 from app.services import customer_portal_context, customer_portal_flow_billing
-from app.services.customer_financial_position import get_customer_financial_position
+from app.services.customer_financial_position import get_customer_billing_summary
 
 
 def _subscriber(db_session) -> Subscriber:
@@ -40,6 +40,8 @@ def _invoice(
     status=InvoiceStatus.issued,
     balance="100.00",
     due_at=None,
+    currency="NGN",
+    is_proforma=False,
 ) -> Invoice:
     inv = Invoice(
         account_id=sub.id,
@@ -48,7 +50,8 @@ def _invoice(
         total=Decimal(balance),
         balance_due=Decimal(balance),
         due_at=due_at,
-        currency="NGN",
+        currency=currency,
+        is_proforma=is_proforma,
         is_active=True,
     )
     db_session.add(inv)
@@ -68,7 +71,7 @@ def test_billing_kpis_computed_over_full_set_not_paginated_page(db_session):
         db_session, {"account_id": str(sub.id)}, per_page=2, page=1
     )
     stats = page["billing_stats"]
-    position = get_customer_financial_position(db_session, str(sub.id))
+    summary = get_customer_billing_summary(db_session, str(sub.id))
 
     # The page is capped at two rows, but the KPIs reflect the whole account —
     # the exact defect the old Jinja-over-the-page sum introduced.
@@ -79,9 +82,46 @@ def test_billing_kpis_computed_over_full_set_not_paginated_page(db_session):
     # page-of-two sum (200).
     assert stats["total_billed"] == Decimal("500.00")
     # Outstanding/overdue are exactly the canonical financial-position figures.
-    assert stats["outstanding"] == position.open_invoice_balance
-    assert stats["overdue"] == position.overdue_debt_balance
-    assert stats["overdue_count"] == position.overdue_invoice_count
+    assert stats["outstanding"] == summary.outstanding
+    assert stats["overdue"] == summary.overdue
+    assert stats["overdue_count"] == summary.overdue_count
+
+
+def test_billing_kpis_exclude_non_billed_and_other_currency_rows(db_session):
+    sub = _subscriber(db_session)
+    past = datetime.now(UTC) - timedelta(days=1)
+    _invoice(db_session, sub, status=InvoiceStatus.issued, balance="100.00")
+    _invoice(db_session, sub, status=InvoiceStatus.paid, balance="50.00")
+    _invoice(db_session, sub, status=InvoiceStatus.draft, balance="900.00")
+    _invoice(db_session, sub, status=InvoiceStatus.void, balance="800.00")
+    _invoice(
+        db_session,
+        sub,
+        status=InvoiceStatus.issued,
+        balance="700.00",
+        is_proforma=True,
+    )
+    _invoice(
+        db_session,
+        sub,
+        status=InvoiceStatus.overdue,
+        balance="600.00",
+        due_at=past,
+        currency="USD",
+    )
+
+    page = customer_portal_flow_billing.get_billing_page(
+        db_session, {"account_id": str(sub.id)}
+    )
+
+    assert page["billing_stats"] == {
+        "available": True,
+        "currency": "NGN",
+        "total_billed": Decimal("150.00"),
+        "outstanding": Decimal("100.00"),
+        "overdue": Decimal("0.00"),
+        "overdue_count": 0,
+    }
 
 
 def test_billing_kpis_marked_unavailable_when_owner_fails(db_session, monkeypatch):
@@ -92,7 +132,7 @@ def test_billing_kpis_marked_unavailable_when_owner_fails(db_session, monkeypatc
         raise RuntimeError("financial owner unavailable")
 
     monkeypatch.setattr(
-        customer_portal_flow_billing, "get_customer_financial_position", _boom
+        customer_portal_flow_billing, "get_customer_billing_summary", _boom
     )
     page = customer_portal_flow_billing.get_billing_page(
         db_session, {"account_id": str(sub.id)}

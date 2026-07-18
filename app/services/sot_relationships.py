@@ -265,10 +265,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "distinct invoice-receivable and prepaid-funding summaries",
                     "customer-visible financial position",
                     "bounded cohort financial projections",
+                    "currency-typed complete billing headline projection",
                 ),
                 depends_on=(
                     "financial.ledger",
                     "financial.prepaid_funding_reconstruction",
+                ),
+            ),
+            SOTService(
+                name="customer.reseller_status_actions",
+                module="app.services.reseller_portal",
+                owns=(
+                    "reseller-scoped account-action impact preview",
+                    "lock-aware account-action eligibility",
+                    "account-action stale-preview fingerprint",
+                    "account-bound idempotent status confirmation",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "access.subscription_lifecycle",
+                ),
+                notes=(
+                    "The reseller adapter renders a distinct confirmation step "
+                    "bound to this preview and an account-scoped idempotency key. "
+                    "Subscription and account lifecycle mutation remains owned by "
+                    "access.subscription_lifecycle."
                 ),
             ),
             SOTService(
@@ -2352,6 +2373,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "inbound channel ingestion",
                     "admin inbox mutation transactions",
                     "InboxContactLink canonical contact-point routing projection",
+                    "exact open, response, assignment, mute, and snooze queue cohorts",
+                    "failed outbound queue count and worklist",
                 ),
                 depends_on=(
                     "party.registry",
@@ -2748,12 +2771,51 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "projects.native_read until the CRM mirror cutover is complete."
                 ),
             ),
+            SOTService(
+                name="operations.vendor_project_workflow",
+                module="app.services.vendor_portal_operations",
+                owns=(
+                    "vendor installation-project quote lifecycle",
+                    "quote submission eligibility and impact snapshot",
+                    "as-built evidence lifecycle and impact snapshot",
+                ),
+                depends_on=("operations.project_lifecycle",),
+            ),
+            SOTService(
+                name="operations.vendor_purchase_invoices",
+                module="app.services.vendor_purchase_invoices",
+                owns=(
+                    "vendor purchase-invoice lifecycle",
+                    "purchase-invoice submission eligibility and financial preview",
+                ),
+                depends_on=("operations.vendor_project_workflow",),
+            ),
+            SOTService(
+                name="operations.vendor_submission_confirmation",
+                module="app.services.vendor_submission_proposals",
+                owns=(
+                    "short-lived signed vendor submission proposal",
+                    "vendor submission stale-preview verification",
+                    "vendor submission idempotency and replay result",
+                ),
+                depends_on=(
+                    "operations.vendor_project_workflow",
+                    "operations.vendor_purchase_invoices",
+                ),
+                notes=(
+                    "Web adapters only request a preview or confirm its signed "
+                    "proposal. Domain owners recheck under lock and commit the "
+                    "mutation with its idempotency result."
+                ),
+            ),
         ),
         entrypoints=(
             "app.services.events.handlers.provisioning",
             "app.tasks.ont_provisioning",
             "app.web.admin.provisioning",
             "app.web.admin.projects",
+            "app.web.vendor_portal",
+            "app.api.vendor_portal",
             "app.api.projects",
             "app.api.field.*",
             "app.services.web_projects",

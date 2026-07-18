@@ -338,7 +338,11 @@ detailed security and delivery boundary is
    derives settled value from invoice money, not a status label. The account
    balance KPI is collectible AR in one declared currency, never `min_balance`.
    Bulk callers use the same owner instead of reconstructing another balance
-   or looping the single-customer ledger reader.
+   or looping the single-customer ledger reader. Its customer billing headline
+   projection is one complete, explicit-currency cohort: total billed excludes
+   draft, void, pro-forma, inactive, and other-currency rows; outstanding and
+   overdue apply the same currency and non-pro-forma boundary. The portal route
+   and template neither sum invoices nor select a currency.
 8. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold` in the
@@ -1153,23 +1157,33 @@ network summary composition.
 7. `customer.usage_summary` owns customer usage windows, headline totals, and
    total provenance. An authoritative zero is a valid value, not a missing-data
    sentinel.
-8. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
+8. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
+   the reseller-scoped impact preview for deactivate, restore, and disable. It
+   evaluates current subscription state, active enforcement locks, duplicate-
+   login restore conflicts, account overrides, and accounts with no services,
+   then fingerprints that exact preview. The first POST renders a distinct
+   server-calculated confirmation page; the second carries the fingerprint and
+   an account-bound idempotency key. The owner reserves the key, rechecks after
+   locking, commits the lifecycle mutation and replay result once, and returns
+   the original result on retry. Lifecycle mutation is still delegated to
+   `access.subscription_lifecycle`.
+9. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
    admin subscriber growth and churn report reads: monthly growth/churn series,
    month-over-month new counts, churn/at-risk summaries, status counts, and
    cumulative signups. The derived-cancelled rule (explicit `canceled`, or NULL
    status on an inactive row) lives here; report pages compose it and never
    re-derive lifecycle in Python.
-8. `customer.data_completeness`
+10. `customer.data_completeness`
    (`app/services/subscriber_data_completeness.py`) owns the purpose-specific
    requirements, derived completeness/revalidation state, capture backlog, and
    filing-readiness counts. It is read-only: it identifies the gap and never
    fills it.
-9. `customer.location_verification`
+11. `customer.location_verification`
    (`app/services/geocode_reconciler.py`) is the only writer of subscriber
    location verification-ledger facts and owns reconciliation of a captured GPS
    pin against claimed location. It writes only facts that agree; disagreement
    is flagged for a human and never auto-applied.
-10. `customer.location_capture` (`app/services/location_capture.py`) owns the
+12. `customer.location_capture` (`app/services/location_capture.py`) owns the
     default-off rollout controls, source authorization, prompt eligibility and
     snooze lifecycle, and orchestration of field-arrival, portal, and agent
     capture. Those adapters call this owner, which delegates adjudication and
@@ -1655,6 +1669,10 @@ in forms, or rotate key material directly.
    existing Inbox route to a canonical Party contact point. It validates the
    point, provider scope, target Party, and active contact relationship against
    `party.registry`, but does not let Party services mutate Inbox routing.
+   `team_inbox_read` and `team_inbox_operations.queue_metrics` also own the
+   exact open, needs-response, unassigned, muted, snoozed, and failed-outbound
+   cohorts. KPI links carry the matching server filter; resolved conversations
+   cannot leak into an open-derived drilldown.
 9. Campaign services own marketing audience, sequence, and content decisions.
    They apply `communications.eligibility` when building an audience, before
    enqueueing a send, and again through the marketing communication intent at
@@ -2255,6 +2273,17 @@ Dependency order:
    requirements, and completion transitions.
 7. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
+7. `operations.vendor_project_workflow` owns installation-project quote and
+   as-built evidence lifecycles, including the read-only impact snapshot used
+   before submit.
+8. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
+   financial totals, submit eligibility, and the financial impact snapshot.
+9. `operations.vendor_submission_confirmation` owns the short-lived signed
+   confirmation proposal, stale-preview comparison, idempotency reservation,
+   and replay result for quote, as-built, and purchase-invoice submissions.
+   The proposal carries no decision authority: each domain owner locks and
+   rechecks its current facts, and the mutation plus idempotency result commit
+   once. Vendor web routes only request preview or confirmation.
 
 Rule: provisioning callers should resolve customer/network context once through
 the operations context service before running workflow steps. Step executors may

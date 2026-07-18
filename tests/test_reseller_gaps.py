@@ -9,6 +9,8 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from app.services.events.types import EventType
 
 # ---------------------------------------------------------------------------
@@ -168,9 +170,292 @@ class TestAccountDetail:
         # Restore acts on the suspended service; deactivate on the active one;
         # disable on both (neither is terminal) — eligibility and counts come
         # from the owner, not a status string in the template.
-        assert actions["restore"] == {"allowed": True, "affected": 1}
-        assert actions["deactivate"] == {"allowed": True, "affected": 1}
-        assert actions["disable"] == {"allowed": True, "affected": 2}
+        assert actions["restore"]["allowed"] is True
+        assert actions["restore"]["affected"] == 1
+        assert actions["deactivate"]["allowed"] is True
+        assert actions["deactivate"]["affected"] == 1
+        assert actions["disable"]["allowed"] is True
+        assert actions["disable"]["affected"] == 2
+        assert all(actions[action]["fingerprint"] for action in actions)
+
+    def test_status_action_preview_accounts_for_active_locks(self, db_session) -> None:
+        from app.models.catalog import (
+            AccessType,
+            CatalogOffer,
+            PriceBasis,
+            ServiceType,
+            Subscription,
+            SubscriptionStatus,
+        )
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.models.subscriber import Reseller, Subscriber
+        from app.services import reseller_portal
+
+        reseller = Reseller(name="Locked Preview", is_active=True)
+        account = Subscriber(
+            first_name="Locked",
+            last_name="Customer",
+            email="locked-preview@example.com",
+            reseller=reseller,
+        )
+        offer = CatalogOffer(
+            name="Locked preview plan",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        )
+        db_session.add_all([reseller, account, offer])
+        db_session.flush()
+        subscription = Subscription(
+            subscriber_id=account.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.active,
+            start_at=datetime.now(UTC),
+        )
+        db_session.add(subscription)
+        db_session.flush()
+        db_session.add(
+            EnforcementLock(
+                subscription_id=subscription.id,
+                subscriber_id=account.id,
+                reason=EnforcementReason.fraud,
+                source="test:fraud-review",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        actions = reseller_portal.get_account_detail(
+            db_session, str(reseller.id), str(account.id)
+        )["status_actions"]
+
+        assert actions["deactivate"]["allowed"] is False
+        assert actions["deactivate"]["affected"] == 0
+        assert actions["disable"]["allowed"] is True
+
+    def test_status_action_preview_includes_accounts_without_services(
+        self, db_session
+    ) -> None:
+        from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
+        from app.services import reseller_portal
+
+        reseller = Reseller(name="No-service Preview", is_active=True)
+        account = Subscriber(
+            first_name="No",
+            last_name="Service",
+            email="no-service-preview@example.com",
+            reseller=reseller,
+            status=SubscriberStatus.active,
+        )
+        db_session.add_all([reseller, account])
+        db_session.commit()
+
+        actions = reseller_portal.get_account_detail(
+            db_session, str(reseller.id), str(account.id)
+        )["status_actions"]
+
+        assert actions["deactivate"]["allowed"] is True
+        assert actions["deactivate"]["affected"] == 0
+        assert actions["deactivate"]["account_affected"] is True
+        assert actions["disable"]["allowed"] is True
+
+    def test_status_command_rejects_stale_preview_fingerprint(self, db_session) -> None:
+        from app.models.catalog import (
+            AccessType,
+            CatalogOffer,
+            PriceBasis,
+            ServiceType,
+            Subscription,
+            SubscriptionStatus,
+        )
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.models.subscriber import Reseller, Subscriber
+        from app.services import reseller_portal
+
+        reseller = Reseller(name="Stale Preview", is_active=True)
+        account = Subscriber(
+            first_name="Stale",
+            last_name="Customer",
+            email="stale-preview@example.com",
+            reseller=reseller,
+        )
+        offer = CatalogOffer(
+            name="Stale preview plan",
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        )
+        db_session.add_all([reseller, account, offer])
+        db_session.flush()
+        subscription = Subscription(
+            subscriber_id=account.id,
+            offer_id=offer.id,
+            status=SubscriptionStatus.active,
+            start_at=datetime.now(UTC),
+        )
+        db_session.add(subscription)
+        db_session.commit()
+        fingerprint = reseller_portal.get_account_detail(
+            db_session, str(reseller.id), str(account.id)
+        )["status_actions"]["deactivate"]["fingerprint"]
+        db_session.add(
+            EnforcementLock(
+                subscription_id=subscription.id,
+                subscriber_id=account.id,
+                reason=EnforcementReason.system,
+                source="test:state-changed",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        with pytest.raises(ValueError, match="changed after preview"):
+            reseller_portal.update_customer_account_status(
+                db_session,
+                str(reseller.id),
+                str(account.id),
+                "deactivate",
+                expected_preview_fingerprint=fingerprint,
+            )
+
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.active
+
+    def test_status_confirmation_is_preview_first_and_idempotent(
+        self, db_session
+    ) -> None:
+        from app.models.idempotency import IdempotencyKey
+        from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
+        from app.services import reseller_portal
+
+        reseller = Reseller(name="Confirmed Status", is_active=True)
+        account = Subscriber(
+            first_name="Confirmed",
+            last_name="Customer",
+            email="confirmed-status@example.com",
+            reseller=reseller,
+            status=SubscriberStatus.active,
+        )
+        db_session.add_all([reseller, account])
+        db_session.commit()
+        fingerprint = reseller_portal.get_account_detail(
+            db_session, str(reseller.id), str(account.id)
+        )["status_actions"]["deactivate"]["fingerprint"]
+
+        proposal = reseller_portal.preview_customer_account_status_confirmation(
+            db_session,
+            str(reseller.id),
+            str(account.id),
+            "deactivate",
+            expected_preview_fingerprint=fingerprint,
+        )
+        assert proposal is not None
+        assert proposal["affected"] == 0
+        assert proposal["account_affected"] is True
+
+        first = reseller_portal.confirm_customer_account_status_action(
+            db_session,
+            str(reseller.id),
+            str(account.id),
+            "deactivate",
+            actor_id=None,
+            expected_preview_fingerprint=proposal["preview_fingerprint"],
+            idempotency_key=proposal["idempotency_key"],
+        )
+        # A later state change must not alter the original result returned by an
+        # idempotent replay.
+        account.status = SubscriberStatus.active
+        db_session.commit()
+        replay = reseller_portal.confirm_customer_account_status_action(
+            db_session,
+            str(reseller.id),
+            str(account.id),
+            "deactivate",
+            actor_id=None,
+            expected_preview_fingerprint=proposal["preview_fingerprint"],
+            idempotency_key=proposal["idempotency_key"],
+        )
+
+        assert first is not None and first["replayed"] is False
+        assert first["status"] == SubscriberStatus.blocked.value
+        assert replay is not None and replay["replayed"] is True
+        assert replay["status"] == SubscriberStatus.blocked.value
+        db_session.refresh(account)
+        assert account.status == SubscriberStatus.active
+        assert (
+            db_session.query(IdempotencyKey)
+            .filter(IdempotencyKey.scope == "reseller_account_status:deactivate")
+            .count()
+            == 1
+        )
+
+    def test_status_confirmation_key_cannot_cross_accounts(self, db_session) -> None:
+        from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
+        from app.services import reseller_portal
+
+        reseller = Reseller(name="Bound Status", is_active=True)
+        first_account = Subscriber(
+            first_name="First",
+            last_name="Customer",
+            email="status-first@example.com",
+            reseller=reseller,
+            status=SubscriberStatus.active,
+        )
+        second_account = Subscriber(
+            first_name="Second",
+            last_name="Customer",
+            email="status-second@example.com",
+            reseller=reseller,
+            status=SubscriberStatus.active,
+        )
+        db_session.add_all([reseller, first_account, second_account])
+        db_session.commit()
+
+        first_fingerprint = reseller_portal.get_account_detail(
+            db_session, str(reseller.id), str(first_account.id)
+        )["status_actions"]["deactivate"]["fingerprint"]
+        first_proposal = reseller_portal.preview_customer_account_status_confirmation(
+            db_session,
+            str(reseller.id),
+            str(first_account.id),
+            "deactivate",
+            expected_preview_fingerprint=first_fingerprint,
+        )
+        assert first_proposal is not None
+        reseller_portal.confirm_customer_account_status_action(
+            db_session,
+            str(reseller.id),
+            str(first_account.id),
+            "deactivate",
+            actor_id=None,
+            expected_preview_fingerprint=first_proposal["preview_fingerprint"],
+            idempotency_key=first_proposal["idempotency_key"],
+        )
+        second_fingerprint = reseller_portal.get_account_detail(
+            db_session, str(reseller.id), str(second_account.id)
+        )["status_actions"]["deactivate"]["fingerprint"]
+
+        with pytest.raises(ValueError, match="another account"):
+            reseller_portal.confirm_customer_account_status_action(
+                db_session,
+                str(reseller.id),
+                str(second_account.id),
+                "deactivate",
+                actor_id=None,
+                expected_preview_fingerprint=second_fingerprint,
+                idempotency_key=first_proposal["idempotency_key"],
+            )
+
+    def test_status_actions_use_server_confirmation_page(self) -> None:
+        detail = Path("templates/reseller/accounts/detail.html").read_text()
+        confirmation = Path(
+            "templates/reseller/accounts/status_confirm.html"
+        ).read_text()
+
+        assert 'onsubmit="return confirm(' not in detail
+        assert "/status/confirm" in confirmation
+        assert 'name="preview_fingerprint"' in confirmation
+        assert 'name="idempotency_key"' in confirmation
 
     def test_get_account_detail_returns_none_for_reseller_login_user(
         self, db_session

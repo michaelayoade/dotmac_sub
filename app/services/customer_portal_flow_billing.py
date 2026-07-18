@@ -29,7 +29,7 @@ from app.services.customer_context import (
     optional_customer_account_id,
     optional_customer_subscriber_id,
 )
-from app.services.customer_financial_position import get_customer_financial_position
+from app.services.customer_financial_position import get_customer_billing_summary
 from app.services.customer_portal_context import (
     get_invoice_billing_contact,
     get_outstanding_balance,
@@ -232,27 +232,21 @@ def get_billing_page(
             exc_info=True,
         )
 
-    # Account-level headline KPIs come from the canonical financial-position
-    # owner over the COMPLETE invoice set — never summed in the template over
-    # the paginated page (which is only ``per_page`` rows and is wrong past
-    # page one). ``total_billed`` is a lifetime aggregate of issued invoice
-    # value; outstanding and overdue are the owner's collectibility figures.
+    # Account-level headline KPIs come from the canonical billing-summary owner
+    # over the COMPLETE, currency-typed invoice set — never summed in the
+    # template over the paginated page.
     # When the owner can't be reached, the stats are marked unavailable so the
     # template renders "unavailable", never a misleading zero.
     billing_stats: dict[str, Any] = {"available": False}
     try:
-        position = get_customer_financial_position(db, account_id_str)
-        total_billed = db.scalar(
-            select(func.coalesce(func.sum(Invoice.total), 0))
-            .where(Invoice.account_id == coerce_uuid(account_id_str))
-            .where(Invoice.is_active.is_(True))
-        )
+        summary = get_customer_billing_summary(db, account_id_str)
         billing_stats = {
             "available": True,
-            "total_billed": Decimal(total_billed or 0),
-            "outstanding": position.open_invoice_balance,
-            "overdue": position.overdue_debt_balance,
-            "overdue_count": position.overdue_invoice_count,
+            "currency": summary.currency,
+            "total_billed": summary.total_billed,
+            "outstanding": summary.outstanding,
+            "overdue": summary.overdue,
+            "overdue_count": summary.overdue_count,
         }
     except Exception:
         logger.warning(

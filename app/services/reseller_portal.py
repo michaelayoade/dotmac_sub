@@ -1,11 +1,13 @@
+import json
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from types import SimpleNamespace
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import and_, func, or_
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
 import app.services.auth_flow as auth_flow_service
@@ -22,6 +24,7 @@ from app.models.billing import (
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementReason
+from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import (
     Reseller,
     ResellerUser,
@@ -37,6 +40,7 @@ from app.services.account_lifecycle import (
     compute_account_status,
     disable_subscription,
     get_active_locks,
+    reactivation_blocked_by_active_login,
     suspend_subscription,
     transition_subscription_status,
 )
@@ -912,6 +916,192 @@ ACCOUNT_STATUS_FILTERS = ("overdue",) + tuple(
 )
 ACCOUNT_LIST_STATUS_OPTIONS = tuple(status.value for status in SubscriberStatus)
 RESELLER_ACCOUNT_STATUS_ACTIONS = ("deactivate", "restore", "disable")
+_RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX = "reseller_account_status"
+
+_RESELLER_RESTORABLE_STATUSES = {
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.blocked,
+    SubscriptionStatus.stopped,
+}
+_RESELLER_DEACTIVATABLE_STATUSES = {
+    SubscriptionStatus.active,
+    SubscriptionStatus.pending,
+    SubscriptionStatus.blocked,
+    SubscriptionStatus.stopped,
+}
+_RESELLER_TERMINAL_STATUSES = {
+    SubscriptionStatus.disabled,
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+    SubscriptionStatus.hidden,
+    SubscriptionStatus.archived,
+}
+
+
+def preview_customer_account_status_actions(
+    db: Session,
+    account: Subscriber,
+    subscriptions: list[Subscription] | None = None,
+) -> dict[str, dict]:
+    """Own reseller account-action eligibility and impact fingerprints.
+
+    The command path and page both call this projection. Active locks and
+    duplicate-login restore conflicts are source facts, so template status
+    strings can never overstate what an action will change.
+    """
+    subscriptions = (
+        subscriptions
+        if subscriptions is not None
+        else list(
+            db.query(Subscription)
+            .filter(Subscription.subscriber_id == account.id)
+            .order_by(Subscription.id.asc())
+            .all()
+        )
+    )
+    lock_snapshots: dict[str, list[dict[str, str]]] = {}
+    for subscription in subscriptions:
+        lock_snapshots[str(subscription.id)] = [
+            {"id": str(lock.id), "reason": lock.reason.value}
+            for lock in sorted(
+                get_active_locks(db, subscription_id=str(subscription.id)),
+                key=lambda row: str(row.id),
+            )
+        ]
+
+    def _affected(action: str) -> list[Subscription]:
+        if action == "deactivate":
+            return [
+                subscription
+                for subscription in subscriptions
+                if subscription.status in _RESELLER_DEACTIVATABLE_STATUSES
+                and not lock_snapshots[str(subscription.id)]
+            ]
+        if action == "restore":
+            return [
+                subscription
+                for subscription in subscriptions
+                if subscription.status in _RESELLER_RESTORABLE_STATUSES
+                and not reactivation_blocked_by_active_login(db, subscription)
+            ]
+        return [
+            subscription
+            for subscription in subscriptions
+            if subscription.status not in _RESELLER_TERMINAL_STATUSES
+        ]
+
+    account_targets = {
+        "deactivate": SubscriberStatus.blocked,
+        "restore": SubscriberStatus.active,
+        "disable": SubscriberStatus.disabled,
+    }
+    previews: dict[str, dict] = {}
+    for action in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        affected = _affected(action)
+        account_affected = False
+        if subscriptions:
+            account_affected = (
+                action == "restore" and account.lifecycle_override_status is not None
+            )
+        else:
+            account_affected = account.status != account_targets[action]
+        snapshot = {
+            "action": action,
+            "account_id": str(account.id),
+            "account_status": account.status.value if account.status else None,
+            "account_override": (
+                account.lifecycle_override_status.value
+                if account.lifecycle_override_status
+                else None
+            ),
+            "account_affected": account_affected,
+            "subscriptions": [
+                {
+                    "id": str(subscription.id),
+                    "status": subscription.status.value,
+                    "locks": lock_snapshots[str(subscription.id)],
+                }
+                for subscription in sorted(subscriptions, key=lambda row: str(row.id))
+            ],
+            "affected_ids": sorted(str(subscription.id) for subscription in affected),
+        }
+        previews[action] = {
+            "allowed": bool(affected or account_affected),
+            "affected": len(affected),
+            "account_affected": account_affected,
+            "fingerprint": sha256(
+                json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        }
+    return previews
+
+
+def preview_customer_account_status_confirmation(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    action: str,
+    *,
+    expected_preview_fingerprint: str,
+) -> dict | None:
+    """Return the server-owned second-step confirmation for one status action."""
+    normalized_action = (action or "").strip().lower()
+    if normalized_action not in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        raise ValueError("Unsupported account status action")
+    account = _get_customer_account(db, reseller_id, account_id)
+    if account is None:
+        return None
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == account.id)
+        .order_by(Subscription.id.asc())
+        .all()
+    )
+    preview = preview_customer_account_status_actions(db, account, subscriptions)[
+        normalized_action
+    ]
+    if not secrets.compare_digest(
+        preview["fingerprint"], (expected_preview_fingerprint or "").strip()
+    ):
+        raise ValueError(
+            "Account status changed after preview; review the current impact and try again"
+        )
+    if not preview["allowed"]:
+        raise ValueError("This account status action would not change the account")
+
+    labels = {
+        "deactivate": "Deactivate account",
+        "restore": "Restore account",
+        "disable": "Disable account",
+    }
+    consequences = {
+        "deactivate": (
+            "Eligible services will be suspended through the canonical access "
+            "lifecycle. Services with active enforcement locks remain unchanged."
+        ),
+        "restore": (
+            "Eligible services will be restored only where billing, enforcement, "
+            "and duplicate-login policy allow it."
+        ),
+        "disable": (
+            "Eligible services will be disabled and the account may leave the "
+            "default reseller account list."
+        ),
+    }
+    total_services = len(subscriptions)
+    return {
+        "account_id": str(account.id),
+        "account_name": _subscriber_label(account),
+        "account_number": account.account_number,
+        "action": normalized_action,
+        "title": labels[normalized_action],
+        "consequence": consequences[normalized_action],
+        "affected": int(preview["affected"]),
+        "unaffected": max(0, total_services - int(preview["affected"])),
+        "account_affected": bool(preview["account_affected"]),
+        "preview_fingerprint": preview["fingerprint"],
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
 
 
 def _apply_account_search(query, search: str | None):
@@ -1397,37 +1587,7 @@ def get_account_detail(
         .scalar()
     ) or 0
 
-    # Per-action eligibility comes from the owner (mirroring the status sets in
-    # update_customer_account_status), never re-derived from a status string in
-    # the template. Each entry says whether the action would change anything and
-    # how many services it affects — a lightweight impact preview.
-    statuses = [sub.status for sub in subscriptions]
-    restorable = {
-        SubscriptionStatus.suspended,
-        SubscriptionStatus.blocked,
-        SubscriptionStatus.stopped,
-    }
-    deactivatable = {
-        SubscriptionStatus.active,
-        SubscriptionStatus.pending,
-        SubscriptionStatus.blocked,
-        SubscriptionStatus.stopped,
-    }
-    terminal = {
-        SubscriptionStatus.disabled,
-        SubscriptionStatus.canceled,
-        SubscriptionStatus.expired,
-        SubscriptionStatus.hidden,
-        SubscriptionStatus.archived,
-    }
-    restore_n = sum(1 for s in statuses if s in restorable)
-    deactivate_n = sum(1 for s in statuses if s in deactivatable)
-    disable_n = sum(1 for s in statuses if s not in terminal)
-    status_actions = {
-        "restore": {"allowed": restore_n > 0, "affected": restore_n},
-        "deactivate": {"allowed": deactivate_n > 0, "affected": deactivate_n},
-        "disable": {"allowed": disable_n > 0, "affected": disable_n},
-    }
+    status_actions = preview_customer_account_status_actions(db, account, subscriptions)
 
     return {
         "id": str(account.id),
@@ -1449,6 +1609,141 @@ def get_account_detail(
     }
 
 
+def _reserve_customer_account_status_action(
+    db: Session,
+    *,
+    account: Subscriber,
+    action: str,
+    idempotency_key: str,
+) -> IdempotencyKey:
+    scope = f"{_RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX}:{action}"
+    key = (idempotency_key or "").strip()
+    if not key or len(key) > 120:
+        raise ValueError("Account status confirmation is invalid")
+    existing = (
+        db.query(IdempotencyKey)
+        .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
+        .with_for_update()
+        .one_or_none()
+    )
+    if existing is not None:
+        if existing.account_id != account.id:
+            raise ValueError("Account status confirmation belongs to another account")
+        if existing.ref_id:
+            return existing
+        raise ValueError("This account status confirmation is already running")
+
+    reservation = IdempotencyKey(
+        scope=scope,
+        key=key,
+        account_id=account.id,
+    )
+    db.add(reservation)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        replay = (
+            db.query(IdempotencyKey)
+            .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
+            .one_or_none()
+        )
+        if replay is not None and replay.account_id != account.id:
+            raise ValueError(
+                "Account status confirmation belongs to another account"
+            ) from None
+        if replay is not None and replay.ref_id:
+            return replay
+        raise ValueError(
+            "This account status confirmation is already running"
+        ) from None
+    return reservation
+
+
+def _replayed_customer_account_status_result(
+    account: Subscriber,
+    result_ref: str,
+) -> dict:
+    parts = result_ref.split("|")
+    if len(parts) == 4 and parts[0] == str(account.id):
+        try:
+            changed = int(parts[2])
+            skipped = int(parts[3])
+        except ValueError:
+            pass
+        else:
+            return {
+                "account_id": parts[0],
+                "status": parts[1] or None,
+                "changed": changed,
+                "skipped": skipped,
+                "replayed": True,
+            }
+    # Compatibility fallback for a reservation written by an older deployment.
+    return {
+        "account_id": str(account.id),
+        "status": account.status.value if account.status else None,
+        "changed": 0,
+        "skipped": 0,
+        "replayed": True,
+    }
+
+
+def confirm_customer_account_status_action(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    action: str,
+    *,
+    actor_id: str | None,
+    expected_preview_fingerprint: str,
+    idempotency_key: str,
+) -> dict | None:
+    """Execute one confirmed reseller status action at most once."""
+    normalized_action = (action or "").strip().lower()
+    if normalized_action not in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        raise ValueError("Unsupported account status action")
+    account = _get_customer_account(db, reseller_id, account_id)
+    if account is None:
+        return None
+    reservation = _reserve_customer_account_status_action(
+        db,
+        account=account,
+        action=normalized_action,
+        idempotency_key=idempotency_key,
+    )
+    if reservation.ref_id:
+        db.refresh(account)
+        return _replayed_customer_account_status_result(account, reservation.ref_id)
+    try:
+        result = update_customer_account_status(
+            db,
+            reseller_id,
+            account_id,
+            normalized_action,
+            actor_id=actor_id,
+            expected_preview_fingerprint=expected_preview_fingerprint,
+            commit=False,
+        )
+        if result is None:
+            db.rollback()
+            return None
+        reservation.ref_id = "|".join(
+            (
+                str(account.id),
+                str(result.get("status") or ""),
+                str(result.get("changed") or 0),
+                str(result.get("skipped") or 0),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    result["replayed"] = False
+    return result
+
+
 def update_customer_account_status(
     db: Session,
     reseller_id: str,
@@ -1456,6 +1751,8 @@ def update_customer_account_status(
     action: str,
     *,
     actor_id: str | None = None,
+    expected_preview_fingerprint: str | None = None,
+    commit: bool = True,
 ) -> dict | None:
     """Deactivate, restore, or disable a reseller-owned customer account."""
     normalized_action = (action or "").strip().lower()
@@ -1465,6 +1762,12 @@ def update_customer_account_status(
     account = _get_customer_account(db, reseller_id, account_id)
     if not account:
         return None
+    account = (
+        _customer_accounts_query(db, reseller_id)
+        .filter(Subscriber.id == account.id)
+        .with_for_update()
+        .one()
+    )
 
     subscriptions = (
         db.query(Subscription)
@@ -1472,6 +1775,18 @@ def update_customer_account_status(
         .with_for_update()
         .all()
     )
+    preview = preview_customer_account_status_actions(db, account, subscriptions)[
+        normalized_action
+    ]
+    if expected_preview_fingerprint is not None:
+        if not secrets.compare_digest(
+            preview["fingerprint"], expected_preview_fingerprint.strip()
+        ):
+            raise ValueError(
+                "Account status changed after preview; review the current impact and try again"
+            )
+    if not preview["allowed"]:
+        raise ValueError("This account status action would not change the account")
     source = f"reseller:{reseller_id}"
     if actor_id:
         source = f"{source}:user:{actor_id}"
@@ -1480,12 +1795,7 @@ def update_customer_account_status(
     skipped = 0
     if normalized_action == "deactivate":
         for subscription in subscriptions:
-            if subscription.status in {
-                SubscriptionStatus.active,
-                SubscriptionStatus.pending,
-                SubscriptionStatus.blocked,
-                SubscriptionStatus.stopped,
-            }:
+            if subscription.status in _RESELLER_DEACTIVATABLE_STATUSES:
                 if get_active_locks(db, subscription_id=str(subscription.id)):
                     skipped += 1
                     continue
@@ -1520,13 +1830,8 @@ def update_customer_account_status(
             reason="Restored from reseller portal.",
             source=source,
         )
-        restorable_statuses = {
-            SubscriptionStatus.suspended,
-            SubscriptionStatus.blocked,
-            SubscriptionStatus.stopped,
-        }
         for subscription in subscriptions:
-            if subscription.status not in restorable_statuses:
+            if subscription.status not in _RESELLER_RESTORABLE_STATUSES:
                 skipped += 1
                 continue
             if transition_subscription_status(
@@ -1542,15 +1847,8 @@ def update_customer_account_status(
         db.flush()
         compute_account_status(db, str(account.id))
     else:
-        terminal_statuses = {
-            SubscriptionStatus.disabled,
-            SubscriptionStatus.canceled,
-            SubscriptionStatus.expired,
-            SubscriptionStatus.hidden,
-            SubscriptionStatus.archived,
-        }
         for subscription in subscriptions:
-            if subscription.status in terminal_statuses:
+            if subscription.status in _RESELLER_TERMINAL_STATUSES:
                 skipped += 1
                 continue
             if disable_subscription(
@@ -1580,8 +1878,11 @@ def update_customer_account_status(
         changed = 1
         db.flush()
 
-    db.commit()
-    db.refresh(account)
+    if commit:
+        db.commit()
+        db.refresh(account)
+    else:
+        db.flush()
     return {
         "account_id": str(account.id),
         "status": account.status.value if account.status else None,
