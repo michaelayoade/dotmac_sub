@@ -1276,6 +1276,10 @@ class PaymentProviderEventIngest(BaseModel):
     external_id: str | None = Field(default=None, max_length=160)
     idempotency_key: str | None = Field(default=None, max_length=160)
     amount: Decimal | None = Field(default=None, gt=0)
+    provider_fee: Decimal = Field(default=Decimal("0.00"), ge=0)
+    net_amount: Decimal | None = Field(default=None, gt=0)
+    provider_reference: str | None = Field(default=None, max_length=120)
+    topup_intent_id: UUID | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     financial_effect: PaymentProviderEventFinancialEffect | None = None
     payload: dict | None = None

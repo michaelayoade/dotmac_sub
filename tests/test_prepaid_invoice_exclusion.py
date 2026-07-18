@@ -116,6 +116,7 @@ def test_renewal_owner_suppresses_legacy_prepaid_invoice_path_even_in_dry_run(
     )
     catalog_offer.billing_cycle = BillingCycle.monthly
     _add_recurring_price(db_session, subscription.offer_id)
+    subscription.unit_price = Decimal("100.00")
     db_session.add_all(
         [
             DomainSetting(

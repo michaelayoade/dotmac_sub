@@ -380,6 +380,9 @@ detailed security and delivery boundary is
    when reviewed funding already exists as a monthly period becomes due, it
    previews against the verified position, posts one idempotent service debit,
    links one active entitlement, and advances the exact subscription period.
+   It requires the positive contracted `Subscription.unit_price` and fails
+   closed when that evidence is absent; current catalog price is not authority
+   for an already-contracted prepaid service.
    The daily adapter is control-gated and refuses anchors more than two days
    stale; historical cycles require a reviewed hash-bound reconciliation plan.
 10. `financial.billing_reporting` (`app/services/billing/reporting.py`) owns
@@ -666,6 +669,22 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   non-success webhook remains an observation. A verified invoice hint becomes
   pending intent before settlement or uses the confirmed allocation-transfer
   owner after settlement; the provider adapter never constructs financial rows.
+- Cash-first provider boundary: a signature-verified webhook or successful
+  provider verification commits the payment document, gross charge, provider
+  fee, net `PaymentSettlement`, and exact net unallocated-credit ledger link
+  before invoice allocation is attempted. Invoice eligibility, prepaid funding
+  projection, or other downstream consequence failures cannot roll back that
+  confirmed cash evidence.
+- Allocation-exception boundary: applying the net unallocated credit to the
+  checkout invoice remains owned by the normal preview/fingerprint-bound
+  allocation service. Failure leaves the net credit untouched and writes one
+  idempotent `PaymentAllocationReconciliationException` linking the payment,
+  intended invoice, checkout intent/reference, and error. A successful replay
+  resolves that exception; retries cannot duplicate money or exception rows.
+- Invoice-lifecycle boundary: invoice-payment checkout cannot persist an intent
+  for a draft. The checkout adapter first requests the canonical invoice
+  lifecycle owner to transition the document from draft to issued, then creates
+  the provider intent from the issued document.
 - Historical boundary: old succeeded payments are not automatically trusted or
   linked by amount/memo similarity. Inspection lists candidates; reconciliation
   requires an operator-selected exact ledger row for every active allocation,
