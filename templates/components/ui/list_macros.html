@@ -1,0 +1,89 @@
+{# Reusable list macros for the list_query migration.
+
+   sort_header renders one Carbon/WCAG-conformant sortable column header from a
+   ListQuery: a deep-linkable sort link that toggles direction, aria-sort on the
+   th, an accessible label, and a non-colour direction indicator. Every list
+   migrated to list_query uses this instead of hand-rolling ~20 lines per column.
+
+   Usage:
+     {% from "components/ui/list_macros.html" import sort_header %}
+     {{ sort_header(list_query, '/admin/referrals', 'created_at', 'Created', entity='referrals') }}
+
+   For plain full-page navigation, omit hx_target. Pass hx_target (e.g.
+   '#referrals-table') to swap the table in place via HTMX where the page wires
+   it up. #}
+{% macro sort_header(list_query, base_url, key, label, entity='items', th_class='px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400', hx_target=None) %}
+{% set _active = list_query.sort_by == key %}
+{% set _dir = 'desc' if _active and list_query.sort_dir == 'asc' else 'asc' %}
+{% set _url = list_query.url(base_url, page=1, sort_by=key, sort_dir=_dir) %}
+<th scope="col"
+    aria-sort="{% if _active %}{{ 'ascending' if list_query.sort_dir == 'asc' else 'descending' }}{% else %}none{% endif %}"
+    class="{{ th_class }}">
+    <a class="group inline-flex items-center gap-1.5 rounded-sm hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:hover:text-slate-200 dark:focus-visible:ring-offset-slate-900"
+       href="{{ _url }}"
+       {% if hx_target %}hx-get="{{ _url }}" hx-target="{{ hx_target }}" hx-push-url="true"{% endif %}
+       aria-label="Sort {{ entity }} by {{ label|lower }} {{ 'descending' if _dir == 'desc' else 'ascending' }}">
+        {{ label }}
+        <svg class="h-3.5 w-3.5 text-slate-400 transition {% if not _active %}opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100{% endif %}"
+             fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            {% if _active and list_query.sort_dir == 'desc' %}
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            {% else %}
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>
+            {% endif %}
+        </svg>
+    </a>
+</th>
+{% endmacro %}
+
+{# Canonical list footer: result announcement, page-size state, and navigation
+   all come from ListQuery/PageMeta. No caller assembles query strings. #}
+{% macro list_pagination(list_query, page_meta, base_url, entity='results') %}
+{% if page_meta.total_items > 0 %}
+<div class="border-t border-slate-200 bg-slate-50/50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p class="text-sm text-slate-500 dark:text-slate-400" role="status" aria-live="polite">
+            Showing {{ page_meta.start_item }} to {{ page_meta.end_item }} of {{ page_meta.total_items }} {{ entity }}
+        </p>
+        <div class="flex flex-wrap items-center gap-4">
+            <form method="get" action="{{ base_url }}" class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                {% if list_query.search %}<input type="hidden" name="search" value="{{ list_query.search }}">{% endif %}
+                {% for key, value in list_query.filters %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+                <input type="hidden" name="sort" value="{{ list_query.sort_by }}">
+                <input type="hidden" name="dir" value="{{ list_query.sort_dir }}">
+                <input type="hidden" name="page" value="1">
+                <label for="{{ list_query.definition.key }}-per-page">Rows per page</label>
+                <select id="{{ list_query.definition.key }}-per-page" name="per_page" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-300 bg-white py-1 pl-2 pr-7 text-sm text-slate-700 focus:border-primary-500 focus:ring-2 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                    {% for size in list_query.definition.per_page_options %}
+                    <option value="{{ size }}" {% if list_query.per_page == size %}selected{% endif %}>{{ size }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+            {% if page_meta.total_pages > 1 %}
+            <nav class="flex items-center gap-1" aria-label="{{ entity|capitalize }} pagination">
+                {% if page_meta.has_previous %}
+                <a href="{{ list_query.url(base_url, page=page_meta.page - 1) }}" aria-label="Previous page"
+                   class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-400 dark:hover:bg-slate-700">Previous</a>
+                {% endif %}
+                {% for page in page_meta.navigation %}
+                    {% if page is none %}
+                    <span class="px-2 text-sm text-slate-400" aria-hidden="true">…</span>
+                    {% elif page == page_meta.page %}
+                    <span aria-current="page" class="rounded-lg bg-slate-200 px-3 py-1.5 text-sm font-semibold text-slate-900 dark:bg-slate-700 dark:text-white">{{ page }}</span>
+                    {% else %}
+                    <a href="{{ list_query.url(base_url, page=page) }}" aria-label="Page {{ page }}"
+                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-400 dark:hover:bg-slate-700">{{ page }}</a>
+                    {% endif %}
+                {% endfor %}
+                {% if page_meta.has_next %}
+                <a href="{{ list_query.url(base_url, page=page_meta.page + 1) }}" aria-label="Next page"
+                   class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:text-slate-400 dark:hover:bg-slate-700">Next</a>
+                {% endif %}
+            </nav>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endmacro %}

@@ -45,8 +45,6 @@ _ACCUMULATOR = re.compile(
 # owning backend service instead. Customer-facing entries are marked; fix those
 # first (they render above paginated tables).
 BACKLOG = {
-    "templates/customer/usage/_content.html",  # customer-facing: "Total Usage" over the page
-    "templates/customer/billing/index.html",  # customer-facing
     "templates/customer/services/change_plan.html",  # customer-facing
     "templates/admin/design_system/index.html",  # design-system demo
     "templates/components/data/data_grid.html",  # shared component helper

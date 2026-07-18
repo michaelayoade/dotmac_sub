@@ -225,6 +225,7 @@ def _parse_date_end(value: str | None) -> datetime | None:
             require_any_permission(
                 "reports:billing",
                 "reports:network",
+                "reports:support:read",
                 "customer:read",
                 "provisioning:read",
             )
@@ -452,7 +453,7 @@ def reports_network_export(hours: int | None = None, db: Session = Depends(get_d
 @router.get(
     "/technician",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_technician(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -479,7 +480,7 @@ def reports_technician(request: Request, db: Session = Depends(get_db)):
 
 @router.get(
     "/technician/export",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_technician_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_technician_export_csv(db=db, days=days)
@@ -495,7 +496,7 @@ def reports_technician_export(days: int | None = None, db: Session = Depends(get
 @router.get(
     "/ticket-sla",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_ticket_sla(
     request: Request,
@@ -677,7 +678,7 @@ def _inbox_escalation_return_url(
 @router.get(
     "/inbox-performance",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_inbox_performance(
     request: Request,
@@ -719,7 +720,7 @@ def reports_inbox_performance(
 
 @router.get(
     "/inbox-performance/export",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_inbox_performance_export(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
@@ -759,7 +760,7 @@ def reports_inbox_performance_export(
 @router.get(
     "/inbox-escalations",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_inbox_escalations(
     request: Request,
@@ -979,7 +980,7 @@ def reports_inbox_escalation_reply(
 
 @router.get(
     "/inbox-escalations/export",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_inbox_escalations_export(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),

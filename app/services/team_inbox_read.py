@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.service_team import ServiceTeam
@@ -233,6 +233,8 @@ def list_conversations(
     priority_at_most: int | None = None,
     muted: bool | None = None,
     snoozed: bool | None = None,
+    open_only: bool = False,
+    unassigned: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> InboxConversationListResult:
@@ -281,6 +283,8 @@ def list_conversations(
         )
     if status:
         query = query.filter(InboxConversation.status == status)
+    if open_only:
+        query = query.filter(InboxConversation.status != "resolved")
     if channel_type:
         query = query.filter(InboxConversation.channel_type == channel_type)
     if priority_at_most is not None:
@@ -312,6 +316,11 @@ def list_conversations(
             InboxConversationAssignment.person_id == assignee_uuid,
             InboxConversationAssignment.is_active.is_(True),
         )
+    if unassigned:
+        assigned_conversation_ids = select(
+            InboxConversationAssignment.conversation_id
+        ).where(InboxConversationAssignment.is_active.is_(True))
+        query = query.filter(~InboxConversation.id.in_(assigned_conversation_ids))
 
     ordered_query = query.order_by(
         InboxConversation.priority.asc(),

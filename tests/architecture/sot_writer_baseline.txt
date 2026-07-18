@@ -170,7 +170,6 @@ app.services.quotes_mirror
 app.services.radio_registration
 app.services.radius
 app.services.redis_client
-app.services.reseller_portal
 app.services.reseller_portal_billing
 app.services.reseller_service_requests
 app.services.router_management.config
@@ -214,8 +213,6 @@ app.services.unmatched_radio_queue
 app.services.usage
 app.services.user_profile
 app.services.vendor_admin
-app.services.vendor_portal_operations
-app.services.vendor_purchase_invoices
 app.services.web_billing_invoice_batch
 app.services.web_billing_reconciliation
 app.services.web_catalog_offers

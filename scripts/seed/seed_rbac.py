@@ -260,7 +260,13 @@ DEFAULT_PERMISSIONS = [
     ("finance:ap:write", "Manage accounts-payable resources"),
     # GIS / Mapping
     ("gis:map:view", "View maps and layers"),
-    ("gis:map:edit", "Edit map features (markers, polygons)"),
+    ("gis:location:write", "Create, edit, and delete map location markers"),
+    ("gis:area:write", "Create, edit, and delete map coverage areas"),
+    ("gis:layer:write", "Create, edit, and delete map layers"),
+    (
+        "gis:location_request:review",
+        "Approve or reject customer location-change requests",
+    ),
     ("gis:map:configure", "Configure map settings and layers"),
     ("gis:coverage:read", "View coverage areas"),
     ("gis:coverage:write", "Manage coverage areas"),
@@ -273,6 +279,7 @@ DEFAULT_PERMISSIONS = [
     ("reports:network", "View network reports"),
     ("reports:operations", "View operations reports"),
     ("reports:subscribers", "View subscriber reports"),
+    ("reports:support:read", "View support and inbox operations reports"),
     # Router Management
     ("router:read", "View routers, templates, push history, snapshots"),
     ("router:write", "Create/edit routers, templates, trigger sync/snapshots"),
@@ -388,6 +395,7 @@ ROLE_PERMISSIONS = {
         "operations:expense_request:read",
         "operations:expense_request:write",
         "reports:network",
+        "reports:support:read",
     ],
     "support": [
         "customer:read",
@@ -412,6 +420,7 @@ ROLE_PERMISSIONS = {
         "crm:conversation:read",
         "crm:conversation:write",
         "reports:subscribers",
+        "reports:support:read",
     ],
     "finance_manager": [
         "billing:invoice:read",

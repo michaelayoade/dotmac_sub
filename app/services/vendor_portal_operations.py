@@ -49,23 +49,38 @@ def _geom(geojson: dict):
     return func.ST_SetSRID(func.ST_GeomFromGeoJSON(json.dumps(geojson)), 4326)
 
 
-def _project(db: Session, project_id: str) -> InstallationProject:
-    row = db.get(InstallationProject, coerce_uuid(project_id))
+def _project(
+    db: Session, project_id: str, *, for_update: bool = False
+) -> InstallationProject:
+    query = db.query(InstallationProject).filter(
+        InstallationProject.id == coerce_uuid(project_id)
+    )
+    if for_update:
+        query = query.with_for_update(of=InstallationProject)
+    row = query.one_or_none()
     if row is None or not row.is_active:
         raise HTTPException(status_code=404, detail="Installation project not found")
     return row
 
 
-def _quote(db: Session, quote_id: str, vendor_id: str | None = None) -> ProjectQuote:
-    row = (
+def _quote(
+    db: Session,
+    quote_id: str,
+    vendor_id: str | None = None,
+    *,
+    for_update: bool = False,
+) -> ProjectQuote:
+    query = (
         db.query(ProjectQuote)
         .options(
             selectinload(ProjectQuote.line_items), joinedload(ProjectQuote.project)
         )
         .filter(ProjectQuote.id == coerce_uuid(quote_id))
         .filter(ProjectQuote.is_active.is_(True))
-        .one_or_none()
     )
+    if for_update:
+        query = query.with_for_update(of=ProjectQuote)
+    row = query.one_or_none()
     if row is None or (vendor_id and str(row.vendor_id) != str(vendor_id)):
         raise HTTPException(status_code=404, detail="Project quote not found")
     return row
@@ -108,6 +123,9 @@ def _serialize_quote(row: ProjectQuote) -> dict:
         "project_id": row.project_id,
         "vendor_id": row.vendor_id,
         "status": row.status,
+        # Editability is owned here (the same set the mutation paths enforce),
+        # not re-derived from a status string in the template.
+        "can_edit": row.status in _EDITABLE_QUOTES,
         "currency": row.currency,
         "subtotal": row.subtotal,
         "vat_rate_percent": row.vat_rate_percent,
@@ -231,10 +249,135 @@ class VendorPortalOperations:
         return _serialize_quote(_quote(db, quote_id, vendor_id))
 
     @staticmethod
+    def preview_quote_submission(
+        db: Session,
+        quote_id: str,
+        vendor_id: str,
+        *,
+        for_update: bool = False,
+    ) -> dict:
+        """Own the read-only impact snapshot for a quote submission."""
+        quote = _quote(db, quote_id, vendor_id, for_update=for_update)
+        project = (
+            _project(db, str(quote.project_id), for_update=True)
+            if for_update
+            else quote.project
+        )
+        if quote.status not in _EDITABLE_QUOTES:
+            raise HTTPException(status_code=409, detail="Quote is not submittable")
+        active = [item for item in quote.line_items if item.is_active]
+        if not active:
+            raise HTTPException(
+                status_code=422, detail="Quote requires at least one line"
+            )
+        subtotal = sum((_money(item.amount) for item in active), Decimal("0.00"))
+        tax_total = _money(
+            subtotal * Decimal(str(quote.vat_rate_percent or 0)) / Decimal("100")
+        )
+        total = _money(subtotal + tax_total)
+        return {
+            "submission_type": "quote",
+            "project_id": str(quote.project_id),
+            "target_id": str(quote.id),
+            "title": "Submit quote for review",
+            "summary": (
+                f"{len(active)} line item{'s' if len(active) != 1 else ''}; "
+                f"{quote.currency} {total:,.2f} total"
+            ),
+            "details": [
+                ("Line items", str(len(active))),
+                ("Subtotal", f"{quote.currency} {subtotal:,.2f}"),
+                ("Tax", f"{quote.currency} {tax_total:,.2f}"),
+                ("Total", f"{quote.currency} {total:,.2f}"),
+                ("Result", "Quote becomes read-only and enters staff review"),
+            ],
+            "state": {
+                "quote_id": str(quote.id),
+                "project_id": str(quote.project_id),
+                "project_status": project.status,
+                "project_updated_at": project.updated_at,
+                "status": quote.status,
+                "currency": quote.currency,
+                "vat_rate_percent": quote.vat_rate_percent,
+                "updated_at": quote.updated_at,
+                "lines": [
+                    {
+                        "id": str(item.id),
+                        "description": item.description,
+                        "quantity": item.quantity,
+                        "unit_price": item.unit_price,
+                        "amount": item.amount,
+                        "updated_at": item.updated_at,
+                    }
+                    for item in sorted(active, key=lambda row: str(row.id))
+                ],
+            },
+        }
+
+    @staticmethod
+    def preview_as_built_submission(
+        db: Session,
+        payload: VendorAsBuiltCreate,
+        vendor_id: str,
+        *,
+        for_update: bool = False,
+    ) -> dict:
+        """Own the read-only impact snapshot for an as-built submission."""
+        project = _project(db, str(payload.project_id), for_update=for_update)
+        if str(project.assigned_vendor_id) != str(vendor_id):
+            raise HTTPException(
+                status_code=403, detail="Project is assigned to another vendor"
+            )
+        if not payload.geojson and not payload.line_items:
+            raise HTTPException(status_code=422, detail="Provide a route or line items")
+        if payload.geojson:
+            if payload.geojson.get("type") != "LineString" or not isinstance(
+                payload.geojson.get("coordinates"), list
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="As-built route must be a GeoJSON LineString",
+                )
+            if len(payload.geojson["coordinates"]) < 2:
+                raise HTTPException(
+                    status_code=422,
+                    detail="As-built route requires at least two coordinates",
+                )
+        length_label = (
+            f"{payload.actual_length_meters:,.1f} m"
+            if payload.actual_length_meters is not None
+            else "Not supplied"
+        )
+        return {
+            "submission_type": "as_built",
+            "project_id": str(project.id),
+            "target_id": None,
+            "title": "Submit as-built route",
+            "summary": "Creates the immutable route evidence staff will review",
+            "details": [
+                ("Route type", "GeoJSON LineString" if payload.geojson else "None"),
+                ("Actual length", length_label),
+                ("Variation reason", payload.variation_reason or "None"),
+                ("Result", "A submitted as-built record is created for review"),
+            ],
+            "state": {
+                "project_id": str(project.id),
+                "project_status": project.status,
+                "project_updated_at": project.updated_at,
+                "assigned_vendor_id": str(project.assigned_vendor_id),
+                "payload": payload.model_dump(mode="json"),
+            },
+            "payload": payload.model_dump(mode="json"),
+        }
+
+    @staticmethod
     def add_quote_line(
         db: Session, quote_id: str, payload: VendorQuoteLineCreate, vendor_id: str
     ) -> dict:
-        quote = _quote(db, quote_id, vendor_id)
+        # Quote-line writers lock the same parent row as submission confirmation.
+        # This prevents an edit from slipping between the locked stale-preview
+        # recheck and the status transition.
+        quote = _quote(db, quote_id, vendor_id, for_update=True)
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not editable")
         line = ProjectQuoteLineItem(
@@ -256,7 +399,7 @@ class VendorPortalOperations:
         payload: VendorQuoteLineUpdate,
         vendor_id: str,
     ) -> dict:
-        quote = _quote(db, quote_id, vendor_id)
+        quote = _quote(db, quote_id, vendor_id, for_update=True)
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not editable")
         line = next(
@@ -280,7 +423,7 @@ class VendorPortalOperations:
     def delete_quote_line(
         db: Session, quote_id: str, line_id: str, vendor_id: str
     ) -> dict:
-        quote = _quote(db, quote_id, vendor_id)
+        quote = _quote(db, quote_id, vendor_id, for_update=True)
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not editable")
         line = next(
@@ -299,8 +442,14 @@ class VendorPortalOperations:
         return _serialize_quote(_quote(db, quote_id, vendor_id))
 
     @staticmethod
-    def submit_quote(db: Session, quote_id: str, vendor_id: str) -> dict:
-        quote = _quote(db, quote_id, vendor_id)
+    def submit_quote(
+        db: Session,
+        quote_id: str,
+        vendor_id: str,
+        *,
+        commit: bool = True,
+    ) -> dict:
+        quote = _quote(db, quote_id, vendor_id, for_update=True)
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not submittable")
         active = [item for item in quote.line_items if item.is_active]
@@ -313,7 +462,10 @@ class VendorPortalOperations:
         quote.submitted_at = _now()
         if quote.project.status == InstallationProjectStatus.open_for_bidding.value:
             quote.project.status = InstallationProjectStatus.quoted.value
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return _serialize_quote(_quote(db, quote_id, vendor_id))
 
     @staticmethod
@@ -403,9 +555,14 @@ class VendorPortalOperations:
 
     @staticmethod
     def submit_as_built(
-        db: Session, payload: VendorAsBuiltCreate, vendor_id: str, user_id: str
+        db: Session,
+        payload: VendorAsBuiltCreate,
+        vendor_id: str,
+        user_id: str,
+        *,
+        commit: bool = True,
     ) -> dict:
-        project = _project(db, str(payload.project_id))
+        project = _project(db, str(payload.project_id), for_update=True)
         if str(project.assigned_vendor_id) != str(vendor_id):
             raise HTTPException(
                 status_code=403, detail="Project is assigned to another vendor"
@@ -431,7 +588,10 @@ class VendorPortalOperations:
                 )
             )
         db.add(row)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return {
             "id": row.id,
             "project_id": row.project_id,

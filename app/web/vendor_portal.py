@@ -18,6 +18,7 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceCreate,
     VendorPurchaseInvoiceLineCreate,
 )
+from app.services import vendor_submission_proposals
 from app.services.common import coerce_uuid
 from app.services.field.vendor_auth import vendor_context
 from app.services.vendor_portal_operations import vendor_portal_operations
@@ -165,20 +166,32 @@ def vendor_add_quote_line(
 
 @router.post("/projects/{project_id}/quotes/{quote_id}/submit")
 def vendor_submit_quote(
+    request: Request,
     project_id: str,
     quote_id: str,
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    vendor_portal_operations.submit_quote(
-        db, quote_id, str(context["native_vendor_id"])
+    proposal = vendor_submission_proposals.issue_quote_submission(
+        db,
+        quote_id=quote_id,
+        vendor_id=str(context["native_vendor_id"]),
+        user_id=str(auth["principal_id"]),
     )
-    return _redirect(project_id, "Quote submitted")
+    return templates.TemplateResponse(
+        "vendor/submission_confirm.html",
+        {
+            "request": request,
+            "vendor": context["native_vendor"],
+            "proposal": proposal,
+        },
+    )
 
 
 @router.post("/projects/{project_id}/as-built")
 def vendor_submit_as_built(
+    request: Request,
     project_id: str,
     geojson: str = Form(...),
     actual_length_meters: float | None = Form(default=None),
@@ -187,18 +200,25 @@ def vendor_submit_as_built(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    vendor_portal_operations.submit_as_built(
+    proposal = vendor_submission_proposals.issue_as_built_submission(
         db,
-        VendorAsBuiltCreate(
+        payload=VendorAsBuiltCreate(
             project_id=coerce_uuid(project_id),
             geojson=json.loads(geojson),
             actual_length_meters=actual_length_meters,
             variation_reason=variation_reason,
         ),
-        str(context["native_vendor_id"]),
-        str(auth["principal_id"]),
+        vendor_id=str(context["native_vendor_id"]),
+        user_id=str(auth["principal_id"]),
     )
-    return _redirect(project_id, "As-built submitted")
+    return templates.TemplateResponse(
+        "vendor/submission_confirm.html",
+        {
+            "request": request,
+            "vendor": context["native_vendor"],
+            "proposal": proposal,
+        },
+    )
 
 
 @router.post("/projects/{project_id}/purchase-invoices")
@@ -271,13 +291,50 @@ async def vendor_upload_invoice_attachment(
 
 @router.post("/projects/{project_id}/purchase-invoices/{invoice_id}/submit")
 def vendor_submit_invoice(
+    request: Request,
     project_id: str,
     invoice_id: str,
     auth: dict = Depends(require_web_auth),
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    vendor_purchase_invoices.submit(
-        db, invoice_id, vendor_id=str(context["native_vendor_id"])
+    proposal = vendor_submission_proposals.issue_purchase_invoice_submission(
+        db,
+        invoice_id=invoice_id,
+        vendor_id=str(context["native_vendor_id"]),
+        user_id=str(auth["principal_id"]),
     )
-    return _redirect(project_id, "Invoice submitted")
+    return templates.TemplateResponse(
+        "vendor/submission_confirm.html",
+        {
+            "request": request,
+            "vendor": context["native_vendor"],
+            "proposal": proposal,
+        },
+    )
+
+
+@router.post("/projects/{project_id}/submissions/confirm")
+def vendor_confirm_submission(
+    project_id: str,
+    confirmation_token: str = Form(...),
+    auth: dict = Depends(require_web_auth),
+    db: Session = Depends(get_db),
+):
+    context = _context(auth, db)
+    result = vendor_submission_proposals.confirm_submission(
+        db,
+        confirmation_token=confirmation_token,
+        vendor_id=str(context["native_vendor_id"]),
+        user_id=str(auth["principal_id"]),
+        project_id=project_id,
+    )
+    labels = {
+        "quote": "Quote submitted",
+        "as_built": "As-built submitted",
+        "purchase_invoice": "Invoice submitted",
+    }
+    message = labels[result.submission_type]
+    if result.replayed:
+        message = f"{message} (already processed)"
+    return _redirect(project_id, message)

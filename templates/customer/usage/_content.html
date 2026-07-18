@@ -1,7 +1,5 @@
-{% set totals = namespace(amount=0) %}
-{% for record in usage_records %}
-    {% set totals.amount = totals.amount + (record.amount or record.usage_amount or 0) %}
-{% endfor %}
+{# Period total is computed by the usage read owner over the complete record
+   set (period_total_gb), never summed here over the paginated page. #}
 {% set usage_theme = usage_theme | default('customer') %}
 {% set usage_navigation_base_url = usage_navigation_base_url | default('/portal/usage') %}
 {% set usage_period_query_key = usage_period_query_key | default('period') %}
@@ -174,7 +172,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Total Usage</p>
-                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:.2f}".format(totals.amount) }} <span class="text-sm font-semibold text-stone-500">GB</span></p>
+                        <p class="mt-1 text-2xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ "{:.2f}".format(period_total_gb | default(0.0)) }} <span class="text-sm font-semibold text-stone-500">GB</span></p>
                     </div>
                 </div>
             </div>

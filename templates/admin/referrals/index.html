@@ -1,9 +1,10 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card,
-    table_row, row_action, status_badge,
+    table_row, row_actions, row_action, status_badge,
     empty_state, animation_styles, icon_view
 %}
+{% from "components/ui/list_macros.html" import list_pagination, sort_header %}
 
 {% block title %}Referrals - Admin{% endblock %}
 
@@ -59,34 +60,45 @@
     {# Stats #}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" style="animation-delay: 50ms;">
         {{ stats_card(
-            "Total",
-            stats.total,
+            stats.total.label,
+            stats.total.value.value,
             icon=ref_icon,
-            color="amber", color2="orange"
+            color="amber", color2="orange",
+            href=stats.total.cohort_url,
+            tone=stats.total.tone
         ) }}
         {{ stats_card(
-            "Pending",
-            stats.pending,
+            stats.pending.label,
+            stats.pending.value.value,
             icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="blue", color2="indigo"
+            color="blue", color2="indigo",
+            href=stats.pending.cohort_url,
+            tone=stats.pending.tone
         ) }}
         {{ stats_card(
-            "Qualified (reward due)",
-            stats.qualified,
+            stats.qualified.label,
+            stats.qualified.value.value,
             icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="indigo", color2="violet"
+            color="indigo", color2="violet",
+            href=stats.qualified.cohort_url,
+            tone=stats.qualified.tone
         ) }}
         {{ stats_card(
-            "Rewarded",
-            stats.rewarded,
+            stats.rewarded.label,
+            stats.rewarded.value.value,
             icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="emerald", color2="green"
+            color="emerald", color2="green",
+            href=stats.rewarded.cohort_url,
+            tone=stats.rewarded.tone
         ) }}
     </div>
 
     {# Filters #}
     <div class="animate-fade-in-up rounded-xl border border-slate-200/60 bg-white/80 px-5 py-3 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 100ms;">
         <form method="get" action="/admin/referrals" class="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <input type="hidden" name="sort" value="{{ list_query.sort_by }}">
+            <input type="hidden" name="dir" value="{{ list_query.sort_dir }}">
+            <input type="hidden" name="per_page" value="{{ list_query.per_page }}">
             <div class="sm:w-48">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Status</label>
                 <select name="status" onchange="this.form.submit()"
@@ -108,7 +120,7 @@
                 </select>
             </div>
             {% if status_filter or reward_status_filter %}
-            <a href="/admin/referrals"
+            <a href="{{ list_query.url('/admin/referrals', page=1, filters={'status': None, 'reward_status': None}) }}"
                class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                 Clear filters
@@ -125,11 +137,11 @@
                     <tr class="border-b border-slate-100 bg-slate-50/80 dark:border-slate-700/50 dark:bg-slate-900/20">
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Referrer</th>
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Referred</th>
-                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Status</th>
+                        {{ sort_header(list_query, '/admin/referrals', 'status', 'Status', entity='referrals', th_class='px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500') }}
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Reward</th>
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Reward Status</th>
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Source</th>
-                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Captured</th>
+                        {{ sort_header(list_query, '/admin/referrals', 'created_at', 'Captured', entity='referrals', th_class='px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500') }}
                         <th scope="col" class="px-6 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Actions</th>
                     </tr>
                 </thead>
@@ -157,11 +169,9 @@
                         <td class="whitespace-nowrap px-6 py-4">{{ reward_status_badge(ref.reward_status) }}</td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ ref.source | replace('_', ' ') | title if ref.source != '—' else '—' }}</td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ ref.created_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
-                        <td class="whitespace-nowrap px-6 py-4 text-right">
-                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                                {{ row_action(href=detail_href, icon=icon_view(), title="Review", color="amber") }}
-                            </div>
-                        </td>
+                        {% call row_actions() %}
+                            {{ row_action(href=detail_href, icon=icon_view(), title="Review", color="amber") }}
+                        {% endcall %}
                     {% endcall %}
                     {% endfor %}
                     {% else %}
@@ -177,27 +187,7 @@
             </table>
         </div>
 
-        {# Pagination #}
-        {% if total_pages > 1 %}
-        {% set _extra %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if reward_status_filter %}&reward_status={{ reward_status_filter }}{% endif %}{% endset %}
-        <div class="border-t border-slate-200 bg-slate-50/50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
-            <div class="flex items-center justify-between">
-                <p class="text-sm text-slate-500 dark:text-slate-400">
-                    Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} results
-                </p>
-                <nav class="flex items-center gap-1">
-                    {% if page > 1 %}
-                    <a href="/admin/referrals?page={{ page - 1 }}&per_page={{ per_page }}{{ _extra }}"
-                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Previous</a>
-                    {% endif %}
-                    {% if page < total_pages %}
-                    <a href="/admin/referrals?page={{ page + 1 }}&per_page={{ per_page }}{{ _extra }}"
-                       class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Next</a>
-                    {% endif %}
-                </nav>
-            </div>
-        </div>
-        {% endif %}
+        {{ list_pagination(list_query, page_meta, '/admin/referrals', entity='referrals') }}
     </div>
 
 </div>

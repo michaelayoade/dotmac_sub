@@ -29,6 +29,7 @@ from app.services.customer_context import (
     optional_customer_account_id,
     optional_customer_subscriber_id,
 )
+from app.services.customer_financial_position import get_customer_billing_summary
 from app.services.customer_portal_context import (
     get_invoice_billing_contact,
     get_outstanding_balance,
@@ -195,6 +196,7 @@ def get_billing_page(
         "ledger_entries": [],
         "billing_activity": [],
         "invoice_status_presentations": {},
+        "billing_stats": {"available": False},
     }
     if not account_id_str:
         return empty_result
@@ -230,6 +232,29 @@ def get_billing_page(
             exc_info=True,
         )
 
+    # Account-level headline KPIs come from the canonical billing-summary owner
+    # over the COMPLETE, currency-typed invoice set — never summed in the
+    # template over the paginated page.
+    # When the owner can't be reached, the stats are marked unavailable so the
+    # template renders "unavailable", never a misleading zero.
+    billing_stats: dict[str, Any] = {"available": False}
+    try:
+        summary = get_customer_billing_summary(db, account_id_str)
+        billing_stats = {
+            "available": True,
+            "currency": summary.currency,
+            "total_billed": summary.total_billed,
+            "outstanding": summary.outstanding,
+            "overdue": summary.overdue,
+            "overdue_count": summary.overdue_count,
+        }
+    except Exception:
+        logger.warning(
+            "Failed to resolve billing KPIs for account %s",
+            account_id_str,
+            exc_info=True,
+        )
+
     # Backwards-compatible raw ledger rows for older templates.
     ledger_entries = billing_service.ledger_entries.list(
         db, account_id_str, None, None, True, "effective_date", "desc", 25, 0
@@ -246,6 +271,7 @@ def get_billing_page(
         "prepaid_balance": prepaid_balance,
         "ledger_entries": ledger_entries,
         "billing_activity": billing_activity,
+        "billing_stats": billing_stats,
         "invoice_status_presentations": {
             str(invoice.id): invoice_status_presentation(invoice.status)
             for invoice in invoices

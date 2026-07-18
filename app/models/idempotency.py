@@ -1,8 +1,8 @@
-"""Idempotency keys for wallet-affecting customer operations.
+"""Shared idempotency keys for replay-safe domain operations.
 
-A client sends a stable key with a money-moving request and re-sends the same
-key on retry. The (scope, key) unique constraint lets the server detect a replay
-and return the original result instead of performing the operation twice.
+A client or signed proposal supplies a stable key and can re-send the same
+command on retry. The (scope, key) unique constraint lets the owning service
+detect a replay and return the original result instead of performing it twice.
 
 Isolated table — existing queries are unaffected, and it simply has no rows
 until the migration (or create_all) provisions it.
