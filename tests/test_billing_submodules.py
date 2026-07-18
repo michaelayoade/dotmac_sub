@@ -1422,6 +1422,7 @@ class TestPaymentCRUD:
         subscription.billing_mode = BillingMode.prepaid
         subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
         subscription.next_billing_at = next_billing
+        subscription.unit_price = Decimal("37625.00")
         subscriber.status = SubscriberStatus.blocked
         db_session.add(
             OfferPrice(
@@ -1469,6 +1470,56 @@ class TestPaymentCRUD:
         assert subscription.next_billing_at == datetime(2026, 8, 1)
         assert subscriber.status == SubscriberStatus.active
 
+    def test_succeeded_prepaid_payment_refuses_catalog_fallback_without_contract_price(
+        self, db_session, subscriber, subscription
+    ):
+        from app.models.catalog import (
+            BillingCycle,
+            BillingMode,
+            OfferPrice,
+            PriceType,
+            SubscriptionStatus,
+        )
+
+        paid_at = datetime(2026, 6, 28, tzinfo=UTC)
+        subscription.status = SubscriptionStatus.active
+        subscription.billing_mode = BillingMode.prepaid
+        subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
+        subscription.next_billing_at = datetime(2026, 7, 1, tzinfo=UTC)
+        subscription.unit_price = None
+        db_session.add(
+            OfferPrice(
+                offer_id=subscription.offer_id,
+                price_type=PriceType.recurring,
+                amount=Decimal("2150000.00"),
+                currency="NGN",
+                billing_cycle=BillingCycle.monthly,
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        payment = billing_service.payments.create(
+            db_session,
+            PaymentCreate(
+                account_id=subscriber.id,
+                amount=Decimal("2150000.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                paid_at=paid_at,
+            ),
+        )
+
+        debits = (
+            db_session.query(LedgerEntry)
+            .filter(LedgerEntry.payment_id == payment.id)
+            .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+            .count()
+        )
+        assert debits == 0
+        db_session.refresh(subscription)
+        assert subscription.next_billing_at == datetime(2026, 7, 1)
+
     def test_succeeded_prepaid_payment_preserves_credit_when_paid_coverage_exists(
         self, db_session, subscriber, subscription
     ):
@@ -1488,6 +1539,7 @@ class TestPaymentCRUD:
         subscription.billing_mode = BillingMode.prepaid
         subscription.start_at = datetime(2026, 6, 1, tzinfo=UTC)
         subscription.next_billing_at = period_start
+        subscription.unit_price = Decimal("37625.00")
         db_session.add(
             OfferPrice(
                 offer_id=subscription.offer_id,

@@ -641,6 +641,9 @@ def _batch_reconstructed_positions(
         column("subscription_id", Uuid(as_uuid=True)),
         column("source_status"),
         column("source_deleted", Boolean),
+        column("quantity"),
+        column("unit_price", Numeric(19, 4)),
+        column("start_date", Date),
         column("last_charge_total", Numeric(19, 4)),
         column("last_period_from", Date),
         column("last_period_to", Date),
@@ -648,6 +651,9 @@ def _batch_reconstructed_positions(
         column("noncharge_period_rows"),
         column("last_noncharge_transaction_id"),
         column("last_noncharge_type"),
+        column("last_noncharge_source"),
+        column("last_noncharge_to_invoice", Boolean),
+        column("last_noncharge_comment_empty", Boolean),
         column("last_noncharge_category_id"),
         column("last_noncharge_total", Numeric(19, 4)),
         column("last_noncharge_period_from", Date),
@@ -933,11 +939,22 @@ def _batch_reconstructed_positions(
         final_services.c.splynx_service_id,
         final_services.c.subscriber_id,
         final_services.c.subscription_id,
+        final_services.c.quantity,
+        final_services.c.unit_price,
+        final_services.c.start_date,
         final_services.c.last_charge_total,
         final_services.c.last_period_from,
         final_services.c.last_period_to,
         final_services.c.noncharge_transaction_rows,
         final_services.c.noncharge_period_rows,
+        final_services.c.last_noncharge_type,
+        final_services.c.last_noncharge_source,
+        final_services.c.last_noncharge_to_invoice,
+        final_services.c.last_noncharge_comment_empty,
+        final_services.c.last_noncharge_category_id,
+        final_services.c.last_noncharge_total,
+        final_services.c.last_noncharge_period_from,
+        final_services.c.last_noncharge_period_to,
     ).where(
         final_services.c.subscriber_id.in_(replay_ids),
         final_services.c.source_status == "active",
@@ -945,32 +962,82 @@ def _batch_reconstructed_positions(
     )
     for service_row in db.execute(service_stmt):
         account_id = str(service_row.subscriber_id)
-        if service_row.last_period_from is None or service_row.last_period_to is None:
-            if int(service_row.noncharge_transaction_rows or 0) > 0:
+        period_from = service_row.last_period_from
+        period_to = service_row.last_period_to
+        charge_total = service_row.last_charge_total
+        if period_from is None or period_to is None:
+            # The retained final source contains two auto-generated first-cycle
+            # service debits classified under Splynx category 2 rather than the
+            # canonical category 1. Accept only the structural shape that proves
+            # this is the exact service charge: one row, one period, debit,
+            # auto-generated, marked for invoicing, no operator comment, starts
+            # with the service, and equals quantity * source unit price. This is
+            # source evidence repair, not a general category-2 fallback.
+            quantity = int(service_row.quantity or 0)
+            noncanonical_total = (
+                _money(service_row.last_noncharge_total)
+                if service_row.last_noncharge_total is not None
+                else None
+            )
+            source_unit_price = (
+                _money(service_row.unit_price)
+                if service_row.unit_price is not None
+                else None
+            )
+            reviewed_misclassified_charge = (
+                int(service_row.noncharge_transaction_rows or 0) == 1
+                and int(service_row.noncharge_period_rows or 0) == 1
+                and service_row.last_noncharge_type == "debit"
+                and service_row.last_noncharge_source == "auto"
+                and service_row.last_noncharge_to_invoice is True
+                and service_row.last_noncharge_comment_empty is True
+                and int(service_row.last_noncharge_category_id or 0) == 2
+                and quantity > 0
+                and noncanonical_total is not None
+                and noncanonical_total > ZERO
+                and source_unit_price is not None
+                and noncanonical_total
+                == _money(source_unit_price * Decimal(quantity))
+                and service_row.start_date
+                == service_row.last_noncharge_period_from
+                and service_row.last_noncharge_period_from is not None
+                and service_row.last_noncharge_period_to is not None
+            )
+            if reviewed_misclassified_charge:
+                period_from = service_row.last_noncharge_period_from
+                period_to = service_row.last_noncharge_period_to
+                charge_total = noncanonical_total
+            elif int(service_row.noncharge_transaction_rows or 0) > 0:
                 reason = (
                     "source_service_has_noncanonical_period_evidence"
                     if int(service_row.noncharge_period_rows or 0) > 0
                     else "source_service_has_noncanonical_activity"
                 )
                 incomplete[account_id].add(reason)
+                continue
             else:
-                incomplete[account_id].add("source_service_without_paid_through_period")
+                incomplete[account_id].add(
+                    "source_service_without_paid_through_period"
+                )
+                continue
+        if period_from is None or period_to is None:
+            # Kept explicit for type narrowing and fail-closed safety if the
+            # reviewed source rule above is changed later.
+            incomplete[account_id].add("source_service_without_paid_through_period")
             continue
-        cycle_days = (
-            service_row.last_period_to - service_row.last_period_from
-        ).days + 1
+        cycle_days = (period_to - period_from).days + 1
         if cycle_days <= 0 or cycle_days > 366:
             incomplete[account_id].add("invalid_source_service_cycle")
             continue
-        if service_row.last_charge_total is None:
+        if charge_total is None:
             incomplete[account_id].add("source_service_without_charge")
             continue
-        charge = _money(service_row.last_charge_total)
+        charge = _money(charge_total)
         if charge < ZERO:
             incomplete[account_id].add("source_service_negative_charge")
             continue
         next_due = max(
-            service_row.last_period_to + timedelta(days=1),
+            period_to + timedelta(days=1),
             LEGACY_FINANCIAL_REPLAY_AT.date(),
         )
         if service_row.subscription_id is not None:

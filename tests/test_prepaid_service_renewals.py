@@ -274,6 +274,7 @@ def _prepare_scheduled_cycle(db_session, subscriber, subscription):
     _prepare(db_session, subscriber, subscription)
     subscription.offer.billing_cycle = BillingCycle.monthly
     subscription.offer.is_active = True
+    subscription.unit_price = Decimal("50.00")
     db_session.add(
         OfferPrice(
             offer_id=subscription.offer_id,
@@ -313,6 +314,25 @@ def test_scheduled_owner_dry_run_writes_nothing(db_session, subscriber, subscrip
     )
 
     assert summary["prepaid_renewals_funded"] == 1
+    assert db_session.query(AccountAdjustment).count() == 0
+    assert db_session.query(ServiceEntitlement).count() == 0
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("100.00")
+
+
+def test_scheduled_owner_refuses_catalog_fallback_without_contract_price(
+    db_session, subscriber, subscription
+):
+    _prepare_scheduled_cycle(db_session, subscriber, subscription)
+    subscription.unit_price = None
+    db_session.commit()
+
+    summary = run_due_prepaid_service_renewals(
+        db_session,
+        run_at=datetime(2026, 7, 1, 12, tzinfo=UTC),
+    )
+
+    assert summary["prepaid_renewals_missing_price"] == 1
+    assert summary["prepaid_renewals_funded"] == 0
     assert db_session.query(AccountAdjustment).count() == 0
     assert db_session.query(ServiceEntitlement).count() == 0
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("100.00")

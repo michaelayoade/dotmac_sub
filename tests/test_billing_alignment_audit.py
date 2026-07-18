@@ -76,6 +76,9 @@ from scripts.one_off.reconstruct_splynx_mirror import (
     _date as normalize_splynx_date,
 )
 from scripts.one_off.reconstruct_splynx_mirror import (
+    _deleted as normalize_splynx_boolean,
+)
+from scripts.one_off.reconstruct_splynx_mirror import (
     _entry_type as normalize_splynx_entry_type,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
@@ -395,11 +398,22 @@ def _replay_tables(
         Column("subscription_id", Uuid(as_uuid=True)),
         Column("source_status", String, nullable=False),
         Column("source_deleted", Boolean, nullable=False),
+        Column("quantity", Integer),
+        Column("unit_price", Numeric(19, 4)),
+        Column("start_date", Date),
         Column("last_charge_total", Numeric(19, 4)),
         Column("last_period_from", Date),
         Column("last_period_to", Date),
         Column("noncharge_transaction_rows", Integer, nullable=False),
         Column("noncharge_period_rows", Integer, nullable=False),
+        Column("last_noncharge_type", String),
+        Column("last_noncharge_source", String),
+        Column("last_noncharge_to_invoice", Boolean),
+        Column("last_noncharge_comment_empty", Boolean),
+        Column("last_noncharge_category_id", Integer),
+        Column("last_noncharge_total", Numeric(19, 4)),
+        Column("last_noncharge_period_from", Date),
+        Column("last_noncharge_period_to", Date),
     )
     metadata.create_all(db_session.get_bind())
     db_session.execute(
@@ -415,6 +429,9 @@ def _replay_tables(
             subscription_id=subscription_id,
             source_status="active",
             source_deleted=False,
+            quantity=1,
+            unit_price=source_charge,
+            start_date=date(2026, 6, 1),
             last_charge_total=source_charge,
             last_period_from=date(2026, 6, 1),
             last_period_to=date(2026, 6, 30),
@@ -636,6 +653,14 @@ def test_replay_separates_absent_service_history_from_noncanonical_period_eviden
             last_period_to=None,
             noncharge_transaction_rows=1,
             noncharge_period_rows=1,
+            last_noncharge_type="debit",
+            last_noncharge_source="auto",
+            last_noncharge_to_invoice=True,
+            last_noncharge_comment_empty=True,
+            last_noncharge_category_id=5,
+            last_noncharge_total=Decimal("0.00"),
+            last_noncharge_period_from=date(2026, 6, 1),
+            last_noncharge_period_to=date(2026, 6, 30),
         )
     )
     db_session.commit()
@@ -651,6 +676,86 @@ def test_replay_separates_absent_service_history_from_noncanonical_period_eviden
     reasons = replay.incomplete[str(subscriber.id)]
     assert "source_service_has_noncanonical_period_evidence" in reasons
     assert "source_service_without_paid_through_period" not in reasons
+
+
+def test_replay_accepts_strict_auto_misclassified_first_service_charge(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(
+        db_session,
+        subscriber.id,
+        subscription.id,
+        with_native_invoice=False,
+    )
+    final_services = metadata.tables["audit_splynx_final_services"]
+    db_session.execute(
+        final_services.update().values(
+            last_charge_total=None,
+            last_period_from=None,
+            last_period_to=None,
+            noncharge_transaction_rows=1,
+            noncharge_period_rows=1,
+            last_noncharge_type="debit",
+            last_noncharge_source="auto",
+            last_noncharge_to_invoice=True,
+            last_noncharge_comment_empty=True,
+            last_noncharge_category_id=2,
+            last_noncharge_total=Decimal("50.00"),
+            last_noncharge_period_from=date(2026, 6, 1),
+            last_noncharge_period_to=date(2026, 6, 30),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 6, 30, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert str(subscriber.id) not in replay.incomplete
+    assert replay.positions[str(subscriber.id)] == Decimal("100.00")
+
+
+def test_replay_rejects_unproven_category_two_service_activity(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    final_services = metadata.tables["audit_splynx_final_services"]
+    db_session.execute(
+        final_services.update().values(
+            last_charge_total=None,
+            last_period_from=None,
+            last_period_to=None,
+            noncharge_transaction_rows=1,
+            noncharge_period_rows=1,
+            last_noncharge_type="debit",
+            last_noncharge_source="manual",
+            last_noncharge_to_invoice=True,
+            last_noncharge_comment_empty=True,
+            last_noncharge_category_id=2,
+            last_noncharge_total=Decimal("50.00"),
+            last_noncharge_period_from=date(2026, 6, 1),
+            last_noncharge_period_to=date(2026, 6, 30),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.incomplete[str(subscriber.id)] == {
+        "source_service_has_noncanonical_period_evidence"
+    }
 
 
 def test_replay_marks_service_with_no_transaction_evidence_as_no_paid_through(
@@ -1351,6 +1456,11 @@ def test_d12_query_count_does_not_scale_with_prepaid_accounts(db_session):
 def test_reconstruction_normalizes_splynx_zero_dates():
     assert normalize_splynx_date("0000-00-00") is None
     assert normalize_splynx_date("2026-06-15") == date(2026, 6, 15)
+
+
+def test_reconstruction_normalizes_splynx_enum_booleans():
+    assert normalize_splynx_boolean("1") is True
+    assert normalize_splynx_boolean("0") is False
 
 
 def test_reconstruction_preserves_only_balance_affecting_entry_types():
