@@ -276,6 +276,7 @@ DEFAULT_PERMISSIONS = [
     ("reports:network", "View network reports"),
     ("reports:operations", "View operations reports"),
     ("reports:subscribers", "View subscriber reports"),
+    ("reports:support:read", "View support and inbox operations reports"),
     # Router Management
     ("router:read", "View routers, templates, push history, snapshots"),
     ("router:write", "Create/edit routers, templates, trigger sync/snapshots"),
@@ -391,6 +392,7 @@ ROLE_PERMISSIONS = {
         "operations:expense_request:read",
         "operations:expense_request:write",
         "reports:network",
+        "reports:support:read",
     ],
     "support": [
         "customer:read",
@@ -415,6 +417,7 @@ ROLE_PERMISSIONS = {
         "crm:conversation:read",
         "crm:conversation:write",
         "reports:subscribers",
+        "reports:support:read",
     ],
     "finance_manager": [
         "billing:invoice:read",
