@@ -258,16 +258,22 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             )
             stats_error = True
 
+    # An unknown balance must never render as 0.00 "good standing": track
+    # whether it actually loaded so the template can show "unavailable" instead
+    # of a reassuring zero (unknown != zero).
     current_balance = 0.0
+    balance_available = False
     if account_id:
         try:
             current_balance = float(get_available_balance(db, str(account_id)))
+            balance_available = True
         except Exception:
             logger.warning(
                 "Failed to resolve available balance for dashboard account %s",
                 account_id,
                 exc_info=True,
             )
+            stats_error = True
     next_bill_amount = float(invoices[0].total or 0) if invoices else 0.0
     next_bill_date = None
 
@@ -300,6 +306,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
 
     account = SimpleNamespace(
         balance=current_balance,
+        balance_available=balance_available,
         next_bill_amount=next_bill_amount,
         next_bill_date=next_bill_date,
         has_next_bill=has_next_bill,
@@ -350,6 +357,25 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
             plan_name=services[0].name,
             status_presentation=services[0].status_presentation,
         )
+
+    # Service-access is owned by the access resolver and kept distinct from
+    # subscription lifecycle and financial state: a subscription can read
+    # "active" while access is restricted for non-payment. "known" stays False
+    # when the resolver can't be reached so the template shows "unknown"
+    # rather than implying access is fine.
+    service_access = SimpleNamespace(known=False, restricted=False)
+    if subscriber_id:
+        try:
+            service_access = SimpleNamespace(
+                known=True,
+                restricted=bool(customer_is_restricted(db, subscriber_id)),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to resolve service access for subscriber %s",
+                subscriber_id,
+                exc_info=True,
+            )
 
     open_count = 0
     if account_id:
@@ -402,6 +428,7 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         "user": SimpleNamespace(**user),
         "account": account,
         "service": primary_service,
+        "service_access": service_access,
         "services": services,
         "devices": devices,
         "tickets": SimpleNamespace(open_count=open_count),
