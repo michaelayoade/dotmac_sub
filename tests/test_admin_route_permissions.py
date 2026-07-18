@@ -171,28 +171,43 @@ def test_catalog_settings_routes_require_catalog_permissions():
     )
 
 
-def test_gis_routes_require_map_permissions():
+def test_gis_routes_require_granular_map_permissions():
     assert _route_has_permission(admin_gis.router, "/gis", "GET", "gis:map:view")
+    # Approving a customer's location-change request is a distinct business
+    # decision, gated separately from editing map features.
     for path, method in [
         ("/gis/location-requests/{request_id}/approve", "POST"),
         ("/gis/location-requests/{request_id}/reject", "POST"),
+    ]:
+        assert _route_has_permission(
+            admin_gis.router, path, method, "gis:location_request:review"
+        )
+    for path, method in [
         ("/gis/locations/new", "GET"),
         ("/gis/locations/new", "POST"),
         ("/gis/locations/{location_id}/edit", "GET"),
         ("/gis/locations/{location_id}/edit", "POST"),
         ("/gis/locations/{location_id}/delete", "POST"),
+    ]:
+        assert _route_has_permission(
+            admin_gis.router, path, method, "gis:location:write"
+        )
+    for path, method in [
         ("/gis/areas/new", "GET"),
         ("/gis/areas/new", "POST"),
         ("/gis/areas/{area_id}/edit", "GET"),
         ("/gis/areas/{area_id}/edit", "POST"),
         ("/gis/areas/{area_id}/delete", "POST"),
+    ]:
+        assert _route_has_permission(admin_gis.router, path, method, "gis:area:write")
+    for path, method in [
         ("/gis/layers/new", "GET"),
         ("/gis/layers/new", "POST"),
         ("/gis/layers/{layer_id}/edit", "GET"),
         ("/gis/layers/{layer_id}/edit", "POST"),
         ("/gis/layers/{layer_id}/delete", "POST"),
     ]:
-        assert _route_has_permission(admin_gis.router, path, method, "gis:map:edit")
+        assert _route_has_permission(admin_gis.router, path, method, "gis:layer:write")
 
 
 def test_profile_sync_task_routes_require_network_permissions():
