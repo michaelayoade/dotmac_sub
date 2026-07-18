@@ -107,7 +107,7 @@ def test_credit_fully_settles_open_invoice(db_session):
         .one()
     )
     assert allocation.preview_fingerprint is not None
-    assert allocation.idempotency_key == f"reconcile-unposted-{payment.id}-{inv.id}"
+    assert allocation.idempotency_key == (f"account-credit-apply-{payment.id}-{inv.id}")
     assert allocation.ledger_entry_id is not None
     assert allocation.consumption_ledger_entry_id is not None
     assert db_session.get(LedgerEntry, allocation.ledger_entry_id) is not None

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -23,6 +24,17 @@ def _now() -> datetime:
 class FieldVendor(Base):
     __tablename__ = "field_vendors"
     __table_args__ = (
+        CheckConstraint(
+            "(party_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_field_vendors_party_binding_evidence",
+        ),
+        UniqueConstraint("party_id", name="uq_field_vendors_party_id"),
         UniqueConstraint("code", name="uq_field_vendors_code"),
         UniqueConstraint("crm_vendor_id", name="uq_field_vendors_crm_vendor_id"),
         Index("ix_field_vendors_active", "is_active"),
@@ -31,6 +43,12 @@ class FieldVendor(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parties.id", ondelete="RESTRICT")
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
     crm_vendor_id: Mapped[str | None] = mapped_column(String(64))
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     code: Mapped[str | None] = mapped_column(String(60))
@@ -50,9 +68,12 @@ class FieldVendor(Base):
     )
 
     users = relationship("FieldVendorUser", back_populates="vendor")
+    party = relationship("Party", back_populates="field_vendor_profile")
 
 
 class FieldVendorUser(Base):
+    """SystemUser projected into one vendor organization context."""
+
     __tablename__ = "field_vendor_users"
     __table_args__ = (
         UniqueConstraint(
@@ -63,6 +84,20 @@ class FieldVendorUser(Base):
         UniqueConstraint(
             "crm_vendor_user_id", name="uq_field_vendor_users_crm_vendor_user_id"
         ),
+        CheckConstraint(
+            "(party_membership_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(party_membership_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_field_vendor_users_party_binding_evidence",
+        ),
+        UniqueConstraint(
+            "party_membership_id",
+            name="uq_field_vendor_users_party_membership_id",
+        ),
         Index("ix_field_vendor_users_system_user_id", "system_user_id"),
         Index("ix_field_vendor_users_active", "is_active"),
     )
@@ -70,6 +105,13 @@ class FieldVendorUser(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    party_membership_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("party_memberships.id", ondelete="RESTRICT"),
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
     crm_vendor_user_id: Mapped[str | None] = mapped_column(String(64))
     vendor_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -95,6 +137,7 @@ class FieldVendorUser(Base):
 
     vendor = relationship("FieldVendor", back_populates="users")
     system_user = relationship("SystemUser")
+    party_membership = relationship("PartyMembership")
 
 
 class FieldVendorDeviceToken(Base):

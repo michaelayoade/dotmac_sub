@@ -2,6 +2,7 @@ import html
 import logging
 import os
 import smtplib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -76,6 +77,13 @@ DOTMAC_RED = "#FF0000"
 DOTMAC_GREEN = "#008000"
 DOTMAC_WHITE = "#F4F4F9"
 DOTMAC_BUTTON_TEXT = "#ffffff"
+
+
+@dataclass(frozen=True)
+class RenderedEmail:
+    subject: str
+    body_html: str
+    body_text: str
 
 
 def _env_value(name: str) -> str | None:
@@ -826,6 +834,7 @@ def send_email(
     activity: str | None = None,
     notification_id: str | None = None,
     headers: dict[str, str] | None = None,
+    sensitive_content: bool = False,
 ) -> bool:
     """
     Send an email via SMTP.
@@ -893,7 +902,10 @@ def send_email(
             channel=NotificationChannel.email,
             recipient=to_email,
             subject=subject,
-            body=tracked_body,
+            # Capability-bearing content exists only in this process for the
+            # duration of the provider call. The durable outbox still records
+            # transport state, recipient, and the non-secret subject.
+            body=None if sensitive_content else tracked_body,
             commit=True,
         )
 
@@ -940,7 +952,12 @@ def send_email(
         return True
 
     except smtplib.SMTPAuthenticationError as exc:
-        logger.error("SMTP authentication failed for %s: %s", to_email, exc)
+        if sensitive_content:
+            logger.error(
+                "SMTP authentication failed for sensitive email to %s", to_email
+            )
+        else:
+            logger.error("SMTP authentication failed for %s: %s", to_email, exc)
         if notification and db is not None:
             notification.status = NotificationStatus.failed
             notification.last_error = "SMTP authentication failed"
@@ -957,15 +974,24 @@ def send_email(
             db.commit()
         return False
     except Exception as e:
-        logger.error(
-            "Failed to send email to %s via sender %s: %s",
-            to_email,
-            config.get("sender_key", "legacy"),
-            e,
-        )
+        if sensitive_content:
+            logger.error(
+                "Sensitive email transport failed for %s via sender %s",
+                to_email,
+                config.get("sender_key", "legacy"),
+            )
+        else:
+            logger.error(
+                "Failed to send email to %s via sender %s: %s",
+                to_email,
+                config.get("sender_key", "legacy"),
+                e,
+            )
         if notification and db is not None:
             notification.status = NotificationStatus.failed
-            notification.last_error = str(e)
+            notification.last_error = (
+                "Sensitive email transport failed" if sensitive_content else str(e)
+            )
             db.add(
                 NotificationDelivery(
                     notification_id=notification.id,
@@ -973,7 +999,11 @@ def send_email(
                     provider_message_id=None,
                     status=DeliveryStatus.failed,
                     response_code="smtp_error",
-                    response_body=str(e),
+                    response_body=(
+                        "Sensitive email transport failed"
+                        if sensitive_content
+                        else str(e)
+                    ),
                 )
             )
             db.commit()
@@ -1237,16 +1267,18 @@ This is an automated message. Please do not reply to this email.
     )
 
 
-def send_user_invite_email(
+def render_user_invite_email(
     db: Session,
     to_email: str,
     reset_token: str,
     person_name: str | None = None,
     next_login_path: str | None = None,
     expires_minutes: int | None = None,
-) -> bool:
+    action_path: str = "/auth/reset-password",
+    token_in_fragment: bool = False,
+) -> RenderedEmail:
     """
-    Send a new user invitation email.
+    Render a new user invitation email without sending or persisting it.
 
     Args:
         db: Database session
@@ -1254,15 +1286,18 @@ def send_user_invite_email(
         reset_token: The JWT reset token
         person_name: Optional name to personalize the email
         expires_minutes: Actual token TTL; falls back to the configured setting
-
-    Returns:
-        True if email was sent successfully, False otherwise
+        action_path: Portal path that will consume the purpose-bound token
+        token_in_fragment: Keep the bearer out of HTTP request/access logs
     """
     app_url = _get_app_url(db, next_login_path=next_login_path)
     query = {"token": reset_token}
     if next_login_path and next_login_path.startswith("/"):
         query["next_login"] = next_login_path
-    reset_url = f"{app_url}/auth/reset-password?{urlencode(query)}"
+    normalized_action_path = (
+        action_path if action_path.startswith("/") else f"/{action_path}"
+    )
+    token_separator = "#" if token_in_fragment else "?"
+    reset_url = f"{app_url}{normalized_action_path}{token_separator}{urlencode(query)}"
 
     # Prefer the actual token TTL; fall back to the configured setting
     expiry_minutes = expires_minutes or (
@@ -1320,11 +1355,42 @@ This link will expire in {expiry_duration}.
 This is an automated message. Please do not reply to this email.
 """
 
+    return RenderedEmail(
+        subject=subject,
+        body_html=body_html,
+        body_text=body_text,
+    )
+
+
+def send_user_invite_email(
+    db: Session,
+    to_email: str,
+    reset_token: str,
+    person_name: str | None = None,
+    next_login_path: str | None = None,
+    expires_minutes: int | None = None,
+    action_path: str = "/auth/reset-password",
+    track: bool = True,
+    token_in_fragment: bool = False,
+) -> bool:
+    """Render and send a new user invitation email."""
+
+    rendered = render_user_invite_email(
+        db,
+        to_email,
+        reset_token,
+        person_name=person_name,
+        next_login_path=next_login_path,
+        expires_minutes=expires_minutes,
+        action_path=action_path,
+        token_in_fragment=token_in_fragment,
+    )
     return send_email(
         db,
         to_email,
-        subject,
-        body_html,
-        body_text,
+        rendered.subject,
+        rendered.body_html,
+        rendered.body_text,
+        track=track,
         activity="auth_user_invite",
     )

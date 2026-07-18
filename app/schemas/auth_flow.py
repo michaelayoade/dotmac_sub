@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models.auth import AuthProvider
 
@@ -165,6 +165,28 @@ class ResetPasswordRequest(BaseModel):
 
 class ResetPasswordResponse(BaseModel):
     reset_at: datetime
+
+
+class CredentialEnrollmentRequest(BaseModel):
+    """One-time referral enrollment capability plus a customer-chosen secret."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=1, max_length=4096)
+    new_password: str = Field(min_length=8, max_length=255)
+    username: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=150,
+        pattern=r"^\S+$",
+    )
+
+
+class CredentialEnrollmentResponse(BaseModel):
+    subscriber_id: UUID
+    username: str
+    email_verified: bool
+    enrolled_at: datetime
 
 
 class VerifyEmailRequest(BaseModel):

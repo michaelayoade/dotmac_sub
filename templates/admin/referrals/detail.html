@@ -50,6 +50,7 @@
                 {{ info_row("Source", (row.source | replace('_', ' ') | title) if row.source != '—' else "—") }}
                 {{ info_row("Captured", row.created_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
                 {{ info_row("Qualified", row.qualified_at | app_datetime('%Y-%m-%d %H:%M', '—')) }}
+                {{ info_row("Canonical Party", conversion_context.referred_party_id if conversion_context else "—") }}
                 {{ info_row("Attributed lead", lead_id or "—") }}
             {% endcall %}
         {% endcall %}
@@ -89,6 +90,32 @@
 
         {% call card(title="Actions", icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="amber") %}
             <div class="space-y-4">
+                {% if row.can_attach_account and conversion_context %}
+                <form method="post" action="/admin/referrals/{{ row.id }}/attach-subscriber"
+                      onsubmit="return confirm('Attach this Subscriber only if you reviewed that it belongs to the exact referral Party? Contact values are not used for matching.');">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="referred_party_id" value="{{ conversion_context.referred_party_id }}">
+                    <input type="hidden" name="referred_lead_id" value="{{ conversion_context.referred_lead_id }}">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Subscriber ID</label>
+                        <input name="subscriber_id" type="text" required
+                               placeholder="Exact reviewed Subscriber UUID"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div class="mt-2">
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-1">Review reason</label>
+                        <textarea name="reason" rows="2" maxlength="1000" required
+                                  placeholder="Evidence reviewed for this exact Party/account binding"
+                                  class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"></textarea>
+                    </div>
+                    <button type="submit"
+                            class="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 transition-colors">
+                        Attach Reviewed Account
+                    </button>
+                    <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">The server revalidates the Referral, Party and Lead IDs under lock. Email and phone never select the account.</p>
+                </form>
+                {% endif %}
+
                 {% if row.can_qualify %}
                 <form method="post" action="/admin/referrals/{{ row.id }}/qualify"
                       onsubmit="return confirm('Qualify this referral now? This overrides the automatic activation check and marks the reward as earned at the current program amount.');">
@@ -129,7 +156,7 @@
                 </form>
                 {% endif %}
 
-                {% if not (row.can_qualify or row.can_issue or row.can_reject) %}
+                {% if not (row.can_attach_account or row.can_qualify or row.can_issue or row.can_reject) %}
                 <p class="text-sm text-slate-500 dark:text-slate-400">
                     This referral is <span class="font-semibold">{{ st | replace('_', ' ') | title }}</span> — no further actions are available.
                 </p>

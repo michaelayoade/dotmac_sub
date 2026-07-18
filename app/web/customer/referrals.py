@@ -1,12 +1,7 @@
-"""Customer portal Refer & Earn page (RFC #73).
+"""Native Sub customer portal Refer & Earn page (RFC #73).
 
-Server-rendered. The page read runs behind the
-``referrals_native_read_enabled`` ownership flag: OFF reads the local
-referral mirror (fast, resilient to a CRM outage), ON reads the native
-referral tables with the same payload shape. The refer-a-friend POST stays a
-mirror write-through until native referral write ownership is enabled. Individual
-subscribers only (the customer portal is subscriber-scoped; reseller float
-wallets are never involved).
+Individual subscribers only: the customer portal is subscriber-scoped and
+reseller float wallets are never involved. CRM has no read or write role.
 """
 
 import logging
@@ -18,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import referrals as referrals_service
-from app.services import referrals_mirror
 from app.services.customer_context import optional_customer_subscriber_id
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -31,9 +25,7 @@ _LOGIN = "/portal/auth/login?next=/portal/refer-and-earn"
 
 
 def _summary(db: Session, subscriber_id: str) -> dict:
-    if referrals_service.native_read_enabled(db):
-        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
-    return referrals_mirror.read_for_subscriber(db, subscriber_id)
+    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
 
 
 @router.get("/refer-and-earn", response_class=HTMLResponse)
@@ -69,35 +61,17 @@ def customer_refer_a_friend(
         return RedirectResponse(url=_LOGIN, status_code=303)
 
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
-    # §4.3 write flip: ON captures natively (no CRM link needed); OFF is the
-    # unchanged CRM write-through.
-    if referrals_service.native_write_enabled(db):
-        try:
-            referrals_service.referrals.refer_a_friend(
-                db,
-                subscriber_id,
-                name=name or None,
-                email=email or None,
-                phone=phone or None,
-            )
-        except HTTPException as exc:
-            return RedirectResponse(
-                url=f"/portal/refer-and-earn?error={quote(str(exc.detail))}",
-                status_code=303,
-            )
-        return RedirectResponse(
-            url="/portal/refer-and-earn?referred=1", status_code=303
-        )
     try:
-        referrals_mirror.refer_a_friend(
+        referrals_service.referrals.refer_a_friend(
             db,
             subscriber_id,
             name=name or None,
             email=email or None,
             phone=phone or None,
         )
-    except referrals_mirror.ReferralError as exc:
+    except HTTPException as exc:
         return RedirectResponse(
-            url=f"/portal/refer-and-earn?error={quote(exc.message)}", status_code=303
+            url=f"/portal/refer-and-earn?error={quote(str(exc.detail))}",
+            status_code=303,
         )
     return RedirectResponse(url="/portal/refer-and-earn?referred=1", status_code=303)

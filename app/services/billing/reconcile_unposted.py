@@ -206,127 +206,19 @@ def settle_open_invoices_from_credit(db: Session, account_id: str) -> SettleResu
     can commit per account and roll back a single bad account without losing the
     batch). Returns a :class:`SettleResult`.
     """
-    result = SettleResult(account_id=str(account_id))
+    # Compatibility adapter for one-off/repair callers. The named account-credit
+    # owner now makes the allocation decision and composes PaymentAllocations.
+    from app.services.billing.account_credit import AccountCreditApplications
 
-    # Serialize the read-modify-write of the credit pool for this account.
-    lock_account(db, str(account_id))
-
-    invoices = _open_invoices(db, str(account_id))
-    if not invoices:
-        return result
-
-    currencies = sorted({invoice.currency or "NGN" for invoice in invoices})
-    credit_by_currency = {
-        currency: get_account_credit_balance(db, str(account_id), currency=currency)
-        for currency in currencies
-    }
-    result.available_credit = round_money(
-        sum(
-            (
-                credit
-                for credit in credit_by_currency.values()
-                if credit > Decimal("0.00")
-            ),
-            Decimal("0.00"),
-        )
+    owner_result = AccountCreditApplications.apply(db, str(account_id))
+    return SettleResult(
+        account_id=owner_result.account_id,
+        available_credit=owner_result.available_credit,
+        applied=owner_result.applied,
+        invoices_settled=owner_result.invoices_settled,
+        invoices_touched=owner_result.invoices_touched,
+        unbacked_credit=owner_result.unbacked_credit,
     )
-    if result.available_credit <= 0:
-        return result
-
-    payments = _allocatable_payments(db, str(account_id))
-    payment_backed_by_currency: dict[str, Decimal] = {}
-    for payment, room in payments:
-        currency = payment.currency or "NGN"
-        payment_backed_by_currency[currency] = round_money(
-            payment_backed_by_currency.get(currency, Decimal("0.00")) + room
-        )
-    payment_backed = round_money(
-        sum((room for _payment, room in payments), Decimal("0.00"))
-    )
-    # Spend only credit that real succeeded payments can back. Any surplus credit
-    # with no allocatable payment behind it is left alone and reported.
-    spendable_by_currency = {
-        currency: min(
-            max(credit_by_currency.get(currency, Decimal("0.00")), Decimal("0.00")),
-            payment_backed_by_currency.get(currency, Decimal("0.00")),
-        )
-        for currency in currencies
-    }
-    result.unbacked_credit = round_money(
-        sum(
-            (
-                max(
-                    credit_by_currency.get(currency, Decimal("0.00"))
-                    - payment_backed_by_currency.get(currency, Decimal("0.00")),
-                    Decimal("0.00"),
-                )
-                for currency in currencies
-            ),
-            Decimal("0.00"),
-        )
-    )
-
-    remaining_by_currency = dict(spendable_by_currency)
-    room_by_payment: dict = {payment.id: room for payment, room in payments}
-    touched: set = set()
-
-    for invoice in invoices:
-        currency = invoice.currency or "NGN"
-        remaining = remaining_by_currency.get(currency, Decimal("0.00"))
-        if remaining <= 0:
-            continue
-        invoice_remaining = _project_invoice_remaining(db, invoice)
-        if invoice_remaining <= 0:
-            if to_decimal(invoice.balance_due) > 0:
-                touched.add(invoice.id)
-            continue
-        for payment, _room in payments:
-            if remaining <= 0 or invoice_remaining <= 0:
-                break
-            if payment.currency != invoice.currency:
-                continue
-            payment_room = room_by_payment.get(payment.id, Decimal("0.00"))
-            if payment_room <= 0:
-                continue
-            amount = min(remaining, invoice_remaining, payment_room)
-            if amount <= 0:
-                continue
-            applied = _confirm_allocation(
-                db,
-                payment=payment,
-                invoice=invoice,
-                amount=amount,
-            )
-            result.applied = round_money(result.applied + applied)
-            remaining = round_money(remaining - applied)
-            remaining_by_currency[currency] = remaining
-            invoice_remaining = round_money(invoice_remaining - applied)
-            room_by_payment[payment.id] = round_money(payment_room - applied)
-            touched.add(invoice.id)
-
-    if result.applied <= 0 and not touched:
-        return result
-
-    db.flush()
-    for invoice_id in touched:
-        inv = db.get(Invoice, invoice_id)
-        if inv is None:
-            continue
-        recalculate_invoice_totals(db, inv)
-        result.invoices_touched.append(str(invoice_id))
-        if inv.status == InvoiceStatus.paid:
-            result.invoices_settled.append(str(invoice_id))
-
-    db.flush()
-    logger.info(
-        "Cutover reconcile: applied %s credit to %d invoice(s) for account %s "
-        "(%d fully settled)",
-        result.applied,
-        len(result.invoices_touched),
-        account_id,
-        len(result.invoices_settled),
-    )
-    return result
 
 
 def settle_single_invoice_from_credit(
@@ -466,6 +358,7 @@ def settle_prepaid_draft_invoices_from_credit(
             issued_at=now,
             due_at=now,
             reason="reconcile_prepaid_draft_from_confirmed_credit",
+            apply_available_credit=False,
         )
 
         applied = settle_single_invoice_from_credit(db, invoice, only_if_full=True)

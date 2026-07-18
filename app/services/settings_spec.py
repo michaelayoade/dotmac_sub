@@ -12,7 +12,9 @@ from app.services.brand_theme import (
     DEFAULT_SECONDARY_HEX,
     DEFAULT_SEMANTIC_COLORS,
 )
-from app.services.channel_health_contracts import DEFAULT_CHANNEL_HEALTH_CONTRACTS
+from app.services.channel_health_contracts import (
+    DEFAULT_CHANNEL_HEALTH_CONTRACTS,
+)
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
 from app.services.settings_specs.integration import build_integration_specs
@@ -470,54 +472,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="ALERT_NOTIFICATIONS_ENABLED",
         value_type=SettingValueType.boolean,
         default=True,
-    ),
-    # Weekly NCC complaints digest email — default OFF. Sends a summary + a
-    # link to the filing workbook (Monday 08:00 in the celery timezone).
-    SettingSpec(
-        domain=SettingDomain.notification,
-        key="ncc_report_email_enabled",
-        env_var="NCC_REPORT_EMAIL_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
-        key="ncc_report_email_to",
-        env_var="NCC_REPORT_EMAIL_TO",
-        value_type=SettingValueType.string,
-        default="",
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
-        key="ncc_report_email_subject",
-        env_var="NCC_REPORT_EMAIL_SUBJECT",
-        value_type=SettingValueType.string,
-        default="Weekly NCC Report",
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
-        key="ncc_report_email_lookback_days",
-        env_var="NCC_REPORT_EMAIL_LOOKBACK_DAYS",
-        value_type=SettingValueType.integer,
-        default=7,
-        min_value=1,
-    ),
-    SettingSpec(
-        domain=SettingDomain.notification,
-        key="ncc_report_email_timezone",
-        env_var="NCC_REPORT_EMAIL_TIMEZONE",
-        value_type=SettingValueType.string,
-        default="Africa/Lagos",
-    ),
-    SettingSpec(
-        # Service-owned idempotency cursor. This must be registered because
-        # resolve_value deliberately ignores unregistered database keys.
-        domain=SettingDomain.notification,
-        key="ncc_report_email_last_sent_local_date",
-        env_var=None,
-        value_type=SettingValueType.string,
-        default=None,
-        label="NCC report email last sent date (managed)",
     ),
     SettingSpec(
         # Hard gate: suppress customer notifications to terminal accounts
@@ -1370,7 +1324,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="CRM Ticket Pull Interval (minutes)",
     ),
     SettingSpec(
-        # Native work-order authority lever: gates the CRM webhook branch, the
+        # flip lever: gates the CRM work-order webhook branch, the
         # work_order_mirror_reconcile beat, and the lazy mirror refresh
         # (crm.work_order_pull in the control registry). Default ON — inert
         # until the work-order SoT flip deliberately turns it off.
@@ -2505,17 +2459,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         allowed={"HIGH", "MEDIUM"},
         label="Sensitive Automation Minimum Identity Confidence",
     ),
-    # How long "remind me later" hides the location-confirmation prompt
-    # (docs/designs/LOYALTY_AND_CAPTURE.md). Payment re-prompts regardless.
-    SettingSpec(
-        domain=SettingDomain.subscriber,
-        key="loyalty_capture_prompt_snooze_days",
-        env_var="LOYALTY_CAPTURE_PROMPT_SNOOZE_DAYS",
-        value_type=SettingValueType.integer,
-        default=30,
-        label="Location prompt snooze (days)",
-    ),
-    # Referral program ownership migrated from the CRM subscriber
+    # Referral program (— migrated from the CRM subscriber
     # domain; there is no program table, these five keys ARE the program).
     SettingSpec(
         domain=SettingDomain.subscriber,
@@ -2955,14 +2899,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network_monitoring,
-        key="channel_health_contracts",
-        label="Sensitive channel health contracts",
-        env_var=None,
-        value_type=SettingValueType.json,
-        default=DEFAULT_CHANNEL_HEALTH_CONTRACTS,
-    ),
-    SettingSpec(
-        domain=SettingDomain.network_monitoring,
         key="server_health_disk_warn_pct",
         label="Server Health Disk Warning (%)",
         env_var="SERVER_HEALTH_DISK_WARN_PCT",
@@ -3146,7 +3082,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=1,
         max_value=100,
     ),
-    # --- Detected-outage incident reconcile (design §7.6) ------------------
+    # --- Detected-outage incident reconcile (design ) ------------------
     SettingSpec(
         domain=SettingDomain.network_monitoring,
         key="outage_reconcile_interval_seconds",
@@ -3963,10 +3899,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=10,
         max_value=600,
     ),
-    # ── Self-serve installation quotes (native projects ownership) ──
+    # ── Self-serve installation quotes ──
     # The nine CRM ``selfserve_quote_*`` keys migrated as-is, except the
     # price-book SKU keys which are re-keyed to sub catalog offers
-    # (``*_offer_id`` — inventory is not native yet). Placeholder defaults carried
+    # (``*_offer_id`` — inventory remains externally owned). Placeholder defaults carried
     # from the CRM — tune per market. Estimate = base_fee + max(0,
     # distance_to_nearest_FAP - free_radius) * fee_per_km; deposit =
     # estimate * deposit_percent. Feasibility radius bounds "covered".
@@ -4051,10 +3987,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
         ),
         min_value=0,
     ),
-    # Native quote-write ownership flag:
+    # write-flip flag:
     # OFF = quote acceptance write-through to the CRM (mirror path); ON =
     # native accept (sales/selfserve.accept_with_deposit → native sales
-    # order pipeline). Default OFF until the coordinated native write
+    # order pipeline). Default OFF until the coordinated write
     # window; flipping back is the cheap rollback.
     SettingSpec(
         domain=SettingDomain.projects,
@@ -4064,31 +4000,31 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=False,
         label="Quotes: native write path",
     ),
-    # CRM-to-native sync-window flag: while CRM remains the
+    # sync-window flag: while CRM remains the
     # writer for projects/quotes/referrals (backfill done, write flip not
     # yet), ON makes CRM webhooks ALSO apply thin status deltas to the
     # NATIVE tables and enables the crm_phase3_native_delta beat (the
     # backfill importer's watermark mode run in-process against the CRM
     # DB), so the flip-day delta stays minutes. One flag for all verticals
-    # because the delta importer is cross-vertical by FK order (§3.5) — a
+    # because the delta importer is cross-vertical by FK order — a
     # per-vertical flag would misrepresent what actually runs. Default
-    # OFF; delete it when the CRM compatibility adapter is retired.
+    # OFF; deleted with the whole adapter at the contract.
     SettingSpec(
         domain=SettingDomain.projects,
         key="crm_phase3_native_sync_enabled",
         env_var="CRM_PHASE3_NATIVE_SYNC_ENABLED",
         value_type=SettingValueType.boolean,
         default=False,
-        label="CRM compatibility: sync changes into native tables",
+        label="sync CRM changes into native tables (sync window)",
     ),
-    # Native read-ownership flags, one per vertical: OFF =
+    # read-flip flags: OFF =
     # the read surfaces (/me/*, web customer portal, reseller views) keep
     # serving the CRM mirrors; ON = they serve the native services
     # (projects.portal_read_for_subscriber, sales.selfserve read,
-    # referrals.read_for_subscriber). Shapes are identical (§2.5
+    # referrals.read_for_subscriber). Shapes are identical (
     # golden-payload contract), so flipping back is the cheap rollback
     # during the sync window. Sales orders have no read surface of their
-    # own (§2.5 — sales_order_id rides inside the quote payload).
+    # own.
     SettingSpec(
         domain=SettingDomain.projects,
         key="projects_native_read_enabled",
@@ -4104,27 +4040,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
         label="Quotes: native read path",
-    ),
-    SettingSpec(
-        domain=SettingDomain.projects,
-        key="referrals_native_read_enabled",
-        env_var="REFERRALS_NATIVE_READ_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Referrals: native read path",
-    ),
-    # §4.3 write flip, referrals vertical: OFF keeps POST /me/referrals and
-    # the portal refer-a-friend form writing through the CRM mirror; ON
-    # captures the referral in sub's native tables (no CRM link required).
-    # Reward money is unaffected either way — financial.credit_notes owns it
-    # behind the shared referral:{id} idempotency namespace.
-    SettingSpec(
-        domain=SettingDomain.projects,
-        key="referrals_native_write_enabled",
-        env_var="REFERRALS_NATIVE_WRITE_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=False,
-        label="Referrals: native write path",
     ),
     # --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) ----------
     # Every value defaults OFF/empty: the transport is inert until an operator
@@ -4301,6 +4216,72 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=5,
         label="Nominatim request timeout (seconds)",
     ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="channel_health_contracts",
+        label="Sensitive channel health contracts",
+        env_var=None,
+        value_type=SettingValueType.json,
+        default=DEFAULT_CHANNEL_HEALTH_CONTRACTS,
+    ),
+    # How long "remind me later" hides the location-confirmation prompt
+    # (docs/designs/LOYALTY_AND_CAPTURE.md). Payment re-prompts regardless.
+    SettingSpec(
+        domain=SettingDomain.subscriber,
+        key="loyalty_capture_prompt_snooze_days",
+        env_var="LOYALTY_CAPTURE_PROMPT_SNOOZE_DAYS",
+        value_type=SettingValueType.integer,
+        default=30,
+        label="Location prompt snooze (days)",
+    ),
+    # Weekly NCC complaints digest email — default OFF. Sends a summary + a
+    # link to the filing workbook (Monday 08:00 in the celery timezone).
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_enabled",
+        env_var="NCC_REPORT_EMAIL_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
+        # Service-owned idempotency cursor. This must be registered because
+        # resolve_value deliberately ignores unregistered database keys.
+        domain=SettingDomain.notification,
+        key="ncc_report_email_last_sent_local_date",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="NCC report email last sent date (managed)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_lookback_days",
+        env_var="NCC_REPORT_EMAIL_LOOKBACK_DAYS",
+        value_type=SettingValueType.integer,
+        default=7,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_subject",
+        env_var="NCC_REPORT_EMAIL_SUBJECT",
+        value_type=SettingValueType.string,
+        default="Weekly NCC Report",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_timezone",
+        env_var="NCC_REPORT_EMAIL_TIMEZONE",
+        value_type=SettingValueType.string,
+        default="Africa/Lagos",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_to",
+        env_var="NCC_REPORT_EMAIL_TO",
+        value_type=SettingValueType.string,
+        default="",
+    ),
 ]
 
 # Tombstone the settings-registry surfaces whose decisions moved to canonical
@@ -4335,8 +4316,6 @@ _RETIRED_FEATURE_ALIAS_SPECS = frozenset(
         (SettingDomain.projects, "crm_phase3_native_sync_enabled"),
         (SettingDomain.projects, "projects_native_read_enabled"),
         (SettingDomain.projects, "quotes_native_read_enabled"),
-        (SettingDomain.projects, "referrals_native_read_enabled"),
-        (SettingDomain.projects, "referrals_native_write_enabled"),
     }
 )
 SETTINGS_SPECS = [

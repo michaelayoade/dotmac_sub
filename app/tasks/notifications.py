@@ -24,6 +24,11 @@ from app.services import sms as sms_service
 from app.services.communication_intents import record_delivery_outcome
 from app.services.db_session_adapter import db_session_adapter
 from app.services.email_template import render_email_bodies
+from app.services.ephemeral_communication_actions import (
+    EphemeralActionRejected,
+    has_ephemeral_action,
+    materialize_email,
+)
 from app.services.integrations.connectors import whatsapp as whatsapp_service
 from app.services.observability import record_notification_queue_result
 from app.services.settings_spec import resolve_value
@@ -215,6 +220,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
     suppressed = 0
     stuck_dropped = 0
     rate_limited = 0
+    materialization_rejected = 0
     channel_counts: dict[NotificationChannel, int] = {}
     for notification in notifications:
         current_count = channel_counts.get(notification.channel, 0)
@@ -291,27 +297,46 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
         subject = notification.subject or "Notification"
         body = notification.body or ""
         delivery_metadata = dict(notification.metadata_ or {})
+        ephemeral_delivery = has_ephemeral_action(notification)
         try:
             if notification.channel == NotificationChannel.email:
-                # Queue bodies are usually plain text — wrap them in the
-                # branded template and keep the text as the text/plain part.
-                resolved_brand = None
-                if notification.subscriber_id:
-                    from app.services.brand_profiles import resolve_brand
-
-                    resolved_brand = resolve_brand(
-                        db, subscriber_id=notification.subscriber_id
-                    ).to_dict()
-                configured_html = delivery_metadata.get("body_html")
-                configured_text = delivery_metadata.get("body_text")
-                if isinstance(configured_html, str) and configured_html.strip():
-                    body_html = configured_html
-                    body_text = (
-                        configured_text if isinstance(configured_text, str) else body
-                    )
+                sender_key: str | None
+                activity: str
+                body_html: str
+                body_text: str | None
+                if ephemeral_delivery:
+                    rendered = materialize_email(db, notification)
+                    subject = rendered.subject
+                    body_html = rendered.body_html
+                    body_text = rendered.body_text
+                    sender_key = rendered.sender_key
+                    activity = rendered.activity
                 else:
-                    body_html, body_text = render_email_bodies(
-                        body, subject=subject, brand=resolved_brand
+                    # Queue bodies are usually plain text — wrap them in the
+                    # branded template and keep the text as the text/plain part.
+                    resolved_brand = None
+                    if notification.subscriber_id:
+                        from app.services.brand_profiles import resolve_brand
+
+                        resolved_brand = resolve_brand(
+                            db, subscriber_id=notification.subscriber_id
+                        ).to_dict()
+                    configured_html = delivery_metadata.get("body_html")
+                    configured_text = delivery_metadata.get("body_text")
+                    if isinstance(configured_html, str) and configured_html.strip():
+                        body_html = configured_html
+                        body_text = (
+                            configured_text
+                            if isinstance(configured_text, str)
+                            else body
+                        )
+                    else:
+                        body_html, body_text = render_email_bodies(
+                            body, subject=subject, brand=resolved_brand
+                        )
+                    sender_key = str(delivery_metadata.get("sender_key") or "") or None
+                    activity = str(
+                        delivery_metadata.get("activity") or "notification_queue"
                     )
                 success = email_service.send_email(
                     db=db,
@@ -319,12 +344,11 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                     subject=subject,
                     body_html=body_html,
                     body_text=body_text,
-                    sender_key=str(delivery_metadata.get("sender_key") or "") or None,
+                    sender_key=sender_key,
                     track=False,
-                    activity=str(
-                        delivery_metadata.get("activity") or "notification_queue"
-                    ),
+                    activity=activity,
                     notification_id=str(notification.id),
+                    sensitive_content=ephemeral_delivery,
                 )
             elif notification.channel == NotificationChannel.sms:
                 success = sms_service.send_sms(
@@ -417,9 +441,30 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 notification.last_error = (
                     f"unsupported_channel:{notification.channel.value}"
                 )
+        except EphemeralActionRejected as exc:
+            notification.status = NotificationStatus.canceled
+            notification.last_error = f"ephemeral_action_rejected:{exc.code}"
+            materialization_rejected += 1
+            logger.warning(
+                "Ephemeral notification %s rejected during materialization (%s)",
+                notification.id,
+                exc.code,
+            )
+            record_delivery_outcome(db, notification)
+            db.commit()
+            continue
         except Exception as exc:
             success = False
-            notification.last_error = str(exc)
+            if ephemeral_delivery:
+                # An exception raised after materialization may carry rendered
+                # content. Never persist or log its message.
+                notification.last_error = "ephemeral_delivery_failed"
+                logger.warning(
+                    "Ephemeral notification %s failed during delivery",
+                    notification.id,
+                )
+            else:
+                notification.last_error = str(exc)
 
         if success:
             notification.status = NotificationStatus.delivered
@@ -465,6 +510,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
         "suppressed": suppressed,
         "stuck_dropped": stuck_dropped,
         "rate_limited": rate_limited,
+        "materialization_rejected": materialization_rejected,
     }
 
 

@@ -135,7 +135,6 @@ from app.services import (
     projects_mirror,
     quote_deposits,
     quotes_mirror,
-    referrals_mirror,
     web_support_tickets,
     work_orders_mirror,
 )
@@ -682,7 +681,7 @@ def my_topup_page(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Top-up page context: balance, limits, presets, and the pay-with selector.
+    """Deposit Account Credit context, eligibility, limits, and payment options.
 
     ``payment_options`` mirrors the web chooser (online gateways + a direct
     bank-transfer option) and ``direct_bank_transfer`` carries the admin bank
@@ -715,6 +714,10 @@ def my_topup_page(
         provider_type=ctx["provider_type"],
         provider_public_key=ctx.get("provider_public_key"),
         prepaid_balance=ctx.get("prepaid_balance"),
+        account_credit=ctx.get("account_credit"),
+        deposit_allowed=ctx.get("deposit_allowed", True),
+        eligible_unpaid_total=ctx.get("eligible_unpaid_total", Decimal("0.00")),
+        eligible_unpaid_invoices=ctx.get("eligible_unpaid_invoices", []),
         min_amount=ctx["min_amount"],
         max_amount=ctx["max_amount"],
         preset_amounts=ctx.get("preset_amounts", []),
@@ -730,7 +733,7 @@ def my_topup_initiate(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Create a top-up checkout intent for the caller's prepaid account."""
+    """Create a Deposit Account Credit intent for the caller's account."""
     customer = _customer(db, principal)
     try:
         result = customer_payments.create_topup_intent(
@@ -761,6 +764,7 @@ def my_topup_initiate(
         customer_email=customer["username"] or None,
         charged=result.get("charged", False),
         checkout_url=result.get("checkout_url"),
+        preview_fingerprint=result["preview_fingerprint"],
     )
 
 
@@ -770,7 +774,7 @@ def my_topup_verify(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Verify a top-up transaction and credit the account."""
+    """Verify and settle a Deposit Account Credit transaction."""
     customer = _customer(db, principal)
     account_id = require_customer_account_id(db, customer)
     try:
@@ -798,6 +802,8 @@ def my_topup_verify(
         already_recorded=result.get("already_recorded", False),
         available_balance=result.get("available_balance"),
         credit_added=result.get("credit_added"),
+        allocated_total=result.get("allocated_total", Decimal("0.00")),
+        allocated_to_invoices=result.get("allocated_to_invoices", []),
         card_saved=card_saved,
         card_save_message=card_save_message,
     )
@@ -872,14 +878,9 @@ def my_referrals(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's Refer & Earn summary — code, share link, program terms, and
-    history. Behind the ``referrals_native_read_enabled`` ownership
-    flag (§4.2): OFF serves the local CRM mirror (refreshed lazily), ON serves
-    the native referral tables — same shape either way (§2.5)."""
+    """The caller's native Sub Refer & Earn summary."""
     subscriber_id = _subscriber_id(principal)
-    if referrals_service.native_read_enabled(db):
-        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
-    return referrals_mirror.read_for_subscriber(db, subscriber_id)
+    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
 
 
 @router.get("/projects", response_model=MyProjectsResponse)
@@ -888,9 +889,9 @@ def my_projects(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's installations/projects — stage timeline + progress %.
-    Behind the ``projects_native_read_enabled`` ownership flag:
+    Behind the ``projects_native_read_enabled`` read-flip flag:
     OFF serves the local CRM mirror (refreshed lazily), ON serves the native
-    ``projects`` table — same shape and ids either way (§2.5)."""
+    ``projects`` table — same shape and ids either way."""
     subscriber_id = _subscriber_id(principal)
     if projects_service.native_read_enabled(db):
         return projects_service.portal_read_for_subscriber(db, subscriber_id)
@@ -960,9 +961,9 @@ def my_quotes(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's self-serve installation quotes — feasibility, estimate,
-    deposit, status. Behind the ``quotes_native_read_enabled`` ownership
-    read-flip flag (§4.2): OFF serves the local CRM mirror (refreshed lazily),
-    ON serves sub's native ``quotes`` table — same shape either way (§2.5)."""
+    deposit, status. Behind the ``quotes_native_read_enabled``
+    read-flip flag: OFF serves the local CRM mirror (refreshed lazily),
+    ON serves sub's native ``quotes`` table — same shape either way."""
     subscriber_id = _subscriber_id(principal)
     if selfserve_service.native_read_enabled(db):
         return selfserve_service.selfserve_quotes.read_for_subscriber(db, subscriber_id)
@@ -977,10 +978,10 @@ def my_quote_request(
 ):
     """Request a map-pinned installation quote. The dropped pin drives the
     feasibility check (proximity to fiber) + estimate + deposit. Behind the
-    ``quotes_native_write_enabled`` ownership flag: OFF writes through
+    ``quotes_native_write_enabled`` write-flip flag: OFF writes through
     to the CRM and returns the mirrored item; ON creates the quote in sub's
     native ``quotes`` table (no CRM link required, so native-only subscribers
-    can quote too) — same §2.5 payload shape either way."""
+    can quote too) — same payload shape either way."""
     subscriber_id = _subscriber_id(principal)
     if selfserve_service.native_write_enabled(db):
         quote = selfserve_service.selfserve_quotes.request_quote(
@@ -1056,32 +1057,16 @@ def my_refer_a_friend(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Refer a friend. Behind the ``referrals_native_write_enabled``
-    write-flip flag: OFF captures in the CRM (write-through, mirrored
-    locally); ON captures in sub's native referral tables — no CRM link
-    required, so native-only subscribers can refer too. Same response shape
-    either way."""
+    """Refer a friend through Sub's Party-first referral owner."""
     subscriber_id = _subscriber_id(principal)
-    if referrals_service.native_write_enabled(db):
-        return referrals_service.referrals.refer_a_friend(
-            db,
-            subscriber_id,
-            name=payload.name,
-            email=payload.email,
-            phone=payload.phone,
-            note=payload.note,
-        )
-    try:
-        return referrals_mirror.refer_a_friend(
-            db,
-            subscriber_id,
-            name=payload.name,
-            email=payload.email,
-            phone=payload.phone,
-            note=payload.note,
-        )
-    except referrals_mirror.ReferralError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    return referrals_service.referrals.refer_a_friend(
+        db,
+        subscriber_id,
+        name=payload.name,
+        email=payload.email,
+        phone=payload.phone,
+        note=payload.note,
+    )
 
 
 @router.get(

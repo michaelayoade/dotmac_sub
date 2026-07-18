@@ -18,6 +18,7 @@ from app.config import settings
 from app.models.domain_settings import SettingDomain
 from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.provisioning import ServiceOrder
+from app.models.sales import Lead
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.support import (
     Ticket,
@@ -59,6 +60,7 @@ from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.dynamic_filters import FilterValidationError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.sales import lifecycle as lead_lifecycle
 from app.services.staff_notifications import queue_staff_email, queue_staff_push
 
 logger = logging.getLogger(__name__)
@@ -411,6 +413,43 @@ def _apply_inbound_identity_resolution(db: Session, data: dict[str, Any]) -> Non
     if data.get("subscriber_id") and not data.get("customer_account_id"):
         data["customer_account_id"] = data["subscriber_id"]
     data["metadata_"] = metadata or None
+
+
+def _validate_ticket_lead_alignment(
+    db: Session,
+    data: dict[str, Any],
+    *,
+    existing: Ticket | None = None,
+) -> None:
+    """Keep a Ticket's optional account links aligned with its Lead Party."""
+
+    lead_id = (
+        data["lead_id"] if "lead_id" in data else getattr(existing, "lead_id", None)
+    )
+    if lead_id is None:
+        return
+    lead = db.get(Lead, lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    subscriber_ids: set[UUID] = set()
+    for field in ("subscriber_id", "customer_account_id", "customer_person_id"):
+        value = data[field] if field in data else getattr(existing, field, None)
+        if value is not None:
+            subscriber_ids.add(value)
+    for subscriber_id in subscriber_ids:
+        subscriber = db.get(Subscriber, subscriber_id)
+        if subscriber is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Ticket {subscriber_id} Subscriber link was not found",
+            )
+        try:
+            lead_lifecycle.validate_lead_subscriber_alignment(
+                db, lead=lead, subscriber=subscriber
+            )
+        except lead_lifecycle.LeadLifecycleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class TicketComments:
@@ -1154,6 +1193,7 @@ class Tickets:
             db, data.get("created_by_person_id")
         )
         _apply_inbound_identity_resolution(db, data)
+        _validate_ticket_lead_alignment(db, data)
 
         ticket = Ticket(
             **{
@@ -1782,6 +1822,8 @@ class Tickets:
             data.pop("status")
         if "priority" in data and data["priority"] is None:
             data.pop("priority")
+
+        _validate_ticket_lead_alignment(db, data, existing=ticket)
 
         if "status" in data:
             # Admin edit may legitimately reopen, but it's validated + audited.

@@ -9,6 +9,15 @@ from uuid import UUID
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.models.party import (
+    Party,
+    PartyContactPoint,
+    PartyContactPointType,
+    PartyIdentityStatus,
+    PartyRelationship,
+    PartyRelationshipStatus,
+    PartyRelationshipType,
+)
 from app.models.subscriber import Reseller, Subscriber
 from app.models.team_inbox import InboxContactLink, InboxConversation
 from app.services.common import coerce_uuid
@@ -21,6 +30,21 @@ class ContactLinkError(ValueError):
 
 class ConversationContactLinkError(ContactLinkError):
     pass
+
+
+_INBOX_PARTY_CONTACT_CHANNELS = {
+    "email": PartyContactPointType.email.value,
+    "whatsapp": PartyContactPointType.whatsapp.value,
+    "facebook_messenger": PartyContactPointType.facebook_messenger.value,
+    "instagram_dm": PartyContactPointType.instagram_dm.value,
+}
+
+_ROUTABLE_CONTACT_RELATIONSHIPS = {
+    PartyRelationshipType.contact_for.value,
+    PartyRelationshipType.billing_contact_for.value,
+    PartyRelationshipType.technical_contact_for.value,
+    PartyRelationshipType.emergency_contact_for.value,
+}
 
 
 @dataclass(frozen=True)
@@ -162,6 +186,133 @@ def _target(
     if reseller is not None and not reseller.is_active:
         raise ContactLinkError("Cannot link an inactive reseller.")
     return subscriber, reseller
+
+
+def bind_contact_link_party_contact_point(
+    db: Session,
+    *,
+    contact_link_id: UUID,
+    party_contact_point_id: UUID,
+    source: str,
+    reason: str,
+) -> InboxContactLink:
+    """Bind an existing Inbox route to reviewed canonical reachability.
+
+    This shadow projection does not change the active route, target account,
+    conversation resolution, verification, consent, or authorization. Current
+    inbound readers continue to use channel/normalized_contact until a separate
+    parity-gated cutover.
+    """
+
+    normalized_source = source.strip()
+    normalized_reason = reason.strip()
+    if not normalized_source:
+        raise ContactLinkError("source is required")
+    if not normalized_reason:
+        raise ContactLinkError("reason is required")
+    link = db.get(InboxContactLink, contact_link_id)
+    if link is None:
+        raise ContactLinkError("Inbox contact link not found.")
+    point = db.get(PartyContactPoint, party_contact_point_id)
+    if point is None:
+        raise ContactLinkError("Party contact point not found.")
+    party = db.get(Party, point.party_id)
+    if party is None or party.status in {
+        PartyIdentityStatus.merged.value,
+        PartyIdentityStatus.archived.value,
+    }:
+        raise ContactLinkError("Party contact point has no routable Party.")
+    if not point.is_active:
+        raise ContactLinkError("Party contact point is inactive.")
+    expected_channel = _INBOX_PARTY_CONTACT_CHANNELS.get(link.channel_type)
+    if expected_channel is None:
+        raise ContactLinkError(
+            f"Inbox channel '{link.channel_type}' has no canonical contact-point "
+            "projection contract."
+        )
+    if point.channel_type != expected_channel:
+        raise ContactLinkError(
+            "Party contact point channel does not match the Inbox contact link."
+        )
+    normalized_values = {
+        value
+        for value in (
+            _normalize_contact(db, link.channel_type, point.normalized_value),
+            _normalize_contact(db, link.channel_type, point.external_subject_id),
+        )
+        if value
+    }
+    if link.normalized_contact not in normalized_values:
+        raise ContactLinkError(
+            "Party contact point does not match the Inbox normalized contact."
+        )
+    if link.channel_type in {
+        "facebook_messenger",
+        "instagram_dm",
+    } and not (
+        (point.provider or "").strip()
+        and (point.provider_account_id or "").strip()
+        and (point.external_subject_id or "").strip()
+    ):
+        raise ContactLinkError(
+            "Social Party contact point lacks immutable provider identity scope."
+        )
+    target_party_id = None
+    if link.subscriber_id is not None:
+        subscriber = db.get(Subscriber, link.subscriber_id)
+        target_party_id = subscriber.party_id if subscriber is not None else None
+    elif link.reseller_id is not None:
+        reseller = db.get(Reseller, link.reseller_id)
+        target_party_id = reseller.party_id if reseller is not None else None
+    if target_party_id is None:
+        raise ContactLinkError(
+            "Inbox contact-link target must have a reviewed Party binding first."
+        )
+    target_party = db.get(Party, target_party_id)
+    if target_party is None or target_party.status in {
+        PartyIdentityStatus.merged.value,
+        PartyIdentityStatus.archived.value,
+    }:
+        raise ContactLinkError("Inbox contact-link target has no routable Party.")
+    if point.party_id != target_party_id:
+        routed_relationship = (
+            db.query(PartyRelationship.id)
+            .filter(
+                PartyRelationship.subject_party_id == point.party_id,
+                PartyRelationship.object_party_id == target_party_id,
+                PartyRelationship.relationship_type.in_(
+                    _ROUTABLE_CONTACT_RELATIONSHIPS
+                ),
+                PartyRelationship.status == PartyRelationshipStatus.active.value,
+            )
+            .scalar()
+        )
+        if routed_relationship is None:
+            raise ContactLinkError(
+                "Party contact point owner has no active contact relationship to "
+                "the Inbox target Party."
+            )
+    if link.party_contact_point_id is not None:
+        if link.party_contact_point_id != point.id:
+            raise ContactLinkError(
+                "Inbox contact link is already bound to another Party contact "
+                "point; use the reviewed merge/repoint workflow."
+            )
+        if not (
+            link.party_contact_point_bound_at is not None
+            and (link.party_contact_point_binding_source or "").strip()
+            and (link.party_contact_point_binding_reason or "").strip()
+        ):
+            raise ContactLinkError(
+                "Inbox contact link has incomplete Party contact-point evidence."
+            )
+        return link
+    link.party_contact_point_id = point.id
+    link.party_contact_point_bound_at = datetime.now(UTC)
+    link.party_contact_point_binding_source = normalized_source
+    link.party_contact_point_binding_reason = normalized_reason
+    db.flush()
+    return link
 
 
 def link_conversation_contact(

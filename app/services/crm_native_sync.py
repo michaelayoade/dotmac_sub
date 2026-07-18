@@ -1,28 +1,10 @@
-"""CRM-to-native project and sales sync-window adapter.
+"""sync-window adapter: CRM webhook events → NATIVE table deltas.
 
-During the projects-and-sales coexistence window, the backfill is complete
-while CRM remains the writer for projects, quotes, and referrals. Sub's native
-tables must therefore track CRM changes the same way the compatibility mirrors
-do, keeping the cutover delta within minutes. The whole module retires with the
-mirrors after native ownership is verified.
-
-Ownership boundary (webhook vs scheduled reconciliation):
-
-* This module (webhook path) applies only the narrow delta the CRM webhook
-  payload actually carries — status + the timestamps the mirror parsers
-  already trust — onto an EXISTING native row. CRM UUIDs are sub PKs for
-  every native project and sales table, so the row lookup is a PK get.
-* Everything else (new rows, line items, tasks, totals, …) needs the full
-  CRM shape, which the portal API does not serve. That is the beat task
-  ``app.tasks.crm_native_sync.pull_crm_phase3_native_delta`` — the backfill
-  importer's watermark mode run in-process against the CRM DB — which is
-  also the backstop when a webhook arrives before its native row exists.
-
-Gated by ``crm_phase3_native_sync_enabled`` (projects domain, default OFF).
-Called from the ``crm_webhooks`` branches IN ADDITION to the mirror apply —
-mirrors keep syncing through the window to preserve cheap read-cutover rollback.
-Best-effort by design: a failure here must never turn a webhook the mirror
-already applied into a CRM retry, so ``apply_webhook_delta`` never raises.
+Transitional glue for the projects-and-sales coexistence window: the backfill
+is done and CRM is still the writer for projects and quotes, so sub's native
+tables must track CRM changes the same way the mirrors do — the flip-day delta
+stays minutes. The whole module is deleted at the cutover contract together
+with the mirrors.
 """
 
 from __future__ import annotations
@@ -33,7 +15,6 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models.project import Project, ProjectStatus
-from app.models.referral_native import Referral, ReferralRewardStatus, ReferralStatus
 from app.models.sales import Quote, QuoteStatus
 from app.services import control_registry
 from app.services.common import coerce_uuid
@@ -42,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_enabled(db: Session) -> bool:
-    """Return whether CRM compatibility events should update native rows."""
+    """sync-window flag: adapt CRM events into native rows."""
     return control_registry.is_enabled(db, "crm.phase3_native_sync")
 
 
@@ -55,17 +36,6 @@ def _to_dt(value: object) -> datetime | None:
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
-        return None
-
-
-def _to_decimal(value: object):
-    from decimal import Decimal, InvalidOperation
-
-    if value in (None, ""):
-        return None
-    try:
-        return Decimal(str(value))
-    except (InvalidOperation, ValueError, TypeError):
         return None
 
 
@@ -142,48 +112,9 @@ def _apply_quote(db: Session, event_type: str, body: dict) -> dict:
     return {"status": "ok", "event": event_type}
 
 
-_REFERRAL_STATUS_BY_EVENT = {
-    "referral.captured": ReferralStatus.pending.value,
-    "referral.qualified": ReferralStatus.qualified.value,
-    "referral.rewarded": ReferralStatus.rewarded.value,
-}
-
-
-def _apply_referral(db: Session, event_type: str, body: dict) -> dict:
-    crm_referral_id = str(body.get("referral_id") or body.get("id") or "").strip()
-    if not crm_referral_id:
-        return {"status": "skipped", "reason": "incomplete_payload"}
-
-    row = _native_row(db, Referral, crm_referral_id)
-    if row is None:
-        return {"status": "skipped", "reason": "native_row_missing"}
-
-    new_status = _REFERRAL_STATUS_BY_EVENT.get(event_type)
-    if new_status:
-        row.status = new_status
-    now = datetime.now(UTC)
-    if event_type == "referral.qualified" and row.qualified_at is None:
-        row.qualified_at = _to_dt(body.get("qualified_at")) or now
-    if event_type == "referral.rewarded":
-        amount = _to_decimal(body.get("amount") or body.get("reward_amount"))
-        if amount is not None:
-            row.reward_amount = amount
-            row.reward_currency = str(
-                body.get("currency") or body.get("reward_currency") or "NGN"
-            )
-        # Native vocabulary is "issued" (§1.7) — NOT the CRM webhook's
-        # "paid", which was the mirror-only value the doc flags at §1.7.
-        row.reward_status = ReferralRewardStatus.issued.value
-        if row.reward_issued_at is None:
-            row.reward_issued_at = _to_dt(body.get("reward_issued_at")) or now
-    db.commit()
-    return {"status": "ok", "event": event_type}
-
-
 _HANDLERS = {
     "project": _apply_project,
     "quote": _apply_quote,
-    "referral": _apply_referral,
 }
 
 

@@ -1,7 +1,7 @@
-"""Phase 3 PR 2: expand-B native tables — schema-shape assertions.
+"""PR 2: expand-B native tables — schema-shape assertions.
 
-Covers the §1.1 table map (projects, leads/pipeline, quotes, sales orders,
-referrals, work_links), the §1.7 enum vocabularies (exact values), the §1.8
+Covers the table map (projects, leads/pipeline, quotes, sales orders,
+referrals, work_links), the enum vocabularies (exact values), the
 person/staff FK-clash treatment (customer FKs → subscribers, staff columns →
 plain UUIDs), and the 244 migration's revision chain.
 """
@@ -55,7 +55,7 @@ from app.models.work_link import WorkEntityType, WorkLink, WorkLinkType
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Every table the expand-B migration creates, named exactly per §1.1.
+# Every table the expand-B migration creates, named exactly per .
 PHASE3_TABLES = [
     "pipelines",
     "pipeline_stages",
@@ -90,7 +90,7 @@ def test_phase3_table_registered(table_name):
 
 
 def test_mirror_tables_untouched():
-    """§3.3: native tables coexist with the mirrors until the contract PR."""
+    """native tables coexist with the mirrors until the contract PR."""
     for mirror in (
         "project_mirror",
         "project_sync_state",
@@ -103,7 +103,7 @@ def test_mirror_tables_untouched():
 
 
 # ---------------------------------------------------------------------------
-# Enum vocabularies — exact values (§1.7)
+# Enum vocabularies — exact values
 # ---------------------------------------------------------------------------
 
 
@@ -230,7 +230,7 @@ def test_status_columns_are_strings_not_pg_enums():
 
 
 # ---------------------------------------------------------------------------
-# FK clash treatment (§1.8)
+# FK clash treatment
 # ---------------------------------------------------------------------------
 
 
@@ -239,8 +239,9 @@ def _fk_targets(table_name: str, column_name: str) -> set[str]:
     return {fk.target_fullname for fk in column.foreign_keys}
 
 
-# Staff person / Phase 4 agent+campaign / Phase 5 inventory / Phase 2 WO
-# columns: FKs dropped, plain UUIDs carried verbatim.
+# Staff person / external agent / inventory / WO columns: FKs
+# dropped, plain UUIDs carried verbatim. Native campaign FKs materialized in
+# revision 355 and therefore no longer belong in this legacy list.
 NO_FK_COLUMNS = [
     ("projects", "created_by_person_id"),
     ("projects", "owner_person_id"),
@@ -249,13 +250,11 @@ NO_FK_COLUMNS = [
     ("projects", "assistant_manager_person_id"),
     ("project_tasks", "assigned_to_person_id"),
     ("project_tasks", "created_by_person_id"),
-    ("project_tasks", "work_order_id"),  # Phase 2 flip adds the FK
+    ("project_tasks", "work_order_id"),  # flip adds the FK
     ("project_task_assignees", "person_id"),  # composite-PK half, still no FK
     ("project_task_comments", "author_person_id"),
     ("project_comments", "author_person_id"),
     ("leads", "owner_agent_id"),
-    ("leads", "campaign_id"),
-    ("leads", "campaign_recipient_id"),
     ("quotes", "owner_person_id"),
     ("quote_line_items", "inventory_item_id"),
     ("sales_orders", "owner_agent_id"),
@@ -286,17 +285,16 @@ def test_customer_party_columns_fk_subscribers(table_name, column_name):
 
 
 def test_customer_party_columns_not_null():
-    """§1.8: the six re-pointed customer-party FKs are NOT NULL — except the
-    collapsed referrals.referred_subscriber_id, nullable like CRM's
-    referred_person_id."""
+    """Account-specific records remain required; Party-first Lead/referral
+    account links are nullable compatibility/conversion context."""
     for table_name, column_name in [
-        ("leads", "subscriber_id"),
         ("quotes", "subscriber_id"),
         ("sales_orders", "subscriber_id"),
         ("referral_codes", "subscriber_id"),
         ("referrals", "referrer_subscriber_id"),
     ]:
         assert not Base.metadata.tables[table_name].columns[column_name].nullable
+    assert Base.metadata.tables["leads"].columns["subscriber_id"].nullable
     assert Base.metadata.tables["referrals"].columns["referred_subscriber_id"].nullable
     # projects.subscriber_id stays nullable (CRM shape).
     assert Base.metadata.tables["projects"].columns["subscriber_id"].nullable
@@ -314,12 +312,14 @@ def test_intra_vertical_fks():
     assert _fk_targets("sales_order_lines", "sales_order_id") == {"sales_orders.id"}
     assert _fk_targets("leads", "pipeline_id") == {"pipelines.id"}
     assert _fk_targets("leads", "stage_id") == {"pipeline_stages.id"}
+    assert _fk_targets("leads", "campaign_id") == {"campaigns.id"}
+    assert _fk_targets("leads", "campaign_recipient_id") == {"campaign_recipients.id"}
     assert _fk_targets("referrals", "referral_code_id") == {"referral_codes.id"}
     assert _fk_targets("referrals", "referred_lead_id") == {"leads.id"}
 
 
 def test_subscribers_sales_order_fk_materialized():
-    """PR1 deferred the FK; expand B makes it real (§1.5 account matrix)."""
+    """PR1 deferred the FK; expand B makes it real."""
     assert _fk_targets("subscribers", "sales_order_id") == {"sales_orders.id"}
 
 
@@ -331,7 +331,7 @@ def test_project_task_assignees_composite_pk():
 
 
 # ---------------------------------------------------------------------------
-# Constraints & indexes preserved (§1.1/§1.3/§1.6)
+# Constraints & indexes preserved
 # ---------------------------------------------------------------------------
 
 
@@ -420,7 +420,7 @@ def test_migration_244_is_single_alembic_head():
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     # The chain keeps advancing as later PRs stack on; ONT confirmation added
-    # Phase 5 asset inventory now extends the current migration chain.
+    # asset inventory now extends the current migration chain.
     assert len(heads) == 1, (
         f"Expected exactly one Alembic head, found {len(heads)}: {heads}. "
         "Two branches almost certainly numbered their migrations off the same "
@@ -520,7 +520,7 @@ def test_full_vertical_chain_persists(db_session):
     assert order.payment_status == SalesOrderPaymentStatus.pending.value
     assert quote.sales_order_id == order.id
 
-    # Account-matrix link (§1.5): subscriber → creating sales order.
+    # Account-matrix link: subscriber → creating sales order.
     subscriber.sales_order_id = order.id
     db_session.flush()
 
@@ -544,7 +544,7 @@ def test_full_vertical_chain_persists(db_session):
         project_id=project.id,
         title="Survey",
         assigned_to_person_id=uuid4(),
-        work_order_id=uuid4(),  # CRM WO UUID, plain until Phase 2
+        work_order_id=uuid4(),  # CRM WO UUID, carried as a plain value
         metadata_={"fiber_stage_key": "survey"},
     )
     db_session.add(task)

@@ -113,7 +113,8 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.customers", "router", "api", "user"),
     ("app.api.subscribers", "router", "api", "user"),
     # Native referrals: staff surface rides crm:lead:* per-route
-    # permissions; the capture endpoint is public (shared /r/{code} links).
+    # permissions; capture and signed-context signup are public continuations
+    # from shared /r/{code} links.
     ("app.api.crm_referrals", "router", "api", "user"),
     ("app.api.crm_referrals", "public_router", "api", "none"),
     ("app.api.support", "router", "api", "user"),

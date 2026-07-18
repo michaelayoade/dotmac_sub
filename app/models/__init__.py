@@ -22,6 +22,7 @@ from app.models.auth import (  # noqa: F401
 from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
 from app.models.billing import (  # noqa: F401
     AccountAdjustment,
+    AccountCreditApplicationPolicy,
     BankAccount,
     BankAccountType,
     BankReconciliationItem,
@@ -66,7 +67,9 @@ from app.models.billing import (  # noqa: F401
     ServiceEntitlementStatus,
     TaxApplication,
     TaxRate,
+    TopupAllocationPolicy,
     TopupIntent,
+    TopupIntentPurpose,
 )
 from app.models.branding import BrandProfile  # noqa: F401
 from app.models.catalog import (  # noqa: F401
@@ -528,6 +531,30 @@ from app.models.organization import (  # noqa: F401
     OrganizationMembership,
     OrganizationMembershipRole,
 )
+from app.models.party import (  # noqa: F401
+    PartnerRoleKey,
+    Party,
+    PartyContactConsentStatus,
+    PartyContactPoint,
+    PartyContactPointType,
+    PartyContactVerificationStatus,
+    PartyDataClassification,
+    PartyExternalReference,
+    PartyIdentityBackfillReceipt,
+    PartyIdentityStatus,
+    PartyMembership,
+    PartyMembershipStatus,
+    PartyMembershipType,
+    PartyRelationship,
+    PartyRelationshipStatus,
+    PartyRelationshipType,
+    PartyRole,
+    PartyRoleStatus,
+    PartyRoleType,
+    PartyType,
+    SubscriberContactPointProjection,
+    SubscriberContactRelationshipProjection,
+)
 from app.models.payment_arrangement import (  # noqa: F401
     ArrangementStatus,
     InstallmentStatus,
@@ -656,6 +683,9 @@ from app.models.router_management import (  # noqa: F401
 )
 from app.models.sales import (  # noqa: F401
     Lead,
+    LeadCaptureMethod,
+    LeadOriginCapture,
+    LeadSourcePlatform,
     LeadStatus,
     Pipeline,
     PipelineStage,

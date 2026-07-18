@@ -1,6 +1,6 @@
-"""Phase 3 sync-window adapter (PR 9): CRM webhook events → native rows, and
-the delta beat task gating. Transitional glue deleted at the Phase 3 contract
-(PR 15) — these tests pin the flag gating (default OFF), the thin-delta
+"""sync-window adapter: CRM webhook events → native rows, and
+the delta beat task gating. Transitional glue deleted at the contract
+ — these tests pin the flag gating (default OFF), the thin-delta
 semantics (existing rows only; full shapes come from the delta beat), and the
 never-raise contract of the webhook path."""
 
@@ -20,7 +20,6 @@ import pytest
 from app.api.crm_webhooks import receive_crm_project_event
 from app.config import settings
 from app.models.project import Project
-from app.models.referral_native import Referral
 from app.models.sales import Quote
 from app.models.subscriber import Subscriber
 from app.services import crm_native_sync
@@ -54,16 +53,6 @@ def _project(db, sub, **kw) -> Project:
 
 def _quote(db, sub, **kw) -> Quote:
     row = Quote(id=uuid.uuid4(), subscriber_id=sub.id, status="sent")
-    for key, value in kw.items():
-        setattr(row, key, value)
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
-
-
-def _referral(db, sub, **kw) -> Referral:
-    row = Referral(id=uuid.uuid4(), referrer_subscriber_id=sub.id, status="pending")
     for key, value in kw.items():
         setattr(row, key, value)
     db.add(row)
@@ -230,47 +219,11 @@ def test_quote_missing_native_row_skipped(db_session, flag_on):
     assert out == {"status": "skipped", "reason": "native_row_missing"}
 
 
-# ---------------------------------------------------------------------------
-# referral deltas
-# ---------------------------------------------------------------------------
-
-
-def test_referral_qualified_sets_status_and_timestamp(db_session, flag_on):
-    sub = _subscriber(db_session)
-    row = _referral(db_session, sub)
-    out = crm_native_sync.apply_webhook_delta(
-        db_session, "referral", "referral.qualified", {"referral_id": str(row.id)}
-    )
-    assert out["status"] == "ok"
-    db_session.refresh(row)
-    assert row.status == "qualified"
-    assert row.qualified_at is not None
-
-
-def test_referral_rewarded_uses_native_reward_vocabulary(db_session, flag_on):
-    # The CRM webhook path historically wrote reward_status="paid" into the
-    # mirror; native vocabulary is "issued" (§1.7) — pin that mapping.
-    sub = _subscriber(db_session)
-    row = _referral(db_session, sub, status="qualified")
-    crm_native_sync.apply_webhook_delta(
-        db_session,
-        "referral",
-        "referral.rewarded",
-        {"referral_id": str(row.id), "amount": "2500", "currency": "NGN"},
-    )
-    db_session.refresh(row)
-    assert row.status == "rewarded"
-    assert row.reward_status == "issued"
-    assert str(row.reward_amount) in {"2500", "2500.00"}
-    assert row.reward_currency == "NGN"
-    assert row.reward_issued_at is not None
-
-
-def test_referral_missing_native_row_skipped(db_session, flag_on):
+def test_referral_vertical_is_retired_from_crm_native_sync(db_session, flag_on):
     out = crm_native_sync.apply_webhook_delta(
         db_session, "referral", "referral.captured", {"referral_id": str(uuid.uuid4())}
     )
-    assert out == {"status": "skipped", "reason": "native_row_missing"}
+    assert out == {"status": "skipped", "reason": "unknown_vertical"}
 
 
 # ---------------------------------------------------------------------------

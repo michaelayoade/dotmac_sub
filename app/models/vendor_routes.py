@@ -29,7 +29,8 @@ Reconciliation with the pre-existing vendor-authentication support
 (``app/models/field_vendor.py``): those ``field_vendors`` / ``field_vendor_users``
 / ``field_vendor_device_tokens`` tables are the vendor **auth mirror** (mobile
 login + device tokens, keyed to ``system_users`` with a ``crm_vendor_id`` string
-pointer). They are a different concern and are left untouched. The native
+pointer). They remain a separate auth projection, but both profiles now have
+an additive canonical Party link and must converge on the same Party. The native
 ``vendors`` / ``vendor_users`` tables created here are the CRM-UUID-keyed
 **domain of record** that the route/installation-project tables reference; the
 bridge is ``field_vendors.crm_vendor_id == vendors.id``. The genuinely-new part
@@ -54,6 +55,7 @@ from geoalchemy2 import Geometry
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -74,7 +76,7 @@ def _now() -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# Enums — String columns + app enums, exact CRM vocabularies (§1.7 pattern)
+# Enums — String columns + app enums, exact CRM vocabularies
 # ---------------------------------------------------------------------------
 
 
@@ -141,10 +143,29 @@ class AsBuiltRouteStatus(enum.Enum):
 
 class Vendor(Base):
     __tablename__ = "vendors"
+    __table_args__ = (
+        CheckConstraint(
+            "(party_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_vendors_party_binding_evidence",
+        ),
+        UniqueConstraint("party_id", name="uq_vendors_party_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parties.id", ondelete="RESTRICT")
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     code: Mapped[str | None] = mapped_column(String(60), unique=True)
     contact_name: Mapped[str | None] = mapped_column(String(160))
@@ -162,6 +183,7 @@ class Vendor(Base):
     )
 
     users = relationship("VendorUser", back_populates="vendor")
+    party = relationship("Party", back_populates="vendor_profile")
     quotes = relationship("ProjectQuote", back_populates="vendor")
     purchase_invoices = relationship("VendorPurchaseInvoice", back_populates="vendor")
 

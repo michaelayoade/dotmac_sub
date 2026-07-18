@@ -1,5 +1,4 @@
-"""Referrals module flow on PostgreSQL: refer → qualify → reward, all on the
-native path (referrals_native_write_enabled ON).
+"""Native referrals module flow on PostgreSQL: refer → qualify → reward.
 
 Nothing external is faked: the reward credit is a real issued CreditNote via
 ``crm_api.create_account_credit`` with the shared ``referral:{id}``
@@ -18,6 +17,7 @@ from app.models.billing import CreditNote
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.referral_native import Referral
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services import party as party_service
 from app.services.referrals import referrals
 from app.services.subscriber import _default_reseller_id
 
@@ -39,11 +39,12 @@ def _program(db, *, amount: str = "2500") -> None:
     db.flush()
 
 
-def _subscriber(db) -> Subscriber:
+def _subscriber(db, *, status=SubscriberStatus.active) -> Subscriber:
     sub = Subscriber(
         first_name="Flow",
         last_name="Referral",
         email=f"fr-{uuid.uuid4().hex[:8]}@example.com",
+        status=status,
         # subscribers.reseller_id is NOT NULL (migration 116); default to House.
         reseller_id=_default_reseller_id(db),
     )
@@ -53,8 +54,7 @@ def _subscriber(db) -> Subscriber:
 
 
 @pytest.fixture(autouse=True)
-def _native_write(enable_flags, db_session):
-    enable_flags("referrals_native_write_enabled")
+def _native_program(db_session):
     _program(db_session)
 
 
@@ -75,8 +75,24 @@ def test_referral_lifecycle_native(db_session):
     assert referral is not None
     assert referral.referrer_subscriber_id == referrer.id
 
-    # 2. Qualify — the referred prospect becomes an active subscriber.
-    prospect = db_session.get(Subscriber, referral.referred_subscriber_id)
+    assert referral.referred_subscriber_id is None
+
+    # 2. Convert through reviewed Party equality, then qualify on activation.
+    prospect = _subscriber(db_session, status=SubscriberStatus.new)
+    party_service.bind_subscriber_account(
+        db_session,
+        subscriber_id=prospect.id,
+        party_id=referral.referred_party_id,
+        source="integration_review",
+        reason="Integration flow reviewed the referral identity",
+    )
+    referrals.attach_subscriber(
+        db_session,
+        referral_id=str(referral.id),
+        subscriber_id=str(prospect.id),
+        source="integration_review",
+        reason="Integration flow reviewed the referral identity",
+    )
     prospect.status = SubscriberStatus.active
     db_session.flush()
     qualified = referrals.qualify_for_subscriber(db_session, prospect)

@@ -4,7 +4,7 @@ Ported from the CRM's ``app/web/admin/crm_referrals.py`` onto sub identity:
 referrer/referred are subscribers (not CRM people), rows link to the existing
 ``/admin/customers/{person|business}/{id}`` detail pages, and the program
 lives in the five ``referral_*`` settings keys (``SettingDomain.subscriber``)
-surfaced on the system settings page — there is no program table (§1.6).
+surfaced on the system settings page — there is no program table.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from decimal import Decimal
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from app.models.party import PartyContactPoint, PartyContactPointType
 from app.models.referral_native import (
     Referral,
     ReferralRewardStatus,
@@ -50,7 +51,30 @@ def _subscriber_link(subscriber: Subscriber | None) -> str | None:
     return f"/admin/customers/{kind}/{subscriber.id}"
 
 
-def _capture_meta(referral: Referral) -> dict:
+def _capture_meta(db: Session, referral: Referral) -> dict:
+    if referral.referred_party_id is not None:
+        points = {
+            point.channel_type: point.display_value or point.normalized_value
+            for point in db.query(PartyContactPoint)
+            .filter(PartyContactPoint.party_id == referral.referred_party_id)
+            .filter(PartyContactPoint.is_active.is_(True))
+            .filter(
+                PartyContactPoint.channel_type.in_(
+                    [
+                        PartyContactPointType.email.value,
+                        PartyContactPointType.phone.value,
+                    ]
+                )
+            )
+            .all()
+        }
+        return {
+            "name": referral.referred_party.display_name
+            if referral.referred_party is not None
+            else None,
+            "email": points.get(PartyContactPointType.email.value),
+            "phone": points.get(PartyContactPointType.phone.value),
+        }
     meta = referral.metadata_ if isinstance(referral.metadata_, dict) else {}
     capture = meta.get("capture")
     return capture if isinstance(capture, dict) else {}
@@ -65,9 +89,14 @@ def _reward_display(referral: Referral) -> str:
 
 
 def _referred_name(referral: Referral) -> str:
+    if referral.referred_party is not None:
+        return referral.referred_party.display_name
     if referral.referred_subscriber is not None:
         return _subscriber_name(referral.referred_subscriber)
-    name = _capture_meta(referral).get("name")
+    meta = referral.metadata_ if isinstance(referral.metadata_, dict) else {}
+    capture_value = meta.get("capture")
+    capture = capture_value if isinstance(capture_value, dict) else {}
+    name = capture.get("name")
     return str(name).strip() if name else "—"
 
 
@@ -88,12 +117,25 @@ def _row(referral: Referral) -> dict:
         # fresh page): qualify rescues pending/expired, issue pays a
         # qualified referral, reject voids anything not yet paid out.
         "can_qualify": referral.status
-        in (ReferralStatus.pending.value, ReferralStatus.expired.value),
+        in (ReferralStatus.pending.value, ReferralStatus.expired.value)
+        and (
+            referral.referred_party_id is None
+            or referral.referred_subscriber_id is not None
+        ),
         "can_issue": referral.status == ReferralStatus.qualified.value
         and referral.reward_status
         in (ReferralRewardStatus.pending.value, ReferralRewardStatus.approved.value),
         "can_reject": referral.status
         in (ReferralStatus.pending.value, ReferralStatus.qualified.value),
+        "can_attach_account": referral.referred_party_id is not None
+        and referral.referred_lead_id is not None
+        and referral.referred_subscriber_id is None
+        and referral.status
+        in (
+            ReferralStatus.pending.value,
+            ReferralStatus.expired.value,
+            ReferralStatus.qualified.value,
+        ),
     }
 
 
@@ -138,6 +180,7 @@ def list_data(
         .options(
             joinedload(Referral.referrer),
             joinedload(Referral.referred_subscriber),
+            joinedload(Referral.referred_party),
         )
         .filter(Referral.is_active.is_(True))
     )
@@ -182,6 +225,7 @@ def detail_data(db: Session, *, referral_id: str) -> dict | None:
         .options(
             joinedload(Referral.referrer),
             joinedload(Referral.referred_subscriber),
+            joinedload(Referral.referred_party),
             joinedload(Referral.code),
             joinedload(Referral.lead),
         )
@@ -194,10 +238,17 @@ def detail_data(db: Session, *, referral_id: str) -> dict | None:
     return {
         "referral": referral,
         "row": _row(referral),
-        "capture": _capture_meta(referral),
+        "capture": _capture_meta(db, referral),
         "code": referral.code.code if referral.code is not None else None,
         "lead_id": str(referral.referred_lead_id)
         if referral.referred_lead_id
+        else None,
+        "conversion_context": {
+            "referred_party_id": str(referral.referred_party_id),
+            "referred_lead_id": str(referral.referred_lead_id),
+        }
+        if referral.referred_party_id is not None
+        and referral.referred_lead_id is not None
         else None,
         "reward_credit_id": meta.get("reward_credit_id"),
         "program": referrals_service.program(db),

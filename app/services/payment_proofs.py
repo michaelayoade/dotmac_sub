@@ -1,4 +1,4 @@
-"""Bank-transfer proof flow: upload -> staff verify -> wallet/invoice credit.
+"""Bank-transfer proof flow: upload -> staff verify -> account/invoice credit.
 
 Verification creates a real Payment (status=succeeded, paid_at from the
 claimed transfer date) through the standard billing service, optionally
@@ -17,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
@@ -25,6 +26,7 @@ from app.models.billing import (
     InvoiceStatus,
     PaymentSettlementOrigin,
     PaymentStatus,
+    TopupIntent,
 )
 from app.models.payment_proof import (
     PaymentProof,
@@ -472,29 +474,64 @@ def verify_proof(
             code="duplicate_transfer_reference",
         )
 
-    allocations = (
-        _open_invoice_allocations(db, proof.account_id, value)
-        if auto_allocate
-        else None
+    deposit_intent = db.scalar(
+        select(TopupIntent).where(
+            TopupIntent.account_id == proof.account_id,
+            TopupIntent.reference == proof.reference,
+            TopupIntent.purpose == "account_credit_deposit",
+        )
     )
-    payment = billing_service.payments.create(
-        db,
-        PaymentCreate(
-            account_id=proof.account_id,
-            amount=value,
-            currency=proof.currency,
-            status=PaymentStatus.succeeded,
-            paid_at=proof.paid_at or datetime.now(UTC),
-            external_id=(proof.reference or "")[:120] or None,
-            memo=f"Bank transfer (proof {proof.id})",
-            allocations=allocations or None,
-        ),
-        auto_allocate=auto_allocate,
-        # Keep the account lock until the proof and payment commit together.
-        # The owner's default commit would release the lock while this proof was
-        # still submitted, reopening the concurrent double-credit race.
-        commit=False,
-    )
+    if deposit_intent is not None:
+        from app.services.account_credit_deposits import (
+            AccountCreditDeposits,
+            DepositEligibilityError,
+        )
+        from app.services.payment_gateway_adapter import PaymentGatewayTransaction
+
+        try:
+            settlement = AccountCreditDeposits.settle_verified(
+                db,
+                intent_id=deposit_intent.id,
+                transaction=PaymentGatewayTransaction(
+                    provider_type=deposit_intent.provider_type,
+                    external_id=f"proof:{proof.id}",
+                    amount=value,
+                    currency=proof.currency,
+                    metadata={"topup_intent_id": str(deposit_intent.id)},
+                    memo_prefix="Bank transfer",
+                ),
+                origin=PaymentSettlementOrigin.manual,
+                commit=False,
+            )
+        except DepositEligibilityError as exc:
+            raise PaymentProofReviewError(
+                status_code=409,
+                detail=str(exc),
+                code=exc.code,
+            ) from exc
+        payment = settlement.payment
+    else:
+        allocations = (
+            _open_invoice_allocations(db, proof.account_id, value)
+            if auto_allocate
+            else None
+        )
+        payment = billing_service.payments.create(
+            db,
+            PaymentCreate(
+                account_id=proof.account_id,
+                amount=value,
+                currency=proof.currency,
+                status=PaymentStatus.succeeded,
+                paid_at=proof.paid_at or datetime.now(UTC),
+                external_id=(proof.reference or "")[:120] or None,
+                memo=f"Bank transfer (proof {proof.id})",
+                allocations=allocations or None,
+            ),
+            auto_allocate=auto_allocate,
+            # Keep the account lock until proof and payment commit together.
+            commit=False,
+        )
     proof.status = PaymentProofStatus.verified
     proof.verified_amount = value
     proof.verified_by = str(verified_by)

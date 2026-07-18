@@ -496,14 +496,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.radius_population.sync_device_login": _c("radius", SWEEP, IDEMP, STATUS),
     "app.tasks.referrals.reconcile_referral_mirror": _c(
-        "billing", SWEEP, IDEMP, HEALTH
+        "referrals", NONE, IDEMP, LOG, "Retired CRM mirror task tombstone."
     ),
     "app.tasks.referrals.refresh_referral_mirror_for_subscriber": _c(
-        "crm",
+        "referrals",
         NONE,
         IDEMP,
         LOG,
-        "Best-effort on-view refresh; periodic reconcile backs it.",
+        "Retired CRM mirror task tombstone.",
     ),
     "app.tasks.support_tickets.auto_confirm_resolved_tickets": _c(
         "support",
@@ -548,7 +548,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         SWEEP,
         IDEMP,
         HEALTH,
-        "Classifier outage lifecycle debounce (§7.6); identity dedupes and "
+        "Classifier outage lifecycle debounce; identity dedupes and "
         "every transition is state-guarded, so re-runs are idempotent.",
     ),
     "app.tasks.topology_sync.warm_topology_status": _c("network", SWEEP, IDEMP, HEALTH),

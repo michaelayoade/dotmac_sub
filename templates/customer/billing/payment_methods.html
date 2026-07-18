@@ -94,7 +94,7 @@
                 <div class="mt-5 rounded-2xl border border-dashed border-stone-300 bg-stone-50/70 p-6 text-center dark:border-stone-600 dark:bg-stone-900/20">
                     <p class="text-sm font-semibold text-stone-900 dark:text-white">No saved cards yet</p>
                     <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">
-                        Add a card to pay faster and enable autopay. We&rsquo;ll add a top-up to your balance and remember the card for next time.
+                        Add a card to pay faster and enable autopay. We&rsquo;ll make a Deposit Account Credit payment and remember the card for next time.
                     </p>
                     {% if not (customer and customer.read_only) %}
                     <a href="/portal/billing/topup?add_card=1" class="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-700">
@@ -156,10 +156,10 @@
             <section class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
                 <h2 class="text-lg font-semibold text-stone-900 dark:text-white">Other ways to pay</h2>
                 <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">
-                    You can also pay by card on a one-off basis without saving it — just choose your amount on the Add Funds page.
+                    You can also pay by card without saving it on the Deposit Account Credit page.
                 </p>
                 <a href="/portal/billing/topup" class="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800 dark:text-emerald-400">
-                    Add Funds
+                    Deposit Account Credit
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 </a>
             </section>
