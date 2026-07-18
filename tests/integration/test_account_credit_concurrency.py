@@ -17,6 +17,7 @@ from app.models.billing import (
     PaymentProvider,
     PaymentProviderType,
 )
+from app.models.catalog import BillingMode
 from app.models.subscriber import Reseller, Subscriber
 from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.billing._common import get_account_credit_balance
@@ -39,6 +40,10 @@ def test_two_applicators_cannot_spend_one_credit_source_twice(engine):
             last_name="Concurrency",
             email=f"credit-concurrency-{suffix}@example.com",
             reseller=reseller,
+            # Postpaid: the row-lock contract under test is orthogonal to the
+            # prepaid funding authority, whose missing-baseline gate would
+            # otherwise fire in the payment path on a bare test database.
+            billing_mode=BillingMode.postpaid,
         )
         provider = PaymentProvider(
             name=f"Credit Concurrency Paystack {suffix}",
