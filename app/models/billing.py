@@ -1607,6 +1607,70 @@ class PaymentSettlement(Base):
     )
 
 
+class PaymentAllocationReconciliationException(Base):
+    """Durable evidence that settled money could not reach its target invoice."""
+
+    __tablename__ = "payment_allocation_reconciliation_exceptions"
+    __table_args__ = (
+        Index(
+            "uq_payment_allocation_reconciliation_exceptions_key",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index(
+            "ix_payment_allocation_reconciliation_exceptions_status_created",
+            "status",
+            "created_at",
+        ),
+        Index(
+            "ix_payment_allocation_reconciliation_exceptions_payment",
+            "payment_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    payment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    topup_intent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("topup_intents.id", ondelete="RESTRICT"),
+    )
+    provider_reference: Mapped[str] = mapped_column(String(120), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="open", server_default="open"
+    )
+    error_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    payment = relationship("Payment")
+    invoice = relationship("Invoice")
+    topup_intent = relationship("TopupIntent")
+
+
 class ConsolidatedPaymentSettlementReconciliationEvidence(Base):
     """Reviewed provenance for one historical consolidated settlement."""
 

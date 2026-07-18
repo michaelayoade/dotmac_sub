@@ -305,14 +305,48 @@ class PaymentProviderEvents(ListResponseMixin):
             if invoice:
                 _validate_invoice_currency(invoice, currency)
             if new_status == PaymentStatus.succeeded:
-                # Funds confirmed by the provider: settle through the full
-                # payment pipeline so webhook-driven settlement is identical to
-                # the synchronous verify path — capped allocation, ledger
-                # entry, invoice recalculation, service restore, and
-                # payment.received events. This is the backstop for customers
-                # who paid but never returned to the redirect/verify URL.
+                # An invoice checkout is cash-first: commit the provider money
+                # as net unallocated credit, then let the allocation owner try
+                # the requested invoice. Allocation failure is a durable
+                # reconciliation exception and cannot roll back the payment.
+                is_invoice_checkout = bool(
+                    invoice is not None
+                    and account_id is not None
+                    and payload.external_id
+                    and payload.provider_reference
+                )
+                if is_invoice_checkout:
+                    from app.services.provider_payment_settlements import (
+                        settle_verified_invoice_payment,
+                    )
+
+                    assert invoice is not None
+                    assert account_id is not None
+                    result = settle_verified_invoice_payment(
+                        db,
+                        account_id=account_id,
+                        invoice_id=invoice.id,
+                        topup_intent_id=payload.topup_intent_id,
+                        provider_id=provider.id,
+                        provider_reference=str(payload.provider_reference),
+                        external_id=str(payload.external_id),
+                        gross_amount=payload.amount,
+                        provider_fee=payload.provider_fee,
+                        net_amount=payload.net_amount
+                        or (payload.amount - payload.provider_fee),
+                        currency=currency,
+                        memo=f"{provider.name} webhook event: {payload.event_type}",
+                    )
+                    payment = result.payment
+                    created_settled = True
+                # Non-invoice provider success keeps the established generic or
+                # consolidated settlement path.
                 allocations: list[PaymentAllocationApply] | None = None
-                if invoice is not None and account_id is not None:
+                if (
+                    not is_invoice_checkout
+                    and invoice is not None
+                    and account_id is not None
+                ):
                     balance_due = round_money(to_decimal(invoice.balance_due or 0))
                     if balance_due > Decimal("0.00"):
                         allocations = [
@@ -328,7 +362,7 @@ class PaymentProviderEvents(ListResponseMixin):
                 # its balance (auto_allocate=False) rather than spreading across
                 # member invoices, matching the reseller manual-record flow.
                 is_consolidated = billing_account_id is not None and account_id is None
-                if is_consolidated:
+                if not is_invoice_checkout and is_consolidated:
                     source_id = (
                         payload.idempotency_key
                         or payload.external_id
@@ -353,7 +387,8 @@ class PaymentProviderEvents(ListResponseMixin):
                         ),
                         origin=PaymentSettlementOrigin.provider_event,
                     ).payment
-                else:
+                    created_settled = True
+                elif not is_invoice_checkout:
                     payment = Payments.create(
                         db,
                         PaymentCreate(
@@ -370,7 +405,7 @@ class PaymentProviderEvents(ListResponseMixin):
                         ),
                         origin=PaymentSettlementOrigin.provider_event,
                     )
-                created_settled = True
+                    created_settled = True
             else:
                 payment = Payments.create(
                     db,
@@ -389,10 +424,40 @@ class PaymentProviderEvents(ListResponseMixin):
                     origin=PaymentSettlementOrigin.provider_event,
                 )
         elif payment and payload.invoice_id and invoice and not payment.allocations:
-            balance_due = round_money(to_decimal(invoice.balance_due or 0))
-            alloc_amount = min(round_money(to_decimal(payment.amount)), balance_due)
-            if alloc_amount > Decimal("0.00"):
-                if payment.status == PaymentStatus.succeeded:
+            if (
+                payment.status == PaymentStatus.succeeded
+                and payload.provider_reference
+                and payload.external_id
+                and account_id is not None
+                and payload.amount is not None
+            ):
+                from app.services.provider_payment_settlements import (
+                    settle_verified_invoice_payment,
+                )
+
+                result = settle_verified_invoice_payment(
+                    db,
+                    account_id=account_id,
+                    invoice_id=invoice.id,
+                    topup_intent_id=payload.topup_intent_id,
+                    provider_id=provider.id,
+                    provider_reference=str(payload.provider_reference),
+                    external_id=str(payload.external_id),
+                    gross_amount=payload.amount,
+                    provider_fee=payload.provider_fee,
+                    net_amount=payload.net_amount
+                    or (payload.amount - payload.provider_fee),
+                    currency=payload.currency or invoice.currency,
+                    memo=f"{provider.name} webhook event: {payload.event_type}",
+                )
+                payment = result.payment
+            else:
+                balance_due = round_money(to_decimal(invoice.balance_due or 0))
+                alloc_amount = min(round_money(to_decimal(payment.amount)), balance_due)
+                if (
+                    alloc_amount > Decimal("0.00")
+                    and payment.status == PaymentStatus.succeeded
+                ):
                     preview_request = PaymentAllocationPreviewRequest(
                         payment_id=payment.id,
                         invoice_id=invoice.id,
@@ -423,7 +488,7 @@ class PaymentProviderEvents(ListResponseMixin):
                         ),
                         commit=False,
                     )
-                else:
+                elif alloc_amount > Decimal("0.00"):
                     PaymentAllocations.record_intent(
                         db,
                         PaymentAllocationCreate(

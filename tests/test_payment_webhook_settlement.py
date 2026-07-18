@@ -21,6 +21,7 @@ import pytest
 from app.models.billing import (
     InvoiceStatus,
     Payment,
+    PaymentAllocationReconciliationException,
     PaymentProvider,
     PaymentProviderEvent,
     PaymentProviderEventStatus,
@@ -186,6 +187,68 @@ def test_paystack_webhook_captures_provider_fee(db_session, subscriber):
     payment = db_session.query(Payment).filter_by(external_id="990010").one()
     assert payment.amount == Decimal("3000.00")  # gross unchanged
     assert payment.provider_fee == Decimal("45.00")  # fee captured
+
+
+def test_paystack_webhook_keeps_net_credit_when_invoice_allocation_fails(
+    db_session, subscriber
+):
+    _make_provider(db_session)
+    invoice = billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber.id,
+            invoice_number="INV-WH-DRAFT-CASH-FIRST",
+            currency="NGN",
+            subtotal=Decimal("1000.00"),
+            total=Decimal("1000.00"),
+            balance_due=Decimal("1000.00"),
+            status=InvoiceStatus.draft,
+        ),
+    )
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="DMAC-WH-DRAFT-CASH-FIRST",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("1000.00"),
+        status="pending",
+        metadata_={
+            "payment_flow": "invoice_payment",
+            "invoice_id": str(invoice.id),
+            "account_id": str(subscriber.id),
+        },
+    )
+    db_session.add(intent)
+    db_session.commit()
+    body = _paystack_body(
+        reference=intent.reference,
+        tx_id="990011",
+        amount_kobo=102000,
+        fees_kobo=2000,
+        metadata={
+            "payment_flow": "invoice_payment",
+            "invoice_id": str(invoice.id),
+            "account_id": str(subscriber.id),
+        },
+    )
+
+    response = _post_paystack(db_session, body)
+
+    assert response.status_code == 200
+    payment = db_session.query(Payment).filter_by(external_id="990011").one()
+    exception = (
+        db_session.query(PaymentAllocationReconciliationException)
+        .filter_by(payment_id=payment.id, invoice_id=invoice.id)
+        .one()
+    )
+    db_session.refresh(intent)
+    assert payment.amount == Decimal("1020.00")
+    assert payment.provider_fee == Decimal("20.00")
+    assert payment.settlement.amount == Decimal("1000.00")
+    assert payment.settlement.unallocated_amount == Decimal("1000.00")
+    assert exception.status == "open"
+    assert intent.status == "completed"
+    assert intent.completed_payment_id == payment.id
 
 
 def test_flutterwave_webhook_captures_app_fee(db_session, subscriber):
