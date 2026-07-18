@@ -75,7 +75,7 @@ def gis_index(
 
 @router.post(
     "/location-requests/{request_id}/approve",
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:location_request:review"))],
 )
 def gis_location_request_approve(
     request: Request,
@@ -99,7 +99,7 @@ def gis_location_request_approve(
 
 @router.post(
     "/location-requests/{request_id}/reject",
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:location_request:review"))],
 )
 def gis_location_request_reject(
     request: Request,
@@ -124,7 +124,7 @@ def gis_location_request_reject(
 @router.get(
     "/locations/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:location:write"))],
 )
 def gis_location_new(request: Request, db: Session = Depends(get_db)):
     context = _gis_context(
@@ -141,7 +141,7 @@ def gis_location_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/locations/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:location:write"))],
 )
 def gis_location_create(
     request: Request,
@@ -180,7 +180,7 @@ def gis_location_create(
 @router.get(
     "/locations/{location_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:location:write"))],
 )
 def gis_location_edit(
     request: Request, location_id: str, db: Session = Depends(get_db)
@@ -200,7 +200,7 @@ def gis_location_edit(
 @router.post(
     "/locations/{location_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:location:write"))],
 )
 def gis_location_update(
     request: Request,
@@ -242,7 +242,7 @@ def gis_location_update(
 @router.post(
     "/locations/{location_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:location:write"))],
 )
 def gis_location_delete(location_id: str, db: Session = Depends(get_db)):
     web_gis_service.delete_location(db, location_id=location_id)
@@ -255,7 +255,7 @@ def gis_location_delete(location_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/areas/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:area:write"))],
 )
 def gis_area_new(request: Request, db: Session = Depends(get_db)):
     ctx = _gis_context(
@@ -272,7 +272,7 @@ def gis_area_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/areas/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:area:write"))],
 )
 def gis_area_create(
     request: Request,
@@ -309,7 +309,7 @@ def gis_area_create(
 @router.get(
     "/areas/{area_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:area:write"))],
 )
 def gis_area_edit(request: Request, area_id: str, db: Session = Depends(get_db)):
     area = web_gis_service.get_area(db, area_id=area_id)
@@ -327,7 +327,7 @@ def gis_area_edit(request: Request, area_id: str, db: Session = Depends(get_db))
 @router.post(
     "/areas/{area_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:area:write"))],
 )
 def gis_area_update(
     request: Request,
@@ -367,7 +367,7 @@ def gis_area_update(
 @router.post(
     "/areas/{area_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:area:write"))],
 )
 def gis_area_delete(area_id: str, db: Session = Depends(get_db)):
     web_gis_service.delete_area(db, area_id=area_id)
@@ -380,7 +380,7 @@ def gis_area_delete(area_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/layers/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:layer:write"))],
 )
 def gis_layer_new(request: Request, db: Session = Depends(get_db)):
     ctx = _gis_context(
@@ -397,7 +397,7 @@ def gis_layer_new(request: Request, db: Session = Depends(get_db)):
 @router.post(
     "/layers/new",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:layer:write"))],
 )
 def gis_layer_create(
     request: Request,
@@ -438,7 +438,7 @@ def gis_layer_create(
 @router.get(
     "/layers/{layer_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:layer:write"))],
 )
 def gis_layer_edit(request: Request, layer_id: str, db: Session = Depends(get_db)):
     layer = web_gis_service.get_layer(db, layer_id=layer_id)
@@ -456,7 +456,7 @@ def gis_layer_edit(request: Request, layer_id: str, db: Session = Depends(get_db
 @router.post(
     "/layers/{layer_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:layer:write"))],
 )
 def gis_layer_update(
     request: Request,
@@ -500,7 +500,7 @@ def gis_layer_update(
 @router.post(
     "/layers/{layer_id}/delete",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("gis:map:edit"))],
+    dependencies=[Depends(require_permission("gis:layer:write"))],
 )
 def gis_layer_delete(layer_id: str, db: Session = Depends(get_db)):
     web_gis_service.delete_layer(db, layer_id=layer_id)

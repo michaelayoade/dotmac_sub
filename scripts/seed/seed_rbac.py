@@ -260,7 +260,10 @@ DEFAULT_PERMISSIONS = [
     ("finance:ap:write", "Manage accounts-payable resources"),
     # GIS / Mapping
     ("gis:map:view", "View maps and layers"),
-    ("gis:map:edit", "Edit map features (markers, polygons)"),
+    ("gis:location:write", "Create, edit, and delete map location markers"),
+    ("gis:area:write", "Create, edit, and delete map coverage areas"),
+    ("gis:layer:write", "Create, edit, and delete map layers"),
+    ("gis:location_request:review", "Approve or reject customer location-change requests"),
     ("gis:map:configure", "Configure map settings and layers"),
     ("gis:coverage:read", "View coverage areas"),
     ("gis:coverage:write", "Manage coverage areas"),
