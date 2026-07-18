@@ -19,8 +19,8 @@ def _load_migration():
 def test_payment_prepaid_application_revision_is_linear_and_structural():
     migration = _load_migration()
 
-    assert migration.revision == "357_payment_prepaid_applications"
-    assert migration.down_revision == "356_party_first_referral_capture"
+    assert migration.revision == "359_payment_prepaid_applications"
+    assert migration.down_revision == "358_paystack_allocation_exceptions"
     source = Path(migration.__file__).read_text(encoding="utf-8")
     assert "payment_prepaid_applications" in source
     assert "payment_settlements.id" in source

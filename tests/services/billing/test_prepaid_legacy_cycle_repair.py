@@ -69,6 +69,7 @@ def _repair_evidence(db, subscriber) -> dict[str, object]:
         status=SubscriptionStatus.active,
         billing_mode=BillingMode.prepaid,
         billing_cycle=BillingCycle.monthly,
+        unit_price=Decimal("100.00"),
         next_billing_at=datetime(2026, 7, 10, tzinfo=UTC),
     )
     db.add(subscription)
