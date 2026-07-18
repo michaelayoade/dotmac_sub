@@ -1,4 +1,4 @@
-"""Expense-claim flow for the sub → DotMac ERP outbox (ERP re-home, PR 2).
+"""Expense-claim flow for the Sub → DotMac ERP outbox.
 
 This is the first real money flow to move onto sub's ``field_erp_sync_events``
 outbox. It ports ``dotmac_crm/app/services/dotmac_erp/expense_request_sync.py``
@@ -83,7 +83,7 @@ def build_expense_claim_payload(request: FieldExpenseRequest) -> dict:
     Mirrors CRM's ``_map_expense_request``: ``omni_id`` is sub's request UUID,
     amounts stringified, dates ISO-formatted, and each line carries
     ``category_code`` / ``claimed_amount`` / ``expense_date``. Fidelity notes vs
-    CRM are in the PR description — chiefly that ticket/project ids come from the
+    CRM are documented in the ERP ownership contract — chiefly that ticket/project ids come from the
     work-order mirror and ``reference_number`` from ``crm_expense_request_id``
     (sub has no native expense number).
     """

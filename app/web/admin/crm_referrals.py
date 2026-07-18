@@ -1,4 +1,4 @@
-"""Admin web pages for the referral program (Phase 3 §2.6).
+"""Admin web pages for the native referral program.
 
 Ported from CRM ``app/web/admin/crm_referrals.py`` + templates and restyled
 to sub conventions (thin routes over ``web_referrals`` context builders, the

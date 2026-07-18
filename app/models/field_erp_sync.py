@@ -1,4 +1,4 @@
-"""Native sub → DotMac ERP delivery substrate (ERP re-home, PR 1).
+"""Native Sub → DotMac ERP delivery substrate.
 
 Two tables:
 

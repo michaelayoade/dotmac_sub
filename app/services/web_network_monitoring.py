@@ -74,7 +74,7 @@ def monitoring_page_data(
     data["ont_olt_link_summary"] = get_onu_olt_status_summary(db)
     data["pon_outages"] = get_pon_outage_summary(db)
 
-    # ONT status trend chart (Phase 4 — 24h time-series)
+    # ONT status trend chart (24-hour time series)
     data["ont_service_trend"] = _get_onu_status_trend(db, hours=24)
 
     # ONU authorization trend (Phase 6D — new registrations per day, 30 days)

@@ -419,12 +419,10 @@ class WorkOrderHeaders(ListResponseMixin):
             raise HTTPException(status_code=409, detail="Work order id already exists")
         metadata = dict(data.pop("metadata_", None) or {})
         metadata["native_source"] = "sub"
-        # Compat window (WORK_ORDER_IDENTITY_SOT slice 1): field lookups and
-        # evidence rows still key on crm_work_order_id, so native rows
-        # dual-write it equal to public_id until slice 4 moves them to the FK.
+        # Native rows have NO CRM upstream: crm_work_order_id stays NULL, which
+        # is exactly what is_sub_authoritative uses as the native marker.
         row = WorkOrder(
             public_id=public_id,
-            crm_work_order_id=public_id,
             metadata_=metadata,
             work_order_created_at=data.get("work_order_created_at"),
             **data,
@@ -492,7 +490,9 @@ class AssignmentQueue(ListResponseMixin):
         work_order = _resolve_work_order(db, payload)
         data = _data(payload)
         data["work_order_mirror_id"] = work_order.id
-        data["crm_work_order_id"] = work_order.public_id
+        # ``crm_work_order_id`` remains an input compatibility name for field
+        # clients, but the child row stores only the authoritative native FK.
+        data.pop("crm_work_order_id", None)
         _ensure_rule(db, data.get("dispatch_rule_id"))
         if data.get("assigned_technician_id") is not None:
             _ensure_technician(db, data["assigned_technician_id"])

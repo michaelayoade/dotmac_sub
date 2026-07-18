@@ -7,16 +7,16 @@ for the quote, paid via ``create_invoice_payment_intent`` +
 ``verify_and_record_payment``, and on settlement the quote is accepted — which
 records the deposit and triggers the sales order + install project.
 
-Phase 3 (§2.2 step 4): the accept tail runs behind the
+The native quote-acceptance cutover runs behind the
 ``quotes_native_write_enabled`` flag (projects domain, default OFF):
 
 * OFF — write-through to the CRM (``quotes_mirror.accept_quote``), unchanged.
 * ON  — native accept (``sales.selfserve.accept_with_deposit``): the quote is
   accepted in sub's own ``quotes`` table, firing the native sales-order
   pipeline. The mirror row is upserted from the native payload afterwards so
-  mirror-based reads (``/me/quotes``, web portal — repointed in PR 8) and
+  mirror-based reads (``/me/quotes`` and the web portal) and
   ``initiate_deposit``'s dedup check stay coherent during the transition
-  window; that write-back dies with the mirror at the Phase 3 contract.
+  window; that write-back retires with the mirror after native-read verification.
 
 Billing-safety invariant (risk #2): on either path the sole ledger event per
 deposit is ``verify_and_record_payment`` on the deposit invoice; the accept
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 def _native_write_enabled(db: Session) -> bool:
-    """Phase 3 flip flag: native quote writes vs CRM write-through
+    """Select native quote writes or CRM write-through
     (delegates to the canonical helper next to its read twin)."""
     return selfserve.native_write_enabled(db)
 
@@ -319,7 +319,7 @@ def _sync_mirror_after_native_accept(
 ) -> None:
     """Transitional: reflect the native accept into the quote mirror so
     mirror-based reads and ``initiate_deposit``'s already-paid check stay
-    coherent until the PR 8 read flip / Phase 3 contract. Best-effort."""
+    coherent until native reads are verified and the mirror retires. Best-effort."""
     try:
         sub_uuid = coerce_uuid(str(subscriber_id))
         quotes_mirror._upsert_row(db, subscriber_id=sub_uuid, item=payload)

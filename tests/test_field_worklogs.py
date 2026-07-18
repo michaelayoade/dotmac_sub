@@ -103,7 +103,7 @@ def test_submit_worklog_and_surface_in_job_detail(db_session):
     assert result[0]["duplicate"] is False
     assert result[0]["worklog"]["minutes"] == 90
     stored = db_session.query(FieldWorkLog).one()
-    assert stored.crm_work_order_id == "wo-log-detail"
+    assert stored.work_order_mirror.public_id == "wo-log-detail"
 
     detail = field_jobs.get_detail(db_session, _auth(user), "wo-log-detail")
     assert len(detail.worklogs) == 1

@@ -78,7 +78,7 @@ class SubscriberStatus(enum.Enum):
 class PartyStatus(enum.Enum):
     """Lifecycle status for the unified party model (CRM ``people.party_status``).
 
-    Ported in Phase 3 (doc 02 §2, phase 3 §1.9): keeps prospects created by the
+    Keeps prospects created by the party-identity backfill
     party backfill (leads/quotes/referrals persons with no account) out of
     billing/RADIUS sweeps. Stored as String(20) + app enum per sub convention.
     """
@@ -340,8 +340,8 @@ class Subscriber(Base):
     # splynx_customer_id -> CRM external_id resolution chain for subscribers
     # that have it; backfilled from CRM, persisted lazily on first resolve.
     crm_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    # Party lifecycle status ported from CRM people.party_status (Phase 3
-    # §1.9). PartyStatus values; NULL means the row predates the party
+    # Party lifecycle status ported from CRM people.party_status.
+    # PartyStatus values; NULL means the row predates the party
     # backfill and is treated as an ordinary subscriber.
     party_status: Mapped[str | None] = mapped_column(String(20))
     # B2B organization link (ported CRM party model, doc 02 §3.3). Replaces
@@ -350,7 +350,7 @@ class Subscriber(Base):
         UUID(as_uuid=True), ForeignKey("organizations.id"), index=True
     )
     # CRM-owned account-matrix field (doc 02 §2): the sales order that created
-    # this account. Real FK since the Phase 3 expand-B migration landed the
+    # this account. Real FK since the native sales migration landed the
     # sales_orders table; backfilled from CRM via link key 2 (§1.5).
     sales_order_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("sales_orders.id"), index=True

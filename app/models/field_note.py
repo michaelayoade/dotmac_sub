@@ -10,7 +10,7 @@ from app.db import Base
 
 
 class FieldWorkOrderNote(Base):
-    """Native field note attached to a CRM-synced work-order mirror."""
+    """Native field note attached to an authoritative work order by FK."""
 
     __tablename__ = "field_work_order_notes"
     __table_args__ = (
@@ -19,7 +19,6 @@ class FieldWorkOrderNote(Base):
             "work_order_mirror_id",
             "created_at",
         ),
-        Index("ix_field_work_order_notes_crm_work_order_id", "crm_work_order_id"),
         Index("ix_field_work_order_notes_author_technician", "author_technician_id"),
     )
 
@@ -31,7 +30,6 @@ class FieldWorkOrderNote(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     author_technician_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
     )
@@ -45,7 +43,7 @@ class FieldWorkOrderNote(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_internal: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     attachments: Mapped[list | None] = mapped_column(JSON)
-    # Provenance for imported notes (Phase 2 backfill): CRM-origin notes carry
+    # Provenance for imported notes: CRM-origin notes carry
     # {"source": "crm", "crm_note_id": ..., ...} — crm_note_id doubles as the
     # importer's dedupe marker. Native notes leave this NULL.
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)

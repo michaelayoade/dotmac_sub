@@ -1,13 +1,12 @@
-"""Leads / pipeline / quotes API — CRM port (Phase 3 §2.4).
+"""Native leads, pipeline, and quotes API ported from CRM.
 
 Ported from ``dotmac_crm/app/api/crm/sales.py`` (same paths, mounted under
 ``/api/v1``). Permission tightening per §2.4: the CRM gated leads on
 ``crm:lead:{read,write}`` but left pipelines and quotes auth-only —
 during the port quotes gain ``crm:quote:{read,write}`` and pipelines ride
 ``crm:lead:*`` (they are lead-vertical infrastructure; §2.4 introduces no
-dedicated pipeline key). RBAC seeding of the new keys lands with the
-referrals-admin PR of the Phase 3 series (§6 PR 12); until then the keys
-resolve for admins only.
+dedicated pipeline key). The native sales RBAC contract owns seeding these
+keys; until they exist, the permissions resolve for admins only.
 """
 
 from fastapi import APIRouter, Depends, Query, status

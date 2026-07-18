@@ -106,7 +106,6 @@ def test_create_field_note_and_surface_in_job_detail(db_session):
     assert note["is_internal"] is False
     stored = db_session.query(FieldWorkOrderNote).one()
     assert stored.work_order_mirror_id == work_order.id
-    assert stored.crm_work_order_id == "wo-note-detail"
 
     detail = field_jobs.get_detail(db_session, _auth(user), "wo-note-detail")
     assert len(detail.notes) == 1

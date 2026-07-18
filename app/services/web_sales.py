@@ -1,6 +1,6 @@
 """Web helpers for the admin sales routes (leads, pipelines, quotes, orders).
 
-Phase 3 §2.6 admin-web port (PR 11 of the series): the context builders behind
+Native admin-sales port: the context builders behind
 ``app/web/admin/sales.py``, adapted from the CRM's
 ``services/crm/web_{leads,sales,quotes}.py`` and the sales-order slices of
 ``web/admin/operations.py`` onto sub's context-builder idiom
@@ -12,9 +12,9 @@ CRM → sub adaptations:
 
 * ``person_id`` contacts become ``subscriber_id`` subscribers (§1.3–§1.5);
   contact labels resolve from the batched subscriber map.
-* Status columns are plain strings in sub (Phase 1 String-not-enum rule), so
+* Status columns are plain strings in Sub, so
   no ``.value`` handling anywhere.
-* CRM agents (Phase 4) are not ported — owner columns render as raw UUID
+* CRM agents are not native — owner columns render as raw UUID
   short-codes until the agent model lands.
 * List totals come from count queries instead of the CRM's
   ``limit=10000`` re-list trick.

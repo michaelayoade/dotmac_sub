@@ -20,7 +20,6 @@ class FieldAttachment(Base):
             "work_order_mirror_id",
             "created_at",
         ),
-        Index("ix_field_attachments_crm_work_order_id", "crm_work_order_id"),
         Index("ix_field_attachments_note_id", "note_id"),
         Index("ix_field_attachments_client_ref", "client_ref", unique=True),
         Index("ix_field_attachments_asset", "asset_type", "asset_id"),
@@ -34,7 +33,6 @@ class FieldAttachment(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     note_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("field_work_order_notes.id", ondelete="SET NULL")
     )

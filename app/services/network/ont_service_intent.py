@@ -42,7 +42,7 @@ def _plan_section(ont_plan: dict[str, Any], step: str) -> dict[str, Any]:
 def _active_wan_service_instances(
     ont: object, db: Session | None = None
 ) -> list[object]:
-    """Get active WAN service instances for an ONT (Phase 2+3 architecture)."""
+    """Get active WAN service instances from the native service-intent model."""
     ont_id = getattr(ont, "id", None)
     if db is not None and ont_id:
         from app.models.network import OntWanServiceInstance
@@ -355,7 +355,7 @@ def build_service_intent(
             1 for row in rows if isinstance(row, dict) and row.get("value") == "Not set"
         )
 
-    # Include WAN service instances if available (Phase 2+3 architecture)
+    # Include native WAN service instances when available.
     formatted_instances = _format_wan_service_instances(wan_service_instances)
 
     return {

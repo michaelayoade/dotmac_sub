@@ -221,7 +221,8 @@ def test_native_work_order_header_create_update_and_queue(db_session):
         ),
     )
 
-    assert work_order.crm_work_order_id == "sub-wo-service-1"
+    assert work_order.public_id == "sub-wo-service-1"
+    assert work_order.crm_work_order_id is None
     assert work_order.metadata_["native_source"] == "sub"
     assert work_order.metadata_["source_ref"] == "manual"
     assert work_order.required_skills == ["fiber"]

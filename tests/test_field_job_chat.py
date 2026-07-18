@@ -88,7 +88,7 @@ def test_chat_thread_send_and_ordering(db_session):
     user = _user(db_session)
     _profile(db_session, user)
     subscriber = _subscriber(db_session)
-    _work_order(db_session, subscriber, crm_work_order_id="wo-chat-flow")
+    work_order = _work_order(db_session, subscriber, crm_work_order_id="wo-chat-flow")
     db_session.commit()
 
     thread = field_job_chat.get_thread(db_session, _auth(user), "wo-chat-flow")
@@ -115,7 +115,7 @@ def test_chat_thread_send_and_ordering(db_session):
     assert thread["conversation_id"] is not None
     stored = (
         db_session.query(FieldJobChatMessage)
-        .filter(FieldJobChatMessage.crm_work_order_id == "wo-chat-flow")
+        .filter(FieldJobChatMessage.work_order_mirror_id == work_order.id)
         .count()
     )
     assert stored == 2

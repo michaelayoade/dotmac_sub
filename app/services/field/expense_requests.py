@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def serialize_expense_request(request: FieldExpenseRequest) -> dict:
     return {
         "id": request.id,
-        "crm_work_order_id": request.crm_work_order_id,
+        "crm_work_order_id": request.work_order_mirror.public_id,
         "crm_expense_request_id": request.crm_expense_request_id,
         "requested_by_person_id": request.requested_by_person_id,
         "requested_by_system_user_id": request.requested_by_system_user_id,
@@ -141,7 +141,6 @@ class FieldExpenseRequests:
         planned_items = _validate_items(db, row, items)
         request = FieldExpenseRequest(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.public_id,
             requested_by_technician_id=profile.id,
             requested_by_person_id=profile.person_id,
             requested_by_system_user_id=profile.system_user_id,

@@ -2,7 +2,8 @@
 
 Mirrors ``app.tasks.ip_utilization``: one task snapshots yesterday's
 availability per element, a sibling prunes beyond the retention window. Wire
-both into Celery beat. See INFRASTRUCTURE_SLA_PERFORMANCE.md Phase 2.
+both into Celery beat. See the snapshot-retention contract in
+``INFRASTRUCTURE_SLA_PERFORMANCE.md``.
 """
 
 import logging

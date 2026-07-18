@@ -1,8 +1,9 @@
-"""Availability → uptime-alert bridge (Infrastructure SLA, Phase 0/R1).
+"""Availability → uptime-alert bridge for infrastructure SLA reporting.
 
 The SLA/uptime report (`network_monitoring.uptime_report`) derives downtime
 intervals solely from `Alert` rows with `metric_type=uptime`. In production
-nothing else creates those (see INFRASTRUCTURE_SLA_PERFORMANCE.md Phase 0).
+nothing else creates those; see the availability-log contract in
+``INFRASTRUCTURE_SLA_PERFORMANCE.md``.
 Without a bridge every uptime % reads 100%.
 
 This module is that bridge. The live-status warmer already detects device

@@ -1,4 +1,4 @@
-"""Admin projects web routes (Phase 3 PR 10 — CRM projects admin port).
+"""Native admin project routes ported from CRM.
 
 Thin routes over ``app.services.web_projects`` context builders, following
 the ``support_tickets``/``dispatch_work_orders`` house idiom. Static paths
@@ -762,7 +762,7 @@ def project_detail(request: Request, project_ref: str, db: Session = Depends(get
         db, project_ref
     )
     if should_redirect:
-        # Canonical number URL; PR 6 email deep links arrive with the UUID.
+        # Canonical number URL; legacy email deep links arrive with the UUID.
         return RedirectResponse(
             url=f"/admin/projects/{project.number}", status_code=302
         )

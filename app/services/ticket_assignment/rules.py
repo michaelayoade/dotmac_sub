@@ -1,6 +1,6 @@
 """Rule loading and matching for ticket/project auto-assignment.
 
-Projects joined in Phase 3 (§2.1): rules gain an optional ``project_types``
+Native projects extend rules with an optional ``project_types``
 match key and contexts carry ``entity_type ∈ {ticket, project}``.
 """
 

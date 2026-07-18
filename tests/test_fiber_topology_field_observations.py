@@ -184,7 +184,6 @@ def _attachment(
     db_session.flush()
     attachment = FieldAttachment(
         work_order_mirror_id=work_order.id,
-        crm_work_order_id=work_order.public_id,
         stored_file_id=stored.id,
         kind="photo",
         file_name="fiber-evidence.jpg",

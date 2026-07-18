@@ -1,4 +1,4 @@
-"""Phase 2 work-order drift checker: status classification + native tolerance."""
+"""Work-order drift checker: status classification and native precedence."""
 
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ def test_terminal_vocabulary_matches_mirror_semantics():
     assert is_open_status("CANCELED") is False
 
 
-def test_native_rows_recognized_by_sub_prefix():
-    assert is_native_row("sub-3f2a") is True
+def test_native_rows_recognized_by_absent_crm_provenance():
+    assert is_native_row(None) is True
+    assert is_native_row("sub-3f2a") is False
     assert is_native_row("7e6a2f0c-0000-0000-0000-000000000000") is False
-    assert is_native_row(None) is False
 
 
 def test_classify_status_ok_when_equal():

@@ -292,7 +292,7 @@ def _status_from_radacct(row: dict[str, object]) -> AccountingStatus:
 # Building a fresh client (and its connection pool) each call leaked sockets
 # for the life of the prefork child — the second leak behind the 2026-06-10
 # ingestion worker OOM loop. The leak was dormant until the open-session
-# refresh pass (PR #142) made interim re-reads routine.
+# refresh pass made interim re-reads routine.
 _BANDWIDTH_REDIS: tuple[str, object] | None = None
 
 

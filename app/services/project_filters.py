@@ -1,7 +1,7 @@
 """Whitelisted dynamic-filter specs for projects and project tasks.
 
-Backs the `filters` JSON param on GET /projects and GET /project-tasks
-(Phase 3 §2.1 — the CRM API exposed the same param via its filter engine).
+Backs the `filters` JSON param on GET /projects and GET /project-tasks. The
+CRM API exposed the same contract through its filter engine.
 Reuses the shared `dynamic_filters` engine, mirroring
 `support_ticket_filters.py`: AND rows plus OR groups, strict field/operator
 whitelisting — never raw column injection.
@@ -292,7 +292,7 @@ def build_project_task_filter_clause(
     )
 
 
-# ── Filter-schema serializers (admin filter-builder UI; deferred from PR 6) ──
+# ── Filter-schema serializers for the admin filter-builder UI ────────────────
 
 PROJECT_FILTER_LABELS: dict[str, str] = {
     "name": "Name",

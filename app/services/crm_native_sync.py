@@ -1,17 +1,17 @@
-"""Phase 3 sync-window adapter: CRM webhook events → NATIVE table deltas.
+"""CRM-to-native project and sales sync-window adapter.
 
-Transitional glue for the coexistence window (20-phase3-projects-sales.md
-§4.2 step 4, PR 9): the backfill is done and CRM is still the writer for
-projects / quotes / referrals, so sub's native tables must track CRM changes
-the same way the mirrors do — the flip-day delta stays minutes. The whole
-module is deleted at the Phase 3 contract (PR 15) together with the mirrors.
+During the projects-and-sales coexistence window, the backfill is complete
+while CRM remains the writer for projects, quotes, and referrals. Sub's native
+tables must therefore track CRM changes the same way the compatibility mirrors
+do, keeping the cutover delta within minutes. The whole module retires with the
+mirrors after native ownership is verified.
 
-Split of responsibilities (webhook vs beat):
+Ownership boundary (webhook vs scheduled reconciliation):
 
-* This module (webhook path) applies only the THIN delta the CRM webhook
+* This module (webhook path) applies only the narrow delta the CRM webhook
   payload actually carries — status + the timestamps the mirror parsers
   already trust — onto an EXISTING native row. CRM UUIDs are sub PKs for
-  every Phase 3 table (§3.4), so the row lookup is a PK get.
+  every native project and sales table, so the row lookup is a PK get.
 * Everything else (new rows, line items, tasks, totals, …) needs the full
   CRM shape, which the portal API does not serve. That is the beat task
   ``app.tasks.crm_native_sync.pull_crm_phase3_native_delta`` — the backfill
@@ -20,7 +20,7 @@ Split of responsibilities (webhook vs beat):
 
 Gated by ``crm_phase3_native_sync_enabled`` (projects domain, default OFF).
 Called from the ``crm_webhooks`` branches IN ADDITION to the mirror apply —
-mirrors keep syncing through the window per §4.2 (cheap read-flip rollback).
+mirrors keep syncing through the window to preserve cheap read-cutover rollback.
 Best-effort by design: a failure here must never turn a webhook the mirror
 already applied into a CRM retry, so ``apply_webhook_delta`` never raises.
 """
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_enabled(db: Session) -> bool:
-    """Phase 3 sync-window flag: adapt CRM events into native rows."""
+    """Return whether CRM compatibility events should update native rows."""
     return control_registry.is_enabled(db, "crm.phase3_native_sync")
 
 

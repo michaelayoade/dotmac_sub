@@ -5,12 +5,12 @@ helpers aggregate the per-subscriber quotes / projects / work orders across the
 reseller's whole customer set, tagging each row with its account so the
 reseller can see "which customer".
 
-Phase 3 (§4.2): the quote and project reads run behind the per-vertical
+During native ownership cutover, quote and project reads run behind the per-vertical
 ``{quotes,projects}_native_read_enabled`` read-flip flags — OFF (default)
 serves the local CRM mirrors (the reconcile task keeps them fresh, so a
 reseller dashboard never fans out N CRM calls and works during a CRM outage),
 ON serves sub's native tables. Response shells and item shapes are identical
-(§2.5). Work orders stay mirror-only until the Phase 2 flip.
+contract. Work orders stay mirror-only until native work-order authority is enabled.
 """
 
 from __future__ import annotations

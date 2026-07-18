@@ -1,4 +1,4 @@
-"""Cross-vertical work-lifecycle links ported from the CRM (Phase 3 §1.1).
+"""Cross-vertical work-lifecycle links ported from CRM into native ownership.
 
 CRM shape (``dotmac_crm/app/models/work_lifecycle.py`` WorkLink) carried
 verbatim with the sub conventions applied:
@@ -6,15 +6,15 @@ verbatim with the sub conventions applied:
 * PG enums (``WorkEntityType``/``WorkLinkType``) become String columns +
   app-level enums.
 * ``created_by_person_id`` is a staff person FK in CRM — FK dropped, UUID
-  carried verbatim (§1.8); display via the Phase 1 staff map.
+  carried verbatim; display via the CRM-to-Sub staff identity map.
 * Rows whose source/target types ∈ {project, project_task, lead,
-  sales_order} migrate in the Phase 3 backfill; ``work_order``-typed rows
-  stay in CRM until the Phase 2 work-order flip (§1.1, §3.5 step 7). The
+  sales_order} migrate in the native project/sales backfill; ``work_order``-typed rows
+  stay in CRM until native work-order authority is enabled. The
   source/target ids are intentionally FK-less polymorphic UUIDs, exactly as
   in CRM.
 
 Only ``work_links`` ports — CRM ``work_outcomes`` stays behind (it keys on
-``work_orders``, Phase 2 territory).
+``work_orders`` and therefore remains owned by the work-order migration).
 """
 
 import enum

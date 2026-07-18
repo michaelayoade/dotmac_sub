@@ -1,8 +1,9 @@
 """Job-scoped technician chat over the native field chat store.
 
-CRM's field chat rides its inbox/conversation engine (Phase 4); sub has no
-such stack, so messages persist in ``field_job_chat_messages`` keyed directly
-to the work-order mirror. Technicians can only read/send for jobs in their
+CRM's field chat uses its inbox/conversation engine. Sub field operations do
+not depend on that transport, so messages persist in
+``field_job_chat_messages`` keyed directly to the native work order.
+Technicians can only read/send for jobs in their
 assignment scope, and sending is limited to active job states.
 """
 
@@ -119,7 +120,6 @@ class FieldJobChat:
         user = _system_user(db, profile)
         message = FieldJobChatMessage(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.public_id,
             direction="staff",
             body=text,
             author_technician_id=profile.id,

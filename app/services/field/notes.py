@@ -77,7 +77,6 @@ class FieldNotes:
         user = _system_user(db, profile)
         note = FieldWorkOrderNote(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.public_id,
             author_technician_id=profile.id,
             author_person_id=profile.person_id,
             author_system_user_id=profile.system_user_id,

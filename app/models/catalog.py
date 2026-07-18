@@ -165,7 +165,7 @@ class AccessState(enum.Enum):
     a string column rather than a PG enum so future states (e.g.
     ``throttled``, ``trial_expired``) can be added by code change alone.
 
-    Maps to RADIUS groups (phase 1 of the refactor):
+    Maps to RADIUS groups during the access-profile migration:
       active     → dotmac-active     (normal customer)
       suspended  → dotmac-suspended  (hard block, Auth-Type := Reject)
       captive    → dotmac-captive    (soft block, captive portal)
@@ -799,7 +799,7 @@ class Subscription(Base):
         Enum(SubscriptionStatus), default=SubscriptionStatus.pending
     )
     # access_state is the RADIUS-facing state, derived from `status` +
-    # canonical persisted access restriction. Nullable until phase 5 backfill.
+    # canonical persisted access restriction. Nullable until its backfill completes.
     # See docs/radius_state_refactor/phase0_state_model.md.
     access_state: Mapped[str | None] = mapped_column(String(20))
     billing_mode: Mapped[BillingMode] = mapped_column(

@@ -106,7 +106,7 @@ def _strict_olt_write_context(
 
 
 def _set_sync_meta(ont: OntUnit, source: str) -> None:
-    """Update sync tracking fields on OntUnit (Phase 8 columns)."""
+    """Update sync-tracking fields on ``OntUnit``."""
     if hasattr(ont, "last_sync_source"):
         ont.last_sync_source = source  # type: ignore[assignment]
     if hasattr(ont, "last_sync_at"):

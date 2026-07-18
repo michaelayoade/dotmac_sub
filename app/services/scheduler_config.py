@@ -2021,7 +2021,7 @@ def build_beat_schedule() -> dict:
         )
         # Work-order/field-service mirror reconcile — backstop for missed
         # work_order.* webhook deliveries. Gated by the crm.work_order_pull
-        # kill switch (Phase 2 flip lever, ticket-pattern #1111): off means sub
+        # Native work-order authority kill switch: off means Sub
         # is the work-order system-of-record and the CRM is no longer polled.
         work_order_pull_enabled = _effective_bool(
             session,
@@ -2552,13 +2552,13 @@ def build_beat_schedule() -> dict:
                 "kwargs": {"full": True},
             }
 
-        # Phase 3 sync window (§4.2 step 4, PR 9): while CRM is still the
+        # CRM-to-native sync window: while CRM is still the
         # writer for projects/quotes/referrals, pull CRM deltas into the
         # NATIVE tables by running the backfill importer's watermark mode in
         # process (webhooks cover status freshness; this covers full shapes).
         # Gated by the same crm_phase3_native_sync_enabled flag as the
-        # webhook adapter — default OFF; the whole entry dies at the Phase 3
-        # contract (PR 15). Follows the crm.ticket_pull precedent.
+        # webhook adapter. Default OFF; retire the entry with the compatibility
+        # adapter after native ownership is verified.
         crm_phase3_native_sync_enabled = control_registry.is_enabled(
             session, "crm.phase3_native_sync"
         )
@@ -2604,7 +2604,7 @@ def build_beat_schedule() -> dict:
             interval_seconds=dotmac_erp_outbox_interval,
         )
 
-        # Expense-claim status reconcile (ERP re-home, PR 2). Polls ERP for
+        # Expense-claim status reconciliation. Polls ERP for
         # in-flight claims and refreshes erp_claim_status on the source row.
         # Same master gate (dotmac_erp_sync_enabled, default OFF) → inert until
         # cutover; read-only against ERP, so re-running is always safe.
@@ -2623,7 +2623,7 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(dotmac_erp_expense_refresh_interval, 120),
         )
 
-        # Material-request status reconcile (ERP re-home, PR 3). Polls ERP for
+        # Material-request status reconciliation. Polls ERP for
         # in-flight ISSUE requests and refreshes erp_material_status on the source
         # row (flipping to fulfilled when ERP reports it). Same master gate
         # (dotmac_erp_sync_enabled, default OFF) → inert until cutover; read-only
@@ -2721,6 +2721,22 @@ def build_beat_schedule() -> dict:
             enabled=channel_health_enabled,
             interval_seconds=channel_health_interval_seconds,
         )
+
+        # Weekly NCC complaints digest — default OFF. Monday 08:00 in the
+        # configured celery timezone (Africa/Lagos in prod). The service
+        # short-circuits when disabled or already sent today, so a missed
+        # beat self-heals on the next fire without double-sending.
+        ncc_report_email_enabled = _resolve_bool(
+            session,
+            SettingDomain.notification,
+            "ncc_report_email_enabled",
+            False,
+        )
+        if ncc_report_email_enabled:
+            schedule["ncc_report_email"] = {
+                "task": "app.tasks.reports.send_scheduled_ncc_report",
+                "schedule": crontab(hour=8, minute=0, day_of_week="mon"),
+            }
 
         tasks = (
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()

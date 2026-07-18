@@ -1,4 +1,4 @@
-"""Scheduled LLDP neighbor poll -> directed NetworkTopologyLink (Phase 2, P2.5).
+"""Scheduled LLDP neighbor poll → directed ``NetworkTopologyLink`` records.
 
 Reads each MikroTik NAS's /ip/neighbor and reconciles the device-level directed
 graph. Routed to the ``ingestion`` queue. Read-only against routers; commits the

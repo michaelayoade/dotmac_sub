@@ -1,4 +1,4 @@
-"""Sales vertical services (Phase 3).
+"""Native sales vertical services.
 
 * ``service`` — leads, pipelines, quotes port (§2.1).
 * ``selfserve`` — the self-serve quote extraction: feasibility (native FAP),

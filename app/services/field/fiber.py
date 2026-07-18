@@ -210,7 +210,6 @@ def record_test(
 
     result = FieldFiberTestResult(
         work_order_mirror_id=row.id,
-        crm_work_order_id=row.public_id,
         asset_type=normalized_type,
         asset_id=asset_uuid,
         test_type=test_type,

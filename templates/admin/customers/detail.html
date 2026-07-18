@@ -1061,6 +1061,19 @@
                                 class="mt-2 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
                             Save coordinates
                         </button>
+                        {% if location_capture_enabled %}
+                        <button type="button"
+                                id="customer-location-confirm-btn"
+                                data-latitude-input="customer-map-latitude"
+                                data-longitude-input="customer-map-longitude"
+                                data-claimed-state="{{ customer.region or '' }}"
+                                data-claimed-lga="{{ customer.lga or '' }}"
+                                data-claimed-postcode="{{ customer.postal_code or '' }}"
+                                class="mt-2 ml-2 inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
+                            Confirm for NCC ledger
+                        </button>
+                        <p id="customer-location-confirm-status" class="mt-2 text-xs text-slate-500 dark:text-slate-400"></p>
+                        {% endif %}
                     </div>
                     <div class="px-5 pb-4 pt-2 text-xs text-slate-500 dark:text-slate-400">
                         <div id="customer-map-nearby-assets"></div>
@@ -1107,6 +1120,19 @@
                                 class="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700/50 dark:bg-emerald-900/20 dark:text-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
                             Save coordinates
                         </button>
+                        {% if location_capture_enabled %}
+                        <button type="button"
+                                id="customer-location-confirm-btn"
+                                data-latitude-input="customer-latitude"
+                                data-longitude-input="customer-longitude"
+                                data-claimed-state="{{ customer.region or '' }}"
+                                data-claimed-lga="{{ customer.lga or '' }}"
+                                data-claimed-postcode="{{ customer.postal_code or '' }}"
+                                class="ml-2 inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
+                            Confirm for NCC ledger
+                        </button>
+                        <p id="customer-location-confirm-status" class="text-xs text-slate-500 dark:text-slate-400"></p>
+                        {% endif %}
                     </div>
                     {% else %}
                     <div class="px-5 py-8 text-center">
@@ -3326,6 +3352,60 @@ function customerDetail(config = {}) {
             }
         });
     }
+})();
+</script>
+{% endif %}
+
+{% if location_capture_enabled %}
+<script>
+(function() {
+    const button = document.getElementById('customer-location-confirm-btn');
+    const statusEl = document.getElementById('customer-location-confirm-status');
+    if (!button || !statusEl) return;
+
+    function getCookie(name) {
+        const match = document.cookie.match(new RegExp('(^|;\\s*)' + name + '=([^;]*)'));
+        return match ? decodeURIComponent(match[2]) : '';
+    }
+
+    button.addEventListener('click', async () => {
+        const latitudeInput = document.getElementById(button.dataset.latitudeInput);
+        const longitudeInput = document.getElementById(button.dataset.longitudeInput);
+        const latitude = Number(latitudeInput?.value);
+        const longitude = Number(longitudeInput?.value);
+        if (!latitudeInput || !longitudeInput || Number.isNaN(latitude) || Number.isNaN(longitude)) {
+            statusEl.textContent = 'Enter valid latitude and longitude values first.';
+            return;
+        }
+        button.disabled = true;
+        statusEl.textContent = 'Reconciling the confirmed location…';
+        try {
+            const response = await fetch('/admin/customers/profile/{{ customer.id }}/confirm-location', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': getCookie('csrf_token')
+                },
+                body: JSON.stringify({
+                    latitude,
+                    longitude,
+                    claimed_state: button.dataset.claimedState || null,
+                    claimed_lga: button.dataset.claimedLga || null,
+                    claimed_postcode: button.dataset.claimedPostcode || null
+                })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.detail || 'Location confirmation failed');
+            const captured = result.captured || [];
+            statusEl.textContent = captured.length
+                ? `Verified: ${captured.join(', ')}.`
+                : 'No field was auto-verified; the reconciliation needs review.';
+        } catch (error) {
+            statusEl.textContent = error.message || 'Location confirmation failed.';
+        } finally {
+            button.disabled = false;
+        }
+    });
 })();
 </script>
 {% endif %}

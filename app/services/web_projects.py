@@ -1,4 +1,4 @@
-"""Web helpers for admin projects routes (Phase 3 PR 10).
+"""Web helpers for native admin project routes.
 
 Context builders + form handlers for the admin projects UI, ported from CRM's
 ``app/web/admin/projects.py`` onto sub's conventions: thin routes call into
@@ -8,7 +8,7 @@ whitelisted dynamic-filter engine (``project_filters``), and staff/assignee
 options come from the SystemUser staff directory.
 
 Not ported from CRM (documented deviations):
-* vendor ``installation_projects`` auto-create — vendor wrapper is Phase 5.
+* vendor ``installation_projects`` auto-create — the vendor wrapper is separate.
 * ERP expense totals / material requests cards — ERP reads are not in sub.
 * per-person saved filter preferences — sub keeps filter state in the URL.
 * file attachments on projects/tasks/comments — comments are text-only here.
@@ -237,7 +237,7 @@ def _build_task_filter_clause(filters: str | None):
 
 
 # ── reference resolvers (number first, UUID fallback — email deep links use
-#    /admin/projects/{uuid} and must resolve; PR 6 notification links) ────────
+#    /admin/projects/{uuid} and must resolve for legacy notification links) ──
 
 
 def resolve_project_reference(db: Session, project_ref: str) -> tuple[Project, bool]:

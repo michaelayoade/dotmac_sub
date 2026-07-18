@@ -670,7 +670,7 @@ def my_reseller_quotes(
 ) -> dict:
     """Self-serve installation quotes across all the reseller's customers,
     each row tagged with its account. Served from the local CRM mirror, or
-    natively behind ``quotes_native_read_enabled`` (Phase 3 §4.2)."""
+    natively behind the ``quotes_native_read_enabled`` ownership flag."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.quotes_for_reseller(db, reseller_id)
 
@@ -682,7 +682,7 @@ def my_reseller_projects(
 ) -> dict:
     """Installation/projects across all the reseller's customers (stage +
     progress). Served from the local mirror, or natively behind
-    ``projects_native_read_enabled`` (Phase 3 §4.2)."""
+    the ``projects_native_read_enabled`` ownership flag."""
     reseller_id = _reseller_id(db, principal)
     return reseller_crm_views.projects_for_reseller(db, reseller_id)
 
@@ -707,7 +707,7 @@ def my_reseller_quote_request(
 ) -> dict:
     """Request a map-pinned installation quote on a managed customer's behalf.
     404 if the account isn't one of the reseller's (no IDOR). Behind the
-    Phase 3 ``quotes_native_write_enabled`` write-flip flag: OFF writes through
+    ``quotes_native_write_enabled`` ownership flag: OFF writes through
     to the CRM; ON creates the quote natively in sub (same §2.5 shape)."""
     from app.services.sales import selfserve as selfserve_service
 

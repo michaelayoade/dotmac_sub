@@ -892,7 +892,7 @@ def reconcile_fiber_connectivity_coverage(
         _gate(
             "batch_review_and_run_evidence_current",
             evidence_current and not blockers,
-            "Every selected decision has intact Phase 16 manifest, review, and required run evidence.",
+            "Every selected decision has intact connectivity-coverage manifest, review, and required run evidence.",
         ),
         _gate(
             "no_pending_connectivity_review",

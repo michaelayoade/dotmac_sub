@@ -1,4 +1,4 @@
-"""Scheduled native infrastructure poll (Zabbix runtime cutover, Phase 1).
+"""Scheduled native infrastructure poll for the Zabbix runtime cutover.
 
 Runs the ping/SNMP reachability sweep from ``services.infrastructure_polling``
 on the ingestion queue. Single-flight via ``db_session_adapter.advisory_lock``

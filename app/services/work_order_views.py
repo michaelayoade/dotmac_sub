@@ -1,7 +1,8 @@
 """Native read views over Sub-owned work orders.
 
 During migration, CRM can still hydrate legacy work-order headers into
-``work_order`` (keyed by ``crm_work_order_id`` provenance). Native field
+``work_order`` (identified by native ``public_id`` with a root-only
+``crm_work_order_id`` provenance reference). Native field
 execution activity is authored in sub, and this module is the in-process read
 layer admin, dispatch, and field APIs use without fanning out to CRM.
 """

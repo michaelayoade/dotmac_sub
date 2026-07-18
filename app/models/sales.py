@@ -1,5 +1,4 @@
-"""Native leads/pipeline, quotes, and sales-orders verticals ported from the
-CRM (Phase 3 §1.3–§1.5).
+"""Native leads, pipeline, quotes, and sales-order verticals ported from CRM.
 
 CRM shapes (``dotmac_crm/app/models/crm/sales.py`` and
 ``dotmac_crm/app/models/sales_order.py``) carried verbatim with the sub
@@ -14,12 +13,12 @@ conventions applied — table names drop the ``crm_`` prefix (§1.1):
   backfill §3.2): ``leads.person_id``/``quotes.person_id``/
   ``sales_orders.person_id`` become ``subscriber_id`` NOT NULL.
 * Staff FKs are dropped, UUIDs carried verbatim (§1.8):
-  ``quotes.owner_person_id`` (staff map for display) and the Phase 4
+  ``quotes.owner_person_id`` (staff map for display) and the not-yet-native
   ``owner_agent_id`` columns on leads/sales orders (→ ``crm_agents``).
-* ``leads.campaign_id``/``campaign_recipient_id`` are plain UUIDs until the
-  Phase 4 campaign tables materialize the FKs (§1.3).
+* ``leads.campaign_id``/``campaign_recipient_id`` are plain UUIDs until native
+  campaign tables materialize the FKs.
 * ``quote_line_items.inventory_item_id`` / ``sales_order_lines
-  .inventory_item_id`` are plain UUIDs — inventory is Phase 5 (§1.4).
+  .inventory_item_id`` are plain UUIDs while inventory remains externally owned.
 * The CRM partial unique ``uq_crm_leads_one_open_per_person_pipeline`` is
   recreated on ``(subscriber_id, COALESCE(pipeline_id, zero-uuid))`` by the
   expand-B migration as ``uq_leads_one_open_per_subscriber_pipeline`` — it is
@@ -30,7 +29,7 @@ conventions applied — table names drop the ``crm_`` prefix (§1.1):
   ``next_value``, §1.5).
 
 CRM UUID PKs are kept verbatim by the import (§3.4). The ``quotes`` table
-coexists with ``quote_mirror`` until the Phase 3 contract PR (§3.3).
+coexists with ``quote_mirror`` until native-read verification permits retirement.
 """
 
 import enum
@@ -172,7 +171,7 @@ class Lead(Base):
     stage_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("pipeline_stages.id")
     )
-    # CrmAgent UUID carried verbatim — Phase 4 inbox model, no FK (§1.3/§1.8).
+    # CRM agent UUID carried verbatim until the native inbox model owns it; no FK.
     owner_agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     title: Mapped[str | None] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(
@@ -185,9 +184,9 @@ class Lead(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lost_reason: Mapped[str | None] = mapped_column(String(200))
     # Normalized vocabulary lives in the sales service (LEAD_SOURCE_OPTIONS,
-    # gaining "Portal" during the Phase 3 service port, §1.3).
+    # gaining "Portal" during the native sales-service migration).
     lead_source: Mapped[str | None] = mapped_column(String(40))
-    # Campaign attribution UUIDs carried verbatim; FKs materialize in Phase 4.
+    # Campaign attribution UUIDs carried verbatim until native campaign FKs exist.
     campaign_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     campaign_recipient_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     region: Mapped[str | None] = mapped_column(String(80))
@@ -319,7 +318,7 @@ class QuoteLineItem(Base):
     quote_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("quotes.id"), nullable=False, index=True
     )
-    # CRM inventory-item UUID carried verbatim — inventory is Phase 5, no FK.
+    # CRM inventory-item UUID carried verbatim while inventory is external; no FK.
     inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=Decimal("1.000"))
@@ -361,7 +360,7 @@ class SalesOrder(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
-    # CrmAgent UUID carried verbatim — Phase 4, no FK (§1.5/§1.8).
+    # CRM agent UUID carried verbatim until the native agent model exists; no FK.
     owner_agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     source: Mapped[str | None] = mapped_column(String(80))
     # SO-%06d via document_sequences key "sales_order_number" (§1.5).
@@ -421,7 +420,7 @@ class SalesOrderLine(Base):
     sales_order_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("sales_orders.id"), nullable=False, index=True
     )
-    # CRM inventory-item UUID carried verbatim — inventory is Phase 5, no FK.
+    # CRM inventory-item UUID carried verbatim while inventory is external; no FK.
     inventory_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=Decimal("1.000"))

@@ -138,6 +138,7 @@ from app.tasks.radius import run_radius_sync_job
 from app.tasks.radius_health import run_radius_health_check
 from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
 from app.tasks.referrals import reconcile_referral_mirror
+from app.tasks.reports import send_scheduled_ncc_report
 from app.tasks.router_sync import (
     audit_sot_drift,
     capture_scheduled_snapshots,
@@ -342,7 +343,7 @@ __all__ = [
     "sync_inventory_devices_to_monitoring",
     "retired_detect_sla_breaches",
     "resume_expired_holds",
-    # OLT queue processing (Phase 4)
+    # OLT queue processing
     "execute_due_profile_sync_tasks",
     "refresh_monitoring_coverage",
     # Router config sync/snapshot (keystone) — previously unregistered, so the
@@ -359,5 +360,6 @@ __all__ = [
     "reconcile_project_mirror",
     "reconcile_quote_mirror",
     "reconcile_referral_mirror",
+    "send_scheduled_ncc_report",
     "reconcile_work_order_mirror",
 ]

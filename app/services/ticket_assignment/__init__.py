@@ -1,4 +1,4 @@
-"""CRM-style rule-based assignment services (tickets + projects, Phase 3)."""
+"""Rule-based assignment services for native tickets and projects."""
 
 from app.services.ticket_assignment.engine import (
     AssignmentResult,

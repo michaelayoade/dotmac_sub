@@ -316,8 +316,7 @@ class WorkOrderHeaderRead(WorkOrderHeaderBase):
 
     id: UUID
     public_id: str
-    # Provenance ref; equals public_id during the WORK_ORDER_IDENTITY_SOT
-    # compat window, NULL for native rows once dual-write ends (slice 5).
+    # Root-only CRM provenance reference; NULL for native rows.
     crm_work_order_id: str | None = None
     work_order_created_at: datetime | None = None
     created_at: datetime

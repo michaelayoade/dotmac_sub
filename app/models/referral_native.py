@@ -1,4 +1,4 @@
-"""Native referral program ported from the CRM (Phase 3 §1.6).
+"""Native referral program ported from CRM.
 
 CRM shapes (``dotmac_crm/app/models/crm/referral.py``) carried verbatim with
 the sub conventions applied:
@@ -19,7 +19,7 @@ the sub conventions applied:
 
 This module is named ``referral_native`` because ``app/models/referral.py``
 still holds the ReferralMirror/ReferralProgramCache tables — both coexist
-until the Phase 3 contract PR drops the mirrors (§3.3). CRM UUID PKs are
+until verified native ownership permits the mirrors to be dropped. CRM UUID PKs are
 kept verbatim by the import (§3.4).
 """
 

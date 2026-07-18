@@ -547,6 +547,12 @@ def customer_billing(
     billing_data = customer_portal.get_billing_page(
         db, customer, status=status, page=page, per_page=per_page
     )
+    # Payment is the one flow the mostly-dormant customer base reliably uses,
+    # so re-surface the location-confirmation prompt here regardless of any
+    # snooze. Read-only, gated by loyalty.capture_prompt (default off).
+    from app.web.customer.location import location_prompt_context
+
+    location_prompt = location_prompt_context(db, customer, ignore_snooze=True)
     finish_read_transaction(db)
 
     from datetime import UTC, datetime
@@ -558,6 +564,7 @@ def customer_billing(
             "customer": customer,
             **billing_data,
             "active_page": "billing",
+            "location_prompt": location_prompt,
             "now": datetime.now(UTC),
         },
     )

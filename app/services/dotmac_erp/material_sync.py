@@ -1,8 +1,8 @@
-"""Material-request (ISSUE) flow for the sub → DotMac ERP outbox (ERP re-home, PR 3).
+"""Material-request (ISSUE) flow for the Sub → DotMac ERP outbox.
 
 Second money flow to move onto sub's ``field_erp_sync_events`` outbox. Ports
 ``dotmac_crm/app/services/dotmac_erp/material_request_sync.py`` onto sub's native
-``FieldMaterialRequest`` (which PR 3 gives the ERP mirror fields
+``FieldMaterialRequest`` with its ERP mirror fields
 ``erp_material_request_id`` / ``erp_material_status``). Structurally identical to
 ``expense_sync.py``.
 

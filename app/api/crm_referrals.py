@@ -1,4 +1,4 @@
-"""Referral program API: staff management + public capture (Phase 3 §2.4).
+"""Native referral API for staff management and public capture.
 
 Ported from CRM ``app/api/crm/referrals.py``. Staff routes ride the existing
 ``crm:lead:*`` permissions by design (referrals are part of the sales/lead

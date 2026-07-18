@@ -591,8 +591,8 @@ def _ap_side_station_index(
 def _adoption_candidates(session: Session, mac: str | None) -> list[CPEDevice]:
     """Pre-registered install-time cpe rows adoptable by a station's MAC.
 
-    The install-time capture flow (``radio_registration.register_radio_mac``,
-    PR #807) creates cpe rows with the subscriber known and ``uisp_device_id``
+    The install-time capture flow (``radio_registration.register_radio_mac``)
+    creates CPE rows with the subscriber known and ``uisp_device_id``
     NULL, expecting this sync to ADOPT the row once UISP first reports the
     radio. Safety scope: wireless radios only, never a row already bound to a
     (different) UISP device, never a retired tombstone (the hourly
@@ -654,7 +654,7 @@ def _upsert_station(
     in the production schema, so a new row may only be created once its owner
     is known.
 
-    1. ADOPT (install-time contract, PR #807): the field flow pre-registers a
+    1. ADOPT (install-time ownership contract): the field flow pre-registers a
        radio at turn-up as a cpe row with ``subscriber_id`` set and
        ``uisp_device_id`` NULL. When the uisp-id lookup misses, a single such
        row whose normalized MAC equals the station's is adopted in place —

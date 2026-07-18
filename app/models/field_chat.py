@@ -11,12 +11,13 @@ FIELD_CHAT_DIRECTIONS = ("staff", "customer")
 
 
 class FieldJobChatMessage(Base):
-    """Job-scoped technician/customer chat message on a work-order mirror.
+    """Job-scoped technician/customer chat message on a native work order.
 
-    Minimal sub-native store: sub has no CRM inbox/conversation stack (Phase 4),
-    so field chat persists directly against the work-order mirror instead of a
-    conversation engine. ``direction`` is ``staff`` for technician-authored
-    messages and ``customer`` for future customer-portal replies.
+    Sub has no CRM inbox/conversation dependency for field operations, so field
+    chat persists directly against the work order instead of a conversation
+    engine. ``direction`` is ``staff`` for technician-authored
+    messages and ``customer`` for future customer-portal replies. The row
+    stores only the authoritative work-order FK.
     """
 
     __tablename__ = "field_job_chat_messages"
@@ -26,7 +27,6 @@ class FieldJobChatMessage(Base):
             "work_order_mirror_id",
             "created_at",
         ),
-        Index("ix_field_job_chat_messages_crm_work_order_id", "crm_work_order_id"),
         CheckConstraint(
             "direction IN ('staff', 'customer')",
             name="ck_field_job_chat_messages_direction",
@@ -41,7 +41,6 @@ class FieldJobChatMessage(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     direction: Mapped[str] = mapped_column(String(20), default="staff", nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     author_technician_id: Mapped[uuid.UUID | None] = mapped_column(

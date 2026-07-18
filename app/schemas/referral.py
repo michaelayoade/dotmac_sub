@@ -1,4 +1,4 @@
-"""Schemas for the native referral program (Phase 3 §2.1/§2.4).
+"""Schemas for the native referral program.
 
 Ported from CRM ``app/schemas/crm/referral.py`` with the person→subscriber
 re-keying (§1.6): ``person_id`` → ``subscriber_id``, ``referrer_person_id`` →

@@ -6,7 +6,6 @@ app.services.account_deletion
 app.services.account_status_reconcile
 app.services.admin_alerts
 app.services.admin_whats_new
-app.services.ai.engine
 app.services.analytics
 app.services.auth
 app.services.auth_flow
@@ -81,7 +80,6 @@ app.services.file_storage
 app.services.financial_imports
 app.services.fup
 app.services.fup_state
-app.services.geocode_reconciler
 app.services.import_runs
 app.services.infrastructure_availability_snapshot
 app.services.ip_assignment_repair

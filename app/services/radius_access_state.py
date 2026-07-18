@@ -1,6 +1,6 @@
 """Derive and apply the RADIUS access state.
 
-``derive_access_state`` — pure mapping (phase 2).
+``derive_access_state`` is the pure policy mapping.
 ``set_subscription_access_state`` — write app DB ``access_state`` and expose
 the subscriber aggregate consumed by the external projection owner.
 

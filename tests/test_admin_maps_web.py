@@ -255,7 +255,6 @@ def test_movement_points_feed_shape(db_session):
     db_session.add(
         FieldWorkOrderMovement(
             work_order_mirror_id=mirror.id,
-            crm_work_order_id="wo-map-1",
             actor_technician_id=profile.id,
             actor_person_id=user.id,
             destination_type="site",

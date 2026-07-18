@@ -1,4 +1,4 @@
-"""Self-serve installation quotes — the native extraction (Phase 3 §2.2).
+"""Native self-serve installation quotes extracted from CRM.
 
 Business logic extracted from CRM ``services/crm/portal_quotes.py`` (the
 transport shell — portal principal/scope resolution and the mirror push —
@@ -20,13 +20,13 @@ install address; this service:
      (sales order + install project) — and records the deposit on the sales
      order. Idempotent.
 
-Phase 3 deltas vs the CRM source (§2.2):
+Native ownership deltas from the CRM source:
 
 * Feasibility re-points at sub ``FiberAccessPoint`` (models/network.py); the
   CRM's own FAP copy is dropped. Coverage vocabulary unchanged.
 * Price-book SKUs (CRM ``inventory_items``) are re-keyed to sub catalog
   offers: ``selfserve_quote_{bundle,base,distance}_offer_id`` settings
-  replace the ``*_item_sku`` keys (inventory is Phase 5). Estimate line items
+  replace the ``*_item_sku`` keys while inventory remains externally owned. Estimate line items
   set ``inventory_item_id=NULL`` natively; the priced offer is carried in
   line metadata ``sub_offer_id`` (§1.4 convention, already what the admin
   quote form writes).
@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 
 _TWOPLACES = Decimal("0.01")
 # §1.7 ProjectType.fiber_optics_installation — the enum itself arrives with
-# the PR 6 projects port; the metadata contract carries the string value.
+# the native projects migration; the metadata contract carries the string value.
 _PROJECT_TYPE = "fiber_optics_installation"
 
 
@@ -130,7 +130,7 @@ def _settings(db: Session) -> dict:
             0, min(100, _int("selfserve_quote_deposit_percent", 50))
         ),
         "feasibility_radius_m": _int("selfserve_quote_feasibility_radius_meters", 2000),
-        # §2.2: SKU keys re-keyed to sub catalog offers (inventory is Phase 5).
+        # SKU keys re-keyed to Sub catalog offers while inventory is external.
         "bundle_offer_id": _offer_id("selfserve_quote_bundle_offer_id"),
         "base_offer_id": _offer_id("selfserve_quote_base_offer_id"),
         "distance_offer_id": _offer_id("selfserve_quote_distance_offer_id"),
@@ -400,19 +400,19 @@ _UNSET_PROJECT_ID = "__unset__"
 
 
 def native_read_enabled(db: Session) -> bool:
-    """Phase 3 read-flip flag (§4.2): native quote reads vs the CRM mirror.
+    """Select native quote reads or the CRM mirror.
 
     OFF (default) — ``/me/quotes``, the web portal page and the reseller
     views keep serving ``quotes_mirror``; ON — they serve sub's native
     ``quotes`` table via ``SelfServeQuotes.read_for_subscriber`` /
-    ``build_portal_quote_payload``. Distinct from the PR 5 write flag
+    ``build_portal_quote_payload``. Distinct from the native-write flag
     (``quotes_native_write_enabled``) so reads can flip first (§4.2 step 3).
     """
     return control_registry.is_enabled(db, "quotes.native_read")
 
 
 def native_write_enabled(db: Session) -> bool:
-    """Phase 3 write-flip flag (§4.3): native quote writes vs CRM
+    """Select native quote writes or CRM
     write-through. OFF (default) — quote requests and the deposit
     initiate/accept tail write through to the CRM via ``quotes_mirror``;
     ON — ``SelfServeQuotes.request_quote`` / ``accept_with_deposit`` own the
@@ -470,7 +470,7 @@ class SelfServeQuotes:
         """Native ``GET /me/quotes`` / web-portal payload — the exact response
         shell ``quotes_mirror.read_for_subscriber`` served (§2.5):
         ``{quotes[], total, open}`` with ``build_portal_quote_payload`` items.
-        PR8 repoints the customer read surfaces here behind
+        Customer read surfaces use this owner behind
         ``quotes_native_read_enabled``."""
         rows = SelfServeQuotes.list_for_subscribers(db, subscriber_id)
         # H1: resolve every quote's install-project id in ONE query, then pass

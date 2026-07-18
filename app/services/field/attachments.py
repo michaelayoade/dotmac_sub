@@ -24,7 +24,7 @@ def _download_path(attachment_id: UUID) -> str:
 def serialize_attachment(attachment: FieldAttachment) -> dict:
     return {
         "id": attachment.id,
-        "crm_work_order_id": attachment.crm_work_order_id,
+        "crm_work_order_id": attachment.work_order_mirror.public_id,
         "note_id": attachment.note_id,
         "kind": attachment.kind,
         "file_name": attachment.file_name,
@@ -110,7 +110,6 @@ class FieldAttachments:
 
         attachment = FieldAttachment(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.public_id,
             note_id=note_id,
             stored_file_id=stored.id,
             kind=normalized_kind,

@@ -1,4 +1,4 @@
-"""Derived device operational status — the NOC-facing truth (Phase 1).
+"""Derived device operational status — the NOC-facing truth.
 
 `device.status` is administrative/lifecycle *intent*; `live_status` is the raw
 monitoring *observation*. Neither alone is what an operator should read off the
@@ -18,9 +18,9 @@ Precedence (first match wins):
     live_status == up                 -> up
     else                              -> unknown
 
-Phase 1 scope: warmer-fed `live_status` + warmer-heartbeat freshness +
+Current scope: warmer-fed `live_status`, warmer-heartbeat freshness, and
 lifecycle override. Per-type ACS/OLT-poll sources and cached VPN-path coverage
-(the real ``no_path`` distinction) are Phase 2/3 — until then a no-path device
+(the real ``no_path`` distinction) are not yet inputs; until then a no-path device
 reads ``down(monitoring_unknown_retry_pending)`` while the poller retries. A
 retry-pending state is binary for operators but does not alarm without negative
 device evidence.
@@ -226,7 +226,7 @@ def derive_operational_status(
 
     ``device`` needs ``status`` / ``live_status`` (and ``mgmt_ip`` when coverage
     is supplied), read defensively. ``warm_stale`` is computed once per request.
-    ``coverage`` is an optional MonitoringCoverage (Phase 3): when loaded, a
+    ``coverage`` is an optional MonitoringCoverage: when loaded, a
     device whose mgmt IP no live tunnel reaches retains its last binary state
     with a retry-pending reason. Omitted/unloaded coverage = Phase-1 behaviour.
     """

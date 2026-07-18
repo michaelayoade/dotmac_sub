@@ -147,7 +147,7 @@ def _get_actor_id(request: Request) -> str | None:
 def _subscription_action_permission_context(
     request: Request, db: Session
 ) -> dict[str, bool]:
-    auth = getattr(request.state, "auth", None) or {}
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
     can_write_catalog = bool(auth) and has_permission(auth, db, "catalog:write")
     return {
         "can_activate_subscriptions": can_write_catalog
@@ -707,6 +707,13 @@ def person_detail(
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    from app.services import location_capture
+
+    can_confirm_location = bool(auth) and has_permission(auth, db, "customer:write")
+    location_capture_enabled = can_confirm_location and location_capture.prompt_enabled(
+        db
+    )
     notification_context = web_notifications_service.bulk_notification_setup_context(db)
     pppoe_access = detail_data.get("pppoe_access") or {
         "has_credential": False,
@@ -748,6 +755,7 @@ def person_detail(
             "bulk_notification_channels": notification_channels,
             "bulk_notification_templates": notification_templates,
             "current_user": current_user,
+            "location_capture_enabled": location_capture_enabled,
             "sidebar_stats": sidebar_stats,
         },
     )
@@ -2098,6 +2106,63 @@ def geocode_primary_address(
             latitude=latitude,
             longitude=longitude,
         )
+    )
+
+
+@router.post(
+    "/profile/{customer_id}/confirm-location",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
+def confirm_customer_location(
+    request: Request,
+    customer_id: str,
+    latitude: float = Body(...),
+    longitude: float = Body(...),
+    accuracy_m: float | None = Body(default=None),
+    claimed_state: str | None = Body(default=None),
+    claimed_lga: str | None = Body(default=None),
+    claimed_postcode: str | None = Body(default=None),
+    db: Session = Depends(get_db),
+):
+    """Agent-confirmed service location for the NCC verification ledger.
+
+    The agent, on a call with the customer, confirms or corrects the location
+    we hold. Reconciled facts land in the ledger via ``location_capture``; a
+    disagreement is flagged, not silently overwritten.
+    """
+    from app.services import location_capture
+    from app.web.admin import get_current_user
+
+    actor = get_current_user(request) or {}
+    actor_id = str(actor.get("id") or actor.get("subscriber_id") or "") or None
+    actor_name = actor.get("email") or actor.get("username")
+    try:
+        result = location_capture.capture(
+            db,
+            customer_id,
+            lat=latitude,
+            lng=longitude,
+            accuracy_m=accuracy_m,
+            source=location_capture.SOURCE_AGENT,
+            actor_id=actor_id,
+            actor_name=actor_name,
+            claimed_state=claimed_state,
+            claimed_lga=claimed_lga,
+            claimed_postcode=claimed_postcode,
+        )
+    except location_capture.LocationCaptureDisabled as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    db.commit()
+    return JSONResponse(
+        {
+            "captured": [k.value for k in result.captured_keys],
+            "needs_human": [
+                {"field": f.key.value, "note": f.note}
+                for f in result.reconciliation.needs_human
+            ],
+        }
     )
 
 

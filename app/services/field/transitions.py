@@ -66,7 +66,7 @@ _TRANSITION_ALLOWED_FROM: dict[str, set[str]] = {
 def serialize_event(event: FieldJobEvent) -> dict:
     return {
         "id": event.id,
-        "crm_work_order_id": event.crm_work_order_id,
+        "crm_work_order_id": event.work_order_mirror.public_id,
         "event": event.event,
         "previous_status": event.previous_status,
         "new_status": event.new_status,
@@ -185,7 +185,6 @@ class FieldTransitions:
         _mark_sub_authoritative(row, event_value, client_uuid, occurred)
         event_row = FieldJobEvent(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.public_id,
             author_technician_id=profile.id,
             person_id=profile.person_id,
             system_user_id=profile.system_user_id,
@@ -386,7 +385,6 @@ def _sync_timer(
             db.add(
                 FieldWorkLog(
                     work_order_mirror_id=row.id,
-                    crm_work_order_id=row.public_id,
                     author_technician_id=profile.id,
                     person_id=profile.person_id,
                     system_user_id=profile.system_user_id,

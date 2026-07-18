@@ -69,7 +69,6 @@ class FieldWorkOrderMaterial(Base):
             "work_order_mirror_id",
             "created_at",
         ),
-        Index("ix_field_work_order_materials_crm_work_order_id", "crm_work_order_id"),
         Index("ix_field_work_order_materials_item", "item_id"),
         Index("ix_field_work_order_materials_crm_material_id", "crm_material_id"),
         Index("ix_field_work_order_materials_status", "status"),
@@ -99,7 +98,6 @@ class FieldWorkOrderMaterial(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     crm_material_id: Mapped[str | None] = mapped_column(String(64))
     item_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("field_inventory_items.id"), nullable=False
@@ -132,7 +130,6 @@ class FieldMaterialRequest(Base):
         Index(
             "ix_field_material_requests_mirror", "work_order_mirror_id", "created_at"
         ),
-        Index("ix_field_material_requests_crm_work_order_id", "crm_work_order_id"),
         Index("ix_field_material_requests_status", "status"),
         Index("ix_field_material_requests_requested_by", "requested_by_technician_id"),
         Index(
@@ -159,7 +156,6 @@ class FieldMaterialRequest(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     crm_material_request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     requested_by_technician_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
@@ -175,7 +171,7 @@ class FieldMaterialRequest(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     source_warehouse_code: Mapped[str | None] = mapped_column(String(100))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
-    # ERP mirror fields (ERP re-home, PR 3). Written back by the outbox after ERP
+    # ERP mirror fields. Written back by the outbox after ERP
     # accepts the ISSUE, and refreshed by the status reconcile. Mirror the
     # ``erp_*`` fields FieldExpenseRequest already carries. Nullable + inert until
     # the material_request flow is cut over to sub.

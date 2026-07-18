@@ -1,4 +1,4 @@
-"""Native projects API schemas (Phase 3 §2.1 port of CRM ``schemas/projects.py``).
+"""Native projects API schemas ported from CRM ``schemas/projects.py``.
 
 Shape-compatible with the CRM API: field names, optionality and enum
 vocabularies carry verbatim. The only deltas are sub's model/enum names

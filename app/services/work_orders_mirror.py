@@ -130,20 +130,16 @@ def _rating_metadata(row: WorkOrder) -> dict | None:
 
 
 def is_sub_authoritative(row: WorkOrder) -> bool:
-    """True when sub owns this row's field activity (Phase 2 SoT posture).
+    """True when Sub owns this row's field activity.
 
-    Markers: a row with no ``crm_work_order_id`` has no CRM upstream and so was
-    created natively; during the WORK_ORDER_IDENTITY_SOT slice-1 compat window
-    native rows instead dual-write a ``sub-`` public id into that column
-    (dispatch.WorkOrderHeaders.create). Native field writes stamp
+    Two markers: a row with no ``crm_work_order_id`` has no CRM upstream and so
+    was created natively; and native field writes stamp
     ``metadata.native_field_source == "sub"`` (field/source.py) on rows that
-    *were* imported. CRM reconcile/webhook ingest must not clobber status or
-    activity timestamps on such rows — the sub-pointed field app is the only
-    writer there.
+    *were* imported but whose field activity Sub has taken over. CRM
+    reconcile/webhook ingest must not clobber status or activity timestamps on
+    either — the sub-pointed field app is the only writer there.
     """
     if row.crm_work_order_id is None:
-        return True
-    if str(row.crm_work_order_id).startswith("sub-"):
         return True
     metadata = row.metadata_ if isinstance(row.metadata_, dict) else {}
     return metadata.get("native_field_source") == "sub"
@@ -237,7 +233,7 @@ def _upsert_row(
         db.add(row)
         protected = False
     else:
-        # Clobber protection (Phase 2): when sub owns the row's field activity,
+        # Clobber protection: when Sub owns the row's field activity,
         # CRM payloads must not overwrite status or activity timestamps — the
         # sub-pointed field app is the only writer there. Harmless header
         # fields still merge below.
@@ -441,7 +437,7 @@ def read_for_subscriber(
 ) -> dict:
     """Build the field-service payload from the mirror, lazily refreshing from
     the CRM when the cache is missing or stale (best-effort). With the
-    crm.work_order_pull kill switch off (Phase 2 flip: sub is the work-order
+    crm.work_order_pull kill switch off (Sub is the work-order
     system-of-record) the CRM is never contacted — local rows only."""
     from app.services import control_registry
 
@@ -655,7 +651,7 @@ def apply_webhook(db: Session, event_type: str, body: dict) -> dict:
         sync.synced_at = datetime(1970, 1, 1, tzinfo=UTC)
     db.commit()
 
-    # Phase 0 — automated lifecycle notifications. The key moment is the tech
+    # Automated lifecycle notifications. The key moment is the technician
     # tapping Start Work (→ in_progress): the live map goes active, so wake the
     # customer and deep-link straight to tracking. Dispatched/completed keep a
     # lighter notice. Each transition fires once (guarded by prev_status).
