@@ -3,11 +3,11 @@
 Every GIS mutation route now declares a granular
 ``gis:location:write`` / ``gis:area:write`` / ``gis:layer:write`` /
 ``gis:location_request:review`` permission, so ``gis:map:edit`` has no remaining
-consumer. Migration 360 already granted the granular permissions to every role
+consumer. Migration 365 already granted the granular permissions to every role
 that held the coarse one, so deleting it here removes no access.
 
-Revision ID: 361_retire_coarse_gis_edit_permission
-Revises: 360_gis_granular_permissions
+Revision ID: 366_retire_coarse_gis_edit_permission
+Revises: 365_gis_granular_permissions
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "361_retire_coarse_gis_edit_permission"
-down_revision = "360_gis_granular_permissions"
+revision = "366_retire_coarse_gis_edit_permission"
+down_revision = "365_gis_granular_permissions"
 branch_labels = None
 depends_on = None
 

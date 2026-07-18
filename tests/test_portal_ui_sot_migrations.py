@@ -23,22 +23,22 @@ def _load(name: str, file_name: str):
 
 
 def test_portal_ui_migrations_extend_current_main_as_one_head():
-    migration_360 = _load("migration_360", "360_gis_granular_permissions.py")
-    migration_361 = _load("migration_361", "361_retire_coarse_gis_edit_permission.py")
-    migration_362 = _load("migration_362", "362_reports_support_permission.py")
+    migration_365 = _load("migration_365", "365_gis_granular_permissions.py")
+    migration_366 = _load("migration_366", "366_retire_coarse_gis_edit_permission.py")
+    migration_367 = _load("migration_367", "367_reports_support_permission.py")
 
-    assert migration_360.down_revision == "359_payment_prepaid_applications"
-    assert migration_361.down_revision == migration_360.revision
-    assert migration_362.down_revision == migration_361.revision
+    assert migration_365.down_revision == "364_fiber_core_continuity"
+    assert migration_366.down_revision == migration_365.revision
+    assert migration_367.down_revision == migration_366.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [migration_362.revision]
+    assert ScriptDirectory.from_config(config).get_heads() == [migration_367.revision]
 
 
 def test_coarse_gis_permission_downgrade_restores_role_grants(monkeypatch):
     migration = _load(
-        "migration_361_rollback", "361_retire_coarse_gis_edit_permission.py"
+        "migration_366_rollback", "366_retire_coarse_gis_edit_permission.py"
     )
     engine = sa.create_engine("sqlite://")
     metadata = sa.MetaData()

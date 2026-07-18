@@ -8,8 +8,8 @@ layer. This seeds the granular permissions on existing databases and grants all
 four to every role that already holds ``gis:map:edit``, so no principal loses
 access. The coarse permission is retired by the following migration.
 
-Revision ID: 360_gis_granular_permissions
-Revises: 359_payment_prepaid_applications
+Revision ID: 365_gis_granular_permissions
+Revises: 364_fiber_core_continuity
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "360_gis_granular_permissions"
-down_revision = "359_payment_prepaid_applications"
+revision = "365_gis_granular_permissions"
+down_revision = "364_fiber_core_continuity"
 branch_labels = None
 depends_on = None
 

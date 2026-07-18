@@ -8,8 +8,8 @@ access it has today) or ``support:ticket:read`` (so the support role, the
 intended consumer, gains access to its own reports). ``provisioning:read`` is
 left in place — it still gates real provisioning data.
 
-Revision ID: 362_reports_support_permission
-Revises: 361_retire_coarse_gis_edit_permission
+Revision ID: 367_reports_support_permission
+Revises: 366_retire_coarse_gis_edit_permission
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "362_reports_support_permission"
-down_revision = "361_retire_coarse_gis_edit_permission"
+revision = "367_reports_support_permission"
+down_revision = "366_retire_coarse_gis_edit_permission"
 branch_labels = None
 depends_on = None
 
