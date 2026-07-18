@@ -1414,34 +1414,168 @@ Dependency order:
    sweep. It delegates each decision transition to
    `network.fiber_identity_decisions`; execution and reconciliation never
    approve the resulting asset change request.
-8. `network.fiber_connectivity_decisions`: owns reviewed staged-path endpoint
+8. `network.fiber_field_observations`: owns immutable technician observations
+   bound to exact staged feature content, native Sub work orders, technician and
+   person identities, explicit labels or canonical references, measurement
+   facts, and active same-work-order private attachment pointers. It retains
+   contradictory observations and projects agreement, conflict, superseded
+   evidence, and drift by verification scope. It cannot infer identity or
+   endpoints, create or advance decisions, approve changes, mutate canonical
+   topology, or establish a cutover threshold.
+9. `network.fiber_field_verification_worklist`: owns the exhaustive read-only
+   latest-source field-evidence worklist, deterministic evidence-gathering
+   priority, and exact row/report digests. Every staged point and path remains
+   visible, including current agreement. Existing native work-order references
+   are context only. This owner cannot create or assign jobs, record
+   observations, infer identity or endpoints, generate decisions, mutate
+   topology, establish a field threshold, or claim cutover readiness.
+10. `network.fiber_field_verification_map`: owns the complete read-only exact
+   staged-GeoJSON overlay for the field-verification worklist, presentation-only
+   geometry classification and bounds, and exact feature/overlay digests. It
+   fails closed on worklist/source identity or hash drift, colors features only
+   by owner-produced evidence priority, and retains unrenderable source geometry
+   without repairing or hiding its cohort row. It cannot snap, transform, infer
+   topology, create jobs or observations, mutate state, establish a threshold,
+   or claim cutover readiness.
+11. `network.fiber_identity_coverage`: owns exhaustive read-only reconciliation
+   of every latest staged cabinet, FAT/access point, splice closure, building,
+   and pole/support identity to immutable batch/review/run evidence,
+   change-request state, canonical asset state, and exact source provenance. It
+   keeps canonical-model support, coverage, lifecycle, and field-verification
+   evidence independent. Field observations remain visible but are not a gate
+   until an explicit numeric threshold policy is approved.
+   Poles/supports remain visible and reject-only until a canonical owner and
+   model are approved. Passing gates provide evidence for a separate
+   point-identity cutover review only; this owner cannot infer identity, create
+   or advance decisions, approve change requests, mutate assets, or authorize
+   production cutover.
+12. `network.fiber_connectivity_decisions`: owns reviewed staged-path endpoint
    decisions, shared typed termination resolution, canonical segment source
    provenance, and connectivity reconciliation. Geometry never supplies an
    endpoint. A canonical edge exists only after two explicit endpoint
    references and their segment mutation are independently reviewed and
    applied through `network.fiber_asset_changes`. Direct termination/segment
    API mutations are retired; read endpoints remain projections.
-9. `network.fiber_access_attachments`: owns preview, independent review,
+13. `network.fiber_connectivity_review`: owns immutable operator-scale staged-path
+   proposal manifests, exact-manifest independent all-or-nothing attestations,
+   and bounded execution/reconciliation evidence. Every create or link row binds
+   the exact staged content hash and operator-supplied canonical endpoint IDs;
+   geometry is evidence only and never selects an endpoint. It delegates every
+   decision transition to `network.fiber_connectivity_decisions` and never
+   approves the resulting termination or segment request owned by
+   `network.fiber_asset_changes`.
+14. `network.fiber_connectivity_coverage`: owns exhaustive read-only
+   reconciliation of every latest staged path to immutable batch/review/run
+   evidence, decision lifecycle, termination/segment request state, and canonical
+   segment source provenance. It keeps exact, unassigned, superseded,
+   overlapping, and blocked source coverage separate from pending, applied,
+   rejected, declined, stale, failed, and evidence-drift lifecycle state. Field
+   observations are projected separately and do not become a cutover gate until
+   an explicit numeric threshold policy is approved. Its
+   conservative gates produce evidence for a separate connectivity cutover
+   review only. It never infers endpoints, creates or advances decisions,
+   approves change requests, mutates topology, or authorizes production cutover.
+15. `network.ont_topology_observations`: owns durable allowlisted network facts
+   about an ONT's exact electronic location. UISP supplies an exact ONT, parent
+   OLT, and numeric PON observation; it may initialize missing PON inventory.
+   Huawei F/S/P observations can link only an already-modeled exact active PON.
+   The owner may initialize empty ONT OLT/PON edges with source evidence, but it
+   never overwrites or merges an existing identity edge. Missing or conflicting
+   data remains unresolved observation evidence in the admin review queue and
+   cannot itself authorize an assignment repair. Inferred repair, assignment
+   form reads, Huawei authorization adapters, and PON metadata forms cannot
+   bypass the owner to merge, create, reactivate, or rewrite PON inventory or
+   references.
+16. `network.ont_assignment_commands`: owns normal explicit ONT service
+   assignment, normal release, verified PON-move projection, and exact audit
+   results. It requires exact ONT, subscription, and modeled PON identifiers;
+   derives the subscriber only through the subscription bridge; and fails
+   closed when an existing customer, subscription, PON, or OLT identity
+   disagrees. MAC, name, address, work-order, registration, and geometry
+   inference cannot select identity. UFiber MAC matching is preview-only,
+   management IPAM cannot manufacture an assignment, and generic CRUD adapters
+   delegate or retire mutation.
+17. `network.ont_assignment_identity`: owns preview, independent review,
+   execution, and exact-result evidence for exceptional ONT assignment
+   identity repair. Repairs bind one active assignment, exact subscription,
+   PON, OLT, and the complete set of active ONT/subscription conflicts. The
+   subscriber projection comes only from the exact subscription. Subscriber,
+   address, name, geometry, and imported registration inference are forbidden.
+   Public assignment mutations and registration-driven writes are retired;
+   changed execution inputs close without mutation. The admin review queue is a
+   thin projection: it detects disagreements, requires exact identifiers,
+   derives OLT only from the exact modeled PON, enumerates conflicts
+   deterministically, and requires preview before proposal. It never promotes a
+   detected discrepancy directly into a decision or mutation.
+18. `network.ont_assignment_cutover`: owns the exhaustive read-only audit of
+   active assignment invariants, stable exact blocker evidence, and the future
+   database-constraint readiness gate. It scans all active assignments before
+   display filtering, keeps required identity, active-ONT uniqueness,
+   active-subscription uniqueness, and exact active network targets visibly
+   distinct, and routes investigation to `network.ont_assignment_identity`.
+   It never chooses replacement identity, creates a proposal, mutates an
+   assignment, or enables a constraint. A clean report is necessary but does
+   not itself authorize cutover.
+19. `network.ont_assignment_cutover_batches`: owns immutable operator-selected
+   cleanup manifests and their independent review attestations. Every manifest
+   binds the complete cutover report SHA-256, each selected finding SHA-256,
+   and explicit per-assignment action, target, and complete conflict IDs. It
+   atomically delegates proposal and review state to
+   `network.ont_assignment_identity`; it cannot execute a batch or mutate an
+   assignment. Approval only makes the individual decisions eligible for their
+   identity owner's locked revalidation and execution.
+20. `network.ont_assignment_cutover_verification`: owns immutable
+   post-execution verification attestations. It copies every terminal identity
+   decision's exact result payload/hash, binds those results to a fresh
+   exhaustive assignment audit, and keeps pending, applied, stale-closed,
+   conflict-closed, declined, batch-scope residual, and global blocker evidence
+   distinct. A verifier must be independent of proposal, review, and execution
+   actors. Pending decisions cannot be attested. This owner cannot execute a
+   repair, mutate an assignment, or enable a constraint.
+21. `network.ont_assignment_cutover_coverage`: owns the read-only reconciliation
+   of every current assignment cleanup finding against all immutable proposal,
+   review, decision-result, and verification lineage. One repeatable snapshot
+   distinguishes exact, superseded, unassigned, and overlapping coverage while
+   keeping decision outcome, current repair-scope state, and verification drift
+   separate. Its conservative gates produce evidence for a separate constraint
+   authorization review; they do not authorize or enable constraints, and this
+   owner cannot execute repairs or mutate assignments.
+22. `network.ont_assignment_constraint_authorization`: owns immutable requests
+   and independent approve/decline attestations for a future assignment
+   constraint cutover. Each request binds an explicitly named target, expiry,
+   complete clean coverage payload, Phase 14 coverage hash, and Phase 11 audit
+   hash. Approval fails closed on expiry or current evidence drift. Current,
+   stale, expired, declined, and invalid state is derived rather than maintained
+   as a second mutable lifecycle. Even current approval is only evidence for a
+   separate reviewed DDL change; this owner has no constraint or DDL executor.
+23. `network.ont_inventory_release`: owns the local electronic-identity release
+   consequence of an explicit return-to-inventory transition. After successful
+   external OLT/ACS cleanup it locks the ONT and all assignments, closes active
+   assignments, clears exact subscription/subscriber/service-address and PON
+   references, and clears ONT OLT/PON/F/S/P identity in one transaction. It
+   chooses no replacement identity. Legacy SmartOLT import is preview-only and
+   bulk provisioning migration cannot target a PON.
+24. `network.fiber_access_attachments`: owns preview, independent review,
    execution, and audit evidence for exact PON-to-splitter-input and
    ONT-to-splitter-output attachments. It is the only writer for active
    `PonPortSplitterLink` records and the ONT splitter projection. It requires
    exact ONT/PON/OLT agreement, directed active ports, same-splitter continuity,
    and one-to-one occupancy. Geometry, proximity, and legacy splitter
    assignments never create an edge; stale execution closes without mutation.
-10. `network.access_path`: resolves `subscriber/subscription -> access path`
+25. `network.access_path`: resolves `subscriber/subscription -> access path`
    from identity plus the validated fiber topology.
-11. `network.radius_sessions`: resolves online-now state from active sessions.
-12. `network.ont_runtime_status`: owns Huawei bulk ONT status observations, the
+26. `network.radius_sessions`: resolves online-now state from active sessions.
+27. `network.ont_runtime_status`: owns Huawei bulk ONT status observations, the
    Huawei OLT pollability predicate, and admission of those poll tasks. Scheduled
    sweeps and stale inventory reads request the same retry-safe infrastructure
    observation poll through this owner. These bulk reads are not tracked device
    commands; operator-requested single-ONT refresh remains operation-backed.
-13. `network.device_state`: derives NOC operational state, retry state, and alarm
+28. `network.device_state`: derives NOC operational state, retry state, and alarm
    classification from administrative intent and monitoring observations, and
    owns the `up/degraded/down/maintenance` vocabulary. Retry-pending gaps stay
    binary but are non-alarming; presentation renders retry-pending `down` as
    warning/clock rather than a confirmed negative failure.
-14. `network.ont_status_refresh`: owns admission of stale ONT runtime-status
+29. `network.ont_status_refresh`: owns admission of stale ONT runtime-status
    refresh requests from read surfaces. ONT inventory may request a refresh when
    displayed evidence is stale, but it must not poll OLTs directly. Huawei ONTs
    request the `network.ont_runtime_status` infrastructure observation poll with
@@ -1449,20 +1583,20 @@ Dependency order:
    topology sync source. `Status refresh pending` means the displayed value is
    retained or derived and needs asynchronous confirmation, not that the page
    performed a live check.
-15. `network.outage_impact`: resolves affected customers from topology.
-16. `network.device_groups`: owns device-group mutations, membership, and bulk
+30. `network.outage_impact`: resolves affected customers from topology.
+31. `network.device_groups`: owns device-group mutations, membership, and bulk
    action queueing.
-17. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
+32. `network.outage_lifecycle`: owns the persisted incident status vocabulary,
    incident transitions, escalation planning, and outage event emission.
-18. `network.connection_health`: combines authoritative path, live-session,
+33. `network.connection_health`: combines authoritative path, live-session,
    last-mile, impact, and active-incident inputs into the customer-safe
    `connected/trouble/outage` verdict plus headline/message/advice. It does not
    own device operational state or raw online-session observations.
-19. `network.control_plane_intent`: owns the shared desired-state delivery
+34. `network.control_plane_intent`: owns the shared desired-state delivery
    lifecycle, control-plane target/revision identity, and vendor status
    projections. Vendor adapters project through this one
    desired-to-readback lifecycle.
-20. `network.huawei_cli_response`: owns Huawei CLI response classification,
+35. `network.huawei_cli_response`: owns Huawei CLI response classification,
    stable error codes, expected-absence predicates, unsupported-command
    detection, and idempotent response semantics. Huawei SSH sessions, protocol
    adapters, readback verification, and web workflows consume these projections
@@ -1471,11 +1605,11 @@ Dependency order:
    still require the control-plane intent readback contract. Protocol adapter,
    authorization, provisioning, and reconcile history persist the sanitized
    classifier projection as operation evidence; raw CLI output is not retained.
-21. `network.routeros_sot`: owns typed MikroTik desired state, the managed
+36. `network.routeros_sot`: owns typed MikroTik desired state, the managed
    resource/field registry, Dotmac ownership markers, verified reconciliation,
    and periodic drift evidence. Router routes and tasks only orchestrate it,
    and it projects through `network.control_plane_intent`.
-22. `network.operation_ledger`: owns the tracked device operation lifecycle and
+37. `network.operation_ledger`: owns the tracked device operation lifecycle and
    status vocabulary, the terminal-transition guard, correlation-key duplicate
    suppression, stale-active reclamation, parent/child rollup, and whether an
    operation may run, resume, or be re-executed. Celery is transport: tasks
@@ -1494,7 +1628,7 @@ Dependency order:
    single-ONT status refresh. Firmware, configuration, lifecycle, and other
    device writes remain ineligible until their owning service provides
    current-state validation and replay safety.
-23. `network.operation_dispatch`: owns transactional staging and transport for
+38. `network.operation_dispatch`: owns transactional staging and transport for
    operation-backed network commands. The operation and its exact versioned
    command are committed together in `network_operation_dispatches`; request
    handlers never commit an operation and then publish its device task. The
@@ -1512,19 +1646,19 @@ Dependency order:
    is observation polling owned by `network.ont_runtime_status`, not an
    operation-backed command. Firmware verification/readback continuations retain
    their own state machines and are not parallel command-origination paths.
-24. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
+39. `network.ont_provisioning_commands`: owns acceptance and duplicate handling
    for ONT authorization, baseline repair, and bootstrap verification commands.
    It commits each operation and typed dispatch atomically. Admin, API, and bulk
    callers receive operation/dispatch identifiers and never publish the device
    task themselves.
-25. `network.ont_provisioning_execution`: owns the tracked authorization,
+40. `network.ont_provisioning_execution`: owns the tracked authorization,
    baseline-repair, DB-only baseline preview, bootstrap retry, parent rollup,
    and bulk-item transitions.
    Celery workers claim an existing dispatch and delegate execution here; they
    do not create operations or decide a parallel retry policy. Delayed bootstrap
    attempts are separate immutable dispatch rows on the same child operation,
    while Inform-driven completion uses the same parent projection.
-26. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
+41. `network.ip_pool_utilization` (`app/services/ip_pool_utilization_snapshot.py`):
    owns IP-pool utilization reads — the daily utilization snapshots and the
    live per-pool used/total counts consumed by the network report. The live
    count (assignment-join basis) is deliberately distinct from the snapshot's
@@ -1629,6 +1763,13 @@ Dependency order:
    never used as a join key. Field-evidence tables join through the
    `work_order.id` FK; their denormalized string columns are dual-written for
    compatibility until the slice-5 retirement drops them.
+
+   Unresolved writer boundary: native work-order creation, assignment, and
+   assignment-queue mutation still run through dispatch CRUD, but no named SOT
+   mutation owner is registered. Read-only cross-domain worklists may show job
+   context but must not adopt those CRUD paths as authority. A future change
+   must explicitly name the owner and migrate the writers before exposing new
+   cross-domain job actions.
 5. `operations.field_completion`: owns field-job completion eligibility, evidence
    requirements, and completion transitions.
 6. `operations.project_lifecycle`: owns native project field/status mutations,

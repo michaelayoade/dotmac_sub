@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from app.services.network.olt_ssh import ServicePortEntry
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import MgmtIpMode, OLTDevice, OntAssignment, OntUnit, PonPort
@@ -532,22 +531,20 @@ class OntWriteService:
         target_port = db.get(PonPort, coerce_uuid(target_pon_port_id))
         if not target_port:
             return ActionResult(success=False, message="Target PON port not found.")
+        if skip_device_ops:
+            return ActionResult(
+                success=False,
+                message=(
+                    "DB-only ONT moves are retired; execute and verify the physical "
+                    "move before projecting its exact assignment result."
+                ),
+            )
 
         # Get current OLT context
         ctx, context_err = _strict_olt_write_context(db, ont_id)
-        if context_err and _is_test_mock(db):
-            current_assignment = db.scalars(
-                select(OntAssignment).where(
-                    OntAssignment.ont_unit_id == ont.id,
-                    OntAssignment.active.is_(True),
-                )
-            ).first()
-            return _move_ont_db_only(
-                db, ont, target_port, current_assignment, target_pon_port_id
-            )
-        if context_err and not skip_device_ops:
+        if context_err:
             return context_err
-        if ctx is None and not skip_device_ops:
+        if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
         # Validate target is on same OLT (cross-OLT move requires different flow)
@@ -559,20 +556,6 @@ class OntWriteService:
 
         # Build target FSP string from PonPort.name (format: "0/2/1")
         target_fsp = target_port.name
-
-        # Get current assignment for subscriber info
-        current_assignment = db.scalars(
-            select(OntAssignment).where(
-                OntAssignment.ont_unit_id == ont.id,
-                OntAssignment.active.is_(True),
-            )
-        ).first()
-
-        if skip_device_ops:
-            # DB-only mode - skip device operations
-            return _move_ont_db_only(
-                db, ont, target_port, current_assignment, target_pon_port_id
-            )
 
         if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
@@ -776,54 +759,28 @@ class OntWriteService:
                 message=f"Device operation failed: {result.message}",
             )
 
-        # Device operations succeeded - update DB
+        # Device operations succeeded - project the exact move through the
+        # normal assignment command owner.
         try:
-            with db.begin_nested():
-                if current_assignment:
-                    current_assignment.active = False
+            from app.services.network.olt import ont_assignment_commands
 
-                new_assignment = OntAssignment(
-                    ont_unit_id=ont.id,
-                    pon_port_id=target_port.id,
-                    subscriber_id=current_assignment.subscriber_id
-                    if current_assignment
-                    else None,
-                    subscription_id=getattr(current_assignment, "subscription_id", None)
-                    if current_assignment
-                    else None,
-                    service_address_id=getattr(
-                        current_assignment, "service_address_id", None
-                    )
-                    if current_assignment
-                    else None,
-                    work_order_mirror_id=getattr(
-                        current_assignment, "work_order_mirror_id", None
-                    )
-                    if current_assignment
-                    else None,
-                    active=True,
-                    assigned_at=datetime.now(UTC),
-                    notes=f"Moved from {ctx.fsp} to {target_fsp}",
-                )
-                db.add(new_assignment)
-                ont.olt_device_id = target_port.olt_id
-                if new_ont_id_on_olt is not None:
-                    # Update external_id with new ONT-ID for SNMP correlation
-                    vendor_lower = (ctx.olt.vendor or "").lower()
-                    if "huawei" in vendor_lower:
-                        ont.external_id = build_huawei_external_id(
-                            target_fsp, new_ont_id_on_olt
-                        )
-                _set_sync_meta(ont, "device")
-                db.flush()
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            logger.warning("ONT move DB update conflict for ONT %s: %s", ont_id, exc)
-            return ActionResult(
-                success=False,
-                message="Device moved but DB update failed - manual cleanup required.",
+            ont_assignment_commands.move_to_pon(
+                db,
+                ont_unit_id=ont.id,
+                target_pon_port_id=target_port.id,
+                source="ont_write_device_move",
+                commit=False,
             )
+            if new_ont_id_on_olt is not None:
+                # Update external_id with new ONT-ID for SNMP correlation
+                vendor_lower = (ctx.olt.vendor or "").lower()
+                if "huawei" in vendor_lower:
+                    ont.external_id = build_huawei_external_id(
+                        target_fsp, new_ont_id_on_olt
+                    )
+            _set_sync_meta(ont, "device")
+            db.flush()
+            db.commit()
         except Exception as exc:
             db.rollback()
             logger.error("ONT move DB update failed for ONT %s: %s", ont_id, exc)
@@ -855,67 +812,6 @@ class OntWriteService:
         external_id: str,
     ) -> ActionResult:
         return update_external_id(db, ont_id, external_id=external_id)
-
-
-def _move_ont_db_only(
-    db: Session,
-    ont: OntUnit,
-    target_port: PonPort,
-    current_assignment: OntAssignment | None,
-    target_pon_port_id: str,
-) -> ActionResult:
-    """DB-only ONT move (for cleanup or when device ops not needed)."""
-    try:
-        with db.begin_nested():
-            if current_assignment:
-                current_assignment.active = False
-
-            new_assignment = OntAssignment(
-                ont_unit_id=ont.id,
-                pon_port_id=target_port.id,
-                subscriber_id=current_assignment.subscriber_id
-                if current_assignment
-                else None,
-                subscription_id=getattr(current_assignment, "subscription_id", None)
-                if current_assignment
-                else None,
-                service_address_id=getattr(
-                    current_assignment, "service_address_id", None
-                )
-                if current_assignment
-                else None,
-                work_order_mirror_id=getattr(
-                    current_assignment, "work_order_mirror_id", None
-                )
-                if current_assignment
-                else None,
-                active=True,
-                assigned_at=datetime.now(UTC),
-                notes="Moved from previous assignment (DB-only)",
-            )
-            db.add(new_assignment)
-            ont.olt_device_id = target_port.olt_id
-            _set_sync_meta(ont, "manual")
-            db.flush()
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        logger.warning("ONT move assignment conflict for ONT %s: %s", ont.id, exc)
-        return ActionResult(
-            success=False,
-            message="ONT already has an active assignment; reload and try again.",
-        )
-    except Exception as exc:
-        db.rollback()
-        logger.error("ONT move failed for ONT %s: %s", ont.id, exc)
-        return ActionResult(success=False, message=f"Move failed: {exc}")
-
-    _emit_ont_event(
-        db,
-        "ont.moved",
-        {"ont_id": str(ont.id), "target_pon_port_id": target_pon_port_id},
-    )
-    return ActionResult(success=True, message="ONT moved to new PON port (DB-only).")
 
 
 def update_external_id(

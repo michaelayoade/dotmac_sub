@@ -184,7 +184,7 @@ class OltDetailAdapter:
                 "repair_pon_ports": {
                     "url": f"{base}/repair-pon-ports",
                     "method": "POST",
-                    "visible": True,
+                    "visible": False,
                 },
                 "backup_create": {
                     "url": f"{base}/backups/ssh-backup",

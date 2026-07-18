@@ -18,7 +18,7 @@ from app.models.network import (
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services import tr069 as tr069_service
 from app.services.network.ont_assignment_alignment import (
-    align_ont_assignment_to_authoritative_fsp,
+    project_ont_topology_from_fsp_observation,
 )
 from app.services.network.ont_status import set_authorization_status
 from app.services.web_network_ont_autofind import _find_ont_by_serial
@@ -40,7 +40,7 @@ def persist_authorized_ont_inventory(
     serial_number: str,
     ont_id: int,
 ) -> None:
-    """Persist ONT + assignment state after OLT-side authorization."""
+    """Persist observed ONT inventory without inferring customer assignment."""
     normalized_serial = str(serial_number or "").strip()
     board, port = parse_fsp_parts(fsp)
     if not normalized_serial or not board or not port:
@@ -61,12 +61,14 @@ def persist_authorized_ont_inventory(
     ).first()
 
     ont = _find_ont_by_serial(db, normalized_serial)
-    if ont is None:
+    created_ont = ont is None
+    if created_ont:
         ont = OntUnit(
             serial_number=normalized_serial,
             is_active=True,
         )
         db.add(ont)
+        db.flush()
     else:
         # Lock existing ONT before modification to prevent concurrent updates
         ont = db.scalars(
@@ -76,11 +78,8 @@ def persist_authorized_ont_inventory(
             return  # ONT was deleted concurrently
 
     ont.is_active = True
-    ont.olt_device_id = olt.id
     ont.pon_type = PonType.gpon
     ont.gpon_channel = GponChannel.gpon
-    ont.board = board
-    ont.port = port
     ont.external_id = str(ont_id)
     ont.olt_status = OnuOnlineStatus.offline
     set_authorization_status(ont, OntAuthorizationStatus.authorized, strict=False)
@@ -101,12 +100,11 @@ def persist_authorized_ont_inventory(
         if candidate.mac:
             ont.mac_address = candidate.mac
 
-    align_ont_assignment_to_authoritative_fsp(
+    project_ont_topology_from_fsp_observation(
         db,
         ont=ont,
         olt_id=olt.id,
         fsp=fsp,
-        assigned_at=now,
     )
 
     if candidate is not None:

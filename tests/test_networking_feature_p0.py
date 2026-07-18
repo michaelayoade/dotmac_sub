@@ -81,8 +81,6 @@ from app.schemas.network import (
     IPv4AddressCreate,
     IPv6AddressCreate,
     OLTDeviceCreate,
-    OntAssignmentCreate,
-    OntAssignmentUpdate,
     OntUnitCreate,
     PonPortCreate,
 )
@@ -117,6 +115,30 @@ from app.services.network.cpe_tr069 import CpeTR069
 from app.services.network.ont_tr069 import OntTR069
 from app.web.admin import nas as nas_web
 from app.web_domains import network_home
+
+
+def _assign_ont(db_session, *, ont, pon, subscription):
+    olt = db_session.get(OLTDevice, pon.olt_id)
+    assert olt is not None
+    olt.is_active = True
+    db_session.commit()
+    return network_service.ont_assignment_commands.assign(
+        db_session,
+        ont_unit_id=ont.id,
+        subscription_id=subscription.id,
+        pon_port_id=pon.id,
+        subscriber_id=subscription.subscriber_id,
+        source="test",
+    ).assignment
+
+
+def _release_ont(db_session, assignment):
+    return network_service.ont_assignment_commands.release(
+        db_session,
+        assignment_id=assignment.id,
+        reason="test_inventory_parking",
+        source="test",
+    ).assignment
 
 
 def test_validate_ipv4_address_rejects_invalid_octet():
@@ -1072,7 +1094,9 @@ def test_build_cpe_list_data_filters_and_stats(db_session, subscriber):
     assert data["stats"]["mikrotik"] == 1
 
 
-def test_build_cpe_list_data_hides_system_owned_inventory_rows(db_session, subscriber):
+def test_build_cpe_list_data_hides_system_owned_inventory_rows(
+    db_session, subscriber, subscription
+):
     network_service.cpe_devices.create(
         db_session,
         CPEDeviceCreate(
@@ -1094,19 +1118,8 @@ def test_build_cpe_list_data_hides_system_owned_inventory_rows(db_session, subsc
         db_session,
         OntUnitCreate(serial_number="PARKED-ONT-001"),
     )
-    assigned = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.update(
-        db_session,
-        str(assigned.id),
-        OntAssignmentUpdate(active=False),
-    )
+    assigned = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assigned)
 
     parked_cpe = db_session.scalars(
         select(CPEDevice).where(CPEDevice.serial_number == "PARKED-ONT-001").limit(1)
@@ -1120,7 +1133,9 @@ def test_build_cpe_list_data_hides_system_owned_inventory_rows(db_session, subsc
     assert all(sub.user_type.value != "system_user" for sub in data["subscribers"])
 
 
-def test_collect_devices_excludes_system_owned_inventory_cpes(db_session, subscriber):
+def test_collect_devices_excludes_system_owned_inventory_cpes(
+    db_session, subscriber, subscription
+):
     network_service.cpe_devices.create(
         db_session,
         CPEDeviceCreate(
@@ -1142,15 +1157,8 @@ def test_collect_devices_excludes_system_owned_inventory_cpes(db_session, subscr
         db_session,
         OntUnitCreate(serial_number="PARKED-CORE-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
 
     devices = core_devices_inventory_service.collect_devices(db_session)
     cpe_serials = {
@@ -1167,7 +1175,9 @@ def test_collect_devices_excludes_system_owned_inventory_cpes(db_session, subscr
     assert visible_cpe["status_presentation"].tone.value == "neutral"
 
 
-def test_web_network_home_excludes_system_owned_inventory_cpes(db_session, subscriber):
+def test_web_network_home_excludes_system_owned_inventory_cpes(
+    db_session, subscriber, subscription
+):
     network_service.cpe_devices.create(
         db_session,
         CPEDeviceCreate(
@@ -1189,15 +1199,8 @@ def test_web_network_home_excludes_system_owned_inventory_cpes(db_session, subsc
         db_session,
         OntUnitCreate(serial_number="PARKED-WEB-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
 
     request = Request({"type": "http", "method": "GET", "path": "/web/network"})
     with patch("app.web_domains.templates.TemplateResponse") as render:
@@ -1420,7 +1423,7 @@ def test_tr069_dashboard_data_handles_joinedload_assignments_without_500(
 
 
 def test_tr069_dashboard_hides_system_owned_inventory_cpes_from_selector(
-    db_session, acs_server, subscriber
+    db_session, acs_server, subscriber, subscription
 ):
     visible_cpe = network_service.cpe_devices.create(
         db_session,
@@ -1443,15 +1446,8 @@ def test_tr069_dashboard_hides_system_owned_inventory_cpes_from_selector(
         db_session,
         OntUnitCreate(serial_number="PARKED-TR069-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
 
     data = web_network_tr069_service.tr069_dashboard_data(
         db_session,
@@ -1465,7 +1461,7 @@ def test_tr069_dashboard_hides_system_owned_inventory_cpes_from_selector(
 
 
 def test_tr069_dashboard_linked_inventory_cpe_uses_device_label_not_inventory_name(
-    db_session, acs_server, subscriber
+    db_session, acs_server, subscriber, subscription
 ):
     olt = network_service.olt_devices.create(
         db_session,
@@ -1479,15 +1475,8 @@ def test_tr069_dashboard_linked_inventory_cpe_uses_device_label_not_inventory_na
         db_session,
         OntUnitCreate(serial_number="LINKED-PARKED-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
 
     parked_cpe = db_session.scalars(
         select(CPEDevice).where(CPEDevice.serial_number == "LINKED-PARKED-ONT").limit(1)
@@ -1540,11 +1529,14 @@ def test_link_tr069_device_to_cpe_rejects_missing_cpe(db_session, acs_server):
 
 
 def test_link_tr069_device_to_cpe_rejects_parked_inventory_cpe(
-    db_session, acs_server, subscriber
+    db_session, acs_server, subscriber, subscription
 ):
     olt = network_service.olt_devices.create(
         db_session,
-        OLTDeviceCreate(name="TR069 Reject OLT", hostname="tr069-reject-olt.local"),
+        OLTDeviceCreate(
+            name="TR069 Reject OLT",
+            hostname="tr069-reject-olt.local",
+        ),
     )
     pon = network_service.pon_ports.create(
         db_session,
@@ -1554,15 +1546,8 @@ def test_link_tr069_device_to_cpe_rejects_parked_inventory_cpe(
         db_session,
         OntUnitCreate(serial_number="REJECT-PARKED-ONT"),
     )
-    assignment = network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
-    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    assignment = _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
+    _release_ont(db_session, assignment)
     parked_cpe = db_session.scalars(
         select(CPEDevice).where(CPEDevice.serial_number == "REJECT-PARKED-ONT").limit(1)
     ).first()
@@ -3201,7 +3186,7 @@ def test_ont_tr069_uses_cached_snapshot_when_live_fetch_fails(db_session, monkey
 
 
 def test_ont_device_info_modal_does_not_allow_serial_number_change(
-    db_session, subscriber
+    db_session, subscription
 ):
     olt = network_service.olt_devices.create(
         db_session,
@@ -3219,14 +3204,7 @@ def test_ont_device_info_modal_does_not_allow_serial_number_change(
     )
     db_session.add(ont)
     db_session.flush()
-    network_service.ont_assignments.create(
-        db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            pon_port_id=pon.id,
-            account_id=subscriber.id,
-        ),
-    )
+    _assign_ont(db_session, ont=ont, pon=pon, subscription=subscription)
 
     result = ont_web_forms_service.update_device_info_from_form(
         db_session,

@@ -121,11 +121,9 @@ app.services.network.olt_state_import
 app.services.network.olt_tr069_admin
 app.services.network.olt_web_forms
 app.services.network.olt_web_resources
-app.services.network.olt_web_topology
 app.services.network.ont_action_common
 app.services.network.ont_action_device
 app.services.network.ont_action_network
-app.services.network.ont_assignment_alignment
 app.services.network.ont_assignment_crud
 app.services.network.ont_authorization
 app.services.network.ont_config_snapshots
@@ -137,7 +135,6 @@ app.services.network.ont_management_ipam
 app.services.network.ont_provision_steps
 app.services.network.ont_reconcile_queue
 app.services.network.ont_status
-app.services.network.ont_topology_reconcile
 app.services.network.ont_tr069
 app.services.network.ont_web_forms
 app.services.network.ont_write
@@ -213,7 +210,6 @@ app.services.topology.live_status
 app.services.topology.lldp_poller
 app.services.topology.olt_mac_harvest
 app.services.topology.outage_notifications
-app.services.topology.ufiber_onu_link
 app.services.topology.uisp_ip_backfill
 app.services.topology.uisp_sync
 app.services.tr069
@@ -246,7 +242,6 @@ app.services.web_network_ont_actions.config_setters
 app.services.web_network_ont_actions.db_config
 app.services.web_network_ont_actions.device_actions
 app.services.web_network_ont_actions.inventory
-app.services.web_network_ont_assignments
 app.services.web_network_ont_autofind
 app.services.web_network_onts_provisioning
 app.services.web_network_operations

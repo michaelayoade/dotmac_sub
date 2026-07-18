@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.api.field import router
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile
-from app.models.network import OntAssignment, OntUnit
+from app.models.network import OntAssignment, OntUnit, PonPort
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
@@ -85,10 +85,21 @@ def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
     return row
 
 
-def test_record_equipment_links_ont_subscriber_and_job(db_session):
+def _pon(db_session, olt_device, name: str) -> PonPort:
+    olt_device.is_active = True
+    pon = PonPort(olt_id=olt_device.id, name=name, is_active=True)
+    db_session.add(pon)
+    db_session.flush()
+    return pon
+
+
+def test_record_equipment_links_ont_subscription_pon_and_job(
+    db_session, subscription, olt_device
+):
     user = _user(db_session)
     _profile(db_session, user)
-    subscriber = _subscriber(db_session)
+    subscriber = subscription.subscriber
+    pon = _pon(db_session, olt_device, "0/1/1")
     work_order = _work_order(db_session, subscriber, crm_work_order_id="wo-equip-link")
     db_session.commit()
 
@@ -97,6 +108,8 @@ def test_record_equipment_links_ont_subscriber_and_job(db_session):
         _auth(user),
         "wo-equip-link",
         serial_number=" zte123 ",
+        subscription_id=str(subscription.id),
+        pon_port_id=str(pon.id),
         vendor="ZTE",
         model="F601",
         notes="Installed in sitting room",
@@ -107,6 +120,8 @@ def test_record_equipment_links_ont_subscriber_and_job(db_session):
     assert result["crm_work_order_id"] == "wo-equip-link"
     assignment = db_session.query(OntAssignment).one()
     assert assignment.work_order_mirror_id == work_order.id
+    assert assignment.subscription_id == subscription.id
+    assert assignment.pon_port_id == pon.id
     assert assignment.active is True
     assert assignment.notes == "Installed in sitting room"
     detail = field_jobs.get_detail(db_session, _auth(user), "wo-equip-link")
@@ -114,17 +129,27 @@ def test_record_equipment_links_ont_subscriber_and_job(db_session):
     assert detail.equipment.serial_number == "ZTE123"
 
 
-def test_record_equipment_replaces_existing_active_assignment(db_session):
+def test_record_equipment_replaces_existing_active_assignment(
+    db_session, subscription, olt_device
+):
     user = _user(db_session)
     _profile(db_session, user)
-    subscriber = _subscriber(db_session)
+    subscriber = subscription.subscriber
+    pon = _pon(db_session, olt_device, "0/1/2")
     _work_order(db_session, subscriber, crm_work_order_id="wo-equip-replace")
-    old_unit = OntUnit(serial_number="OLD123", vendor="ZTE")
+    old_unit = OntUnit(
+        serial_number="OLD123",
+        vendor="ZTE",
+        olt_device_id=olt_device.id,
+        pon_port_id=pon.id,
+    )
     db_session.add(old_unit)
     db_session.flush()
     old_assignment = OntAssignment(
         ont_unit_id=old_unit.id,
+        pon_port_id=pon.id,
         subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
         assigned_at=datetime.now(UTC),
         active=True,
     )
@@ -136,6 +161,8 @@ def test_record_equipment_replaces_existing_active_assignment(db_session):
         _auth(user),
         "wo-equip-replace",
         serial_number="new123",
+        subscription_id=str(subscription.id),
+        pon_port_id=str(pon.id),
     )
 
     db_session.refresh(old_assignment)
@@ -150,12 +177,13 @@ def test_record_equipment_replaces_existing_active_assignment(db_session):
     assert active.ont_unit.serial_number == "NEW123"
 
 
-def test_equipment_does_not_leak_hidden_jobs(db_session):
+def test_equipment_does_not_leak_hidden_jobs(db_session, subscription, olt_device):
     user = _user(db_session)
     _profile(db_session, user)
     other = _user(db_session, "Other")
     _profile(db_session, other, crm_person_id="other-equipment-tech")
-    subscriber = _subscriber(db_session)
+    subscriber = subscription.subscriber
+    pon = _pon(db_session, olt_device, "0/1/3")
     _work_order(
         db_session,
         subscriber,
@@ -170,15 +198,18 @@ def test_equipment_does_not_leak_hidden_jobs(db_session):
             _auth(user),
             "wo-equip-hidden",
             serial_number="ONT-HIDDEN",
+            subscription_id=str(subscription.id),
+            pon_port_id=str(pon.id),
         )
 
     assert exc.value.status_code == 404
 
 
-def test_equipment_api(db_session):
+def test_equipment_api(db_session, subscription, olt_device):
     user = _user(db_session)
     _profile(db_session, user)
-    subscriber = _subscriber(db_session)
+    subscriber = subscription.subscriber
+    pon = _pon(db_session, olt_device, "0/1/4")
     _work_order(db_session, subscriber, crm_work_order_id="wo-equip-api")
     db_session.commit()
 
@@ -190,7 +221,12 @@ def test_equipment_api(db_session):
 
     created = client.post(
         "/api/v1/field/jobs/wo-equip-api/equipment",
-        json={"serial_number": "ont-api-1", "vendor": "Huawei"},
+        json={
+            "serial_number": "ont-api-1",
+            "subscription_id": str(subscription.id),
+            "pon_port_id": str(pon.id),
+            "vendor": "Huawei",
+        },
     )
 
     assert created.status_code == 201

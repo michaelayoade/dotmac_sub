@@ -31,6 +31,7 @@ from app.models.work_order import WorkOrder
 from app.services import fiber_change_requests
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
+from app.services.network import fiber_topology_field_observations
 
 _TESTABLE_ASSET_MODELS = {
     "fiber_strand": FiberStrand,
@@ -258,6 +259,89 @@ def list_tests(
         .order_by(FieldFiberTestResult.created_at.desc())
         .all()
     )
+
+
+def record_source_observation(
+    db: Session,
+    principal: dict[str, Any],
+    *,
+    work_order_public_id: str,
+    staged_feature_id: str,
+    expected_feature_content_sha256: str,
+    verification_scope: str,
+    outcome: str,
+    observed_at: datetime,
+    client_ref: str,
+    observed_external_label: str | None = None,
+    observed_asset_type: str | None = None,
+    observed_asset_id: str | None = None,
+    start_endpoint_type: str | None = None,
+    start_endpoint_ref_id: str | None = None,
+    end_endpoint_type: str | None = None,
+    end_endpoint_ref_id: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    accuracy_m: float | None = None,
+    instrument: str | None = None,
+    measurement_payload: dict[str, Any] | None = None,
+    attachment_ids: list[str] | None = None,
+    notes: str | None = None,
+):
+    """Thin technician/work-order adapter around the observation owner."""
+
+    profile = _profile_from_principal(db, principal)
+    work_order = _scoped_work_order(db, profile, work_order_public_id)
+    try:
+        return fiber_topology_field_observations.record_fiber_field_observation(
+            db,
+            staged_feature_id=staged_feature_id,
+            expected_feature_content_sha256=expected_feature_content_sha256,
+            work_order_id=work_order.id,
+            recorded_by_technician_id=profile.id,
+            recorded_by_person_id=profile.person_id,
+            recorded_by_system_user_id=profile.system_user_id,
+            verification_scope=verification_scope,
+            outcome=outcome,
+            observed_at=observed_at,
+            client_ref=client_ref,
+            observed_external_label=observed_external_label,
+            observed_asset_type=observed_asset_type,
+            observed_asset_id=observed_asset_id,
+            start_endpoint_type=start_endpoint_type,
+            start_endpoint_ref_id=start_endpoint_ref_id,
+            end_endpoint_type=end_endpoint_type,
+            end_endpoint_ref_id=end_endpoint_ref_id,
+            latitude=latitude,
+            longitude=longitude,
+            accuracy_m=accuracy_m,
+            instrument=instrument,
+            measurement_payload=measurement_payload,
+            attachment_ids=attachment_ids,
+            notes=notes,
+        )
+    except fiber_topology_field_observations.FiberTopologyFieldObservationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def list_source_observations(
+    db: Session,
+    principal: dict[str, Any],
+    *,
+    work_order_public_id: str,
+    staged_feature_id: str | None = None,
+):
+    """List immutable staged observations within the technician's job scope."""
+
+    profile = _profile_from_principal(db, principal)
+    work_order = _scoped_work_order(db, profile, work_order_public_id)
+    try:
+        return fiber_topology_field_observations.list_fiber_field_observations(
+            db,
+            work_order_id=work_order.id,
+            staged_feature_id=staged_feature_id,
+        )
+    except fiber_topology_field_observations.FiberTopologyFieldObservationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _pending_splice_requests(db: Session) -> list[FiberChangeRequest]:

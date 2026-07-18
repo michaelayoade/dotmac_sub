@@ -8,9 +8,7 @@ from app.models.network import (
     IpPool,
     IPv4Address,
     IPVersion,
-    MgmtIpMode,
     OLTDevice,
-    OntAssignment,
     OntUnit,
 )
 from app.services.network import ont_authorization
@@ -167,9 +165,16 @@ def test_management_ip_allocation_reuses_existing_ip_only_when_in_current_pool(
     db_session.add_all([olt, ont, pool])
     db_session.flush()
     db_session.add(IpBlock(pool_id=pool.id, cidr="172.16.202.0/30", is_active=True))
-    assignment = ont_authorization._get_or_create_active_assignment(db_session, ont)
-    assignment.mgmt_ip_mode = MgmtIpMode.static_ip
-    assignment.mgmt_ip_address = "172.16.202.2"
+    db_session.add(
+        IPv4Address(
+            address="172.16.202.2",
+            pool_id=pool.id,
+            is_reserved=True,
+            notes=f"ont:{ont.id}",
+            ont_unit_id=ont.id,
+            allocation_type="management",
+        )
+    )
     olt.mgmt_ip_pool_id = pool.id
     db_session.commit()
 
@@ -219,11 +224,7 @@ def test_management_ip_allocation_uses_valid_cached_next_ip(
     assert ok is True
     assert allocated_ip == "172.16.203.2"
     assert "Allocated management IP" in message
-    assignment = db_session.query(OntAssignment).filter_by(ont_unit_id=ont.id).one()
-    assert assignment.mgmt_ip_mode == MgmtIpMode.static_ip
-    assert assignment.mgmt_ip_address == "172.16.203.2"
-    assert assignment.mgmt_subnet == "255.255.255.0"
-    assert assignment.mgmt_gateway == "172.16.203.1"
+    assert ont.assignments == []
     assert desired_config(ont)["management"] == {
         "ip_address": "172.16.203.2",
         "ip_mode": "static_ip",
@@ -303,9 +304,6 @@ def test_management_ip_allocation_replaces_stale_existing_ip_from_wrong_pool(
     db_session.add(
         IpBlock(pool_id=current_pool.id, cidr="172.16.202.0/30", is_active=True)
     )
-    assignment = ont_authorization._get_or_create_active_assignment(db_session, ont)
-    assignment.mgmt_ip_mode = MgmtIpMode.static_ip
-    assignment.mgmt_ip_address = "172.16.201.2"
     stale_record = IPv4Address(
         address="172.16.201.2",
         pool_id=old_pool.id,
@@ -327,12 +325,12 @@ def test_management_ip_allocation_replaces_stale_existing_ip_from_wrong_pool(
     assert ok is True
     assert allocated_ip == "172.16.202.2"
     assert "Allocated management IP" in message
-    db_session.refresh(assignment)
     db_session.refresh(stale_record)
-    assert assignment.mgmt_ip_address == "172.16.202.2"
     assert stale_record.is_reserved is False
     assert stale_record.ont_unit_id is None
     assert stale_record.allocation_type is None
+    assert desired_config(ont)["management"]["ip_address"] == "172.16.202.2"
+    assert ont.assignments == []
 
 
 def test_authorization_cleans_stale_registration_before_retry(
@@ -567,7 +565,7 @@ def test_authorization_links_assignment_before_reporting_success(
 
     monkeypatch.setattr(
         ont_authorization,
-        "ensure_assignment_and_pon_port_for_authorized_ont",
+        "record_topology_observation_for_authorized_ont",
         fake_ensure,
     )
 
@@ -636,7 +634,7 @@ def test_authorization_reports_partial_failure_when_assignment_link_fails(
     )
     monkeypatch.setattr(
         ont_authorization,
-        "ensure_assignment_and_pon_port_for_authorized_ont",
+        "record_topology_observation_for_authorized_ont",
         lambda *args, **kwargs: (False, "Invalid OLT F/S/P for assignment."),
     )
 

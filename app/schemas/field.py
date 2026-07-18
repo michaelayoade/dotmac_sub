@@ -273,6 +273,8 @@ class FieldTransitionResponse(BaseModel):
 
 class FieldEquipmentRecord(BaseModel):
     serial_number: str = Field(min_length=1, max_length=120)
+    subscription_id: UUID
+    pon_port_id: UUID
     vendor: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     notes: str | None = Field(default=None, max_length=2000)
@@ -709,6 +711,84 @@ class FieldFiberTestRead(BaseModel):
     measured_at: datetime | None = None
     notes: str | None = None
     client_ref: UUID | None = None
+    created_at: datetime
+
+
+class FieldFiberSourceObservationCreate(BaseModel):
+    work_order_id: str = Field(min_length=1, max_length=64)
+    staged_feature_id: UUID
+    expected_feature_content_sha256: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    verification_scope: Literal[
+        "identity",
+        "presence",
+        "start_endpoint",
+        "end_endpoint",
+        "path_endpoints",
+    ]
+    outcome: Literal[
+        "agrees",
+        "conflicts",
+        "not_found",
+        "inaccessible",
+        "inconclusive",
+    ]
+    observed_at: datetime
+    client_ref: UUID
+    observed_external_label: str | None = Field(default=None, max_length=255)
+    observed_asset_type: str | None = Field(default=None, max_length=40)
+    observed_asset_id: UUID | None = None
+    start_endpoint_type: str | None = Field(default=None, max_length=40)
+    start_endpoint_ref_id: UUID | None = None
+    end_endpoint_type: str | None = Field(default=None, max_length=40)
+    end_endpoint_ref_id: UUID | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0, le=10000)
+    instrument: str | None = Field(default=None, max_length=120)
+    measurement_payload: dict[str, Any] = Field(default_factory=dict)
+    attachment_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    notes: str | None = Field(default=None, max_length=4000)
+
+
+class FieldFiberSourceObservationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    staged_feature_id: UUID
+    feature_content_sha256: str
+    source_system: str
+    source_profile: str
+    source_asset_type: str
+    source_external_id: str | None = None
+    work_order_id: UUID
+    work_order_public_id: str
+    verification_scope: str
+    outcome: str
+    observed_external_label: str | None = None
+    observed_asset_type: str | None = None
+    observed_asset_id: UUID | None = None
+    start_endpoint_type: str | None = None
+    start_endpoint_ref_id: UUID | None = None
+    end_endpoint_type: str | None = None
+    end_endpoint_ref_id: UUID | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy_m: float | None = None
+    instrument: str | None = None
+    measurement_payload: dict[str, Any] = Field(default_factory=dict)
+    attachment_ids: list[UUID] = Field(default_factory=list)
+    notes: str | None = None
+    claim_sha256: str
+    observation_sha256: str
+    client_ref: UUID
+    recorded_by_technician_id: UUID
+    recorded_by_person_id: UUID
+    recorded_by_system_user_id: UUID | None = None
+    observed_at: datetime
     created_at: datetime
 
 

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.catalog import CatalogOffer, Subscription
-from app.models.network import IPAssignment, IpPool, IPVersion, OntAssignment, PonPort
+from app.models.network import IPAssignment, IpPool, IPVersion, OntAssignment
 from app.models.network_monitoring import PopSite
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.services import domain_settings as domain_settings_service
@@ -290,12 +290,19 @@ def _table_row(subscriber: Subscriber) -> dict[str, Any]:
 
 
 def _require_targets(targets: MigrationTargets) -> None:
+    if targets.pon_port_id:
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Bulk OLT/PON migration is retired; use the reviewed ONT identity "
+                "workflow with exact assignment, subscription, PON, and OLT IDs"
+            ),
+        )
     if not any(
         [
             targets.offer_id,
             targets.nas_device_id,
             targets.ip_pool_id,
-            targets.pon_port_id,
         ]
     ):
         raise HTTPException(
@@ -358,16 +365,6 @@ def _preview_changes(
                 "to": target_pool.name if target_pool else targets.ip_pool_id,
             }
         )
-    if targets.pon_port_id:
-        target_port = db.get(PonPort, targets.pon_port_id)
-        out["changes"].append(
-            {
-                "field": "OLT Port",
-                "from": row.get("olt_port") or "-",
-                "to": target_port.name if target_port else targets.pon_port_id,
-            }
-        )
-
     return out
 
 
@@ -538,25 +535,6 @@ def _update_ip_pool_for_subscriber(
     return moved
 
 
-def _update_olt_port_for_subscriber(
-    db: Session, *, subscriber_id: str, pon_port_id: str
-) -> int:
-    target_port = db.get(PonPort, pon_port_id)
-    if not target_port:
-        raise ValueError("Target OLT port not found")
-
-    moved = 0
-    assignments = db.scalars(
-        select(OntAssignment)
-        .where(OntAssignment.subscriber_id == subscriber_id)
-        .where(OntAssignment.active.is_(True))
-    ).all()
-    for assignment in assignments:
-        assignment.pon_port_id = target_port.id
-        moved += 1
-    return moved
-
-
 def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
     job = get_job(db, job_id)
     if not job:
@@ -564,6 +542,7 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
 
     filters = MigrationFilters(**(job.get("filters") or {}))
     targets = MigrationTargets(**(job.get("targets") or {}))
+    _require_targets(targets)
     selected_ids = [str(item) for item in (job.get("selected_ids") or [])]
     actor_id = str(job.get("actor_id") or "").strip() or None
 
@@ -618,11 +597,6 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 moved_ip = _update_ip_pool_for_subscriber(
                     db, subscriber_id=subscriber_id, pool_id=targets.ip_pool_id
                 )
-            if targets.pon_port_id:
-                _update_olt_port_for_subscriber(
-                    db, subscriber_id=subscriber_id, pon_port_id=targets.pon_port_id
-                )
-
             # ensure radius can be re-provisioned before committing this subscriber migration
             db.flush()
             sync_account_credentials_to_radius(db, subscriber.id)
@@ -725,16 +699,12 @@ def page_options(db: Session, *, actor_id: str | None = None) -> dict[str, Any]:
     ip_pools = db.scalars(
         select(IpPool).where(IpPool.is_active.is_(True)).order_by(IpPool.name.asc())
     ).all()
-    pon_ports = db.scalars(
-        select(PonPort).where(PonPort.is_active.is_(True)).order_by(PonPort.name.asc())
-    ).all()
     return {
         "offers": offers,
         "resellers": resellers,
         "pop_sites": pop_sites,
         "nas_devices": nas_devices,
         "ip_pools": ip_pools,
-        "pon_ports": pon_ports,
         "subscriber_statuses": [status.value for status in SubscriberStatus],
         "jobs": list_jobs(db, limit=20, actor_id=actor_id),
     }

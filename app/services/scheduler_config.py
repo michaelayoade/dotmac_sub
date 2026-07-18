@@ -1854,12 +1854,11 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=300,
         )
-        # UFiber ONU -> subscriber link: net-new, auth-safe association pass.
-        # Router-mode UF-Wifi ONUs carry the customer router MAC as their own
-        # MAC (from UISP), so a direct MAC match to an ACTIVE subscription
-        # fills the missing ont_assignments link. Never writes the subscription
-        # MAC. Runs after the UISP sync has imported/refreshed the ONUs, so an
-        # hourly default (vs the 15-min importer) is ample.
+        # Preview-only UFiber ONU/subscription candidate audit. Router-mode
+        # UF-Wifi ONUs carry an observed MAC from UISP, which can be compared to
+        # ACTIVE-subscription MAC observations for field review. The task writes
+        # neither customer assignments nor subscription MACs. It runs after the
+        # UISP sync, so an hourly default (vs the 15-min importer) is ample.
         ufiber_onu_link_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,

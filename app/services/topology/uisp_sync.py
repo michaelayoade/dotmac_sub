@@ -20,8 +20,8 @@ wireless/UFiber customer layer into sub's own tables:
   - PON-port granularity for the UFiber plant: the generic ``/devices`` list
     carries no port info, so each imported UF-OLT's ONUs are re-listed via
     ``/devices/onus?parentId=<olt>`` whose ``onu.port`` is the OLT-side PON
-    port number. Ports are ensured in ``pon_ports`` (match-don't-create by
-    ``(olt_id, port_number)``) and stamped onto ``ont_units.pon_port_id``.
+    port number. The collector submits that exact observation to
+    ``network.ont_topology_observations``; it does not rewrite topology.
 
 Monitoring/state stays with the native polling layer; this sync only owns
 *relationships* and identity fill-in.
@@ -52,7 +52,6 @@ from app.models.network import (
     OLTDevice,
     OntUnit,
     OnuOnlineStatus,
-    PonPort,
 )
 from app.models.network_monitoring import (
     NetworkDevice,
@@ -61,6 +60,9 @@ from app.models.network_monitoring import (
 )
 from app.models.subscriber import Subscriber
 from app.services.network.ont_status import apply_olt_status_observation
+from app.services.network.ont_topology_observations import (
+    observe_ont_electronic_topology,
+)
 from app.services.topology.lldp_poller import _canonical, build_device_index
 from app.services.topology.lldp_poller import _norm as _norm_label
 
@@ -484,11 +486,11 @@ def _blank_stats() -> Counter:
             "excluded_archive": 0,
             "aps_matched": 0,
             "aps_unmatched": 0,
-            "ports_created": 0,
-            "onu_ports_set": 0,
-            "onu_ports_moved": 0,
-            "onu_olts_moved": 0,
-            "onu_ports_unchanged": 0,
+            "pon_ports_initialized": 0,
+            "onu_topology_initialized": 0,
+            "onu_topology_confirmed": 0,
+            "onu_topology_incomplete": 0,
+            "onu_topology_review_required": 0,
             "port_fetch_failures": 0,
             "links_created": 0,
             "links_updated": 0,
@@ -919,42 +921,10 @@ def _upsert_onu(
     created = ont is None
     changed = False
     if ont is None:
-        # pon_port_id is stamped separately from the per-OLT ONU listings
-        # (the generic /devices list payload has no port granularity).
-        ont = OntUnit(serial_number=serial, olt_device_id=olt_id, vendor="ubiquiti")
+        # Electronic topology is projected separately through the observation
+        # owner after the per-OLT listing supplies exact port evidence.
+        ont = OntUnit(serial_number=serial, vendor="ubiquiti")
         session.add(ont)
-    elif ont.olt_device_id is None:
-        ont.olt_device_id = olt_id
-        changed = True
-    elif ont.olt_device_id != olt_id:
-        collision = (
-            session.query(OntUnit.id)
-            .filter(
-                OntUnit.olt_device_id == olt_id,
-                OntUnit.serial_number == serial,
-                OntUnit.id != ont.id,
-            )
-            .first()
-        )
-        if collision is not None:
-            stats["skipped"] += 1
-            return None
-        logger.info(
-            "uisp_sync_onu_olt_moved uisp_id=%s old_olt=%s new_olt=%s",
-            uisp_id,
-            ont.olt_device_id,
-            olt_id,
-            extra={
-                "event": "uisp_sync_onu_olt_moved",
-                "uisp_device_id": uisp_id,
-                "old_olt_id": str(ont.olt_device_id),
-                "new_olt_id": str(olt_id),
-            },
-        )
-        ont.olt_device_id = olt_id
-        ont.pon_port_id = None
-        stats["onu_olts_moved"] += 1
-        changed = True
 
     changed |= _fill(ont, "name", ident.get("name"))
     changed |= _fill(ont, "model", ident.get("model"))
@@ -1032,133 +1002,53 @@ def _collect_onu_ports(
     return ports
 
 
-def _ensure_pon_ports(
-    session: Session,
-    onus: list[dict],
-    olt_ids_by_uisp: dict[str, UUID],
-    onu_ports_by_uisp: dict[str, int],
-    stats: Counter,
-) -> dict[tuple[UUID, int], UUID]:
-    """Ensure a pon_ports row per (UF-OLT, port) the listings observed.
-
-    Match-don't-create by ``(olt_id, port_number)`` first (whatever its name),
-    then by the name this sync would mint (covers legacy rows whose
-    ``port_number`` is NULL — filled in, never overwritten). Only ports under
-    UISP-managed OLTs (the ones this run imported/matched) are ever touched.
-    """
-    needed: set[tuple[UUID, int]] = set()
-    for device in onus:
-        port_number = onu_ports_by_uisp.get(_device_id(device))
-        if port_number is None:
-            continue
-        olt_pk = _onu_parent_olt_id(device, olt_ids_by_uisp)
-        if olt_pk is not None:
-            needed.add((olt_pk, port_number))
-
-    port_ids: dict[tuple[UUID, int], UUID] = {}
-    for olt_pk, port_number in sorted(needed, key=lambda k: (str(k[0]), k[1])):
-        try:
-            with session.begin_nested():
-                port = (
-                    session.query(PonPort)
-                    .filter(
-                        PonPort.olt_id == olt_pk,
-                        PonPort.port_number == port_number,
-                    )
-                    .order_by(PonPort.name)
-                    .first()
-                )
-                if port is None:
-                    name = f"pon{port_number}"
-                    port = (
-                        session.query(PonPort)
-                        .filter(PonPort.olt_id == olt_pk, PonPort.name == name)
-                        .one_or_none()
-                    )
-                    if port is None:
-                        port = PonPort(
-                            olt_id=olt_pk,
-                            name=name,
-                            port_number=port_number,
-                            is_active=True,
-                            notes=f"Created by UISP topology sync ({SOURCE}).",
-                        )
-                        session.add(port)
-                        stats["ports_created"] += 1
-                    else:
-                        _fill(port, "port_number", port_number)
-                session.flush()
-                port_ids[(olt_pk, port_number)] = port.id
-        except Exception:
-            stats["failed"] += 1
-            logger.exception(
-                "uisp_sync_pon_port_failed olt=%s port=%s", olt_pk, port_number
-            )
-    return port_ids
-
-
-def _apply_onu_pon_port(
+def _record_onu_topology_observation(
     session: Session,
     ont: OntUnit,
     device: dict,
     olt_ids_by_uisp: dict[str, UUID],
     onu_ports_by_uisp: dict[str, int],
-    pon_port_ids: dict[tuple[UUID, int], UUID],
     stats: Counter,
+    now: datetime,
 ) -> None:
-    """Point one UFiber ONU at its observed PON port (UISP is observed truth).
-
-    Fill-if-NULL *and* move-on-change: the OLT reports where the ONU is
-    physically registered, so a differing ``pon_port_id`` is drift and is
-    corrected. Strictly scoped to ONUs whose resolved parent is a UISP-managed
-    OLT from this run; an ONT row whose ``olt_device_id`` points elsewhere
-    (e.g. a Huawei OLT) is never touched. Missing port info leaves the field
-    as-is.
-
-    A move (existing non-NULL port -> different port) is an otherwise-silent
-    auto-heal, so it leaves a breadcrumb: the ``logger.info`` line below flows
-    to Loki and is the only post-mortem history of re-splices/port drift.
-    First-time stamping (old port NULL) is a fill, not a move: no log, no
-    ``onu_ports_moved`` count — ``onu_ports_set`` alone covers it.
-    """
+    """Delegate one exact UISP location observation to the topology owner."""
     port_number = onu_ports_by_uisp.get(_device_id(device))
-    if port_number is None:
-        return
     olt_pk = _onu_parent_olt_id(device, olt_ids_by_uisp)
-    if olt_pk is None or ont.olt_device_id != olt_pk:
+    if olt_pk is None:
         return
-    port_id = pon_port_ids.get((olt_pk, port_number))
-    if port_id is None:
-        return
-    if ont.pon_port_id != port_id:
-        old_port_id = ont.pon_port_id
-        if old_port_id is not None:
-            old_port = session.get(PonPort, old_port_id)
-            old_port_name = old_port.name if old_port is not None else None
-            logger.info(
-                "uisp_sync_onu_pon_port_moved onu=%s uisp_id=%s old_port=%s "
-                "old_port_id=%s new_port=%s new_port_id=%s",
-                ont.name or ont.serial_number,
-                ont.uisp_device_id,
-                old_port_name,
-                old_port_id,
-                f"pon{port_number}",
-                port_id,
-                extra={
-                    "event": "uisp_sync_onu_pon_port_moved",
-                    "device_name": ont.name or ont.serial_number,
-                    "uisp_device_id": ont.uisp_device_id,
-                    "old_port_id": str(old_port_id),
-                    "old_port_name": old_port_name,
-                    "new_port_id": str(port_id),
-                    "new_port_number": port_number,
-                },
-            )
-            stats["onu_ports_moved"] += 1
-        ont.pon_port_id = port_id
-        stats["onu_ports_set"] += 1
-    else:
-        stats["onu_ports_unchanged"] += 1
+    result = observe_ont_electronic_topology(
+        session,
+        source="uisp",
+        evidence_key=_device_id(device),
+        ont_unit_id=ont.id,
+        observed_olt_id=olt_pk,
+        observed_port_number=port_number,
+        observed_port_label=(f"pon{port_number}" if port_number is not None else None),
+        observed_at=now,
+    )
+    if result.pon_created:
+        stats["pon_ports_initialized"] += 1
+    if result.ont_updated:
+        stats["onu_topology_initialized"] += 1
+    if result.outcome == "confirmed":
+        stats["onu_topology_confirmed"] += 1
+    elif result.outcome == "incomplete":
+        stats["onu_topology_incomplete"] += 1
+    elif result.review_required:
+        stats["onu_topology_review_required"] += 1
+        logger.warning(
+            "uisp_onu_topology_review_required onu=%s uisp_id=%s reason=%s",
+            ont.id,
+            ont.uisp_device_id,
+            result.reason,
+            extra={
+                "event": "uisp_onu_topology_review_required",
+                "ont_unit_id": str(ont.id),
+                "uisp_device_id": ont.uisp_device_id,
+                "evidence_id": str(result.evidence.id),
+                "reason": result.reason,
+            },
+        )
 
 
 def _import_data_links(session: Session, client, now: datetime, stats: Counter) -> None:
@@ -1382,10 +1272,6 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
 
     # --- PON-port granularity: per-OLT ONU listings (onu.port) ---
     onu_ports_by_uisp = _collect_onu_ports(client, olt_ids_by_uisp, stats)
-    pon_port_ids = _ensure_pon_ports(
-        session, onus, olt_ids_by_uisp, onu_ports_by_uisp, stats
-    )
-
     # --- UFiber ONUs -> ont_units ---
     seen_onu_keys: set[tuple] = set()
     for device in onus:
@@ -1395,14 +1281,14 @@ def sync(session: Session, client, now: datetime | None = None) -> dict:
                     session, device, olt_ids_by_uisp, seen_onu_keys, now, stats
                 )
                 if ont is not None:
-                    _apply_onu_pon_port(
+                    _record_onu_topology_observation(
                         session,
                         ont,
                         device,
                         olt_ids_by_uisp,
                         onu_ports_by_uisp,
-                        pon_port_ids,
                         stats,
+                        now,
                     )
                     session.flush()
         except Exception:

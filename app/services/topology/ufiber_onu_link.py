@@ -1,37 +1,11 @@
-"""Standalone reconciler: link UFiber router-mode ONUs to subscribers by MAC.
+"""Preview-only UFiber ONU/subscription MAC-match audit.
 
-Net-new, auth-safe association pass. UISP-managed UFiber ONUs (``ont_units``
-rows carrying a ``uisp_device_id``) are imported by the UISP topology sync as
-monitoring/topology objects with NO subscriber assignment. For UF-Wifi
-(router-mode) ONUs the ONU *is* the customer's router, so the ONU's own MAC
-(already in ``ont_units.mac_address``, sourced from UISP) EQUALS the PPPoE
-calling-station-id RADIUS authenticated — i.e. ``subscriptions.mac_address``.
-A direct, exact MAC join therefore identifies the active subscriber the ONU
-serves, and we fill in the missing ``ont_assignments`` link.
-
-This is the SAME auth-safe pattern as the wireless-station MAC match in
-``uisp_sync._upsert_station`` arm 2: it keys off the router MAC RADIUS already
-trusts and NEVER reads or writes ``subscriptions.mac_address``. It only creates
-the ``ont_assignments`` row (subscriber_id + provenance), mirroring how a Huawei
-ONT assignment is created (``subscriber_ont_adapter``).
-
-Bridge-mode UF-Nano ONUs are deliberately NOT matched here: their own MAC is
-not the router MAC (the customer router *behind* the ONU authenticates), so it
-never equals a subscription MAC. Those are correctly left for the
-forwarding-harvest path. This is an association pass — never a MAC backfill of
-subscriptions.
-
-Scope is strictly UISP-managed fiber: candidates are ``ont_units`` with a
-non-NULL ``uisp_device_id`` (the uisp_sync upsert key). Huawei ONTs, which have
-``uisp_device_id IS NULL``, are never considered.
-
-Discipline: single-flight advisory lock (in the task wrapper), a candidate
-query using a correlated ``NOT EXISTS`` (no giant ``IN(...)``), the MAC index
-built ONCE, per-item savepoint isolation, fill-null-only (candidates already
-exclude any ONU with an active assignment) and provenance. Idempotent: a
-re-run finds every linked ONU now has an active assignment and creates no
-duplicates (the ``ix_ont_assignments_active_unit`` partial-unique index is the
-backstop).
+UISP and RADIUS observations can identify candidates for field verification,
+but they are not customer-assignment decisions.  This compatibility task keeps
+the bounded matching report and operational signals while never creating or
+rewriting ``OntAssignment`` rows.  Normal assignments require an operator- or
+field-selected exact subscription and modeled PON through
+``network.ont_assignment_commands``; disagreements use reviewed identity repair.
 """
 
 from __future__ import annotations
@@ -40,7 +14,6 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from difflib import SequenceMatcher
 
 from sqlalchemy import exists
@@ -56,9 +29,8 @@ logger = logging.getLogger(__name__)
 # "topo"). "uFL" -> UFiber ONU Link.
 ADVISORY_LOCK_KEY = 0x75_46_4C
 
-# Provenance stamped on ont_assignments.notes for rows created by the primary
-# (direct, unambiguous MAC) arm.
-PROVENANCE = "linked via UISP ONU MAC (router-mode)"
+# Evidence label emitted for the primary direct, unambiguous MAC candidate.
+PROVENANCE = "candidate via UISP ONU MAC (router-mode)"
 
 # Name-tiebreak thresholds — mirror uisp_sync's IP+name arm
 # (``_IP_NAME_SIM_THRESHOLD = 0.60``). To resolve an ambiguous MAC the winning
@@ -250,6 +222,10 @@ def _candidate_onus(session: Session) -> list[OntUnit]:
 def _blank_result() -> dict:
     return {
         "candidates": 0,
+        "matched_candidate": 0,
+        "matched_by_name_candidate": 0,
+        # Retained as zero-valued compatibility counters for dashboards that
+        # previously displayed mutations performed by this task.
         "matched_linked": 0,
         "matched_by_name_tiebreak": 0,
         "ambiguous": 0,
@@ -263,7 +239,7 @@ def _blank_result() -> dict:
 def _resolve_match(
     onu: OntUnit, matches: list[_SubMatch], result: dict
 ) -> tuple[_SubMatch | None, str, bool]:
-    """Pick the subscriber to link for one MAC-matched ONU.
+    """Pick the strongest review candidate for one MAC-matched ONU.
 
     ``matches`` is the list of DISTINCT active subscribers the ONU's MAC
     resolves to. Returns ``(winner, provenance_note, via_tiebreak)`` where
@@ -287,20 +263,12 @@ def _resolve_match(
         )
         result["ambiguous"] += 1
         return None, PROVENANCE, False
-    note = f"linked via ONU MAC + name tiebreak sim={best_score:.2f}"
+    note = f"candidate via ONU MAC + name tiebreak sim={best_score:.2f}"
     return winner, note, True
 
 
 def link_ufiber_onus_to_subscribers(db: Session) -> dict:
-    """Link router-mode UFiber ONUs to their active subscriber by ONU MAC.
-
-    For each candidate ONU (UISP-managed, has a MAC, no active assignment) whose
-    normalized MAC matches EXACTLY ONE distinct active subscriber, create an
-    ``ont_assignments`` row mirroring a Huawei ONT assignment: ``ont_unit_id`` +
-    ``subscriber_id`` + ``pon_port_id`` (copied from the ONU — may be NULL for
-    UFiber until the PON-port backfill lands; NULL is fine) + ``active=True`` +
-    provenance. ``service_address_id`` is left NULL (not derivable from a
-    router-mode MAC match). ``subscriptions.mac_address`` is never written.
+    """Report router-mode UFiber ONU/subscription candidates without mutation.
 
     A MAC resolving to >1 distinct active subscriber is ambiguous; the
     ONU-name-vs-subscriber-name tiebreak (mirroring ``uisp_sync``'s IP+name arm)
@@ -309,8 +277,8 @@ def link_ufiber_onus_to_subscribers(db: Session) -> dict:
     ``duplicate_active_mac`` ops signal is emitted with the losing login — the
     subscription itself is never modified.
 
-    Returns a counters dict: candidates, matched_linked, matched_by_name_tiebreak,
-    ambiguous, no_match, duplicate_active_mac, already_linked_skipped, failed.
+    Candidate identity is logged for review. No assignment or subscription is
+    created, updated, activated, deactivated, or staged for provisioning.
     """
     result = _blank_result()
 
@@ -320,8 +288,6 @@ def link_ufiber_onus_to_subscribers(db: Session) -> dict:
         return result
 
     mac_index = _active_subscriber_mac_index(db)
-    now = datetime.now(UTC)
-
     for onu in candidates:
         mac = _norm_mac(onu.mac_address)
         if not mac:
@@ -338,85 +304,51 @@ def link_ufiber_onus_to_subscribers(db: Session) -> dict:
         if winner is None:
             continue
 
-        # Per-item savepoint: a single failed insert (e.g. a concurrent run
-        # racing the partial-unique active-assignment index) is isolated and
-        # counted without aborting the whole batch.
-        try:
-            with db.begin_nested():
-                # Re-check under the savepoint so a concurrent linker that
-                # already created the active assignment is treated as
-                # already-linked, not a hard failure.
-                already = (
-                    db.query(OntAssignment.id)
-                    .filter(
-                        OntAssignment.ont_unit_id == onu.id,
-                        OntAssignment.active.is_(True),
-                    )
-                    .first()
+        if via_tiebreak:
+            result["matched_by_name_candidate"] += 1
+        else:
+            result["matched_candidate"] += 1
+        logger.info(
+            "ufiber_onu_assignment_candidate ont_unit_id=%s mac=%s "
+            "subscription_id=%s subscriber_id=%s pon_port_id=%s evidence=%s",
+            onu.id,
+            mac,
+            winner.subscription_id,
+            winner.subscriber_id,
+            onu.pon_port_id,
+            note,
+            extra={
+                "event": "ufiber_onu_assignment_candidate",
+                "ont_unit_id": str(onu.id),
+                "subscription_id": str(winner.subscription_id),
+                "subscriber_id": str(winner.subscriber_id),
+                "pon_port_id": str(onu.pon_port_id) if onu.pon_port_id else None,
+                "evidence": note,
+            },
+        )
+        # Ops signal: every OTHER distinct active subscriber carrying this
+        # ONU's MAC is a stale duplicate. Surfaced for cleanup; never mutated.
+        for loser in matches:
+            if loser.subscriber_id != winner.subscriber_id:
+                logger.warning(
+                    "ufiber_onu_link_duplicate_active_mac ont_unit_id=%s "
+                    "mac=%s candidate_subscriber=%s losing_subscriber=%s "
+                    "losing_login=%s",
+                    onu.id,
+                    mac,
+                    winner.subscriber_id,
+                    loser.subscriber_id,
+                    loser.login,
+                    extra={
+                        "event": "ufiber_onu_link_duplicate_active_mac",
+                        "ont_unit_id": str(onu.id),
+                        "mac": mac,
+                        "candidate_subscriber_id": str(winner.subscriber_id),
+                        "losing_subscriber_id": str(loser.subscriber_id),
+                        "losing_login": loser.login,
+                    },
                 )
-                if already is not None:
-                    result["already_linked_skipped"] += 1
-                    continue
-                assignment = OntAssignment(
-                    ont_unit_id=onu.id,
-                    subscriber_id=winner.subscriber_id,
-                    subscription_id=winner.subscription_id,
-                    pon_port_id=onu.pon_port_id,
-                    service_address_id=winner.service_address_id,
-                    active=True,
-                    assigned_at=now,
-                    notes=note,
-                )
-                db.add(assignment)
-                db.flush()
-                try:
-                    with db.begin_nested():
-                        from app.services.uisp_control_plane import (
-                            stage_pending_orders_for_subscription,
-                        )
-
-                        stage_pending_orders_for_subscription(
-                            db, winner.subscription_id, commit=False
-                        )
-                except Exception:
-                    logger.exception(
-                        "ufiber_order_staging_failed subscription_id=%s ont=%s",
-                        winner.subscription_id,
-                        onu.id,
-                    )
-            if via_tiebreak:
-                result["matched_by_name_tiebreak"] += 1
-            else:
-                result["matched_linked"] += 1
-            # Ops signal: every OTHER distinct active subscriber carrying this
-            # ONU's MAC is a stale duplicate (a losing account still bound to
-            # the router MAC). Surfaced for cleanup; never mutated here.
-            for loser in matches:
-                if loser.subscriber_id != winner.subscriber_id:
-                    logger.warning(
-                        "ufiber_onu_link_duplicate_active_mac ont_unit_id=%s "
-                        "mac=%s linked_subscriber=%s losing_subscriber=%s "
-                        "losing_login=%s",
-                        onu.id,
-                        mac,
-                        winner.subscriber_id,
-                        loser.subscriber_id,
-                        loser.login,
-                        extra={
-                            "event": "ufiber_onu_link_duplicate_active_mac",
-                            "ont_unit_id": str(onu.id),
-                            "mac": mac,
-                            "linked_subscriber_id": str(winner.subscriber_id),
-                            "losing_subscriber_id": str(loser.subscriber_id),
-                            "losing_login": loser.login,
-                        },
-                    )
-                    result["duplicate_active_mac"] += 1
-        except Exception:  # noqa: BLE001 - report and keep reconciling
-            logger.exception(
-                "ufiber_onu_link_failed ont_unit_id=%s mac=%s", onu.id, mac
-            )
-            result["failed"] += 1
+                result["duplicate_active_mac"] += 1
 
     logger.info("ufiber_onu_link_done %s", result)
     return result

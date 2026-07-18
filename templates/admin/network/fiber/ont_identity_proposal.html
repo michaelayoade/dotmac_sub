@@ -1,0 +1,138 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Propose ONT Identity Repair - Admin{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-6xl space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/network/ont-identity-reviews" class="hover:text-indigo-600">ONT identity review</a>
+            <span>/</span><span>New exact proposal</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Propose an exact ONT identity repair</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Preview is read-only. It resolves only exact database IDs and automatically enumerates every active ONT or subscription conflict.</p>
+    </div>
+
+    {% if error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-200">{{ error }}</div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div class="space-y-6">
+            <form method="post" action="/admin/network/ont-identity-reviews/preview" class="space-y-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Exact inputs</h2>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Do not use customer name, address, device label, map proximity, or registration data to choose these identifiers.</p>
+                </div>
+                <label class="block">
+                    <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Action</span>
+                    <select id="identity-action" name="action" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                        <option value="canonicalize" {{ 'selected' if values.action == 'canonicalize' else '' }}>Canonicalize exact assignment</option>
+                        <option value="deactivate" {{ 'selected' if values.action == 'deactivate' else '' }}>Deactivate confirmed orphan</option>
+                    </select>
+                </label>
+                <label class="block">
+                    <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Primary active assignment UUID</span>
+                    <input name="primary_assignment_id" value="{{ values.primary_assignment_id }}" required class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                </label>
+                <div id="canonical-targets" class="grid gap-4 md:grid-cols-2">
+                    <label class="block">
+                        <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Target subscription UUID</span>
+                        <input name="target_subscription_id" value="{{ values.target_subscription_id }}" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                        <span class="mt-1 block text-xs text-slate-500">Subscriber is derived only from this exact subscription.</span>
+                    </label>
+                    <label class="block">
+                        <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Target modeled PON UUID</span>
+                        <input name="target_pon_port_id" value="{{ values.target_pon_port_id }}" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                        <span class="mt-1 block text-xs text-slate-500">OLT is derived from this PON's exact foreign key.</span>
+                    </label>
+                </div>
+                <button type="submit" class="inline-flex rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Preview without writing</button>
+            </form>
+
+            {% if preview %}
+            <div class="space-y-5 rounded-xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-sm dark:border-indigo-800 dark:bg-indigo-950/20">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Validated preview</h2>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Review the complete before-state. Recording this proposal still does not change the assignment.</p>
+                    </div>
+                    <span class="rounded-full bg-indigo-100 px-3 py-1 font-mono text-xs text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200">{{ preview.input_sha256 }}</span>
+                </div>
+                <dl class="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 text-xs dark:border-slate-700 dark:bg-slate-900 md:grid-cols-2">
+                    <div><dt class="font-semibold text-slate-500">Primary assignment</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ preview.primary_assignment_id }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">ONT</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ preview.ont_unit_id }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Target subscription</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ preview.target_subscription_id or 'None' }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Derived subscriber</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ preview.target_subscriber_id or 'None' }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Target PON</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ preview.target_pon_port_id or 'None' }}</dd></div>
+                    <div><dt class="font-semibold text-slate-500">Derived OLT</dt><dd class="mt-1 break-all font-mono text-slate-800 dark:text-slate-200">{{ preview.target_olt_id or 'None' }}</dd></div>
+                </dl>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-800 dark:text-slate-100">Exact conflicts that execution would deactivate</h3>
+                    {% if preview.duplicate_assignment_ids %}
+                    <ul class="mt-2 space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-3 font-mono text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                        {% for assignment_id in preview.duplicate_assignment_ids %}<li>{{ assignment_id }}</li>{% endfor %}
+                    </ul>
+                    {% else %}<p class="mt-2 text-sm text-slate-500">No active ONT or subscription conflicts.</p>{% endif %}
+                </div>
+                <details class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+                    <summary class="cursor-pointer text-sm font-semibold text-slate-700 dark:text-slate-200">Inspect complete authoritative snapshot</summary>
+                    <pre class="mt-3 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-100">{{ preview.input_snapshot | tojson(indent=2) }}</pre>
+                </details>
+                <form method="post" action="/admin/network/ont-identity-reviews/propose" class="space-y-3">
+                    {% include "components/forms/csrf_input.html" %}
+                    <input type="hidden" name="action" value="{{ preview.action }}">
+                    <input type="hidden" name="primary_assignment_id" value="{{ preview.primary_assignment_id }}">
+                    <input type="hidden" name="target_subscription_id" value="{{ preview.target_subscription_id or '' }}">
+                    <input type="hidden" name="target_pon_port_id" value="{{ preview.target_pon_port_id or '' }}">
+                    <input type="hidden" name="expected_input_sha256" value="{{ preview.input_sha256 }}">
+                    <label class="block">
+                        <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">Proposal reason</span>
+                        <textarea name="reason" rows="3" required maxlength="4000" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white" placeholder="State which exact records were independently verified">{{ values.reason }}</textarea>
+                    </label>
+                    <button type="submit" class="inline-flex rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">Record proposal for independent review</button>
+                </form>
+            </div>
+            {% endif %}
+        </div>
+
+        <aside class="space-y-4">
+            {% if candidate %}
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-800 dark:bg-amber-950/30">
+                <h2 class="font-semibold text-amber-900 dark:text-amber-200">Detected record context</h2>
+                <p class="mt-1 text-xs text-amber-800 dark:text-amber-300">Context is displayed for investigation only; it does not preselect a target.</p>
+                <dl class="mt-4 space-y-2 text-xs text-slate-700 dark:text-slate-200">
+                    <div><dt class="font-semibold">ONT serial</dt><dd>{{ candidate.ont_serial_number }}</dd></div>
+                    <div><dt class="font-semibold">Current subscription</dt><dd class="break-all font-mono">{{ candidate.subscription_id or 'missing' }}</dd></div>
+                    <div><dt class="font-semibold">Assignment PON</dt><dd class="break-all font-mono">{{ candidate.assignment_pon_port_id or 'missing' }}</dd></div>
+                    <div><dt class="font-semibold">ONT PON</dt><dd class="break-all font-mono">{{ candidate.ont_pon_port_id or 'missing' }}</dd></div>
+                    <div><dt class="font-semibold">ONT OLT</dt><dd class="break-all font-mono">{{ candidate.ont_olt_id or 'missing' }}</dd></div>
+                </dl>
+                <ul class="mt-4 space-y-1 text-xs text-amber-900 dark:text-amber-200">{% for reason in candidate.reason_labels %}<li>{{ reason }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+            <div class="rounded-xl border border-slate-200 bg-white p-4 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Workflow guardrails</h2>
+                <ol class="mt-3 space-y-3 text-xs text-slate-600 dark:text-slate-300">
+                    <li><span class="font-semibold">1. Preview:</span> exact records and every active conflict are hashed.</li>
+                    <li><span class="font-semibold">2. Propose:</span> a stale preview cannot be recorded.</li>
+                    <li><span class="font-semibold">3. Review:</span> the proposer cannot approve or decline their own proposal.</li>
+                    <li><span class="font-semibold">4. Execute:</span> inputs are locked and revalidated; changes close stale without mutation.</li>
+                </ol>
+            </div>
+        </aside>
+    </div>
+</div>
+
+<script>
+(() => {
+    const action = document.getElementById('identity-action');
+    const targets = document.getElementById('canonical-targets');
+    if (!action || !targets) return;
+    const sync = () => targets.classList.toggle('hidden', action.value === 'deactivate');
+    action.addEventListener('change', sync);
+    sync();
+})();
+</script>
+{% endblock %}

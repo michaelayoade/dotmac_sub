@@ -19,6 +19,7 @@ from app.models.network import (
     PonPort,
 )
 from app.models.network_monitoring import DeviceRole, NetworkDevice
+from app.models.ont_topology_observation import OntTopologyObservationEvidence
 from app.models.subscriber import Subscriber
 from app.services.topology.uisp_sync import ARCHIVE_SITE_ID, sync
 
@@ -975,12 +976,12 @@ def test_onu_port_creates_pon_port_and_sets_onu(db_session):
     assert port.olt_id == olt.id
     assert port.port_number == 3
     assert port.name == "pon3"
-    assert "uisp_sync" in (port.notes or "")
+    assert "observation owner" in (port.notes or "")
     ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
     assert ont.pon_port_id == port.id
-    assert result["ports_created"] == 1
-    assert result["onu_ports_set"] == 1
-    assert result["onu_ports_unchanged"] == 0
+    assert result["pon_ports_initialized"] == 1
+    assert result["onu_topology_initialized"] == 1
+    assert result["onu_topology_confirmed"] == 0
     assert client.onu_list_calls == [OLT_ID]
 
 
@@ -993,14 +994,18 @@ def test_second_run_pon_ports_are_idempotent(db_session):
     first = sync(db_session, client)
     second = sync(db_session, client)
 
-    assert first["ports_created"] == 1
-    assert second["ports_created"] == 0
-    assert second["onu_ports_set"] == 0
-    assert second["onu_ports_unchanged"] == 1
+    assert first["pon_ports_initialized"] == 1
+    assert second["pon_ports_initialized"] == 0
+    assert second["onu_topology_initialized"] == 0
+    assert second["onu_topology_confirmed"] == 1
     assert db_session.query(PonPort).count() == 1
+    evidence = db_session.query(OntTopologyObservationEvidence).one()
+    assert evidence.seen_count == 2
+    assert evidence.initial_outcome == "initialized"
+    assert evidence.latest_outcome == "confirmed"
 
 
-def test_onu_move_between_uisp_olts_updates_parent_and_port(db_session):
+def test_onu_move_between_uisp_olts_requires_review(db_session):
     second_olt_id = "e2e2e2e2-1111-2222-3333-777777777777"
     first_devices = _ufiber_payload()
     sync(
@@ -1049,17 +1054,31 @@ def test_onu_move_between_uisp_olts_updates_parent_and_port(db_session):
         .one()
     )
     ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    original = (
+        db_session.query(OLTDevice).filter(OLTDevice.uisp_device_id == OLT_ID).one()
+    )
     port = db_session.get(PonPort, ont.pon_port_id)
-    assert ont.olt_device_id == destination.id
+    observed_port = (
+        db_session.query(PonPort)
+        .filter(PonPort.olt_id == destination.id, PonPort.port_number == 5)
+        .one()
+    )
+    assert ont.olt_device_id == original.id
     assert port is not None
-    assert port.olt_id == destination.id
-    assert port.port_number == 5
-    assert result["onu_olts_moved"] == 1
+    assert port.olt_id == original.id
+    assert port.port_number == 3
+    assert observed_port.olt_id == destination.id
+    assert result["onu_topology_review_required"] == 1
+    evidence = (
+        db_session.query(OntTopologyObservationEvidence)
+        .filter_by(observed_olt_id=destination.id)
+        .one()
+    )
+    assert evidence.latest_outcome == "review_required"
 
 
-def test_onu_port_change_moves_pon_port_id(db_session):
-    # UISP is observed truth for the UFiber plant: a re-spliced ONU that shows
-    # up on a different OLT port is moved, not left on the stale port.
+def test_onu_port_change_requires_review_without_moving_pon(db_session):
+    # UISP supplies a location observation; it cannot rewrite canonical PON.
     sync(
         db_session,
         FakeUispClient(
@@ -1077,16 +1096,16 @@ def test_onu_port_change_moves_pon_port_id(db_session):
     )
 
     ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
+    old_port = db_session.query(PonPort).filter(PonPort.port_number == 3).one()
     new_port = db_session.query(PonPort).filter(PonPort.port_number == 5).one()
-    assert ont.pon_port_id == new_port.id
-    assert result["onu_ports_set"] == 1
-    assert result["ports_created"] == 1  # pon5; pon3 stays (match-don't-create)
+    assert ont.pon_port_id == old_port.id
+    assert ont.pon_port_id != new_port.id
+    assert result["onu_topology_review_required"] == 1
+    assert result["pon_ports_initialized"] == 1
     assert db_session.query(PonPort).count() == 2
 
 
-def test_onu_port_move_emits_breadcrumb(db_session, caplog):
-    # The pon_port_id auto-heal above is silent by design; the move must still
-    # leave a Loki breadcrumb. First-time stamping is a fill, not a move.
+def test_onu_port_move_emits_durable_review_evidence(db_session, caplog):
     with caplog.at_level(logging.INFO, logger="app.services.topology.uisp_sync"):
         first = sync(
             db_session,
@@ -1095,14 +1114,8 @@ def test_onu_port_move_emits_breadcrumb(db_session, caplog):
                 onus_by_olt={OLT_ID: [_olt_onu_listing_entry(ONU_ID, 3)]},
             ),
         )
-    moves = [
-        r
-        for r in caplog.records
-        if getattr(r, "event", "") == "uisp_sync_onu_pon_port_moved"
-    ]
-    assert first["onu_ports_set"] == 1
-    assert first["onu_ports_moved"] == 0
-    assert moves == []
+    assert first["onu_topology_initialized"] == 1
+    assert first["onu_topology_review_required"] == 0
 
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="app.services.topology.uisp_sync"):
@@ -1114,21 +1127,19 @@ def test_onu_port_move_emits_breadcrumb(db_session, caplog):
             ),
         )
 
-    assert second["onu_ports_set"] == 1
-    assert second["onu_ports_moved"] == 1
+    assert second["onu_topology_initialized"] == 0
+    assert second["onu_topology_review_required"] == 1
     (record,) = [
         r
         for r in caplog.records
-        if getattr(r, "event", "") == "uisp_sync_onu_pon_port_moved"
+        if getattr(r, "event", "") == "uisp_onu_topology_review_required"
     ]
-    old_port = db_session.query(PonPort).filter(PonPort.port_number == 3).one()
-    new_port = db_session.query(PonPort).filter(PonPort.port_number == 5).one()
     assert record.uisp_device_id == ONU_ID
-    assert record.device_name == "ONU-CUST-42"
-    assert record.old_port_id == str(old_port.id)
-    assert record.old_port_name == "pon3"
-    assert record.new_port_id == str(new_port.id)
-    assert record.new_port_number == 5
+    evidence = db_session.get(OntTopologyObservationEvidence, record.evidence_id)
+    assert evidence is not None
+    assert evidence.latest_outcome == "review_required"
+    assert evidence.observed_port_number == 5
+    assert db_session.query(OntTopologyObservationEvidence).count() == 2
 
 
 def test_existing_pon_port_is_matched_not_duplicated(db_session):
@@ -1159,8 +1170,8 @@ def test_existing_pon_port_is_matched_not_duplicated(db_session):
     db_session.refresh(existing_port)
     assert existing_port.name == "PON 3 (Garki feeder)"
     assert existing_port.max_ont_capacity == 64
-    assert result["ports_created"] == 0
-    assert result["onu_ports_set"] == 1
+    assert result["pon_ports_initialized"] == 0
+    assert result["onu_topology_initialized"] == 1
 
 
 def test_huawei_ont_is_never_touched(db_session):
@@ -1191,7 +1202,8 @@ def test_huawei_ont_is_never_touched(db_session):
     db_session.refresh(huawei_ont)
     assert huawei_ont.olt_device_id == huawei_olt.id
     assert huawei_ont.pon_port_id == huawei_port.id
-    assert result["onu_ports_set"] == 0
+    assert result["onu_topology_initialized"] == 0
+    assert result["onu_topology_review_required"] == 0
 
 
 def test_missing_onu_port_is_tolerated(db_session):
@@ -1207,9 +1219,9 @@ def test_missing_onu_port_is_tolerated(db_session):
     ont = db_session.query(OntUnit).filter(OntUnit.uisp_device_id == ONU_ID).one()
     assert ont.pon_port_id is None
     assert db_session.query(PonPort).count() == 0
-    assert result["ports_created"] == 0
-    assert result["onu_ports_set"] == 0
-    assert result["onu_ports_unchanged"] == 0
+    assert result["pon_ports_initialized"] == 0
+    assert result["onu_topology_initialized"] == 1
+    assert result["onu_topology_incomplete"] == 1
     assert result["port_fetch_failures"] == 0
 
 
@@ -1257,8 +1269,9 @@ def test_per_olt_port_fetch_failure_is_isolated(db_session):
     port_b = db_session.query(PonPort).one()
     assert port_b.port_number == 7
     assert ont_b.pon_port_id == port_b.id
-    assert result["ports_created"] == 1
-    assert result["onu_ports_set"] == 1
+    assert result["pon_ports_initialized"] == 1
+    assert result["onu_topology_initialized"] == 2
+    assert result["onu_topology_incomplete"] == 1
     assert sorted(client.onu_list_calls) == sorted([OLT_ID, olt_b_id])
 
 

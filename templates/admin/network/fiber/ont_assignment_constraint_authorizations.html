@@ -1,0 +1,49 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}ONT Constraint Authorization Evidence - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/network/fiber-plant" class="hover:text-indigo-600">Fiber plant</a><span>/</span>
+            <a href="/admin/network/ont-assignment-cutover-coverage" class="hover:text-indigo-600">Coverage evidence</a><span>/</span>
+            <span>Constraint authorization evidence</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">ONT constraint authorization evidence</h1>
+        <p class="mt-1 max-w-4xl text-sm text-slate-500 dark:text-slate-400">Immutable requests bind an explicitly named target and expiry to one exact clean coverage snapshot. A different actor may approve or decline. Current applicability is derived on every read; this page has no mutation controls and neither this owner nor its CLI can run or generate DDL.</p>
+    </div>
+
+    <section class="rounded-xl border {{ 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30' if authorization_evidence.current_coverage.ready_for_constraint_authorization_review else 'border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/30' }} p-4">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div><p class="font-semibold text-slate-900 dark:text-white">Current coverage {{ 'ready for authorization review' if authorization_evidence.current_coverage.ready_for_constraint_authorization_review else 'blocked' }}</p><p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ authorization_evidence.current_approval_count }} current independent approval(s). A current approval is evidence for a separate reviewed DDL change, not permission to execute one.</p></div>
+            <div class="space-y-1 text-right font-mono text-xs text-slate-500"><div>Coverage {{ authorization_evidence.current_coverage.coverage_report_sha256 }}</div><div>Audit {{ authorization_evidence.current_coverage.cutover_report_sha256 }}</div></div>
+        </div>
+    </section>
+
+    <form method="get" class="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 sm:flex-row sm:items-end">
+        <label class="min-w-0 flex-1"><span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Explicit target environment</span><input type="search" name="target_environment" value="{{ authorization_evidence.target_environment or '' }}" placeholder="Exact environment name" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></label>
+        <button type="submit" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Filter</button>
+    </form>
+
+    <section class="space-y-3">
+        <div><h2 class="text-lg font-semibold text-slate-900 dark:text-white">Immutable request and review history</h2><p class="text-sm text-slate-500 dark:text-slate-400">Expired or stale approval evidence remains visible but immediately loses current applicability. Decline remains distinct from expiry and drift.</p></div>
+        <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <table class="min-w-full text-sm">
+                <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50"><tr><th class="px-4 py-3">Target / request</th><th class="px-4 py-3">Exact evidence</th><th class="px-4 py-3">Expiry</th><th class="px-4 py-3">Independent review</th><th class="px-4 py-3">Current state</th></tr></thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for row in authorization_evidence.authorizations %}
+                    <tr class="align-top">
+                        <td class="px-4 py-4 text-xs"><div class="font-semibold text-slate-900 dark:text-white">{{ row.target_environment }}</div><div class="mt-1 font-mono text-slate-500">{{ row.id }}</div><div class="mt-1 text-slate-500">{{ row.requested_by }} · {{ row.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</div></td>
+                        <td class="px-4 py-4 text-xs"><div title="Coverage report SHA-256"><span class="font-semibold">Coverage</span> <span class="font-mono">{{ row.coverage_report_sha256[:16] }}…</span></div><div class="mt-1" title="Cutover audit SHA-256"><span class="font-semibold">Audit</span> <span class="font-mono">{{ row.cutover_report_sha256[:16] }}…</span></div><div class="mt-1" title="Authorization request SHA-256"><span class="font-semibold">Request</span> <span class="font-mono">{{ row.request_sha256[:16] }}…</span></div></td>
+                        <td class="px-4 py-4 text-xs"><span class="{{ 'text-rose-700 dark:text-rose-300' if row.expired else 'text-slate-700 dark:text-slate-200' }}">{{ row.expires_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</span><div class="mt-1 text-slate-500">{{ 'Expired' if row.expired else 'Unexpired' }}</div></td>
+                        <td class="px-4 py-4 text-xs">{% if row.review %}<span class="rounded-full px-2 py-1 font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if row.review.action == 'approve' else 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200' }}">{{ row.review.action | title }}</span><div class="mt-2 text-slate-500">{{ row.review.reviewed_by }} · {{ row.review.reviewed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</div>{% else %}<span class="text-slate-500">Awaiting independent review</span>{% endif %}</td>
+                        <td class="px-4 py-4 text-xs"><span class="rounded-full px-2 py-1 font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if row.eligible_for_separate_ddl_change_review else 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200' }}">{{ row.state | replace('_', ' ') | title }}</span><div class="mt-2 text-slate-500">{{ 'Eligible for separate DDL change review' if row.eligible_for_separate_ddl_change_review else 'No DDL eligibility' }}</div></td>
+                    </tr>
+                    {% else %}<tr><td colspan="5" class="px-4 py-10 text-center text-slate-500">No immutable authorization requests match this target.</td></tr>{% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

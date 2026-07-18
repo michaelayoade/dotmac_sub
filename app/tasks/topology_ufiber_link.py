@@ -1,11 +1,10 @@
-"""Scheduled UFiber ONU -> subscriber link pass.
+"""Scheduled preview-only UFiber ONU/subscription candidate audit.
 
-Standalone, net-new reconciler that fills the missing ``ont_assignments`` link
-for router-mode UFiber (UF-Wifi) ONUs by matching the ONU's own MAC (from UISP,
-already in ``ont_units.mac_address``) to the PPPoE calling-station-id RADIUS
-authenticated (``subscriptions.mac_address``). See
-``app.services.topology.ufiber_onu_link`` for the auth-safety rationale — this
-pass NEVER writes ``subscriptions.mac_address``.
+The compatibility task matches router-mode UFiber (UF-Wifi) ONU observations
+from UISP to PPPoE calling-station-id observations on subscriptions. The result
+is evidence for field review, never a customer-assignment decision: this pass
+writes neither ``ont_assignments`` nor ``subscriptions.mac_address``. See
+``app.services.topology.ufiber_onu_link`` for the ownership rationale.
 
 Routed to the ``ingestion`` queue like the other topology tasks; commits on
 success. Single-flight via ``db_session_adapter.advisory_lock`` (the repo's safe
@@ -28,7 +27,7 @@ from app.services.topology.coverage_metrics import store_task_stats
 logger = logging.getLogger(__name__)
 
 # Statement timeout for the lock session; also bounds the pass's own statements
-# (a single MAC-index build plus per-ONU savepointed inserts).
+# (a single MAC-index build plus bounded candidate evaluation).
 _LOCK_TIMEOUT_MS = 30_000
 
 
@@ -38,7 +37,7 @@ _LOCK_TIMEOUT_MS = 30_000
     time_limit=600,
 )
 def run_ufiber_onu_link() -> dict[str, Any]:
-    """Link router-mode UFiber ONUs to their active subscriber by ONU MAC."""
+    """Report possible UFiber ONU/subscription matches without linking them."""
     from app.services.topology.ufiber_onu_link import (
         ADVISORY_LOCK_KEY,
         link_ufiber_onus_to_subscribers,

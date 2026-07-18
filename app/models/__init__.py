@@ -218,6 +218,14 @@ from app.models.fiber_topology_connectivity import (  # noqa: F401
     FiberTopologySegmentSourceLink,
     FiberTopologyTerminationResolution,
 )
+from app.models.fiber_topology_connectivity_review import (  # noqa: F401
+    FiberTopologyConnectivityBatchReview,
+    FiberTopologyConnectivityProposalBatch,
+    FiberTopologyConnectivityRun,
+)
+from app.models.fiber_topology_field_observation import (  # noqa: F401
+    FiberTopologyFieldObservation,
+)
 from app.models.fiber_topology_identity import (  # noqa: F401
     FiberTopologyAssetSourceLink,
     FiberTopologyIdentityBatchReview,
@@ -477,8 +485,23 @@ from app.models.offer_availability import (  # noqa: F401
     OfferLocationAvailability,
     OfferResellerAvailability,
 )
+from app.models.ont_assignment_constraint_authorization import (  # noqa: F401
+    OntAssignmentConstraintAuthorizationRequest,
+    OntAssignmentConstraintAuthorizationReview,
+)
+from app.models.ont_assignment_cutover import (  # noqa: F401
+    OntAssignmentCutoverBatchReview,
+    OntAssignmentCutoverProposalBatch,
+    OntAssignmentCutoverVerificationAttestation,
+)
+from app.models.ont_assignment_identity import (  # noqa: F401
+    OntAssignmentIdentityDecision,
+)
 from app.models.ont_autofind import OltAutofindCandidate  # noqa: F401
 from app.models.ont_observation import OntObservation  # noqa: F401
+from app.models.ont_topology_observation import (  # noqa: F401
+    OntTopologyObservationEvidence,
+)
 from app.models.operational_escalation import (  # noqa: F401
     OperationalDeliveryStatus,
     OperationalEntityType,

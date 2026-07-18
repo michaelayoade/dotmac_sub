@@ -82,6 +82,11 @@ from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
 
+_ONT_ASSIGNMENT_IDENTITY_RETIRED = (
+    "Direct ONT assignment identity mutation is retired; use the reviewed "
+    "network.ont_assignment_identity workflow."
+)
+
 
 @router.get(
     "/uisp/capabilities",
@@ -1371,7 +1376,11 @@ def delete_ont_unit(unit_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def create_ont_assignment(payload: OntAssignmentCreate, db: Session = Depends(get_db)):
-    return network_service.ont_assignments.create(db, payload)
+    del payload, db
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=_ONT_ASSIGNMENT_IDENTITY_RETIRED,
+    )
 
 
 @router.get(
@@ -1426,7 +1435,11 @@ def list_ont_assignments(
 def update_ont_assignment(
     assignment_id: str, payload: OntAssignmentUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.ont_assignments.update(db, assignment_id, payload)
+    del assignment_id, payload, db
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=_ONT_ASSIGNMENT_IDENTITY_RETIRED,
+    )
 
 
 @router.delete(
@@ -1436,4 +1449,8 @@ def update_ont_assignment(
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def delete_ont_assignment(assignment_id: str, db: Session = Depends(get_db)):
-    network_service.ont_assignments.delete(db, assignment_id)
+    del assignment_id, db
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=_ONT_ASSIGNMENT_IDENTITY_RETIRED,
+    )

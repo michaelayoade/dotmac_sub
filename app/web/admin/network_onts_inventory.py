@@ -494,6 +494,7 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
         db,
         ont_id,
         form,
+        actor_id=web_admin_service.get_actor_id(request),
     )
     if result.not_found:
         return templates.TemplateResponse(
@@ -672,12 +673,22 @@ def ont_assignment_remove(
         db,
         ont_id=ont_id,
         assignment_id=assignment_id,
+        actor_id=web_admin_service.get_actor_id(request),
     )
     if result.not_found:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": result.not_found_message},
             status_code=404,
+        )
+
+    if result.error:
+        assert result.ont is not None
+        return _ont_redirect(
+            str(result.ont.id),
+            tab="operations",
+            status="error",
+            message=result.error,
         )
 
     assert result.ont is not None

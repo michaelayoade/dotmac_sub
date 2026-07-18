@@ -20,7 +20,6 @@ from app.models.network import (
     GponChannel,
     IpProtocol,
     MgmtIpMode,
-    OntAssignment,
     OnuMode,
     SplitterPort,
     SplitterPortType,
@@ -163,13 +162,6 @@ def form_int_or_none(form: FormData, key: str) -> int | None:
         return int(raw)
     except ValueError:
         return None
-
-
-def active_assignment_for_ont(db: Session, ont: Any) -> OntAssignment:
-    """Get the active assignment for an ONT, creating one if none exists."""
-    from app.services import web_network_ont_assignments as assignments_service
-
-    return assignments_service.get_or_create_active_assignment(db, ont)
 
 
 def normalize_vendor_serial(value: str) -> str | None:
