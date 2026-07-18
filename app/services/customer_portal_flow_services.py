@@ -823,6 +823,7 @@ def get_usage_page(
         "fup_status": None,
         "usage_source": "none",
         "has_subscription": False,
+        "period_total_gb": 0.0,
     }
     if not subscription_id_str:
         return empty_result
@@ -852,6 +853,7 @@ def get_usage_page(
 
     usage_source = "postgres"
     chart_source_records: list[Any] = []
+    period_total_gb = 0.0
     if not allow_postgres_fallback:
         return {
             **empty_result,
@@ -872,6 +874,13 @@ def get_usage_page(
         page_start = (page - 1) * per_page
         page_end = page_start + per_page
         usage_records = chart_source_records[page_start:page_end]
+        # Period total is summed over the COMPLETE record set, not the paginated
+        # page — the same per-row amount the template used to sum, moved to the
+        # owner so the figure is right on every page.
+        period_total_gb = sum(
+            float(getattr(r, "amount", None) or getattr(r, "usage_amount", 0) or 0)
+            for r in chart_source_records
+        )
         usage_summary = _usage_summary_stats(
             db,
             subscription_ids=subscription_ids,
@@ -900,6 +909,7 @@ def get_usage_page(
         "fup_status": fup_status,
         "usage_source": usage_source,
         "has_subscription": True,
+        "period_total_gb": period_total_gb,
     }
 
 
