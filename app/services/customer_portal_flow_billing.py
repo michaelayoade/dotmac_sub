@@ -29,6 +29,7 @@ from app.services.customer_context import (
     optional_customer_account_id,
     optional_customer_subscriber_id,
 )
+from app.services.customer_financial_position import get_customer_financial_position
 from app.services.customer_portal_context import (
     get_invoice_billing_contact,
     get_outstanding_balance,
@@ -195,6 +196,7 @@ def get_billing_page(
         "ledger_entries": [],
         "billing_activity": [],
         "invoice_status_presentations": {},
+        "billing_stats": {"available": False},
     }
     if not account_id_str:
         return empty_result
@@ -230,6 +232,35 @@ def get_billing_page(
             exc_info=True,
         )
 
+    # Account-level headline KPIs come from the canonical financial-position
+    # owner over the COMPLETE invoice set — never summed in the template over
+    # the paginated page (which is only ``per_page`` rows and is wrong past
+    # page one). ``total_billed`` is a lifetime aggregate of issued invoice
+    # value; outstanding and overdue are the owner's collectibility figures.
+    # When the owner can't be reached, the stats are marked unavailable so the
+    # template renders "unavailable", never a misleading zero.
+    billing_stats: dict[str, Any] = {"available": False}
+    try:
+        position = get_customer_financial_position(db, account_id_str)
+        total_billed = db.scalar(
+            select(func.coalesce(func.sum(Invoice.total), 0))
+            .where(Invoice.account_id == coerce_uuid(account_id_str))
+            .where(Invoice.is_active.is_(True))
+        )
+        billing_stats = {
+            "available": True,
+            "total_billed": Decimal(total_billed or 0),
+            "outstanding": position.open_invoice_balance,
+            "overdue": position.overdue_debt_balance,
+            "overdue_count": position.overdue_invoice_count,
+        }
+    except Exception:
+        logger.warning(
+            "Failed to resolve billing KPIs for account %s",
+            account_id_str,
+            exc_info=True,
+        )
+
     # Backwards-compatible raw ledger rows for older templates.
     ledger_entries = billing_service.ledger_entries.list(
         db, account_id_str, None, None, True, "effective_date", "desc", 25, 0
@@ -246,6 +277,7 @@ def get_billing_page(
         "prepaid_balance": prepaid_balance,
         "ledger_entries": ledger_entries,
         "billing_activity": billing_activity,
+        "billing_stats": billing_stats,
         "invoice_status_presentations": {
             str(invoice.id): invoice_status_presentation(invoice.status)
             for invoice in invoices
