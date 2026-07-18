@@ -28,6 +28,8 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -368,25 +370,77 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
         )
     ).all()
 
+    # Phase 1 — read: materialize every OLT's port context plus a plain-data
+    # SSH snapshot, then END the transaction. The SSH walk below takes seconds
+    # per port; holding a transaction across it left this connection idle in
+    # transaction for minutes, tripping the PostgreSQL health check
+    # (idle_in_transaction_over_60s) on every run. The snapshot carries the
+    # only fields the SSH layer reads, so phase 2 never touches the session
+    # (an expired ORM attribute access would silently begin a new
+    # transaction and reintroduce the bug).
+    contexts: dict[uuid.UUID, dict[str, _PortContext]] = {}
+    ssh_snapshots: dict[uuid.UUID, SimpleNamespace] = {}
+    orm_olts: dict[uuid.UUID, OLTDevice] = {}
     for olt in olts:
         counters["olts_polled"] += 1
-        savepoint = db.begin_nested()
+        orm_olts[olt.id] = olt
+        contexts[olt.id] = _active_ports_for_olt(db, olt)
+        ssh_snapshots[olt.id] = SimpleNamespace(
+            id=olt.id,
+            name=olt.name,
+            model=olt.model,
+            mgmt_ip=olt.mgmt_ip,
+            hostname=olt.hostname,
+            ssh_username=olt.ssh_username,
+            ssh_password=olt.ssh_password,
+            ssh_port=olt.ssh_port,
+            vendor=olt.vendor,
+        )
+    db.commit()
+
+    # Phase 2 — collect: SSH walks with NO transaction open. Raw outputs only;
+    # per-OLT failures are isolated so one bad OLT can't sink the run.
+    # Iterate the plain snapshots, never the ORM rows: post-commit, even
+    # ``olt.id`` is an expired attribute whose refresh would silently begin a
+    # new transaction (the regression test proved it).
+    collected: list[tuple[uuid.UUID, list[tuple[str, str]]]] = []
+    for olt_id, snapshot in ssh_snapshots.items():
+        walked: list[tuple[str, str]] = []
         try:
-            ports = _active_ports_for_olt(db, olt)
-            for fsp, ctx in ports.items():
+            for fsp in contexts[olt_id]:
+                # The snapshot mirrors every attribute the SSH path reads
+                # (mgmt_ip/hostname/ssh_*/vendor/model/name/id) as plain data;
+                # a live OLTDevice here would reopen a transaction post-commit.
                 ok, status, output = _run_readonly_command(
-                    olt, f"display mac-address port {fsp}"
+                    cast("OLTDevice", snapshot), f"display mac-address port {fsp}"
                 )
                 counters["ports_walked"] += 1
                 if not ok:
                     logger.warning(
                         "olt_mac_harvest_port_read_failed "
                         "olt_device_id=%s fsp=%s status=%s",
-                        olt.id,
+                        olt_id,
                         fsp,
                         status,
                     )
                     continue
+                walked.append((fsp, output))
+        except Exception:  # noqa: BLE001 - isolate per-OLT failure, keep going
+            counters["olt_errors"] += 1
+            logger.exception("olt_mac_harvest_olt_failed olt_device_id=%s", olt_id)
+            continue
+        collected.append((olt_id, walked))
+
+    # Phase 3 — write: parse + upsert + drift in per-OLT SAVEPOINTs on a fresh
+    # transaction (begun implicitly by the first query). The caller owns the
+    # outer commit, as before.
+    for olt_id, walked in collected:
+        olt = orm_olts[olt_id]
+        savepoint = db.begin_nested()
+        try:
+            ports = contexts[olt_id]
+            for fsp, output in walked:
+                ctx = ports[fsp]
                 for entry in parse_mac_address_port(output):
                     ont = ctx.onts_by_ont_id.get(entry.ont_id)
                     pon_port_id = (

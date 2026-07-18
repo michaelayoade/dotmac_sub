@@ -363,3 +363,25 @@ def select_all(model):
     from sqlalchemy import select
 
     return select(model)
+
+
+def test_no_transaction_held_during_ssh_walk(db_session, monkeypatch):
+    """The SSH phase must run with no DB transaction open (the held
+    transaction sat idle-in-transaction for minutes and degraded the
+    PostgreSQL health check in prod)."""
+    from app.services.topology import olt_mac_harvest as mod
+
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="0", ont_id=1, serial="HWTC1")
+    db_session.commit()
+
+    tx_states: list[bool] = []
+
+    def _fake_run(olt_arg, command):
+        tx_states.append(db_session.in_transaction())
+        return True, "ok", ""
+
+    monkeypatch.setattr(mod, "_run_readonly_command", _fake_run)
+    mod.harvest_olt_mac_tables(db_session)
+    assert tx_states, "SSH walk never ran"
+    assert not any(tx_states), "a DB transaction was open during the SSH walk"
