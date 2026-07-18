@@ -1319,7 +1319,8 @@ def get_dashboard_summary(
                 "level": "danger",
                 "icon": "pause",
                 "message": f"{suspended_count} account{'s' if suspended_count != 1 else ''} suspended",
-                "action_url": "/reseller/accounts",
+                # Drill into the exact cohort that produced the count.
+                "action_url": f"/reseller/accounts?status_filter={SubscriberStatus.suspended.value}",
             }
         )
     if new_this_week > 0:
