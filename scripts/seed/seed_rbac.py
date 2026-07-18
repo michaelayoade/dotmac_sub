@@ -263,7 +263,10 @@ DEFAULT_PERMISSIONS = [
     ("gis:location:write", "Create, edit, and delete map location markers"),
     ("gis:area:write", "Create, edit, and delete map coverage areas"),
     ("gis:layer:write", "Create, edit, and delete map layers"),
-    ("gis:location_request:review", "Approve or reject customer location-change requests"),
+    (
+        "gis:location_request:review",
+        "Approve or reject customer location-change requests",
+    ),
     ("gis:map:configure", "Configure map settings and layers"),
     ("gis:coverage:read", "View coverage areas"),
     ("gis:coverage:write", "Manage coverage areas"),
