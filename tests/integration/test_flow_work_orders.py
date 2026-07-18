@@ -102,8 +102,7 @@ def test_work_order_lifecycle_native(db_session):
         WorkOrderHeaderCreate(
             title="Flow install",
             subscriber_id=sub.id,
-            status="dispatched",
-            assigned_to_crm_person_id=profile.crm_person_id,
+            status="scheduled",
             scheduled_start=datetime.now(UTC),
         ),
     )
