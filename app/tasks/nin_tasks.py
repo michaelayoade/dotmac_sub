@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from celery.exceptions import MaxRetriesExceededError, Retry
@@ -20,6 +19,10 @@ from app.services.nin_matching import (
     mask_nin,
     match_subscriber_nin_response,
     normalize_nin,
+)
+from app.services.nin_verifications import (
+    record_nin_verification_failure_committed,
+    record_nin_verification_outcome_committed,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,42 +64,6 @@ def _get_or_create_pending_verification(
     return verification
 
 
-def _update_subscriber_metadata(
-    subscriber: Subscriber,
-    *,
-    is_verified: bool,
-    checked_at: datetime,
-) -> None:
-    metadata = dict(subscriber.metadata_ or {})
-    metadata["nin_verified"] = is_verified
-    metadata["nin_last_checked_at"] = checked_at.isoformat()
-    subscriber.metadata_ = metadata
-
-
-def _mark_failed(
-    db: Session,
-    verification: SubscriberNINVerification,
-    subscriber: Subscriber | None,
-    *,
-    reason: str,
-    mono_response: dict[str, Any] | None = None,
-) -> None:
-    checked_at = datetime.now(UTC)
-    verification.status = NINVerificationStatus.failed
-    verification.is_match = False
-    verification.match_score = 0
-    verification.failure_reason = reason
-    verification.mono_response = mono_response
-    verification.verified_at = checked_at
-    if subscriber is not None:
-        _update_subscriber_metadata(
-            subscriber,
-            is_verified=False,
-            checked_at=checked_at,
-        )
-    db.commit()
-
-
 @celery_app.task(
     bind=True,
     name="app.tasks.nin_tasks.verify_nin_task",
@@ -134,7 +101,7 @@ def verify_nin_task(self, subscriber_id: str, nin: str) -> dict[str, Any]:
                 db.commit()
                 raise self.retry(exc=exc)
 
-            _mark_failed(
+            record_nin_verification_failure_committed(
                 db,
                 verification,
                 subscriber,
@@ -152,31 +119,13 @@ def verify_nin_task(self, subscriber_id: str, nin: str) -> dict[str, Any]:
             return {"status": "failed", "reason": reason}
 
         match_result = match_subscriber_nin_response(subscriber, lookup["data"])
-        checked_at = datetime.now(UTC)
-        is_match = bool(match_result["is_match"])
-
-        verification.status = (
-            NINVerificationStatus.success if is_match else NINVerificationStatus.failed
-        )
-        verification.is_match = is_match
-        verification.match_score = int(match_result["match_score"])
-        verification.mono_response = lookup["raw"]
-        verification.failure_reason = (
-            None if is_match else "Subscriber identity mismatch"
-        )
-        verification.verified_at = checked_at
-        _update_subscriber_metadata(
+        return record_nin_verification_outcome_committed(
+            db,
+            verification,
             subscriber,
-            is_verified=is_match,
-            checked_at=checked_at,
+            match_result=match_result,
+            mono_response=lookup["raw"],
         )
-        db.commit()
-
-        return {
-            "status": verification.status.value,
-            "is_match": is_match,
-            "match_score": verification.match_score,
-        }
     except Retry:
         raise
     except MaxRetriesExceededError as exc:
