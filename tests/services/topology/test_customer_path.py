@@ -58,7 +58,7 @@ def test_fiber_path_includes_physical_plant(db_session, subscriber, subscription
     olt = OLTDevice(name="OLT-Plant", hostname="olt-plant", mgmt_ip="10.0.0.10")
     pop = PopSite(name="Gudu", zabbix_group_id="12")
     fdh = FdhCabinet(name="FDH Alpha", code="FDH-A")
-    splitter = Splitter(name="SPL-A", fdh=fdh)
+    splitter = Splitter(name="SPL-A", fdh=fdh, splitter_ratio="1:8")
     db_session.add_all([olt, pop, fdh, splitter])
     db_session.flush()
     pon = PonPort(olt_id=olt.id, name="0/1/2")
@@ -100,7 +100,7 @@ def test_fiber_path_uses_assignment_and_pon_splitter_fallbacks(
     olt = OLTDevice(name="OLT-Fallback", hostname="olt-fallback", mgmt_ip="10.0.0.11")
     pop = PopSite(name="Jabi", zabbix_group_id="13")
     fdh = FdhCabinet(name="FDH Beta", code="FDH-B")
-    splitter = Splitter(name="SPL-B", fdh=fdh)
+    splitter = Splitter(name="SPL-B", fdh=fdh, splitter_ratio="1:8")
     db_session.add_all([olt, pop, fdh, splitter])
     db_session.flush()
     pon = PonPort(olt_id=olt.id, name="0/1/3")
@@ -218,7 +218,10 @@ def _ap_node(db, name, pop_site_id=None, **kw):
 def test_wireless_happy_path_radio_ap_basestation(db_session, subscriber, subscription):
     from datetime import UTC, datetime
 
-    from app.models.network_monitoring import DeviceRole, NetworkTopologyLink
+    from app.models.network_monitoring import DeviceRole
+    from tests.services.topology.forwarding_test_support import (
+        declare_forwarding_edge,
+    )
 
     pop = PopSite(name="Karu BTS", zabbix_group_id="20")
     db_session.add(pop)
@@ -227,13 +230,12 @@ def test_wireless_happy_path_radio_ap_basestation(db_session, subscriber, subscr
     core = NetworkDevice(name="Core-1", role=DeviceRole.core, is_active=True)
     db_session.add(core)
     db_session.flush()
-    db_session.add(
-        NetworkTopologyLink(
-            source_device_id=ap.id,
-            target_device_id=core.id,
-            source="lldp_neighbor",
-            is_active=True,
-        )
+    declare_forwarding_edge(
+        db_session,
+        ap,
+        core,
+        downstream_role="access",
+        upstream_role="core",
     )
     cpe = _cpe(
         db_session,

@@ -16,7 +16,11 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.dispatch import (
+    DispatchQueueStatus,
+    TechnicianProfile,
+    WorkOrderAssignmentQueue,
+)
 from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
@@ -152,7 +156,8 @@ def _metadata_text_match(key: str, value: str):
 
 def _scoped_query(db: Session, profile: TechnicianProfile):
     assignment_ids = select(WorkOrderAssignmentQueue.work_order_mirror_id).filter(
-        WorkOrderAssignmentQueue.assigned_technician_id == profile.id
+        WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
+        WorkOrderAssignmentQueue.assigned_technician_id == profile.id,
     )
     query = db.query(WorkOrder).filter(WorkOrder.is_active.is_(True))
     clauses: list[Any] = [WorkOrder.id.in_(assignment_ids)]

@@ -9,6 +9,7 @@ import '../features/auth/mfa_screen.dart';
 import '../features/expenses/expenses_screen.dart';
 import '../features/jobs/job_chat_screen.dart';
 import '../features/jobs/job_detail_screen.dart';
+import '../features/jobs/work_order_evidence_map_screen.dart';
 import '../features/location/location_tracking_controller.dart';
 import '../features/manager/manager_providers.dart';
 import '../features/manager/manager_screen.dart';
@@ -59,6 +60,12 @@ GoRouter buildRouter(Ref ref) {
         path: '/jobs/:id/chat',
         builder: (_, state) =>
             JobChatScreen(jobId: state.pathParameters['id']!),
+      ),
+      GoRoute(
+        path: '/jobs/:id/fiber-evidence',
+        builder: (_, state) => WorkOrderEvidenceMapScreen(
+          workOrderPublicId: state.pathParameters['id']!,
+        ),
       ),
       GoRoute(
         path: '/materials/new',

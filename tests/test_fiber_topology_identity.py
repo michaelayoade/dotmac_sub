@@ -295,7 +295,9 @@ def test_proposer_cannot_review_and_changed_content_invalidates_decision(db_sess
         )
 
 
-def test_buildings_are_link_only_and_support_structures_are_reject_only(db_session):
+def test_buildings_are_link_only_and_support_structures_use_reviewed_create(
+    db_session,
+):
     building_feature = _stage_feature(db_session, asset_type="service_building")
     building = ServiceBuilding(name="Canonical service building")
     db_session.add(building)
@@ -334,32 +336,30 @@ def test_buildings_are_link_only_and_support_structures_are_reject_only(db_sessi
     )
 
     support_feature = _stage_feature(db_session, asset_type="support_structure")
-    with pytest.raises(FiberTopologyIdentityError, match="not enabled"):
-        propose_identity_decision(
-            db_session,
-            support_feature.id,
-            "create",
-            proposed_by="planner@example.com",
-            reason="No canonical support-structure owner exists",
-        )
-    rejected = propose_identity_decision(
+    support_feature.source_properties = {"Type": "pole"}
+    db_session.commit()
+    support_decision = propose_identity_decision(
         db_session,
         support_feature.id,
-        "reject",
+        "create",
         proposed_by="planner@example.com",
-        reason="Source support structure is not eligible for import",
+        reason="Stable pole identity and location independently reviewable",
     )
     approve_identity_decision(
         db_session,
-        rejected.id,
+        support_decision.id,
         reviewed_by="reviewer@example.com",
-        review_notes="Rejection independently confirmed",
+        review_notes="Canonical support identity independently confirmed",
     )
-    closed = execute_identity_decision(
-        db_session, rejected.id, executed_by="executor@example.com"
+    requested = execute_identity_decision(
+        db_session, support_decision.id, executed_by="executor@example.com"
     )
-    assert closed.status == "closed"
-    assert closed.closed_reason == "source_identity_rejected"
+    change_request = db_session.get(FiberChangeRequest, requested.change_request_id)
+    assert requested.status == "change_requested"
+    assert change_request is not None
+    assert change_request.asset_type == "support_structure"
+    assert change_request.payload["code"] == support_feature.external_id
+    assert change_request.payload["support_type"] == "pole"
 
 
 def test_path_geometry_is_not_an_identity_or_connectivity_decision(db_session):

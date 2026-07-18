@@ -259,6 +259,40 @@ def test_field_map_propagates_owner_job_context_and_changes_exact_overlay_hash(
     assert replay.overlay_sha256 == after.overlay_sha256
 
 
+def test_field_map_keeps_unclosed_source_polygon_but_marks_it_unrenderable(
+    db_session,
+):
+    geometry = {
+        "type": "Polygon",
+        "coordinates": [[[7.42, 9.02], [7.43, 9.02], [7.43, 9.03], [7.42, 9.03]]],
+    }
+    _stage_features(
+        db_session,
+        [
+            {
+                "asset_type": "fdh_cabinet",
+                "external_id": "CAB-MAP-UNCLOSED",
+                "geometry_type": "Polygon",
+                "geometry": geometry,
+            }
+        ],
+    )
+
+    report = project_fiber_field_verification_map(db_session)
+    feature = report.feature_collection["features"][0]
+
+    assert feature["geometry"] == geometry
+    assert (
+        feature["properties"]["geometry_presentation_state"]
+        == "source_geometry_unrenderable"
+    )
+    assert report.geometry_presentation_counts == {
+        "exact_geojson": 0,
+        "source_geometry_unrenderable": 1,
+    }
+    assert report.bbox is None
+
+
 def test_field_map_fails_closed_on_worklist_source_hash_drift(db_session, monkeypatch):
     feature = _stage_features(
         db_session,

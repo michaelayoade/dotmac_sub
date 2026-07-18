@@ -10,7 +10,6 @@ a blank panel.
 from __future__ import annotations
 
 import logging
-from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,19 +30,13 @@ from app.models.network import (
     SplitterPort,
     SplitterPortAssignment,
 )
-from app.models.network_monitoring import (
-    DeviceRole,
-    NetworkDevice,
-    NetworkTopologyLink,
-    PopSite,
-)
+from app.models.network_monitoring import NetworkDevice, PopSite
 from app.models.radius_active_session import RadiusActiveSession
-from app.services.topology.lldp_poller import SOURCE as LLDP_SOURCE
+from app.services.network.forwarding_topology import (
+    resolve_authoritative_upstream_chain,
+)
 
 logger = logging.getLogger(__name__)
-
-# Max hops to walk toward core (guards against pathological graphs).
-_MAX_UPSTREAM_HOPS = 8
 
 # Gap markers (None = complete path).
 GAP_NO_ONT = "no_ont"  # no resolvable access device (provisioning incomplete)
@@ -69,72 +62,18 @@ class CustomerPath:
     radio: CPEDevice | None = None
     node: NetworkDevice | None = None
     basestation: PopSite | None = None
-    # Device hops above the access node toward core (LLDP graph), [agg... core].
-    # Empty when no core is reachable (graph not yet built / unmapped upstream).
+    # Reviewed, observation-agreeing device hops toward core/border.
+    # Empty when Sub cannot prove an authoritative upstream path.
     upstream_chain: list[NetworkDevice] = field(default_factory=list)
     gap: str | None = None
-
-
-def _lldp_neighbor_ids(session: Session, node_id) -> list:
-    """Adjacent node ids over active LLDP edges (canonical edges are undirected)."""
-    links = (
-        session.query(NetworkTopologyLink)
-        .filter(
-            NetworkTopologyLink.source == LLDP_SOURCE,
-            NetworkTopologyLink.is_active.is_(True),
-            or_(
-                NetworkTopologyLink.source_device_id == node_id,
-                NetworkTopologyLink.target_device_id == node_id,
-            ),
-        )
-        .all()
-    )
-    return [
-        link.target_device_id
-        if link.source_device_id == node_id
-        else link.source_device_id
-        for link in links
-    ]
 
 
 def resolve_upstream_chain(
     session: Session, access_node: NetworkDevice
 ) -> list[NetworkDevice]:
-    """Shortest path of device hops from the access node to the nearest
-    core-role node, via the LLDP graph. Returns [agg... core] (excludes the
-    access node); empty if no core is reachable. Cycle-safe, hop-capped."""
-    start = access_node.id
-    visited = {start}
-    parent: dict = {start: None}
-    queue: deque = deque([(start, 0)])
-    target = None
-    while queue:
-        nid, dist = queue.popleft()
-        if nid != start:
-            dev = session.get(NetworkDevice, nid)
-            if dev is not None and dev.role == DeviceRole.core:
-                target = nid
-                break
-        if dist >= _MAX_UPSTREAM_HOPS:
-            continue
-        for nb in _lldp_neighbor_ids(session, nid):
-            if nb not in visited:
-                visited.add(nb)
-                parent[nb] = nid
-                queue.append((nb, dist + 1))
-    if target is None:
-        return []
-    chain_ids = []
-    cur = target
-    while cur is not None:
-        chain_ids.append(cur)
-        cur = parent[cur]
-    chain_ids.reverse()  # start ... core
-    return [  # drop the access node; keep [agg... core]
-        dev
-        for nid in chain_ids[1:]
-        if (dev := session.get(NetworkDevice, nid)) is not None
-    ]
+    """Return the exact Sub-declared path; observations alone never create it."""
+
+    return resolve_authoritative_upstream_chain(session, access_node.id)
 
 
 def _active_ont_assignment(

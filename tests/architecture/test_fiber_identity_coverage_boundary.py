@@ -92,6 +92,8 @@ def test_identity_coverage_cli_is_exhaustive_read_only_report_only():
     assert commands == set()
     assert "SET TRANSACTION READ ONLY" in source
     assert "REPEATABLE READ" in source
+    assert "decide support mounts" in source
+    assert "reject-only" not in source
     assert "--limit" not in source
     assert "--profile" not in source
     for forbidden in ("propose", "approve", "execute", "reconcile", "apply"):
@@ -106,12 +108,12 @@ def test_identity_coverage_admin_is_get_only_and_full_cohort_gated():
     assert "reconcile_fiber_identity_coverage(db)" in admin_source
     assert "coverage.assets[:250]" in template_source
     assert "gates always use the complete cohort" in template_source
-    assert "reject-only" in template_source
+    assert "decide support mounts" in template_source
     for forbidden_form in ("<form", 'type="submit"', "bulk approve"):
         assert forbidden_form not in template_source.lower()
 
 
-def test_phase18_adds_no_schema_migration():
+def test_identity_coverage_adds_no_separate_schema_migration():
     assert not list(
         (PROJECT_ROOT / "alembic/versions").glob("345*fiber*identity*coverage*.py")
     )

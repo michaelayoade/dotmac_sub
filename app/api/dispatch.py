@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -12,6 +12,10 @@ from app.schemas.dispatch import (
     DispatchRuleCreate,
     DispatchRuleRead,
     DispatchRuleUpdate,
+    FiberFieldVerificationJobPlanExecuteRead,
+    FiberFieldVerificationJobPlanExecuteRequest,
+    FiberFieldVerificationJobPlanPreviewRead,
+    FiberFieldVerificationJobPlanRequest,
     ShiftCreate,
     ShiftRead,
     ShiftUpdate,
@@ -24,6 +28,8 @@ from app.schemas.dispatch import (
     TechnicianSkillCreate,
     TechnicianSkillRead,
     TechnicianSkillUpdate,
+    WorkOrderAssignmentPreviewRead,
+    WorkOrderAssignmentPreviewRequest,
     WorkOrderAssignmentQueueCreate,
     WorkOrderAssignmentQueueRead,
     WorkOrderAssignmentQueueUpdate,
@@ -33,13 +39,17 @@ from app.schemas.dispatch import (
 )
 from app.services import dispatch as dispatch_service
 from app.services.auth_dependencies import require_permission
+from app.services.network.fiber_field_verification_job_plans import (
+    FiberFieldVerificationJobPlanError,
+    execute_fiber_field_verification_job_plan,
+    preview_fiber_field_verification_job_plan,
+)
 
 router = APIRouter(prefix="/dispatch", tags=["dispatch"])
 
 # Granular gates. The router is mounted with an operations:dispatch:read floor
 # (main.py), so read endpoints inherit it; mutations declare their own permission.
 _DISPATCH_WRITE = Depends(require_permission("operations:dispatch:write"))
-_DISPATCH_ASSIGN = Depends(require_permission("operations:dispatch:assign"))
 
 
 @router.post(
@@ -308,16 +318,77 @@ def update_dispatch_rule(
     return dispatch_service.dispatch_rules.update(db, rule_id, payload)
 
 
+def _job_plan_args(payload: FiberFieldVerificationJobPlanRequest) -> dict:
+    return payload.model_dump()
+
+
+@router.post(
+    "/field-verification-job-plans/preview",
+    response_model=FiberFieldVerificationJobPlanPreviewRead,
+)
+def preview_field_verification_job_plan(
+    payload: FiberFieldVerificationJobPlanRequest,
+    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    write_auth: dict = Depends(require_permission("operations:dispatch:write")),
+    network_auth: dict = Depends(require_permission("network:fiber:read")),
+    db: Session = Depends(get_db),
+):
+    del auth, write_auth, network_auth
+    try:
+        return preview_fiber_field_verification_job_plan(
+            db,
+            **_job_plan_args(payload),
+        )
+    except FiberFieldVerificationJobPlanError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post(
+    "/field-verification-job-plans/execute",
+    response_model=FiberFieldVerificationJobPlanExecuteRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def execute_field_verification_job_plan(
+    payload: FiberFieldVerificationJobPlanExecuteRequest,
+    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    write_auth: dict = Depends(require_permission("operations:dispatch:write")),
+    network_auth: dict = Depends(require_permission("network:fiber:read")),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
+):
+    del write_auth, network_auth
+    values = payload.model_dump(exclude={"expected_plan_sha256"})
+    try:
+        return execute_fiber_field_verification_job_plan(
+            db,
+            expected_plan_sha256=payload.expected_plan_sha256,
+            auth=auth,
+            request_id=request_id,
+            **values,
+        )
+    except FiberFieldVerificationJobPlanError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
 @router.post(
     "/work-orders",
     response_model=WorkOrderHeaderRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_DISPATCH_WRITE],
 )
 def create_work_order_header(
-    payload: WorkOrderHeaderCreate, db: Session = Depends(get_db)
+    payload: WorkOrderHeaderCreate,
+    auth: dict = Depends(require_permission("operations:dispatch:write")),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
 ):
-    return dispatch_service.work_order_headers.create(db, payload)
+    return dispatch_service.work_order_headers.create(
+        db,
+        payload,
+        auth=auth,
+        request_id=request_id,
+        idempotency_key=idempotency_key,
+    )
 
 
 @router.get("/work-orders", response_model=ListResponse[WorkOrderHeaderRead])
@@ -349,26 +420,61 @@ def get_work_order_header(work_order_id: str, db: Session = Depends(get_db)):
 @router.patch(
     "/work-orders/{work_order_id}",
     response_model=WorkOrderHeaderRead,
-    dependencies=[_DISPATCH_WRITE],
 )
 def update_work_order_header(
     work_order_id: str,
     payload: WorkOrderHeaderUpdate,
+    auth: dict = Depends(require_permission("operations:dispatch:write")),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
-    return dispatch_service.work_order_headers.update(db, work_order_id, payload)
+    return dispatch_service.work_order_headers.update(
+        db,
+        work_order_id,
+        payload,
+        auth=auth,
+        request_id=request_id,
+    )
+
+
+@router.post(
+    "/work-orders/{work_order_id}/assignment-preview",
+    response_model=WorkOrderAssignmentPreviewRead,
+)
+def preview_work_order_assignment(
+    work_order_id: str,
+    payload: WorkOrderAssignmentPreviewRequest,
+    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    db: Session = Depends(get_db),
+):
+    del auth  # Authorization is enforced by the dependency; previews do not write.
+    return dispatch_service.work_order_commands.preview_assignment(
+        db,
+        work_order_id,
+        technician_id=payload.technician_id,
+        scheduled_start=payload.scheduled_start,
+        scheduled_end=payload.scheduled_end,
+        status=payload.status,
+    )
 
 
 @router.post(
     "/assignment-queue",
     response_model=WorkOrderAssignmentQueueRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[_DISPATCH_ASSIGN],
 )
 def create_assignment_queue_item(
-    payload: WorkOrderAssignmentQueueCreate, db: Session = Depends(get_db)
+    payload: WorkOrderAssignmentQueueCreate,
+    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
 ):
-    return dispatch_service.assignment_queue.create(db, payload)
+    return dispatch_service.assignment_queue.create(
+        db,
+        payload,
+        auth=auth,
+        request_id=request_id,
+    )
 
 
 @router.get(
@@ -396,11 +502,18 @@ def list_assignment_queue(
 @router.patch(
     "/assignment-queue/{queue_id}",
     response_model=WorkOrderAssignmentQueueRead,
-    dependencies=[_DISPATCH_ASSIGN],
 )
 def update_assignment_queue_item(
     queue_id: str,
     payload: WorkOrderAssignmentQueueUpdate,
+    auth: dict = Depends(require_permission("operations:dispatch:assign")),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
-    return dispatch_service.assignment_queue.update(db, queue_id, payload)
+    return dispatch_service.assignment_queue.update(
+        db,
+        queue_id,
+        payload,
+        auth=auth,
+        request_id=request_id,
+    )

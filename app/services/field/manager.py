@@ -33,12 +33,10 @@ from app.services.field.jobs import (
     _system_user,
     _technician_name,
 )
-from app.services.field.source import mark_sub_authoritative
-from app.services.field.work_order_status import ASSIGNABLE_WORK_ORDER_STATUSES
 from app.services.status_presentation import work_order_status_presentation
+from app.services.work_order_commands import work_order_commands
 
 DEFAULT_STALE_AFTER_SECONDS = 120
-_ASSIGNABLE_STATUSES = ASSIGNABLE_WORK_ORDER_STATUSES
 
 
 def _now() -> datetime:
@@ -99,6 +97,7 @@ def _active_orders_by_technician(
         queue_rows = (
             db.query(WorkOrderAssignmentQueue)
             .filter(WorkOrderAssignmentQueue.work_order_mirror_id.in_(order_ids))
+            .filter(WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned)
             .filter(WorkOrderAssignmentQueue.assigned_technician_id.isnot(None))
             .order_by(WorkOrderAssignmentQueue.created_at.asc())
             .all()
@@ -219,7 +218,10 @@ class FieldManager:
         open_jobs = open_query.count()
         assigned_mirror_ids = select(
             WorkOrderAssignmentQueue.work_order_mirror_id
-        ).filter(WorkOrderAssignmentQueue.assigned_technician_id.isnot(None))
+        ).filter(
+            WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
+            WorkOrderAssignmentQueue.assigned_technician_id.isnot(None),
+        )
         unassigned_jobs = (
             open_query.filter(WorkOrder.assigned_to_crm_person_id.is_(None))
             .filter(WorkOrder.id.notin_(assigned_mirror_ids))
@@ -275,12 +277,9 @@ class FieldManager:
         scheduled_start: datetime | None = None,
         scheduled_end: datetime | None = None,
         status: str | None = None,
+        auth: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> dict:
-        next_status = (status or "dispatched").strip().lower()
-        if next_status not in _ASSIGNABLE_STATUSES:
-            raise HTTPException(
-                status_code=422, detail=f"Unsupported status: {next_status}"
-            )
         row = (
             db.query(WorkOrder)
             .filter(WorkOrder.public_id == crm_work_order_id)
@@ -290,41 +289,17 @@ class FieldManager:
         if row is None:
             raise HTTPException(status_code=404, detail="Job not found")
         profile = _technician_by_person_id(db, person_id)
-
-        entry = (
-            db.query(WorkOrderAssignmentQueue)
-            .filter(WorkOrderAssignmentQueue.work_order_mirror_id == row.id)
-            .order_by(WorkOrderAssignmentQueue.created_at.desc())
-            .first()
+        work_order_commands.assign(
+            db,
+            row.public_id,
+            technician_id=profile.id,
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+            status=(status or "dispatched"),
+            reason="manager_assign",
+            auth=auth,
+            request_id=request_id,
         )
-        if entry is None:
-            entry = WorkOrderAssignmentQueue(
-                work_order_mirror_id=row.id,
-                reason="manager_assign",
-            )
-            db.add(entry)
-        entry.assigned_technician_id = profile.id
-        entry.status = DispatchQueueStatus.assigned
-
-        name = _technician_name(profile, _system_user(db, profile))
-        row.assigned_to_crm_person_id = profile.crm_person_id
-        row.assigned_to_name = name
-        row.technician_name = name
-        if scheduled_start is not None:
-            row.scheduled_start = scheduled_start
-        if scheduled_end is not None:
-            row.scheduled_end = scheduled_end
-        row.status = next_status
-        mark_sub_authoritative(
-            row,
-            "assignment",
-            details={
-                "technician_id": str(profile.id),
-                "person_id": str(profile.person_id),
-                "status": next_status,
-            },
-        )
-        db.commit()
         db.refresh(row)
         return FieldManager._job_payload(db, row)
 
@@ -389,6 +364,7 @@ def _assigned_profile(db: Session, row: WorkOrder) -> TechnicianProfile | None:
     entry = (
         db.query(WorkOrderAssignmentQueue)
         .filter(WorkOrderAssignmentQueue.work_order_mirror_id == row.id)
+        .filter(WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned)
         .filter(WorkOrderAssignmentQueue.assigned_technician_id.isnot(None))
         .order_by(WorkOrderAssignmentQueue.created_at.desc())
         .first()
@@ -400,7 +376,8 @@ def _assigned_profile(db: Session, row: WorkOrder) -> TechnicianProfile | None:
 
 def _filter_assigned_to(db: Session, query, profile: TechnicianProfile):
     assignment_ids = select(WorkOrderAssignmentQueue.work_order_mirror_id).filter(
-        WorkOrderAssignmentQueue.assigned_technician_id == profile.id
+        WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
+        WorkOrderAssignmentQueue.assigned_technician_id == profile.id,
     )
     clauses: list[Any] = [WorkOrder.id.in_(assignment_ids)]
     if profile.crm_person_id:

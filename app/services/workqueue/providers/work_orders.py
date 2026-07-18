@@ -19,7 +19,11 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
+from app.models.dispatch import (
+    DispatchQueueStatus,
+    TechnicianProfile,
+    WorkOrderAssignmentQueue,
+)
 from app.models.work_order import WorkOrder
 from app.services.workqueue.providers import register
 from app.services.workqueue.providers.common import (
@@ -162,6 +166,7 @@ def _visible_to_people(person_ids: frozenset[UUID]):
     latest_technician = (
         select(WorkOrderAssignmentQueue.assigned_technician_id)
         .where(WorkOrderAssignmentQueue.work_order_mirror_id == WorkOrder.id)
+        .where(WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned)
         .where(WorkOrderAssignmentQueue.assigned_technician_id.isnot(None))
         .order_by(WorkOrderAssignmentQueue.created_at.desc())
         .limit(1)
@@ -209,6 +214,7 @@ def _assigned_people(db: Session, rows: list[WorkOrder]) -> dict[UUID, UUID]:
     assignments = (
         db.query(WorkOrderAssignmentQueue)
         .filter(WorkOrderAssignmentQueue.work_order_mirror_id.in_(unresolved_ids))
+        .filter(WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned)
         .filter(WorkOrderAssignmentQueue.assigned_technician_id.isnot(None))
         .order_by(
             WorkOrderAssignmentQueue.work_order_mirror_id,

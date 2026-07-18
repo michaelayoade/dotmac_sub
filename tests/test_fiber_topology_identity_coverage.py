@@ -130,7 +130,7 @@ def test_empty_and_unassigned_reports_are_stable_and_read_only(db_session):
     )
 
 
-def test_supported_link_and_support_rejection_can_satisfy_all_evidence_gates(
+def test_supported_identity_and_reviewed_support_rejection_can_satisfy_gates(
     db_session,
 ):
     cabinet_feature = _stage_point(db_session, "fdh_cabinet", "CAB-COVERAGE-READY")
@@ -161,7 +161,7 @@ def test_supported_link_and_support_rejection_can_satisfy_all_evidence_gates(
 
     assert rows["CAB-COVERAGE-READY"]["lifecycle_state"] == "applied_current"
     assert rows["POLE-COVERAGE-REJECT"]["canonical_model_state"] == (
-        "unsupported_reject_only"
+        "supported_create_or_link"
     )
     assert rows["POLE-COVERAGE-REJECT"]["lifecycle_state"] == "rejected_current"
     assert report.ready_for_point_identity_cutover_review is True
@@ -373,5 +373,5 @@ def test_admin_route_and_template_are_read_only_complete_cohort_projection():
     content = template.read_text()
     assert "gates always use the complete cohort" in content
     assert "cannot infer identities" in content
-    assert "reject-only" in content
+    assert "decide support mounts" in content
     assert "<form" not in content

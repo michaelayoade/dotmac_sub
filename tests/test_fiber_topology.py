@@ -13,6 +13,7 @@ from app.models.network import (
     SplitterPortType,
 )
 from app.services.fiber_topology import audit_fiber_topology
+from app.services.network.fiber_plant_integrity import ensure_segment_strand_inventory
 
 
 def test_audit_fails_closed_when_only_a_fiber_subscription_exists(
@@ -26,7 +27,7 @@ def test_audit_fails_closed_when_only_a_fiber_subscription_exists(
     assert report.electronic.active_fiber_subscriptions == 1
     assert report.electronic.exact_subscription_assignments == 0
     assert report.inventory.active_segments == 0
-    assert report.customer_trace_cutover_ready is False
+    assert report.customer_trace_evidence_complete is False
     assert {finding.code for finding in report.findings} >= {
         "fiber_subscription_without_exact_ont",
         "fiber_subscription_not_traceable_to_splitter",
@@ -54,7 +55,7 @@ def test_audit_accepts_one_fully_connected_customer_path(
         longitude=7.49,
         is_active=True,
     )
-    splitter = Splitter(name="SPL-001", fdh=fdh, is_active=True)
+    splitter = Splitter(name="SPL-001", fdh=fdh, splitter_ratio="1:8", is_active=True)
     splitter_input = SplitterPort(
         splitter=splitter,
         port_number=0,
@@ -110,15 +111,17 @@ def test_audit_accepts_one_fully_connected_customer_path(
     )
     db_session.add_all([upstream, downstream])
     db_session.flush()
-    db_session.add(
-        FiberSegment(
-            name="SEG-001",
-            from_point_id=upstream.id,
-            to_point_id=downstream.id,
-            route_geom="LINESTRING(7.48 9.07, 7.49 9.08)",
-            is_active=True,
-        )
+    segment = FiberSegment(
+        name="SEG-001",
+        from_point_id=upstream.id,
+        to_point_id=downstream.id,
+        route_geom="LINESTRING(7.48 9.07, 7.49 9.08)",
+        fiber_count=12,
+        is_active=True,
     )
+    db_session.add(segment)
+    db_session.flush()
+    ensure_segment_strand_inventory(db_session, segment)
     db_session.commit()
 
     report = audit_fiber_topology(db_session)
@@ -129,7 +132,7 @@ def test_audit_accepts_one_fully_connected_customer_path(
     assert report.findings == ()
     assert report.aggregate_preconditions_ready is True
     assert report.trace_coverage is None
-    assert report.customer_trace_cutover_ready is False
+    assert report.customer_trace_evidence_complete is False
 
 
 def test_audit_detects_ont_and_assignment_on_another_olts_pon(

@@ -1,18 +1,26 @@
 # Fiber Topology Source of Truth
 
-Status: phase 21 exact fiber field-verification map projection implemented
+Status: canonical topology ownership in active development
 Owner: `network.fiber_topology`
 Mutation owner: `network.fiber_asset_changes`
+Plant-integrity owner: `network.fiber_plant_integrity`
+Splitter-inventory owner: `network.splitter_inventory`
+Support-structure owner: `network.fiber_support_structures`
 Identity-decision owner: `network.fiber_identity_decisions`
 Review/reconciliation owner: `network.fiber_identity_review`
 Field-observation owner: `network.fiber_field_observations`
 Field-worklist owner: `network.fiber_field_verification_worklist`
 Field-map owner: `network.fiber_field_verification_map`
+Work-order evidence-map owner: `network.fiber_work_order_evidence_map`
+Field-mobile evidence consumer: read-only projection of
+`network.fiber_work_order_evidence_map` (no independent decision owner)
 Identity-coverage owner: `network.fiber_identity_coverage`
 Connectivity-decision owner: `network.fiber_connectivity_decisions`
 Connectivity-review owner: `network.fiber_connectivity_review`
 Connectivity-coverage owner: `network.fiber_connectivity_coverage`
+Numeric cutover-readiness owner: `network.fiber_cutover_readiness`
 Access-attachment owner: `network.fiber_access_attachments`
+Forwarding-topology owner: `network.forwarding_topology`
 Electronic-topology observation owner: `network.ont_topology_observations`
 Electronic-identity repair owner: `network.ont_assignment_identity`
 Cleanup-batch owner: `network.ont_assignment_cutover_batches`
@@ -32,18 +40,19 @@ customer impact.
 The target trace is:
 
 ```text
-POP -> OLT -> PON port -> termination/segment chain -> FDH/FAT/splitter
-    -> splitter output/drop -> ONT -> subscription -> customer
+POP -> OLT -> PON port -> termination/segment chain -> root splitter
+    -> zero or more reviewed splitter cascades -> leaf output/drop
+    -> ONT -> subscription -> customer
 ```
 
 Only validated edges participate in outage impact or customer diagnosis. A
 line that merely appears to touch a point on a map is not a connectivity edge.
 
-The implemented trace begins at the serving POP resolved by `network.identity`.
-It does not label LLDP adjacency as a border/core/NAS forwarding path. That
-upstream lane remains explicitly outside the trace until an authoritative
-routing/access-path cohort projection can prove it. This preserves the target
-without inventing the part of the path Sub cannot yet verify.
+The passive-fiber trace begins at the serving POP resolved by
+`network.identity`; it does not relabel LLDP adjacency as passive connectivity.
+The separate `network.forwarding_topology` owner now governs the upstream
+device lane. Customer path and outage ancestry consume only its reviewed
+declarations with current exact required observation agreement.
 
 ## Canonical edges
 
@@ -54,6 +63,7 @@ without inventing the part of the path Sub cannot yet verify.
 | PON to ONT | `OntUnit.pon_port_id` | `OntAssignment.pon_port_id` is a projection that must agree |
 | ONT to service | active `OntAssignment.subscription_id` | subscriber/address matches are noncanonical evidence and never create the edge |
 | PON to splitter input | active `PonPortSplitterLink` to an input port | inferred PON/splitter proximity is evidence only |
+| Splitter output to downstream input | active `SplitterCascadeLink` between exact directed ports | cabinet, name, ratio, geometry, and proximity are evidence only |
 | Splitter output to ONT | `OntUnit.splitter_port_id` to an output port | `SplitterPortAssignment` is legacy matching evidence |
 | Asset-to-asset cable path | `FiberTerminationPoint` plus `FiberSegment` endpoints | route geometry alone is not connectivity |
 | Strand/splice detail | `FiberStrand` and `FiberSplice` nested inside the asset graph | strand endpoint fields do not create a parallel asset graph |
@@ -144,6 +154,40 @@ plant records are loaded into Sub production.
     `SplitterPortAssignment` customer authority, and remaining direct CRUD
     writers after their consumers use the owner.
 
+Operational cable integrity is a hard cutover invariant, not a map warning:
+
+- An active `FiberSegment` must have two distinct active
+  `FiberTerminationPoint` rows, approved route geometry, and exact canonical
+  endpoint references. It must also declare a positive `fiber_count`; the
+  reviewed mutation workflow delegates to `network.fiber_plant_integrity`,
+  which materializes that many exact numbered
+  `FiberStrand.segment_id` rows. `cable_name` is display metadata and cannot
+  establish core ownership. A name, line endpoint coordinate, nearest point,
+  or imported feature ID cannot satisfy an endpoint.
+- Valid cable ends terminate on actual fiber infrastructure such as a PON port,
+  splitter port, FDH/cabinet, FAT/access point, splice closure, or ONT. A pole or
+  support is a route mount unless a separately modeled termination asset exists
+  there; mounting a cable does not terminate it.
+- An active segment component must be rooted through exact edges at a serving
+  PON/OLT boundary. An isolated closure-to-closure or cabinet-to-cabinet island
+  remains planned/staged evidence and cannot become operational merely because
+  both cable ends have names.
+- Construction is root-first and retirement is leaf-first. Activating or
+  retiring a segment cannot orphan another active segment, splitter branch,
+  ONT, or customer-bearing path.
+
+Migration `361_fiber_plant_operational_integrity` now enforces the active-row
+shape at the database boundary and fails its preflight rather than silently
+deactivating or completing legacy rows. `network.fiber_asset_changes` owns the
+review and application workflow and delegates the exact endpoint, whole-component,
+PON/OLT rootedness, numbered-core, and safe-retirement invariants to
+`network.fiber_plant_integrity`. `network.splitter_inventory` is the one writer
+for splitter identity, declared ratio/capacity, and modeled ports; its API and
+admin adapters use the same capacity guards. Active splitters require an exact
+`input_ports:output_ports` ratio and positive declared capacity, and active
+modeled ports cannot exceed that declaration. Existing rows which fail the
+migration preflight remain explicit cleanup blockers.
+
 Normalized feature equivalence is tracked by
 `(source_system, asset_type, external_id, content_hash)`, while replay of an
 identical source cohort is idempotent by its manifest hash. Re-running a source
@@ -206,15 +250,16 @@ between staged evidence and canonical topology:
 - `fiber_topology_asset_source_links` is the canonical source-identity link.
   Its source key is `(source_system, source_asset_type, external_id)`, so one
   imported identity cannot silently point at multiple assets.
-- `create` is enabled only for cabinets, FAT/FAP access points, and splice
-  closures. Execution creates a pending `network.fiber_asset_changes` request;
-  it does not construct a canonical asset. The source link is finalized only
-  after that request is independently approved and has an exact asset ID.
+- `create` is enabled for cabinets, FAT/FAP access points, splice closures, and
+  support structures. Execution creates a pending
+  `network.fiber_asset_changes` request; it does not construct a canonical
+  asset. Support requests delegate their approved mutation to
+  `network.fiber_support_structures`. The source link is finalized only after
+  that request is independently approved and has an exact asset ID.
 - `link_existing` is enabled for those point types and service buildings. It
   writes identity provenance only and does not mutate the linked asset.
-- support structures can only be rejected in this slice because Sub has no
-  deployed canonical support-structure table. Cable paths remain ineligible
-  until reviewed termination connectivity is modeled; geometry is not an edge.
+- Cable paths remain ineligible for point-identity decisions because reviewed
+  termination connectivity owns path edges; geometry is never an edge.
 
 Every transition records actor, reason/review evidence, timestamps, the staged
 content hash, and (for creates) the exact resulting fiber change request. A
@@ -365,7 +410,7 @@ canonical termination and segment mutations.
 
 - A proposal is bound to one staged `fiber_segment`, its stable external ID,
   exact content hash, explicit action, actor/reason, segment attributes, and two
-  typed canonical endpoint references. Supported endpoints in this slice are
+  typed canonical endpoint references. Supported endpoints in this capability are
   PON ports, splitter ports, FDH cabinets, FAT/access points, splice closures,
   and ONTs.
 - Geometry is retained as exact route evidence. It never chooses, snaps, or
@@ -412,7 +457,7 @@ python scripts/network/review_fiber_topology_connectivity.py reconcile \
   --actor "reconciler identity" --limit 100
 ```
 
-This slice does not infer path endpoints from spatial proximity and does not
+This capability does not infer path endpoints from spatial proximity and does not
 bulk-load staged OSP paths. Production cutover remains a separate gate.
 
 The six direct API mutation adapters for termination points and segments now
@@ -421,19 +466,34 @@ highest-risk unreviewed parallel writer. Canonical mutations are applied by
 `network.fiber_asset_changes`, while staged path endpoint decisions and their
 provenance remain owned by `network.fiber_connectivity_decisions`.
 
-## Reviewed PON-input and ONT-output attachments
+## Reviewed PON-input, splitter-cascade, and ONT-output attachments
 
-Migration `338_fiber_access_attachment_decisions` makes
+Migrations `338_fiber_access_attachment_decisions` and
+`359_splitter_cascade_links` make
 `network.fiber_access_attachments` the one writer for the active
-PON-to-splitter input edge and the ONT-to-splitter output edge.
+PON-to-root-input edge, directed splitter cascade edges, and the
+ONT-to-leaf-output edge.
 
 - `pon_input` decisions bind one exact `PonPort`, its OLT, the current active
   `PonPortSplitterLink`, and an explicit active splitter input port. One input
   can serve only one active PON.
+- `splitter_cascade` decisions bind an exact upstream output and downstream
+  input, the one rooted PON/OLT chain, the downstream stage, and cumulative
+  insertion loss. `SplitterCascadeLink` is the canonical edge. Construction is
+  root-first and removal is leaf-first; a link cannot orphan active ONTs or a
+  downstream cascade.
+- A splitter can have only one active upstream source. One output can feed at
+  most one downstream splitter, and a cascade output cannot also feed an ONT.
+  Self-edges, cycles, multi-input splitter traversal, and a downstream PON root
+  are rejected. Every splitter participating in a cascade requires an explicit
+  `insertion_loss_db`; ratio labels never supply a loss value.
+- `network.fiber_asset_changes` remains the reviewed owner for changing a
+  splitter's canonical insertion-loss property. The generic splitter write
+  schema does not accept this field; its read schema exposes the current value.
 - `ont_output` decisions bind one exact active `OntUnit`, its authoritative PON
-  and OLT, the current output, and an explicit active splitter output. The PON
-  must already have a reviewed active input on the same splitter, and one
-  output can serve only one active ONT.
+  and OLT, the current output, and an explicit active leaf output. The target
+  must resolve through the exact reviewed splitter tree rooted at that PON, and
+  one output can serve only one active ONT.
 - `OntUnit.splitter_port_id` is canonical. `OntUnit.splitter_id` is updated in
   the same transaction as its denormalized parent projection. A detach clears
   both. `SplitterPortAssignment` remains legacy matching evidence and cannot
@@ -442,8 +502,9 @@ PON-to-splitter input edge and the ONT-to-splitter output edge.
   evidence. A different actor must approve it. Execution locks and revalidates
   every bound PON/OLT/port/splitter value, then records the exact resulting IDs
   and a result digest. Stale inputs close without mutation.
-- Geometry, coordinates, names, proximity, and route touching are not accepted
-  as attachment evidence. They can guide field verification only.
+- Geometry, coordinates, names, cabinets, splitter ratios, proximity, and route
+  touching are not accepted as attachment evidence. They can guide field
+  verification only.
 - Generic PON-link create/update/delete adapters now return `410 Gone` at both
   API and service boundaries. Generic ONT create/update cannot set attachment
   fields, and the ONT location form no longer writes those fields.
@@ -460,6 +521,13 @@ python scripts/network/review_fiber_access_attachments.py propose \
   --splitter-port-id OUTPUT_PORT_UUID --actor "proposer identity" \
   --reason "field labels and electronic PON identity verified"
 
+python scripts/network/review_fiber_access_attachments.py propose \
+  --attachment-type splitter_cascade --action attach \
+  --subject-id UPSTREAM_OUTPUT_PORT_UUID \
+  --splitter-port-id DOWNSTREAM_INPUT_PORT_UUID \
+  --actor "proposer identity" \
+  --reason "directed ports and insertion loss independently verified"
+
 python scripts/network/review_fiber_access_attachments.py approve \
   --decision-id DECISION_UUID --actor "independent reviewer" \
   --notes "exact PON, OLT, splitter, and output verified"
@@ -468,7 +536,7 @@ python scripts/network/review_fiber_access_attachments.py execute \
   --decision-id DECISION_UUID --actor "executor identity"
 ```
 
-This slice establishes the reviewed writer and invariants. It does not import
+This capability establishes the reviewed writer and invariants. It does not import
 production attachments or infer them from the map. Existing exact ONT
 assignment duplicates and ONT/PON/OLT disagreements are inputs to the reviewed
 electronic identity repair workflow below, not attachment evidence.
@@ -584,8 +652,8 @@ collector facts separate from reviewed identity decisions.
 
 ## Legacy import, bulk migration, and inventory release cutover
 
-Phase 9 removes the remaining legacy adapters that could bypass the electronic
-identity owners.
+This cutover removes the remaining legacy adapters that could bypass the
+electronic identity owners.
 
 - `scripts/network/import_smartolt_unconfigured.py` is now an exact,
   preview-only observation audit. It reports stable hashes, exact local
@@ -610,9 +678,9 @@ identity owners.
 
 ## Normal explicit ONT assignment command ownership
 
-Phase 10 makes `network.ont_assignment_commands` the only constructor for a
-normal `OntAssignment` and separates service identity from observations and
-device configuration caches.
+`network.ont_assignment_commands` is the only constructor for a normal
+`OntAssignment` and separates service identity from observations and device
+configuration caches.
 
 - Normal assignment requires an exact local ONT, exact subscription, and exact
   active modeled PON. The subscriber is derived through the subscription bridge
@@ -648,9 +716,10 @@ device configuration caches.
 
 ## ONT assignment constraint cutover readiness
 
-Phase 11 makes `network.ont_assignment_cutover` the exhaustive read-only owner
-for deciding whether the current active assignment data is eligible for future
-database-constraint enforcement. This phase does not add or enable constraints.
+`network.ont_assignment_cutover` is the exhaustive read-only owner for deciding
+whether the current active assignment data is eligible for future
+database-constraint enforcement. This capability does not add or enable
+constraints.
 
 - The audit scans every active assignment before applying any display filter or
   limit. It verifies exact subscription/subscriber projection, ONT/PON/OLT
@@ -677,11 +746,11 @@ database-constraint enforcement. This phase does not add or enable constraints.
 
 ## Reviewed ONT assignment cleanup batches
 
-Phase 12 makes `network.ont_assignment_cutover_batches` the owner of immutable,
-operator-selected cleanup manifests. It stages reviewable identity decisions;
-it does not add a second repair executor or authorize constraint cutover.
+`network.ont_assignment_cutover_batches` owns immutable, operator-selected
+cleanup manifests. It stages reviewable identity decisions; it does not add a
+second repair executor or authorize constraint cutover.
 
-- A preview binds the complete Phase 11 report SHA-256 and the exact finding
+- A preview binds the complete assignment-cutover audit SHA-256 and the exact finding
   SHA-256 for every selected active assignment. Each item must state its action,
   reason, exact subscription/PON/OLT targets, and the complete conflict IDs when
   canonicalizing. Names, addresses, geometry, and imported identifiers remain
@@ -729,11 +798,11 @@ python scripts/network/review_ont_assignment_cutover_batch.py preview \
 
 ## Post-execution ONT cleanup verification
 
-Phase 13 makes `network.ont_assignment_cutover_verification` the owner of
-immutable terminal-result and fresh-audit attestations. This phase verifies
-cleanup evidence; it does not execute a repair or authorize constraints.
+`network.ont_assignment_cutover_verification` owns immutable terminal-result
+and fresh-audit attestations. It verifies cleanup evidence; it does not execute
+a repair or authorize constraints.
 
-- Preview validates the exact Phase 12 batch manifest and review, copies every
+- Preview validates the exact cleanup-batch manifest and review, copies every
   delegated decision's status, decision/input hashes, terminal result payload
   and result hash, and independently recomputes each applied/closed result hash.
   Missing or mismatched result evidence fails closed.
@@ -741,7 +810,7 @@ cleanup evidence; it does not execute a repair or authorize constraints.
   attestation. Terminal outcomes remain separate as applied, stale-closed,
   conflict-closed, other-closed, or declined; a declined batch never claims
   cleanup success.
-- Verification reruns the complete Phase 11 audit. The immutable evidence keeps
+- Verification reruns the complete assignment-cutover audit. The immutable evidence keeps
   fresh global report/gate readiness separate from residual findings in the
   selected batch's exact primary/duplicate assignment scope. A clean batch scope
   does not imply global constraint readiness.
@@ -782,14 +851,14 @@ and requires the fresh exhaustive audit itself to be globally clean.
 
 ## ONT cleanup lineage coverage reconciliation
 
-Phase 14 makes `network.ont_assignment_cutover_coverage` the read-only owner of
-current cleanup coverage and verification-drift projection. It consumes the
-Phase 11 audit and every Phase 12/13 lineage record; it creates no new authority
-and does not add or enable a database constraint.
+`network.ont_assignment_cutover_coverage` is the read-only owner of current
+cleanup coverage and verification-drift projection. It consumes the exhaustive
+assignment audit and every cleanup-batch and verification lineage record; it
+creates no new authority and does not add or enable a database constraint.
 
 - One PostgreSQL `REPEATABLE READ` snapshot joins current exhaustive findings to
   every immutable batch item, review, delegated decision result, and verification
-  attestation. The canonical Phase 13 decision-result snapshot/digest is reused;
+  attestation. The canonical verification decision-result snapshot/digest is reused;
   the coverage owner does not rederive execution evidence differently.
 - A current finding is `exact` only when both its primary assignment ID and
   finding SHA-256 match one immutable proposal item. One repair-scope match with
@@ -813,21 +882,21 @@ and does not add or enable a database constraint.
 
 ## ONT constraint-cutover authorization evidence
 
-Phase 15 makes `network.ont_assignment_constraint_authorization` the owner of
-immutable authorization requests and independent approve/decline attestations.
+`network.ont_assignment_constraint_authorization` owns immutable authorization
+requests and independent approve/decline attestations.
 It records evidence for a later separately reviewed database change; it cannot
 create, validate, enable, disable, or remove a constraint.
 
-- A request requires the exact current Phase 14 coverage SHA-256 and Phase 11
-  cutover audit SHA-256 while every conservative coverage gate is clean. It
+- A request requires the exact current cleanup-coverage SHA-256 and
+  assignment-cutover audit SHA-256 while every conservative coverage gate is clean. It
   stores the complete coverage payload, an explicitly named target environment,
   requester, reason, and explicit caller-chosen expiry. No environment is
-  inferred and this phase invents no unapproved maximum validity threshold.
+  inferred and this owner invents no unapproved maximum validity threshold.
 - Request confirmation requires the exact previewed request SHA-256. A changed
   coverage/audit snapshot or expired timestamp fails before any row is written.
   Exact replays are idempotent.
 - A different actor independently approves or declines the immutable request.
-  Approval re-runs Phase 14 in the same repeatable snapshot and fails closed when
+  Approval re-runs cleanup coverage in the same repeatable snapshot and fails closed when
   the request expired, either report hash changed, any readiness gate regressed,
   or the previewed attestation digest changed. Decline remains possible so stale
   or expired requests can be explicitly rejected without claiming approval.
@@ -846,10 +915,10 @@ create, validate, enable, disable, or remove a constraint.
 
 ## Operator-scale reviewed connectivity batches
 
-Phase 16 makes `network.fiber_connectivity_review` the owner of immutable
-operator-scale proposal manifests, independent batch attestations, and bounded
-execution/reconciliation evidence. It scales the Phase 4 path-decision owner to
-the 1,600 staged OSP paths without introducing a bulk-import writer.
+`network.fiber_connectivity_review` owns immutable operator-scale proposal
+manifests, independent batch attestations, and bounded execution/reconciliation
+evidence. It scales the single-path decision owner to the staged OSP paths
+without introducing a bulk-import writer.
 
 - A proposal batch contains at most 500 rows. Every row binds one exact staged
   feature ID and content SHA-256. `create` and `link_existing` rows must also
@@ -907,7 +976,7 @@ python scripts/network/review_fiber_topology_connectivity_batch.py reconcile \
 
 ## Exhaustive fiber connectivity coverage evidence
 
-Phase 17 makes `network.fiber_connectivity_coverage` the read-only owner of the
+`network.fiber_connectivity_coverage` is the read-only owner of the
 complete latest staged-path coverage and readiness projection. It adds no schema
 migration and creates no new mutation authority.
 
@@ -922,7 +991,7 @@ migration and creates no new mutation authority.
   mutation, execution-evidence drift, applied current, provenance drift,
   explicitly reviewed rejection, stale closure, rejected mutation, and other
   failed closure.
-- Exact Phase 16 manifests are rehashed and compared to every delegated batch
+- Exact connectivity-review manifests are rehashed and compared to every delegated batch
   row. Independent review attestations and bounded execution/reconciliation run
   payloads are rehashed and their counts checked. Advanced decisions without a
   current matching run outcome remain visible evidence drift.
@@ -953,18 +1022,21 @@ python scripts/network/audit_fiber_connectivity_coverage.py --compact
 
 ## Exhaustive fiber point-identity coverage evidence
 
-Phase 18 makes `network.fiber_identity_coverage` the read-only owner of the
+`network.fiber_identity_coverage` is the read-only owner of the
 complete latest staged point-asset coverage and readiness projection. It adds
 no schema migration and creates no mutation authority.
+
+Report schema version 2 removes the obsolete reject-only support count; every
+reported point type now has a canonical create/link or link-only model.
 
 - One repeatable snapshot selects the latest source fact for every
   `(source_system, asset_type, external_id)` across cabinets, FAT/access points,
   splice closures, service buildings, and support structures. It does not
   accept a profile, sample, display limit, or geometry-based inclusion filter.
 - Canonical-model state remains separate from coverage and lifecycle. Cabinets,
-  FATs, and closures support reviewed create/link/reject decisions; buildings
-  support link/reject; support structures remain visible and reject-only until
-  their canonical owner and model are approved.
+  FATs, closures, and support structures support reviewed create/link/reject
+  decisions; buildings support link/reject. Support identity does not imply an
+  equipment or cable mount.
 - Exact identity batch manifests, request references, decision digests,
   independent review attestations, and bounded execution-run payloads are
   rehashed and compared with their stored columns and delegated decisions.
@@ -983,7 +1055,8 @@ no schema migration and creates no mutation authority.
 - Conservative gates require a non-empty structurally reviewable full cohort,
   exact-once current decisions, intact batch/review/run evidence, no pending
   review, execution, asset mutation, or reconciliation, terminal current
-  supported identities, and reviewed rejection of every support structure.
+  supported identities, including every applied or explicitly rejected support
+  identity.
   Passing means only `ready_for_point_identity_cutover_review`.
 - `/admin/network/fiber-identity-coverage` is GET-only. Its HTML table displays
   at most 250 rows, but every gate always uses the complete cohort.
@@ -1000,7 +1073,7 @@ python scripts/network/audit_fiber_identity_coverage.py --compact
 
 ## Immutable staged fiber field-verification evidence
 
-Phase 19 makes `network.fiber_field_observations` the sole writer and projector
+`network.fiber_field_observations` is the sole writer and projector
 for technician observations about exact staged fiber source facts. Migration
 `345_fiber_topology_field_observations` adds one append-only evidence table; it
 does not add a topology, identity-decision, connectivity-decision, asset-change,
@@ -1028,17 +1101,18 @@ or cutover writer.
   `GET /field/fiber/source-observations` are thin job/technician-scoped adapters
   around the owner. They do not propose, review, approve, execute, reconcile,
   or apply topology changes.
-- Phase 17 connectivity coverage and Phase 18 identity coverage now display
+- Connectivity coverage and identity coverage display
   `unobserved`, `superseded_only`, `current_agreement`, `current_conflict`,
   `current_inconclusive`, `conflicting_observations`, and `evidence_drift`
   separately for every latest source row. These facts are included in exact
-  report evidence but deliberately do not alter an existing cutover-readiness
-  gate. Field-verification thresholds remain pending architecture policy and
-  cannot be introduced implicitly by a UI or coverage resolver.
+  component-report evidence but do not alter either component owner's local
+  gate. The approved numeric policy consumes them only through
+  `network.fiber_cutover_readiness`; a UI or component coverage resolver cannot
+  introduce a parallel threshold.
 
 ## Exhaustive fiber field-verification worklist
 
-Phase 20 makes `network.fiber_field_verification_worklist` the read-only owner
+`network.fiber_field_verification_worklist` is the read-only owner
 of the complete latest-source field-evidence worklist. It adds no migration and
 no mutation authority.
 
@@ -1047,7 +1121,7 @@ no mutation authority.
   splice closures, service buildings, supports, and fiber paths. It accepts no
   source profile, sample, or display-limit input and never hides currently
   agreeing rows from the complete cohort.
-- Every row embeds the Phase 19 field-evidence projection and binds the exact
+- Every row embeds the field-observation projection and binds the exact
   source batch, profile, feature/content/geometry hashes, source blockers,
   current and superseded observation counts, scope states, and existing native
   work-order references. Stable row and report SHA-256 values make changes in
@@ -1058,8 +1132,9 @@ no mutation authority.
   it never proposes a canonical identity, endpoint, topology mutation, or
   customer-impact consequence.
 - `needs_follow_up_count` is workload inventory, not a correctness percentage or
-  cutover gate. The report deliberately has no ready/pass/eligible field because
-  the numeric field-verification recommendation remains unapproved.
+  cutover gate. The worklist deliberately has no ready/pass/eligible field;
+  only `network.fiber_cutover_readiness` applies the checked-in numeric policy to
+  the complete worklist evidence.
 - `/admin/network/fiber-field-verification` is GET-only. Its summary always uses
   the complete cohort while the HTML table displays the first 500 rows in
   evidence-priority order. `scripts/network/audit_fiber_field_verification.py`
@@ -1067,21 +1142,19 @@ no mutation authority.
   `REPEATABLE READ` transaction and does not return a cutover-readiness exit
   code.
 - The worklist shows only existing work-order context and has no create, assign,
-  or dispatch action. The SOT registry currently names
-  `operations.work_orders` as the work-order read-model owner, while existing
-  native creation/assignment still uses dispatch CRUD without a named mutation
-  owner. A future field-work scheduling action must first resolve that ownership
-  boundary and delegate through the approved owner; this worklist cannot become
+  or dispatch action. Native creation and assignment are owned by
+  `operations.work_order_commands`; a separate exact-source planning owner
+  delegates through it. The worklist itself remains GET-only and cannot become
   an accidental second job writer.
 
 No source fact, observation, work order, proposal, topology decision, asset, or
-cutover state is changed by this phase.
+cutover state is changed by this projection.
 
 ## Exact fiber field-verification map projection
 
-Phase 21 makes `network.fiber_field_verification_map` the read-only owner of the
-complete staged-geometry overlay for the Phase 20 worklist. It adds no migration
-and no mutation authority.
+`network.fiber_field_verification_map` is the read-only owner of the complete
+staged-geometry overlay for the field-verification worklist. It adds no
+migration and no mutation authority.
 
 - One repeatable snapshot consumes the complete owner-produced worklist, reloads
   every referenced staged source feature, and fails closed if an identity,
@@ -1097,11 +1170,11 @@ and no mutation authority.
   evidence state, priority, next evidence step, blockers, and current versus
   superseded native work-order references. A stable map-feature SHA-256 and
   complete overlay SHA-256 bind those facts to the exact staged geometry and the
-  Phase 20 report SHA-256.
+  worklist report SHA-256.
 - Presentation bounds are computed only from unchanged finite GeoJSON coordinate
   pairs. This is a viewport projection, not asset proximity, endpoint selection,
   route validation, or fault localization. Map color comes only from the Phase
-  20 evidence-priority field; asset types and client filters cannot redefine it.
+  worklist evidence-priority field; asset types and client filters cannot redefine it.
 - `/admin/network/fiber-field-verification-map` is GET-only and embeds the
   complete FeatureCollection. Browser filters change only the visible overlay;
   complete counts and hashes remain unchanged. Exact source/content/geometry,
@@ -1113,48 +1186,284 @@ and no mutation authority.
 
 No source geometry, source fact, observation, work order, proposal, topology
 decision, asset, threshold, customer-impact state, or cutover state is changed
-by this phase.
+by this projection.
 
-## Pending architecture recommendations
+## Native work-order fiber evidence map
 
-These recommendations are not approved ownership changes or production-cutover
-authority. They keep the unresolved boundaries explicit for a separate decision.
+`network.fiber_work_order_evidence_map` is the read-only owner of an
+exact field-evidence overlay for one explicitly named native Sub work order. It
+adds no migration and no mutation authority.
 
-1. **Pole/support ownership:** add a dedicated
-   `network.fiber_support_structures` owner in Sub for canonical support identity,
-   lifecycle, inspection/lease state, and exact asset-to-support mount edges.
-   GIS remains its spatial projection and construction/CRM imports remain source
-   observations. Until that model and reviewed writer exist, staged poles remain
-   reject-only and cannot become fiber endpoints.
-2. **Cascaded splitter modeling:** extend
-   `network.fiber_access_attachments` with an exact reviewed
-   splitter-output-to-downstream-input edge. The PON attaches only to a root
-   splitter input; an ONT attaches only to a leaf output. Enforce one upstream
-   per input, at most one downstream splitter per output, no self-edge or cycle,
-   active ports/splitters, and explicit stage/loss tracing. Never infer a cascade
-   from shared cabinets, names, ratios, or proximity.
-3. **Numeric cutover thresholds:** correctness gates should be zero-tolerance
-   within each explicitly selected geographic cutover cohort: 100% exact current
-   source identity and connectivity coverage, 100% current review/result/provenance
-   evidence, zero ambiguous/unassigned/blocked/drift/pending rows, and 100% of
-   customer-bearing paths traceable. Field verification should be 100% for
-   POP/OLT, feeder/trunk, cabinets, splitters, customer-bearing endpoints, and
-   every conflict/changed row. A random audit may cover 20% of remaining dormant
-   low-risk rows (minimum 25); discrepancy above 2% blocks the cohort and expands
-   that class to 100% verification. Percentages never excuse a known SOT gap.
-4. **Border/core/NAS projection:** add a Sub-owned
-   `network.forwarding_topology` declaration for exact device, interface, VRF,
-   peer, border/core role, site, and NAS termination identities. Configuration
-   owners apply declared intent; LLDP, BGP, routing-table, and RADIUS collectors
-   persist observations; an idempotent reconciler projects agreement/drift.
-   `network.radius_sessions` remains online-session evidence and LLDP never
-   creates the official forwarding path.
-5. **Native work-order mutation ownership:** name one Sub service for work-order
-   creation, assignment, and assignment-queue transitions. The current
-   `operations.work_orders` registration owns reads, while dispatch CRUD still
-   writes. Before the field-verification worklist gains job actions, move those
-   writes behind the named owner with preview/authorization/audit/idempotency
-   appropriate to dispatch consequences; keep CRM IDs as provenance only.
+- The owner opens the same repeatable snapshot as the field-verification map,
+  resolves the exact active `work_order.id` and `public_id`, reads that job's
+  immutable field observations, and consumes the complete exact-GeoJSON overlay. It
+  accepts no source profile, geographic area, sample, proximity, or display
+  limit input.
+- Every immutable observation for the work order must appear in exactly one
+  field-verification map feature's owner-produced current or superseded evidence. A missing,
+  duplicated, cross-job, source-identity-mismatched, or content-state-mismatched
+  observation fails the complete projection instead of being hidden or joined
+  by a label, geometry, or nearest-asset guess.
+- Only features backed by an immutable observation for that work order are
+  returned. The response removes the complete-map evidence lists for all jobs and
+  replaces them with the selected job's exact observation IDs, staged-feature
+  IDs, content/claim/observation hashes, actors, scopes, outcomes, measurements,
+  and attachment references. This prevents a technician from discovering
+  another work order through a shared source feature.
+- `current_source`, `superseded_source`, and
+  `current_and_superseded_source` remain separate. The geometry is always the
+  unchanged current field-verification-map source geometry. Superseded evidence retains its
+  originally observed staged-feature ID and content hash and is never presented
+  as verification of the current geometry or content.
+- Stable observation-evidence, selected-feature, and complete report SHA-256
+  values bind the job-scoped projection to the exact field-verification overlay
+  and worklist hashes.
+- `GET /api/v1/field/fiber/work-order-evidence-map?work_order_id=<public_id>` is
+  a thin authenticated adapter. It opens the repeatable snapshot before field
+  permission reads and uses the existing technician/vendor/assignment-queue
+  work-order scope before delegating to the owner. The endpoint has no POST,
+  create, assign, observe, propose, apply, or readiness mode.
+
+No source geometry, observation, work order, assignment, topology decision,
+asset, threshold, customer-impact state, or cutover state is changed by this
+projection.
+
+## Field-mobile work-order evidence projection
+
+`field_mobile` is a read-only consumer of the work-order evidence-map owner. It
+adds no backend migration, command, or decision authority. The local Drift
+schema is version 5 only to hold bounded offline projection snapshots.
+
+- Native job detail links to `/jobs/:id/fiber-evidence`. The repository calls
+  only
+  `GET /api/v1/field/fiber/work-order-evidence-map?work_order_id=<public_id>`;
+  it has no create, observe, assign, schedule, propose, repair, or topology-write
+  path.
+- The client validates that the response work-order public ID and every feature
+  work-order public ID match the requested job. Unknown evidence contexts,
+  unknown geometry states, presentation/value disagreement, invalid hashes,
+  invalid feature counts, or source geometry labelled exact but not renderable
+  without modification fail closed.
+- The map renders only the returned exact `Point`, `LineString`, and `Polygon`
+  coordinates. Unsupported or invalid source geometry remains visibly listed as
+  unrenderable; the client never snaps, repairs, drops, or replaces it with a
+  nearest asset. An empty cohort explicitly means no immutable fiber
+  observations are attached to the job and does not trigger asset discovery or
+  fault-area inference.
+- The work-order evidence-map owner supplies the context and geometry labels,
+  semantic tones, and icon keys. Flutter maps those transport-neutral meanings to Material
+  tokens; it does not maintain a competing current/superseded/unrenderable
+  presentation policy. Current, superseded, combined, and unrenderable evidence
+  remain distinct, and exact report, overlay, observation, content, geometry,
+  and feature hashes remain inspectable.
+- The offline table key is
+  `(authenticated_principal, work_order_public_id, report_sha256)`: the latter
+  two fields are the exact evidence identity, and principal scope prevents a
+  shared device login from exposing another actor's cached job evidence. A
+  successful newer response replaces older snapshots for that same principal
+  and job. Network fallback reads only that principal and requested public work
+  order, revalidates payload/cache hashes, and displays an explicit
+  stale-until-refreshed warning. Authorization, scope, lineage-conflict, and
+  other authoritative 4xx responses fail closed and never fall back to stale
+  data. A snapshot is never reused across principals or jobs and is evidence
+  cache only, not source or operational state.
+
+No observation, source geometry, native work order, assignment, canonical
+fiber asset, topology edge, customer-impact state, threshold, or cutover state
+is changed by this projection.
+
+## Implemented supporting ownership decisions
+
+### Canonical support structures and reviewed mount edges
+
+`network.fiber_support_structures` owns canonical pole/support identity,
+lifecycle, ownership, inspection and lease state, plus exact passive-asset mount
+edges. Migration `358_fiber_support_structures` adds the canonical support,
+immutable mount-decision, and mount-edge tables.
+
+- Imported GIS, construction, CRM, or KMZ pole rows remain staged observations.
+  Reviewed point-identity create/link/reject decisions use the existing
+  independent proposal and passive-asset change-request path. An approved
+  support request delegates its mutation to this owner; the generic change
+  service never constructs a support row.
+- Support lifecycle is explicit as planned, active, suspended, or retired.
+  Ownership, inspection, and lease states remain visibly separate. A support
+  with active mount edges cannot be retired.
+- Mount preview requires an exact active support ID and exact canonical cabinet,
+  FAT/access-point, splice-closure, or fiber-segment ID. Point assets have at
+  most one active support mount. A fiber segment may cross multiple supports,
+  but every active edge has a unique positive route sequence.
+- Attach/detach proposals bind exact support, asset, and existing-mount state
+  hashes. Confirmation persists immutable proposal evidence; an independent
+  actor approves or declines it; execution locks and revalidates every input,
+  writes the exact edge/result hash, and stages actor audit evidence. Geometry,
+  labels, external IDs, and proximity never select a mount.
+- `scripts/network/review_fiber_support_mount.py` is a thin preview, propose,
+  approve/decline, execute, and inspect adapter. It has no unreviewed apply mode.
+  Identity coverage remains read-only and now treats support structures as a
+  canonical create/link model without becoming a mount writer.
+
+### Native work-order mutation ownership
+
+`operations.work_order_commands` is the Sub owner for native work-order
+creation/header commands, assignment decisions/projection, and assignment-queue
+transitions. Dispatch API/web and field-manager adapters delegate to it;
+assignment preview is read-only and execution is locked, atomic,
+state-idempotent, and actor-audited with exact previous/result state. Direct
+header assignment fields and field-execution status bypasses are rejected.
+`operations.work_orders` remains the read owner,
+`operations.field_completion` retains execution transitions, and CRM IDs remain
+provenance only.
+
+### Exact field-verification job planning
+
+`network.fiber_field_verification_job_scope` owns the versioned exact-source
+scope stored on a planned native work order, and
+`network.fiber_field_verification_jobs` owns write-free preview plus confirmed
+execution. A plan binds at most 100 explicitly selected current worklist rows,
+every staged/row/content/geometry hash, existing job context, the complete
+worklist report hash, explicit subscriber and schedule, optional technician,
+and a deterministic idempotent native job ID. Execute re-runs report and plan
+confirmation, then delegates create/assignment to
+`operations.work_order_commands` in one transaction with audit evidence.
+
+## Approved numeric cutover-readiness policy
+
+`network.fiber_cutover_readiness` owns the versioned numeric policy and the
+combined read-only readiness decision. Policy `fiber_topology_cutover_v1`
+accepts only the complete `all_sub_operating_geographies` cohort: every latest
+staged source identity and path plus every active fiber subscription. A label or
+geometry filter cannot create a smaller cohort. Exact geographic membership
+requires a separate authoritative membership owner before a later policy may
+admit it.
+
+The policy requires:
+
+- 100% exact-current identity coverage and 100% current terminal
+  review/result/provenance evidence;
+- 100% exact-current connectivity coverage and 100% current terminal
+  review/result/provenance evidence;
+- zero component-owner, ambiguity, drift, pending, source, or canonical
+  topology blockers;
+- an exhaustive trace audit with 100% of active customer-bearing fiber paths
+  complete;
+- exact field-worklist membership equal to the complete identity plus path
+  cohorts, with 100% current agreement for every required row; and
+- authoritative field-evidence contracts for POP/OLT, feeder/trunk, cabinet,
+  splitter, customer-bearing endpoint, and changed/conflicting-source scopes.
+
+No authoritative dormant-low-risk classifier exists yet, so the database
+projection classifies no row as dormant and keeps every latest staged row in the
+100% required field cohort. The checked-in policy nevertheless fixes the later
+audit rule: 20% of explicitly classified dormant low-risk rows, rounded up with
+a minimum of 25 (or the full class when it has fewer than 25 rows). Any known
+sample discrepancy blocks readiness; a discrepancy rate strictly above 2%
+also expands that asset class to 100% review. Integer counts and basis points,
+not floating-point percentages, decide every gate.
+
+The current report deliberately fails closed because field observations cannot
+yet authoritatively cover POP/OLT, splitter, or customer-bearing endpoint
+classes. It names those missing contracts as blockers. Feeder/trunk, cabinet,
+and changed/conflicting staged-source evidence is supported; no unsupported
+class is inferred from labels, geometry, or asset type similarity.
+
+`scripts/network/audit_fiber_cutover_readiness.py` runs one PostgreSQL read-only
+`REPEATABLE READ` snapshot and emits the policy hash, cohort hash, component
+report hashes, exact numerators/denominators, gates, blocker codes, and final
+report hash. It has no profile, geography, limit, proposal, approval, apply, or
+cutover command. `ready_for_cutover_review` is evidence for an independent
+production change review; it does not name a target, authorize a cutover, or
+mutate state. In particular, this owner cannot authorize or perform a production
+cutover.
+
+```bash
+python scripts/network/audit_fiber_cutover_readiness.py
+
+# Machine-readable complete evidence; still read-only and exhaustive.
+python scripts/network/audit_fiber_cutover_readiness.py --compact
+```
+
+## Border, core, and NAS forwarding ownership
+
+`network.forwarding_topology` is the implemented Sub owner for official
+downstream-to-upstream forwarding path. The previous operational readers walked
+active LLDP links and treated `NetworkDevice.role == core` as enough to derive
+customer upstream chains, outage ancestry, and blast radius. That parallel
+decision path is retired: `NetworkTopologyLink` is adjacency evidence and the
+legacy device role remains inventory/display context only.
+
+Each active declaration binds an exact path key, downstream device/interface/
+site/role, VRF, preference, configuration owner and intent reference. Internal
+and NAS paths also bind the exact upstream device/interface/site/role. Border
+paths bind peer IP/ASN plus exact route prefix and next hop; NAS termination
+paths bind the exact `NasDevice`, route prefix, and next hop. Device and site
+roles are therefore authoritative only within this reviewed declaration graph,
+not inferred from a monitoring label.
+
+Declare and retire transitions use a write-free preview, confirmed decision
+hash, independent reviewer, locked execution revalidation, audit event, and
+exact hashed result. Active declarations must keep one role and site per device,
+unique downstream/VRF preferences, and an acyclic graph. Configuration is not a
+side effect of declaration: `network.control_plane_intent` and
+`network.routeros_sot` continue to apply and verify device configuration.
+
+The read-only reconciler keeps evidence types distinct:
+
+- internal path: exact active LLDP endpoints;
+- border peer: exact current BGP peer and routing-table observations;
+- NAS termination: exact active LLDP endpoints and route observation;
+- RADIUS: active-session count shown as online context, never a path gate or
+  writer.
+
+Missing, expired, conflicting, or invalid evidence fails closed. The official
+graph selects the lowest-preference agreeing declaration per downstream device
+and VRF. Customer path, reachability, outage localization, and affected-customer
+expansion now consume that graph; no raw-observation fallback remains.
+
+Migration authority is explicit: the old owner was direct LLDP traversal in
+`app.services.topology`; the new owner is
+`app.services.network.forwarding_topology`. Migration `348` adds declaration,
+decision, and append-only normalized control-observation records. Before any
+production application cutover, operators must load and independently review
+the complete intended internal/border/NAS declaration cohort, run
+`scripts/network/review_forwarding_topology.py audit`, and require current
+agreement for every path needed by customer/outage operations. Deployment with
+missing declarations degrades safely to no inferred ancestry rather than
+restoring LLDP authority.
+
+The normalized BGP and route observation boundary now has a production-code
+RouterOS adapter in
+`app.services.network.forwarding_observation_collector`. It is read-only and
+declaration-scoped: active reviewed declarations select the exact devices,
+peers, and prefixes to inspect; Router rows must bind exactly to
+`NetworkDevice`; RouterOS local address or immediate-gateway evidence must map
+to one exact `DeviceInterface`; and VRF identity must be explicit. Cached or
+non-established BGP sessions, inactive routes, ambiguous mappings, fuzzy names,
+and unsupported payload shapes create no fact. Accepted facts are append-only,
+hashed, and expire unless refreshed.
+
+The scheduled adapter is registered on the ingestion queue but is fail-closed
+by default behind `network.forwarding_observation_collection`. Enabling that
+control starts the observation shadow run only. It never declares or retires a
+path, applies router configuration, or authorizes customer/outage cutover.
+Production readiness still requires a complete independently reviewed
+declaration cohort, fresh agreeing observations, the forwarding audit, and the
+existing explicit cutover review. Until then, absent evidence continues to
+produce `missing_observation` and no inferred ancestry.
+
+`network.access_path.resolve_fiber_end_to_end_path` now forms the single
+read-only subscription proof. It reverses the validated passive trace from the
+customer/ONT toward the OLT, requires complete declared cable/core capacity,
+resolves exactly one OLT `NetworkDevice`, and follows only reviewed forwarding
+declarations with current observation agreement through the subscription's
+authoritative provisioning NAS to a core/border root. The live RADIUS NAS is a
+separate observation (`agreement`, `drift`, or `missing_observation`) and never
+replaces provisioning identity. Every refused join is a typed domain gap and
+the full hop/gap/declaration/fault-candidate payload has one combined SHA-256.
+Production cutover still requires the documented complete reviewed declaration,
+passive-inventory, observation-agreement, and field-verification cohorts; the
+existence of this projection does not make empty or partial production data
+ready.
 
 ## Validated subscription trace shadow
 
@@ -1163,7 +1472,9 @@ using only authoritative edges:
 
 ```text
 serving POP -> OLT -> PON -> referenced terminations/segments
-  -> FDH/FAT -> splitter input/output -> referenced drop segments
+  -> FDH/FAT -> root splitter input/output
+  -> zero or more exact cascade distribution paths and splitter stages
+  -> leaf output -> referenced drop segments
   -> ONT -> exact subscription -> customer
 ```
 
@@ -1212,12 +1523,15 @@ counts, and ranked candidate scopes. It has no topology write or outage command.
   connectivity decisions retain their own immutable provenance and audit
   records; this projection creates no official incident or outage timeline.
 
-The aggregate audit and the cutover gate are deliberately separate:
+The aggregate audit and the combined numeric policy are deliberately separate:
 
 - `aggregate_preconditions_ready` means inventory-level blockers are clear;
-- `customer_trace_cutover_ready` additionally requires an exhaustive cohort
-  evaluation in which every active fiber subscription has a complete trace;
-- an omitted or limited cohort fails closed, even if every sampled path passes.
+- `customer_trace_evidence_complete` additionally means an exhaustive cohort
+  evaluation found every active fiber subscription trace complete;
+- an omitted or limited cohort cannot establish complete trace evidence, even
+  if every sampled path passes; and
+- only `network.fiber_cutover_readiness` combines this evidence with the
+  versioned identity, connectivity, and field-verification thresholds.
 
 Run the exhaustive gate only as an operator audit because it resolves every
 active fiber service:
@@ -1225,7 +1539,7 @@ active fiber service:
 ```bash
 python scripts/network/audit_fiber_topology.py --verify-customer-traces
 
-# Shadow sample only; this can never report cutover-ready
+# Shadow sample only; this can never report complete cohort evidence
 python scripts/network/audit_fiber_topology.py \
   --verify-customer-traces --trace-limit 100
 ```

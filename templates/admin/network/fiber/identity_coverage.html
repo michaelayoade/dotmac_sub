@@ -9,14 +9,14 @@
             <a href="/admin/network/fiber-plant" class="hover:text-indigo-600">Fiber plant</a><span>/</span><span>Point identity coverage</span>
         </nav>
         <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Fiber point identity coverage evidence</h1>
-        <p class="mt-1 max-w-4xl text-sm text-slate-500 dark:text-slate-400">One exhaustive read-only snapshot reconciles every latest staged cabinet, FAT/access point, splice closure, building, and pole/support identity to exact batch, review, execution, change-request, canonical asset, and source-provenance evidence. Geometry and names are observations only. This page cannot infer identities, advance decisions, approve change requests, mutate assets, or authorize production cutover. Poles/supports remain reject-only until their owner and model are approved.</p>
+        <p class="mt-1 max-w-4xl text-sm text-slate-500 dark:text-slate-400">One exhaustive read-only snapshot reconciles every latest staged cabinet, FAT/access point, splice closure, building, and pole/support identity to exact batch, review, execution, change-request, canonical asset, and source-provenance evidence. Geometry and names are observations only. This page cannot infer identities, decide support mounts, advance decisions, approve change requests, mutate assets, or authorize production cutover.</p>
     </div>
 
     <section class="rounded-xl border {{ 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30' if coverage.ready_for_point_identity_cutover_review else 'border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/30' }} p-4">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <p class="font-semibold {{ 'text-emerald-900 dark:text-emerald-200' if coverage.ready_for_point_identity_cutover_review else 'text-rose-900 dark:text-rose-200' }}">Point-identity cutover evidence {{ 'ready for separate review' if coverage.ready_for_point_identity_cutover_review else 'blocked' }}</p>
-                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ coverage.staged_point_count }} latest point(s) from {{ coverage.source_batch_count }} source batch(es): {{ coverage.supported_point_count }} supported and {{ coverage.reject_only_point_count }} reject-only, with {{ coverage.batch_evidence_blockers | length }} evidence blocker(s).</p>
+                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ coverage.staged_point_count }} latest point(s) from {{ coverage.source_batch_count }} source batch(es): {{ coverage.supported_point_count }} supported, with {{ coverage.batch_evidence_blockers | length }} evidence blocker(s).</p>
             </div>
             <div class="font-mono text-xs text-slate-500" title="Coverage report SHA-256">{{ coverage.coverage_report_sha256 }}</div>
         </div>

@@ -1684,6 +1684,473 @@ class CachedMapAssetSyncCursorsCompanion
   }
 }
 
+class $CachedWorkOrderEvidenceMapsTable extends CachedWorkOrderEvidenceMaps
+    with
+        TableInfo<
+          $CachedWorkOrderEvidenceMapsTable,
+          CachedWorkOrderEvidenceMap
+        > {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $CachedWorkOrderEvidenceMapsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _principalScopeMeta = const VerificationMeta(
+    'principalScope',
+  );
+  @override
+  late final GeneratedColumn<String> principalScope = GeneratedColumn<String>(
+    'principal_scope',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _workOrderPublicIdMeta = const VerificationMeta(
+    'workOrderPublicId',
+  );
+  @override
+  late final GeneratedColumn<String> workOrderPublicId =
+      GeneratedColumn<String>(
+        'work_order_public_id',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _reportSha256Meta = const VerificationMeta(
+    'reportSha256',
+  );
+  @override
+  late final GeneratedColumn<String> reportSha256 = GeneratedColumn<String>(
+    'report_sha256',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _sourceOverlaySha256Meta =
+      const VerificationMeta('sourceOverlaySha256');
+  @override
+  late final GeneratedColumn<String> sourceOverlaySha256 =
+      GeneratedColumn<String>(
+        'source_overlay_sha256',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _payloadJsonMeta = const VerificationMeta(
+    'payloadJson',
+  );
+  @override
+  late final GeneratedColumn<String> payloadJson = GeneratedColumn<String>(
+    'payload_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _cachedAtMeta = const VerificationMeta(
+    'cachedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> cachedAt = GeneratedColumn<DateTime>(
+    'cached_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    principalScope,
+    workOrderPublicId,
+    reportSha256,
+    sourceOverlaySha256,
+    payloadJson,
+    cachedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'cached_work_order_evidence_maps';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<CachedWorkOrderEvidenceMap> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('principal_scope')) {
+      context.handle(
+        _principalScopeMeta,
+        principalScope.isAcceptableOrUnknown(
+          data['principal_scope']!,
+          _principalScopeMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_principalScopeMeta);
+    }
+    if (data.containsKey('work_order_public_id')) {
+      context.handle(
+        _workOrderPublicIdMeta,
+        workOrderPublicId.isAcceptableOrUnknown(
+          data['work_order_public_id']!,
+          _workOrderPublicIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_workOrderPublicIdMeta);
+    }
+    if (data.containsKey('report_sha256')) {
+      context.handle(
+        _reportSha256Meta,
+        reportSha256.isAcceptableOrUnknown(
+          data['report_sha256']!,
+          _reportSha256Meta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_reportSha256Meta);
+    }
+    if (data.containsKey('source_overlay_sha256')) {
+      context.handle(
+        _sourceOverlaySha256Meta,
+        sourceOverlaySha256.isAcceptableOrUnknown(
+          data['source_overlay_sha256']!,
+          _sourceOverlaySha256Meta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_sourceOverlaySha256Meta);
+    }
+    if (data.containsKey('payload_json')) {
+      context.handle(
+        _payloadJsonMeta,
+        payloadJson.isAcceptableOrUnknown(
+          data['payload_json']!,
+          _payloadJsonMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_payloadJsonMeta);
+    }
+    if (data.containsKey('cached_at')) {
+      context.handle(
+        _cachedAtMeta,
+        cachedAt.isAcceptableOrUnknown(data['cached_at']!, _cachedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_cachedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {
+    principalScope,
+    workOrderPublicId,
+    reportSha256,
+  };
+  @override
+  CachedWorkOrderEvidenceMap map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return CachedWorkOrderEvidenceMap(
+      principalScope: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}principal_scope'],
+      )!,
+      workOrderPublicId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}work_order_public_id'],
+      )!,
+      reportSha256: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}report_sha256'],
+      )!,
+      sourceOverlaySha256: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}source_overlay_sha256'],
+      )!,
+      payloadJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}payload_json'],
+      )!,
+      cachedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}cached_at'],
+      )!,
+    );
+  }
+
+  @override
+  $CachedWorkOrderEvidenceMapsTable createAlias(String alias) {
+    return $CachedWorkOrderEvidenceMapsTable(attachedDatabase, alias);
+  }
+}
+
+class CachedWorkOrderEvidenceMap extends DataClass
+    implements Insertable<CachedWorkOrderEvidenceMap> {
+  final String principalScope;
+  final String workOrderPublicId;
+  final String reportSha256;
+  final String sourceOverlaySha256;
+  final String payloadJson;
+  final DateTime cachedAt;
+  const CachedWorkOrderEvidenceMap({
+    required this.principalScope,
+    required this.workOrderPublicId,
+    required this.reportSha256,
+    required this.sourceOverlaySha256,
+    required this.payloadJson,
+    required this.cachedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['principal_scope'] = Variable<String>(principalScope);
+    map['work_order_public_id'] = Variable<String>(workOrderPublicId);
+    map['report_sha256'] = Variable<String>(reportSha256);
+    map['source_overlay_sha256'] = Variable<String>(sourceOverlaySha256);
+    map['payload_json'] = Variable<String>(payloadJson);
+    map['cached_at'] = Variable<DateTime>(cachedAt);
+    return map;
+  }
+
+  CachedWorkOrderEvidenceMapsCompanion toCompanion(bool nullToAbsent) {
+    return CachedWorkOrderEvidenceMapsCompanion(
+      principalScope: Value(principalScope),
+      workOrderPublicId: Value(workOrderPublicId),
+      reportSha256: Value(reportSha256),
+      sourceOverlaySha256: Value(sourceOverlaySha256),
+      payloadJson: Value(payloadJson),
+      cachedAt: Value(cachedAt),
+    );
+  }
+
+  factory CachedWorkOrderEvidenceMap.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return CachedWorkOrderEvidenceMap(
+      principalScope: serializer.fromJson<String>(json['principalScope']),
+      workOrderPublicId: serializer.fromJson<String>(json['workOrderPublicId']),
+      reportSha256: serializer.fromJson<String>(json['reportSha256']),
+      sourceOverlaySha256: serializer.fromJson<String>(
+        json['sourceOverlaySha256'],
+      ),
+      payloadJson: serializer.fromJson<String>(json['payloadJson']),
+      cachedAt: serializer.fromJson<DateTime>(json['cachedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'principalScope': serializer.toJson<String>(principalScope),
+      'workOrderPublicId': serializer.toJson<String>(workOrderPublicId),
+      'reportSha256': serializer.toJson<String>(reportSha256),
+      'sourceOverlaySha256': serializer.toJson<String>(sourceOverlaySha256),
+      'payloadJson': serializer.toJson<String>(payloadJson),
+      'cachedAt': serializer.toJson<DateTime>(cachedAt),
+    };
+  }
+
+  CachedWorkOrderEvidenceMap copyWith({
+    String? principalScope,
+    String? workOrderPublicId,
+    String? reportSha256,
+    String? sourceOverlaySha256,
+    String? payloadJson,
+    DateTime? cachedAt,
+  }) => CachedWorkOrderEvidenceMap(
+    principalScope: principalScope ?? this.principalScope,
+    workOrderPublicId: workOrderPublicId ?? this.workOrderPublicId,
+    reportSha256: reportSha256 ?? this.reportSha256,
+    sourceOverlaySha256: sourceOverlaySha256 ?? this.sourceOverlaySha256,
+    payloadJson: payloadJson ?? this.payloadJson,
+    cachedAt: cachedAt ?? this.cachedAt,
+  );
+  CachedWorkOrderEvidenceMap copyWithCompanion(
+    CachedWorkOrderEvidenceMapsCompanion data,
+  ) {
+    return CachedWorkOrderEvidenceMap(
+      principalScope: data.principalScope.present
+          ? data.principalScope.value
+          : this.principalScope,
+      workOrderPublicId: data.workOrderPublicId.present
+          ? data.workOrderPublicId.value
+          : this.workOrderPublicId,
+      reportSha256: data.reportSha256.present
+          ? data.reportSha256.value
+          : this.reportSha256,
+      sourceOverlaySha256: data.sourceOverlaySha256.present
+          ? data.sourceOverlaySha256.value
+          : this.sourceOverlaySha256,
+      payloadJson: data.payloadJson.present
+          ? data.payloadJson.value
+          : this.payloadJson,
+      cachedAt: data.cachedAt.present ? data.cachedAt.value : this.cachedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CachedWorkOrderEvidenceMap(')
+          ..write('principalScope: $principalScope, ')
+          ..write('workOrderPublicId: $workOrderPublicId, ')
+          ..write('reportSha256: $reportSha256, ')
+          ..write('sourceOverlaySha256: $sourceOverlaySha256, ')
+          ..write('payloadJson: $payloadJson, ')
+          ..write('cachedAt: $cachedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    principalScope,
+    workOrderPublicId,
+    reportSha256,
+    sourceOverlaySha256,
+    payloadJson,
+    cachedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is CachedWorkOrderEvidenceMap &&
+          other.principalScope == this.principalScope &&
+          other.workOrderPublicId == this.workOrderPublicId &&
+          other.reportSha256 == this.reportSha256 &&
+          other.sourceOverlaySha256 == this.sourceOverlaySha256 &&
+          other.payloadJson == this.payloadJson &&
+          other.cachedAt == this.cachedAt);
+}
+
+class CachedWorkOrderEvidenceMapsCompanion
+    extends UpdateCompanion<CachedWorkOrderEvidenceMap> {
+  final Value<String> principalScope;
+  final Value<String> workOrderPublicId;
+  final Value<String> reportSha256;
+  final Value<String> sourceOverlaySha256;
+  final Value<String> payloadJson;
+  final Value<DateTime> cachedAt;
+  final Value<int> rowid;
+  const CachedWorkOrderEvidenceMapsCompanion({
+    this.principalScope = const Value.absent(),
+    this.workOrderPublicId = const Value.absent(),
+    this.reportSha256 = const Value.absent(),
+    this.sourceOverlaySha256 = const Value.absent(),
+    this.payloadJson = const Value.absent(),
+    this.cachedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  CachedWorkOrderEvidenceMapsCompanion.insert({
+    required String principalScope,
+    required String workOrderPublicId,
+    required String reportSha256,
+    required String sourceOverlaySha256,
+    required String payloadJson,
+    required DateTime cachedAt,
+    this.rowid = const Value.absent(),
+  }) : principalScope = Value(principalScope),
+       workOrderPublicId = Value(workOrderPublicId),
+       reportSha256 = Value(reportSha256),
+       sourceOverlaySha256 = Value(sourceOverlaySha256),
+       payloadJson = Value(payloadJson),
+       cachedAt = Value(cachedAt);
+  static Insertable<CachedWorkOrderEvidenceMap> custom({
+    Expression<String>? principalScope,
+    Expression<String>? workOrderPublicId,
+    Expression<String>? reportSha256,
+    Expression<String>? sourceOverlaySha256,
+    Expression<String>? payloadJson,
+    Expression<DateTime>? cachedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (principalScope != null) 'principal_scope': principalScope,
+      if (workOrderPublicId != null) 'work_order_public_id': workOrderPublicId,
+      if (reportSha256 != null) 'report_sha256': reportSha256,
+      if (sourceOverlaySha256 != null)
+        'source_overlay_sha256': sourceOverlaySha256,
+      if (payloadJson != null) 'payload_json': payloadJson,
+      if (cachedAt != null) 'cached_at': cachedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  CachedWorkOrderEvidenceMapsCompanion copyWith({
+    Value<String>? principalScope,
+    Value<String>? workOrderPublicId,
+    Value<String>? reportSha256,
+    Value<String>? sourceOverlaySha256,
+    Value<String>? payloadJson,
+    Value<DateTime>? cachedAt,
+    Value<int>? rowid,
+  }) {
+    return CachedWorkOrderEvidenceMapsCompanion(
+      principalScope: principalScope ?? this.principalScope,
+      workOrderPublicId: workOrderPublicId ?? this.workOrderPublicId,
+      reportSha256: reportSha256 ?? this.reportSha256,
+      sourceOverlaySha256: sourceOverlaySha256 ?? this.sourceOverlaySha256,
+      payloadJson: payloadJson ?? this.payloadJson,
+      cachedAt: cachedAt ?? this.cachedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (principalScope.present) {
+      map['principal_scope'] = Variable<String>(principalScope.value);
+    }
+    if (workOrderPublicId.present) {
+      map['work_order_public_id'] = Variable<String>(workOrderPublicId.value);
+    }
+    if (reportSha256.present) {
+      map['report_sha256'] = Variable<String>(reportSha256.value);
+    }
+    if (sourceOverlaySha256.present) {
+      map['source_overlay_sha256'] = Variable<String>(
+        sourceOverlaySha256.value,
+      );
+    }
+    if (payloadJson.present) {
+      map['payload_json'] = Variable<String>(payloadJson.value);
+    }
+    if (cachedAt.present) {
+      map['cached_at'] = Variable<DateTime>(cachedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CachedWorkOrderEvidenceMapsCompanion(')
+          ..write('principalScope: $principalScope, ')
+          ..write('workOrderPublicId: $workOrderPublicId, ')
+          ..write('reportSha256: $reportSha256, ')
+          ..write('sourceOverlaySha256: $sourceOverlaySha256, ')
+          ..write('payloadJson: $payloadJson, ')
+          ..write('cachedAt: $cachedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $OutboxEntriesTable extends OutboxEntries
     with TableInfo<$OutboxEntriesTable, OutboxEntry> {
   @override
@@ -3196,6 +3663,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   );
   late final $CachedMapAssetSyncCursorsTable cachedMapAssetSyncCursors =
       $CachedMapAssetSyncCursorsTable(this);
+  late final $CachedWorkOrderEvidenceMapsTable cachedWorkOrderEvidenceMaps =
+      $CachedWorkOrderEvidenceMapsTable(this);
   late final $OutboxEntriesTable outboxEntries = $OutboxEntriesTable(this);
   late final $PendingPhotosTable pendingPhotos = $PendingPhotosTable(this);
   late final $DraftEntriesTable draftEntries = $DraftEntriesTable(this);
@@ -3208,6 +3677,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     cachedScheduleEntries,
     cachedMapAssets,
     cachedMapAssetSyncCursors,
+    cachedWorkOrderEvidenceMaps,
     outboxEntries,
     pendingPhotos,
     draftEntries,
@@ -4137,6 +4607,254 @@ typedef $$CachedMapAssetSyncCursorsTableProcessedTableManager =
       CachedMapAssetSyncCursor,
       PrefetchHooks Function()
     >;
+typedef $$CachedWorkOrderEvidenceMapsTableCreateCompanionBuilder =
+    CachedWorkOrderEvidenceMapsCompanion Function({
+      required String principalScope,
+      required String workOrderPublicId,
+      required String reportSha256,
+      required String sourceOverlaySha256,
+      required String payloadJson,
+      required DateTime cachedAt,
+      Value<int> rowid,
+    });
+typedef $$CachedWorkOrderEvidenceMapsTableUpdateCompanionBuilder =
+    CachedWorkOrderEvidenceMapsCompanion Function({
+      Value<String> principalScope,
+      Value<String> workOrderPublicId,
+      Value<String> reportSha256,
+      Value<String> sourceOverlaySha256,
+      Value<String> payloadJson,
+      Value<DateTime> cachedAt,
+      Value<int> rowid,
+    });
+
+class $$CachedWorkOrderEvidenceMapsTableFilterComposer
+    extends Composer<_$AppDatabase, $CachedWorkOrderEvidenceMapsTable> {
+  $$CachedWorkOrderEvidenceMapsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get principalScope => $composableBuilder(
+    column: $table.principalScope,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get workOrderPublicId => $composableBuilder(
+    column: $table.workOrderPublicId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get reportSha256 => $composableBuilder(
+    column: $table.reportSha256,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sourceOverlaySha256 => $composableBuilder(
+    column: $table.sourceOverlaySha256,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get payloadJson => $composableBuilder(
+    column: $table.payloadJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get cachedAt => $composableBuilder(
+    column: $table.cachedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$CachedWorkOrderEvidenceMapsTableOrderingComposer
+    extends Composer<_$AppDatabase, $CachedWorkOrderEvidenceMapsTable> {
+  $$CachedWorkOrderEvidenceMapsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get principalScope => $composableBuilder(
+    column: $table.principalScope,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get workOrderPublicId => $composableBuilder(
+    column: $table.workOrderPublicId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get reportSha256 => $composableBuilder(
+    column: $table.reportSha256,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sourceOverlaySha256 => $composableBuilder(
+    column: $table.sourceOverlaySha256,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get payloadJson => $composableBuilder(
+    column: $table.payloadJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get cachedAt => $composableBuilder(
+    column: $table.cachedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$CachedWorkOrderEvidenceMapsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $CachedWorkOrderEvidenceMapsTable> {
+  $$CachedWorkOrderEvidenceMapsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get principalScope => $composableBuilder(
+    column: $table.principalScope,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get workOrderPublicId => $composableBuilder(
+    column: $table.workOrderPublicId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get reportSha256 => $composableBuilder(
+    column: $table.reportSha256,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get sourceOverlaySha256 => $composableBuilder(
+    column: $table.sourceOverlaySha256,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get payloadJson => $composableBuilder(
+    column: $table.payloadJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get cachedAt =>
+      $composableBuilder(column: $table.cachedAt, builder: (column) => column);
+}
+
+class $$CachedWorkOrderEvidenceMapsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $CachedWorkOrderEvidenceMapsTable,
+          CachedWorkOrderEvidenceMap,
+          $$CachedWorkOrderEvidenceMapsTableFilterComposer,
+          $$CachedWorkOrderEvidenceMapsTableOrderingComposer,
+          $$CachedWorkOrderEvidenceMapsTableAnnotationComposer,
+          $$CachedWorkOrderEvidenceMapsTableCreateCompanionBuilder,
+          $$CachedWorkOrderEvidenceMapsTableUpdateCompanionBuilder,
+          (
+            CachedWorkOrderEvidenceMap,
+            BaseReferences<
+              _$AppDatabase,
+              $CachedWorkOrderEvidenceMapsTable,
+              CachedWorkOrderEvidenceMap
+            >,
+          ),
+          CachedWorkOrderEvidenceMap,
+          PrefetchHooks Function()
+        > {
+  $$CachedWorkOrderEvidenceMapsTableTableManager(
+    _$AppDatabase db,
+    $CachedWorkOrderEvidenceMapsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$CachedWorkOrderEvidenceMapsTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$CachedWorkOrderEvidenceMapsTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$CachedWorkOrderEvidenceMapsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> principalScope = const Value.absent(),
+                Value<String> workOrderPublicId = const Value.absent(),
+                Value<String> reportSha256 = const Value.absent(),
+                Value<String> sourceOverlaySha256 = const Value.absent(),
+                Value<String> payloadJson = const Value.absent(),
+                Value<DateTime> cachedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => CachedWorkOrderEvidenceMapsCompanion(
+                principalScope: principalScope,
+                workOrderPublicId: workOrderPublicId,
+                reportSha256: reportSha256,
+                sourceOverlaySha256: sourceOverlaySha256,
+                payloadJson: payloadJson,
+                cachedAt: cachedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String principalScope,
+                required String workOrderPublicId,
+                required String reportSha256,
+                required String sourceOverlaySha256,
+                required String payloadJson,
+                required DateTime cachedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => CachedWorkOrderEvidenceMapsCompanion.insert(
+                principalScope: principalScope,
+                workOrderPublicId: workOrderPublicId,
+                reportSha256: reportSha256,
+                sourceOverlaySha256: sourceOverlaySha256,
+                payloadJson: payloadJson,
+                cachedAt: cachedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$CachedWorkOrderEvidenceMapsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $CachedWorkOrderEvidenceMapsTable,
+      CachedWorkOrderEvidenceMap,
+      $$CachedWorkOrderEvidenceMapsTableFilterComposer,
+      $$CachedWorkOrderEvidenceMapsTableOrderingComposer,
+      $$CachedWorkOrderEvidenceMapsTableAnnotationComposer,
+      $$CachedWorkOrderEvidenceMapsTableCreateCompanionBuilder,
+      $$CachedWorkOrderEvidenceMapsTableUpdateCompanionBuilder,
+      (
+        CachedWorkOrderEvidenceMap,
+        BaseReferences<
+          _$AppDatabase,
+          $CachedWorkOrderEvidenceMapsTable,
+          CachedWorkOrderEvidenceMap
+        >,
+      ),
+      CachedWorkOrderEvidenceMap,
+      PrefetchHooks Function()
+    >;
 typedef $$OutboxEntriesTableCreateCompanionBuilder =
     OutboxEntriesCompanion Function({
       Value<int> seq,
@@ -4907,6 +5625,12 @@ class $AppDatabaseManager {
       $$CachedMapAssetSyncCursorsTableTableManager(
         _db,
         _db.cachedMapAssetSyncCursors,
+      );
+  $$CachedWorkOrderEvidenceMapsTableTableManager
+  get cachedWorkOrderEvidenceMaps =>
+      $$CachedWorkOrderEvidenceMapsTableTableManager(
+        _db,
+        _db.cachedWorkOrderEvidenceMaps,
       );
   $$OutboxEntriesTableTableManager get outboxEntries =>
       $$OutboxEntriesTableTableManager(_db, _db.outboxEntries);

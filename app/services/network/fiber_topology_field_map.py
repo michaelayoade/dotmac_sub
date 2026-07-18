@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.fiber_topology_staging import FiberTopologyStagedFeature
 from app.services.network.fiber_topology_field_worklist import (
     FiberTopologyFieldWorklistReport,
+    ensure_field_worklist_repeatable_snapshot,
     reconcile_fiber_field_worklist,
 )
 
@@ -129,6 +130,8 @@ def _presentation_coordinates(
         polygon_points: list[tuple[float, float]] = []
         for ring in coordinates:
             if not isinstance(ring, list) or len(ring) < 4:
+                return None
+            if ring[0] != ring[-1]:
                 return None
             ring_points = [_position(value) for value in ring]
             if not all(ring_points):
@@ -312,9 +315,16 @@ def project_fiber_field_verification_map(
     return _map_report(db, reconcile_fiber_field_worklist(db))
 
 
+def ensure_fiber_field_map_repeatable_snapshot(db: Session) -> None:
+    """Open the same consistent snapshot required by the complete map owner."""
+
+    ensure_field_worklist_repeatable_snapshot(db)
+
+
 __all__ = [
     "GEOMETRY_PRESENTATION_STATES",
     "FiberTopologyFieldMapError",
     "FiberTopologyFieldMapReport",
+    "ensure_fiber_field_map_repeatable_snapshot",
     "project_fiber_field_verification_map",
 ]

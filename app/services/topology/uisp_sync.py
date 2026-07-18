@@ -1052,7 +1052,7 @@ def _record_onu_topology_observation(
 
 
 def _import_data_links(session: Session, client, now: datetime, stats: Counter) -> None:
-    """Import active UISP data-links into ``NetworkTopologyLink`` (backhaul).
+    """Import active UISP data-links as non-authoritative backhaul observations.
 
     Owns ``source='uisp_data_link'`` rows only (upsert + soft-prune), mirroring
     the LLDP poller. A link is kept only when BOTH endpoints resolve to a

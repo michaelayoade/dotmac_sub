@@ -118,6 +118,10 @@ class FiberTopologyConnectivityDecision(Base):
             name="ck_fiber_connectivity_fiber_count",
         ),
         CheckConstraint(
+            "action <> 'create' OR fiber_count IS NOT NULL",
+            name="ck_fiber_connectivity_create_capacity",
+        ),
+        CheckConstraint(
             "length_m IS NULL OR length_m > 0",
             name="ck_fiber_connectivity_length",
         ),

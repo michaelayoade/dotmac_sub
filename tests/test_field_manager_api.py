@@ -377,7 +377,8 @@ def test_manager_api(db_session):
         json={"person_id": str(profile.person_id)},
     )
     assert assigned.status_code == 200
-    assert assigned.json()["status"] == "dispatched"
+    # Reassignment must not rewind an active field-execution lifecycle.
+    assert assigned.json()["status"] == "in_progress"
 
     expenses = client.get("/api/v1/field/manager/expenses")
     assert expenses.status_code == 200

@@ -1,6 +1,8 @@
 import json
 import logging
+import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import Uuid, func, select
@@ -11,6 +13,7 @@ from app.models.fiber_change_request import (
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
 )
+from app.models.fiber_support import FiberSupportStructure
 from app.models.network import (
     FdhCabinet,
     FiberAccessPoint,
@@ -36,6 +39,7 @@ ASSET_MODEL_MAP = {
     "fiber_splice_tray": FiberSpliceTray,
     "fiber_strand": FiberStrand,
     "fiber_termination_point": FiberTerminationPoint,
+    "support_structure": FiberSupportStructure,
     "splitter": Splitter,
     "splitter_port": SplitterPort,
 }
@@ -147,34 +151,142 @@ def reject_request(
 
 
 def _apply_request(db: Session, request: FiberChangeRequest):
-    _, model = _get_model(request.asset_type)
+    normalized, model = _get_model(request.asset_type)
+    if normalized == "support_structure":
+        from app.services.network.fiber_support_structures import (
+            FiberSupportStructureError,
+            apply_reviewed_support_change,
+        )
+
+        try:
+            support = apply_reviewed_support_change(
+                db,
+                operation=request.operation,
+                asset_id=request.asset_id,
+                payload=request.payload,
+            )
+        except FiberSupportStructureError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        request.asset_id = support.id
+        return
     payload = _prepare_payload(model, request.payload)
+    if normalized in {"splitter", "splitter_port"}:
+        from app.services.network.splitters import splitter_ports, splitters
+
+        owner = splitters if normalized == "splitter" else splitter_ports
+        if request.operation == FiberChangeRequestOperation.create:
+            delegated_asset = owner.create(db, payload, commit=False)
+            request.asset_id = delegated_asset.id
+            return
+        if not request.asset_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing asset_id for {request.operation.value}",
+            )
+        if request.operation == FiberChangeRequestOperation.update:
+            owner.update(db, str(request.asset_id), payload, commit=False)
+            return
+        if request.operation == FiberChangeRequestOperation.delete:
+            owner.delete(db, str(request.asset_id), commit=False)
+            return
+        raise HTTPException(status_code=400, detail="Invalid operation")
+    from app.services.network.fiber_plant_integrity import (
+        FiberPlantIntegrityError,
+        ensure_segment_strand_inventory,
+        validate_active_segment,
+        validate_operational_termination,
+        validate_segment_retirement,
+        validate_strand_retirement,
+        validate_strand_segment_capacity,
+        validate_termination_change,
+    )
+
+    def fail_closed(exc: FiberPlantIntegrityError) -> None:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     if request.operation == FiberChangeRequestOperation.create:
-        asset = model(**payload)
-        db.add(asset)
+        created_asset: Any = model(**payload)
+        if getattr(created_asset, "id", None) is None:
+            created_asset.id = uuid.uuid4()
+        try:
+            if isinstance(created_asset, FiberSegment):
+                validate_active_segment(db, created_asset)
+            elif isinstance(created_asset, FiberTerminationPoint):
+                if created_asset.is_active:
+                    validate_operational_termination(db, created_asset)
+            elif isinstance(created_asset, FiberStrand):
+                validate_strand_segment_capacity(db, created_asset)
+        except FiberPlantIntegrityError as exc:
+            fail_closed(exc)
+        db.add(created_asset)
         db.flush()
-        request.asset_id = asset.id
+        if isinstance(created_asset, FiberSegment):
+            try:
+                ensure_segment_strand_inventory(db, created_asset)
+                db.flush()
+            except FiberPlantIntegrityError as exc:
+                fail_closed(exc)
+        request.asset_id = created_asset.id
     elif request.operation == FiberChangeRequestOperation.update:
         if not request.asset_id:
             raise HTTPException(status_code=400, detail="Missing asset_id for update")
-        asset = db.get(model, request.asset_id)
-        if not asset:
+        target_asset: Any = db.get(model, request.asset_id)
+        if not target_asset:
             raise HTTPException(status_code=404, detail="Asset not found")
+        try:
+            if isinstance(target_asset, FiberSegment) and target_asset.is_active:
+                if payload.get("is_active") is False:
+                    validate_segment_retirement(db, target_asset)
+            elif isinstance(target_asset, FiberTerminationPoint):
+                validate_termination_change(db, target_asset, changes=payload)
+            elif isinstance(target_asset, FiberStrand) and (
+                payload.get("is_active") is False
+                or (
+                    "segment_id" in payload
+                    and payload["segment_id"] != target_asset.segment_id
+                )
+            ):
+                validate_strand_retirement(db, target_asset)
+        except FiberPlantIntegrityError as exc:
+            fail_closed(exc)
         for key, value in payload.items():
             if key in {"id", "created_at", "updated_at"}:
                 continue
-            if hasattr(asset, key):
-                setattr(asset, key, value)
+            if hasattr(target_asset, key):
+                setattr(target_asset, key, value)
+        try:
+            if isinstance(target_asset, FiberSegment):
+                validate_active_segment(db, target_asset)
+                ensure_segment_strand_inventory(db, target_asset)
+            elif isinstance(target_asset, FiberTerminationPoint):
+                if target_asset.is_active:
+                    validate_operational_termination(db, target_asset)
+            elif isinstance(target_asset, FiberStrand):
+                validate_strand_segment_capacity(db, target_asset)
+            db.flush()
+        except FiberPlantIntegrityError as exc:
+            fail_closed(exc)
     elif request.operation == FiberChangeRequestOperation.delete:
         if not request.asset_id:
             raise HTTPException(status_code=400, detail="Missing asset_id for delete")
-        asset = db.get(model, request.asset_id)
-        if not asset:
+        target_asset = db.get(model, request.asset_id)
+        if not target_asset:
             raise HTTPException(status_code=404, detail="Asset not found")
-        if hasattr(asset, "is_active"):
-            asset.is_active = False
+        try:
+            if isinstance(target_asset, FiberSegment):
+                validate_segment_retirement(db, target_asset)
+            elif isinstance(target_asset, FiberTerminationPoint):
+                validate_termination_change(
+                    db, target_asset, changes={"is_active": False}
+                )
+            elif isinstance(target_asset, FiberStrand):
+                validate_strand_retirement(db, target_asset)
+        except FiberPlantIntegrityError as exc:
+            fail_closed(exc)
+        if hasattr(target_asset, "is_active"):
+            target_asset.is_active = False
         else:
-            db.delete(asset)
+            db.delete(target_asset)
     else:
         raise HTTPException(status_code=400, detail="Invalid operation")
 

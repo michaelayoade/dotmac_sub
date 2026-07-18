@@ -792,6 +792,23 @@ class FieldFiberSourceObservationRead(BaseModel):
     created_at: datetime
 
 
+class FieldFiberWorkOrderEvidenceMapRead(BaseModel):
+    report_sha256: str
+    source_overlay_sha256: str
+    worklist_report_sha256: str
+    observation_evidence_sha256: str
+    work_order_id: UUID
+    work_order_public_id: str
+    observation_count: int
+    current_source_observation_count: int
+    superseded_source_observation_count: int
+    feature_count: int
+    evidence_context_counts: dict[str, int]
+    geometry_presentation_counts: dict[str, int]
+    feature_collection: dict[str, Any]
+    schema_version: int = 1
+
+
 class FieldJobChatMessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
 

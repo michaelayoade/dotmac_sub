@@ -49,7 +49,7 @@ from app.services.topology.affected import (
     _dist_to_core,
     affected_customers,
     downstream_nodes,
-    lldp_adjacency,
+    forwarding_graph_projection,
     subscriptions_for_nodes,
 )
 from app.services.topology.health_classifier import (
@@ -223,8 +223,13 @@ def _candidate_outages(session: Session, now: datetime) -> dict:
 
     Whole-graph maps computed ONCE and reused (no per-candidate BFS).
     """
-    adjacency = lldp_adjacency(session)
-    dist = _dist_to_core(session, adjacency=adjacency)
+    graph = forwarding_graph_projection(session)
+    adjacency = graph.adjacency
+    dist = _dist_to_core(
+        session,
+        adjacency=adjacency,
+        root_ids=graph.root_device_ids,
+    )
     candidates: dict = {}
 
     nodes = session.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
@@ -465,10 +470,10 @@ def reconcile_detected_outages(
                     )
                     counters["suspected_opened"] += 1
                 else:
-                    # Re-point the root to the current deepest-dark node on
-                    # localization drift (node-scoped incidents only; a
-                    # basestation incident's identity is the site, not the node).
-                    if incident.basestation_id is None and repoint_root(
+                    # Re-point a localized root on drift. A site id can remain
+                    # the incident identity while the exact failure node moves;
+                    # a pure site-scoped incident has no root and stays site-only.
+                    if incident.root_node_id is not None and repoint_root(
                         session, incident, cand.root_node
                     ):
                         counters["rerooted"] += 1

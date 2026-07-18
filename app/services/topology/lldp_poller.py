@@ -1,10 +1,11 @@
-"""LLDP neighbor poller → directed ``NetworkTopologyLink`` records.
+"""LLDP neighbor collector for observed interface adjacency.
 
 Reads each MikroTik router's ``/ip/neighbor`` (LLDP/CDP/MNDP discovery, enabled
-fleet-wide via the ``lldp-infra`` setting) and builds the device-level directed
-graph that the empty sysmap never provided. Read-only against routers; the
-reconcile owns ``source='lldp_neighbor'`` rows (upsert + soft-prune) and never
-touches manual/other links.
+fleet-wide via the ``lldp-infra`` setting) and records device/interface
+adjacency observations. Read-only against routers; the reconcile owns
+``source='lldp_neighbor'`` rows (upsert + soft-prune) and never touches
+manual/other links. These rows can verify `network.forwarding_topology`
+declarations but never create official path, role, site, or outage ancestry.
 
 Fetch mechanism: the neighbor tables are read over the RouterOS **binary API**
 (port 8728, the ``routeros_api`` library) — the exact transport the bandwidth

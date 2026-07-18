@@ -119,12 +119,16 @@ def test_update_and_queue_from_form(db_session):
             "status": "dispatched",
             "priority": "normal",
             "work_type": "repair",
-            "assigned_to_name": "Ade Tech",
+            "assigned_to_name": "Ignored parallel assignment",
             "scheduled_start": "2026-07-09T09:00",
             "scheduled_end": "2026-07-09T10:00",
             "estimated_duration_minutes": "60",
         },
     )
+    assert updated.status == "scheduled"
+    assert updated.assigned_to_name is None
+    assert updated.scheduled_start is not None
+
     queued = web_dispatch.queue_assignment_from_form(
         db_session,
         "sub-web-wo-2",
@@ -135,11 +139,11 @@ def test_update_and_queue_from_form(db_session):
         },
     )
 
-    assert updated.status == "dispatched"
-    assert updated.assigned_to_name == "Ade Tech"
-    assert updated.scheduled_start is not None
     assert queued.crm_work_order_id == "sub-web-wo-2"
     assert queued.status == "assigned"
+    db_session.refresh(updated)
+    assert updated.status == "dispatched"
+    assert updated.assigned_to_name == "Ade Tech"
 
 
 def test_queue_assignment_requires_technician(db_session):

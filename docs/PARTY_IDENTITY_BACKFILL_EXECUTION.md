@@ -86,7 +86,7 @@ silently recreates, repairs, merges, or repoints identity state.
 
 ## Receipt and compensation evidence
 
-Migration 341 adds `party_identity_backfill_receipts`. A receipt contains only
+Migration 351 adds `party_identity_backfill_receipts`. A receipt contains only
 the exact approval-file hash, plan/input digests, approval text hashes,
 timestamps, counts, and the PII-free plan manifest.
 Raw approver identity, approval reason, reviewer reason, display names, email,

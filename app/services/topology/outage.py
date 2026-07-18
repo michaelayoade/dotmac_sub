@@ -1,4 +1,4 @@
-"""Outage incident management (Phase 4b + 5b).
+"""Outage incident management and customer-impact projection.
 
 An outage is declared against a node, basestation, or FDH cabinet; the
 affected subscriber count is snapshotted from affected_customers at declare
@@ -25,7 +25,7 @@ from app.services import operational_escalation
 from app.services.topology.affected import (
     _dist_to_core,
     downstream_nodes,
-    lldp_adjacency,
+    forwarding_graph_projection,
 )
 from app.services.topology.outage_operations import (
     ensure_outage_customer_watchers,
@@ -536,7 +536,14 @@ def open_incident_for_path(
         # — and once per candidate inside the auto-detect scan, which passes
         # its own precomputed maps in).
         if adjacency is None:
-            adjacency = lldp_adjacency(session)
+            graph = forwarding_graph_projection(session)
+            adjacency = graph.adjacency
+            if dist is None:
+                dist = _dist_to_core(
+                    session,
+                    adjacency=adjacency,
+                    root_ids=graph.root_device_ids,
+                )
         if dist is None:
             dist = _dist_to_core(session, adjacency=adjacency)
         for incident in root_incidents:

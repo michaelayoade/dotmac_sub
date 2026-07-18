@@ -776,10 +776,11 @@ class NetworkWeathermapView(Base):
 
 
 class NetworkTopologyLink(Base):
-    """Explicit link between two device interfaces.
+    """Observed or manually recorded adjacency between device interfaces.
 
-    This is the graph-topology truth for the network — not the
-    parent_device_id inventory hierarchy.
+    LLDP-sourced rows are observations. They can verify a reviewed forwarding
+    declaration, but do not establish official upstream path, role, site,
+    outage blast radius, or customer-path consequences on their own.
     """
 
     __tablename__ = "network_topology_links"

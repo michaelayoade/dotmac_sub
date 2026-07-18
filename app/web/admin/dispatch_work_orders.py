@@ -68,7 +68,12 @@ def create_dispatch_work_order(
 ):
     form = dict(parse_form_data_sync(request))
     try:
-        row = work_orders_service.create_from_form(db, form)
+        row = work_orders_service.create_from_form(
+            db,
+            form,
+            auth=getattr(request.state, "auth", None),
+            request_id=request.headers.get("X-Request-ID"),
+        )
     except (HTTPException, ValidationError, ValueError) as exc:
         detail = getattr(exc, "detail", None) or str(exc)
         return _redirect(error=detail)
@@ -87,7 +92,13 @@ def update_dispatch_work_order(
 ):
     form = dict(parse_form_data_sync(request))
     try:
-        work_orders_service.update_from_form(db, work_order_id, form)
+        work_orders_service.update_from_form(
+            db,
+            work_order_id,
+            form,
+            auth=getattr(request.state, "auth", None),
+            request_id=request.headers.get("X-Request-ID"),
+        )
     except (HTTPException, ValidationError, ValueError) as exc:
         detail = getattr(exc, "detail", None) or str(exc)
         return _redirect(error=detail)
@@ -100,6 +111,7 @@ def update_dispatch_work_order(
     dependencies=[Depends(require_permission("operations:dispatch:assign"))],
 )
 def queue_dispatch_work_order(
+    request: Request,
     work_order_id: str,
     assigned_technician_id: str = Form(...),
     status: str = Form("queued"),
@@ -115,6 +127,8 @@ def queue_dispatch_work_order(
                 "status": status,
                 "reason": reason,
             },
+            auth=getattr(request.state, "auth", None),
+            request_id=request.headers.get("X-Request-ID"),
         )
     except (HTTPException, ValidationError, ValueError) as exc:
         detail = getattr(exc, "detail", None) or str(exc)

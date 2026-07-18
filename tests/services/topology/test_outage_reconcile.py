@@ -17,7 +17,6 @@ from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
-    NetworkTopologyLink,
     OutageIncident,
 )
 from app.models.radius_active_session import RadiusActiveSession
@@ -32,6 +31,7 @@ from app.services.topology.outage_reconcile import (
     confirm_window_seconds,
     reconcile_detected_outages,
 )
+from tests.services.topology.forwarding_test_support import declare_forwarding_edge
 
 NOW = datetime(2026, 7, 6, 12, 0, tzinfo=UTC)
 
@@ -86,16 +86,15 @@ def _node(
     return n
 
 
-def _link(db, a, b):
-    db.add(
-        NetworkTopologyLink(
-            source_device_id=a.id,
-            target_device_id=b.id,
-            source="lldp_neighbor",
-            is_active=True,
-        )
+def _link(db, upstream, downstream):
+    upstream_is_core = upstream.role == DeviceRole.core
+    declare_forwarding_edge(
+        db,
+        downstream,
+        upstream,
+        downstream_role="aggregation" if upstream_is_core else "access",
+        upstream_role="core" if upstream_is_core else "aggregation",
     )
-    db.flush()
 
 
 def _sub(db, offer_id, nas_id):

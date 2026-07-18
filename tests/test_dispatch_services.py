@@ -231,16 +231,27 @@ def test_native_work_order_header_create_update_and_queue(db_session):
         db_session,
         "sub-wo-service-1",
         WorkOrderHeaderUpdate(
-            status="dispatched",
-            assigned_to_name="Ade Tech",
+            priority="urgent",
             metadata={"dispatch_batch": "morning"},
         ),
     )
 
-    assert updated.status == "dispatched"
-    assert updated.assigned_to_name == "Ade Tech"
+    assert updated.status == "scheduled"
+    assert updated.priority == "urgent"
     assert updated.metadata_["native_source"] == "sub"
     assert updated.metadata_["dispatch_batch"] == "morning"
+    queued = dispatch.assignment_queue.create(
+        db_session,
+        WorkOrderAssignmentQueueCreate(
+            crm_work_order_id="sub-wo-service-1",
+            assigned_technician_id=profile.id,
+            status="assigned",
+        ),
+    )
+    assert queued.work_order_mirror_id == work_order.id
+    db_session.refresh(work_order)
+    assert work_order.status == "dispatched"
+    assert work_order.assigned_to_name == "Ade Tech"
     assert (
         dispatch.work_order_headers.list(
             db_session, subscriber_id=str(sub.id), status="dispatched"
@@ -248,14 +259,23 @@ def test_native_work_order_header_create_update_and_queue(db_session):
         == work_order.id
     )
 
-    queued = dispatch.assignment_queue.create(
+    replayed = dispatch.assignment_queue.create(
         db_session,
         WorkOrderAssignmentQueueCreate(
             crm_work_order_id="sub-wo-service-1",
             assigned_technician_id=profile.id,
+            status="assigned",
         ),
     )
-    assert queued.work_order_mirror_id == work_order.id
+    assert replayed.id == queued.id
+
+    with pytest.raises(HTTPException) as direct_assignment:
+        dispatch.work_order_headers.update(
+            db_session,
+            "sub-wo-service-1",
+            WorkOrderHeaderUpdate(assigned_to_name="Parallel writer"),
+        )
+    assert direct_assignment.value.status_code == 422
 
 
 def test_assignment_queue_rejects_unknown_work_order(db_session):
@@ -265,7 +285,7 @@ def test_assignment_queue_rejects_unknown_work_order(db_session):
             WorkOrderAssignmentQueueCreate(crm_work_order_id="missing"),
         )
     assert exc.value.status_code == 404
-    assert exc.value.detail == "Work order mirror not found"
+    assert exc.value.detail == "Work order not found"
 
 
 def test_delete_marks_skill_and_profile_inactive(db_session):

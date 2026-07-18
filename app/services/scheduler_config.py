@@ -1786,6 +1786,27 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(lldp_poll_minutes * 60, 300),
         )
+        # Reviewed forwarding declarations scope a read-only RouterOS BGP/route
+        # poll. The fail-closed control keeps deployment from silently starting
+        # collection before operators approve the observation shadow run.
+        forwarding_observation_seconds = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "forwarding_control_observation_interval_seconds",
+            300,
+        )
+        _sync_scheduled_task(
+            session,
+            name="forwarding_control_observation_poll",
+            task_name=(
+                "app.tasks.forwarding_control_observations."
+                "run_forwarding_control_observation_poll"
+            ),
+            enabled=control_registry.is_enabled(
+                session, "network.forwarding_observation_collection"
+            ),
+            interval_seconds=max(forwarding_observation_seconds, 60),
+        )
         # The open-only auto-detect scan is retired: the classifier reconcile
         # below owns all auto detection (dark nodes + wireless clusters).
         _retire_scheduled_task(

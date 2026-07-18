@@ -157,6 +157,35 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
               const SizedBox(height: 12),
               _CustomerCard(jobId: job.id, customer: detail.customer!),
             ],
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Fiber evidence',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'View only the exact fiber features backed by immutable '
+                      'observations for this job.',
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      key: const Key('open-fiber-evidence-map'),
+                      onPressed: () => context.push(
+                        '/jobs/${Uri.encodeComponent(job.id)}/fiber-evidence',
+                      ),
+                      icon: const Icon(Icons.layers_outlined),
+                      label: const Text('Open evidence map'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             if (_hasJobContext(detail)) ...[
               const SizedBox(height: 12),
               _JobContextCard(detail: detail),

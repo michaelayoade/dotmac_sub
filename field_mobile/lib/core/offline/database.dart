@@ -52,6 +52,25 @@ class CachedMapAssetSyncCursors extends Table {
   Set<Column> get primaryKey => {assetType};
 }
 
+/// Immutable work-order fiber evidence snapshots. The composite identity keeps
+/// offline evidence bound to the authenticated principal, native job, and exact
+/// server report; callers must never cross principals/jobs or overwrite a hash.
+class CachedWorkOrderEvidenceMaps extends Table {
+  TextColumn get principalScope => text()();
+  TextColumn get workOrderPublicId => text()();
+  TextColumn get reportSha256 => text()();
+  TextColumn get sourceOverlaySha256 => text()();
+  TextColumn get payloadJson => text()();
+  DateTimeColumn get cachedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {
+    principalScope,
+    workOrderPublicId,
+    reportSha256,
+  };
+}
+
 /// Queued offline mutations, flushed FIFO. `clientRef` doubles as the
 /// server-side idempotency key (client_event_id / client_ref).
 class OutboxEntries extends Table {
@@ -105,6 +124,7 @@ class DraftEntries extends Table {
     CachedScheduleEntries,
     CachedMapAssets,
     CachedMapAssetSyncCursors,
+    CachedWorkOrderEvidenceMaps,
     OutboxEntries,
     PendingPhotos,
     DraftEntries,
@@ -114,7 +134,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -128,6 +148,9 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 4) {
         await m.createTable(draftEntries);
+      }
+      if (from < 5) {
+        await m.createTable(cachedWorkOrderEvidenceMaps);
       }
     },
   );

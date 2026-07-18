@@ -15,6 +15,7 @@ from app.models.fiber_change_request import (
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
 )
+from app.models.fiber_support import FiberSupportStructure
 from app.models.fiber_topology_identity import (
     FiberTopologyAssetSourceLink,
     FiberTopologyIdentityDecision,
@@ -36,12 +37,15 @@ POINT_ASSET_TYPES = frozenset(
         "support_structure",
     }
 )
-CREATE_ASSET_TYPES = frozenset({"fdh_cabinet", "fiber_access_point", "splice_closure"})
+CREATE_ASSET_TYPES = frozenset(
+    {"fdh_cabinet", "fiber_access_point", "splice_closure", "support_structure"}
+)
 LINK_TARGET_MODELS = {
     "fdh_cabinet": FdhCabinet,
     "fiber_access_point": FiberAccessPoint,
     "splice_closure": FiberSpliceClosure,
     "service_building": ServiceBuilding,
+    "support_structure": FiberSupportStructure,
 }
 FINAL_STATUSES = frozenset({"applied", "closed"})
 ACTIVE_STATUSES = ("proposed", "approved", "change_requested")
@@ -651,6 +655,24 @@ def _create_payload(
         }
     if feature.asset_type == "splice_closure":
         return common
+    if feature.asset_type == "support_structure":
+        raw_support_type = (
+            _source_property(feature, "support_type", "type") or "pole"
+        ).lower()
+        support_type = (
+            raw_support_type
+            if raw_support_type in {"pole", "tower", "building_attachment", "other"}
+            else "other"
+        )
+        return {
+            **common,
+            "code": _bounded_value(feature.external_id, "external_id", 80),
+            "inspection_status": "uninspected",
+            "lease_status": "unknown",
+            "lifecycle_status": "active",
+            "ownership_status": "unknown",
+            "support_type": support_type,
+        }
     raise FiberTopologyIdentityError(
         f"canonical creation is not enabled for {feature.asset_type}"
     )

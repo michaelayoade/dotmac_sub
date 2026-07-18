@@ -31,7 +31,10 @@ from app.models.work_order import WorkOrder
 from app.services import fiber_change_requests
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
-from app.services.network import fiber_topology_field_observations
+from app.services.network import (
+    fiber_topology_field_observations,
+    fiber_topology_work_order_evidence_map,
+)
 
 _TESTABLE_ASSET_MODELS = {
     "fiber_strand": FiberStrand,
@@ -341,6 +344,31 @@ def list_source_observations(
         )
     except fiber_topology_field_observations.FiberTopologyFieldObservationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def get_work_order_evidence_map(
+    db: Session,
+    principal: dict[str, Any],
+    *,
+    work_order_public_id: str,
+):
+    """Project exact fiber evidence inside the technician's native job scope."""
+
+    fiber_topology_work_order_evidence_map.ensure_work_order_evidence_map_repeatable_snapshot(
+        db
+    )
+    profile = _profile_from_principal(db, principal)
+    work_order = _scoped_work_order(db, profile, work_order_public_id)
+    try:
+        return fiber_topology_work_order_evidence_map.project_fiber_work_order_evidence_map(
+            db,
+            work_order_id=work_order.id,
+            expected_work_order_public_id=work_order.public_id,
+        )
+    except (
+        fiber_topology_work_order_evidence_map.FiberTopologyWorkOrderEvidenceMapError
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _pending_splice_requests(db: Session) -> list[FiberChangeRequest]:

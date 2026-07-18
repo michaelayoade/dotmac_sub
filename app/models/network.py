@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
@@ -14,6 +15,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -2581,7 +2583,21 @@ class FdhCabinet(Base):
 
 class Splitter(Base):
     __tablename__ = "splitters"
-    __table_args__ = (UniqueConstraint("fdh_id", "name", name="uq_splitters_fdh_name"),)
+    __table_args__ = (
+        UniqueConstraint("fdh_id", "name", name="uq_splitters_fdh_name"),
+        CheckConstraint(
+            "insertion_loss_db IS NULL OR "
+            "(insertion_loss_db >= 0 AND insertion_loss_db <= 100)",
+            name="ck_splitters_insertion_loss_db",
+        ),
+        CheckConstraint(
+            "NOT is_active OR (input_ports > 0 AND output_ports > 0 "
+            "AND splitter_ratio IS NOT NULL "
+            "AND splitter_ratio = CAST(input_ports AS VARCHAR) || ':' || "
+            "CAST(output_ports AS VARCHAR))",
+            name="ck_splitters_active_declared_capacity",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -2591,6 +2607,9 @@ class Splitter(Base):
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     splitter_ratio: Mapped[str | None] = mapped_column(String(40))
+    insertion_loss_db: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 3), nullable=True
+    )
     input_ports: Mapped[int] = mapped_column(Integer, default=1)
     output_ports: Mapped[int] = mapped_column(Integer, default=8)
     zone_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -2694,12 +2713,21 @@ class FiberStrand(Base):
         UniqueConstraint(
             "cable_name", "strand_number", name="uq_fiber_strands_cable_strand"
         ),
+        UniqueConstraint(
+            "segment_id", "strand_number", name="uq_fiber_strands_segment_strand"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     cable_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    segment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("fiber_segments.id", ondelete="RESTRICT"),
+        nullable=True,
+        comment="Exact cable-segment identity; cable_name is display metadata only",
+    )
     strand_number: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str | None] = mapped_column(String(160))
     status: Mapped[FiberStrandStatus] = mapped_column(
@@ -2735,18 +2763,16 @@ class FiberStrand(Base):
         back_populates="to_strand",
         foreign_keys="FiberSplice.to_strand_id",
     )
-    segments = relationship("FiberSegment", back_populates="fiber_strand")
-
-    @property
-    def segment_id(self) -> uuid.UUID | None:
-        """Backwards-compat scalar segment identifier.
-
-        The current schema allows a strand to be linked to one or more segments.
-        Older callers/tests expect a single `segment_id` attribute.
-        """
-        if self.segments:
-            return self.segments[0].id
-        return None
+    segments = relationship(
+        "FiberSegment",
+        foreign_keys="FiberSegment.fiber_strand_id",
+        back_populates="fiber_strand",
+    )
+    segment = relationship(
+        "FiberSegment",
+        foreign_keys=[segment_id],
+        back_populates="strands",
+    )
 
 
 class FiberSpliceClosure(Base):
@@ -2941,7 +2967,16 @@ class FiberCableType(enum.Enum):
 
 class FiberSegment(Base):
     __tablename__ = "fiber_segments"
-    __table_args__ = (UniqueConstraint("name", name="uq_fiber_segments_name"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_fiber_segments_name"),
+        CheckConstraint(
+            "NOT is_active OR (from_point_id IS NOT NULL "
+            "AND to_point_id IS NOT NULL AND from_point_id <> to_point_id "
+            "AND route_geom IS NOT NULL AND fiber_count IS NOT NULL "
+            "AND fiber_count > 0)",
+            name="ck_fiber_segments_active_operational_shape",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -2989,7 +3024,14 @@ class FiberSegment(Base):
         foreign_keys=[to_point_id],
         back_populates="segments_to",
     )
-    fiber_strand = relationship("FiberStrand", back_populates="segments")
+    fiber_strand = relationship(
+        "FiberStrand", foreign_keys=[fiber_strand_id], back_populates="segments"
+    )
+    strands = relationship(
+        "FiberStrand",
+        foreign_keys="FiberStrand.segment_id",
+        back_populates="segment",
+    )
 
 
 class PonPortSplitterLink(Base):

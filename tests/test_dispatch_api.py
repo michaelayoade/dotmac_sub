@@ -166,29 +166,36 @@ def test_dispatch_api_native_work_order_header_crud(db_session):
         "/api/v1/dispatch/work-orders/sub-wo-api-1",
         json={"status": "dispatched", "assigned_to_name": "Ade Tech"},
     )
-    assert patched.status_code == 200
-    assert patched.json()["status"] == "dispatched"
-    assert patched.json()["assigned_to_name"] == "Ade Tech"
+    assert patched.status_code == 422
+    assert "assignment command" in patched.json()["detail"].lower()
+
+    technician = client.post(
+        "/api/v1/dispatch/technicians",
+        json={"system_user_id": str(user.id), "region": "Jabi"},
+    )
+    preview = client.post(
+        "/api/v1/dispatch/work-orders/sub-wo-api-1/assignment-preview",
+        json={"technician_id": technician.json()["id"]},
+    )
+    assert preview.status_code == 200
+    assert preview.json()["previous"]["status"] == "scheduled"
+    assert preview.json()["result"]["status"] == "dispatched"
+    queue = client.post(
+        "/api/v1/dispatch/assignment-queue",
+        json={
+            "crm_work_order_id": "sub-wo-api-1",
+            "assigned_technician_id": technician.json()["id"],
+            "status": "assigned",
+        },
+    )
+    assert queue.status_code == 201
+    assert queue.json()["crm_work_order_id"] == "sub-wo-api-1"
 
     listed = client.get(
         f"/api/v1/dispatch/work-orders?subscriber_id={sub.id}&status=dispatched"
     )
     assert listed.status_code == 200
     assert [item["public_id"] for item in listed.json()["items"]] == ["sub-wo-api-1"]
-
-    technician = client.post(
-        "/api/v1/dispatch/technicians",
-        json={"system_user_id": str(user.id), "region": "Jabi"},
-    )
-    queue = client.post(
-        "/api/v1/dispatch/assignment-queue",
-        json={
-            "crm_work_order_id": "sub-wo-api-1",
-            "assigned_technician_id": technician.json()["id"],
-        },
-    )
-    assert queue.status_code == 201
-    assert queue.json()["crm_work_order_id"] == "sub-wo-api-1"
 
 
 def test_granular_dispatch_permissions_are_role_builder_assignable():

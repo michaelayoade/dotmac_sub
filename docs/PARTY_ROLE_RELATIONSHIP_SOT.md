@@ -16,13 +16,13 @@ CRM has no runtime role in party identity or lifecycle. Legacy CRM identifiers
 may be retained only as import provenance in `party_external_references`; they
 are never lookup authority, identity, a fallback, or permission evidence.
 
-This decision is implemented incrementally. Migration 339 creates the native
-foundation, migration 340 adds the nullable, provenance-bound Subscriber to
-Party link, migration 341 adds PII-free backfill execution receipts, and
-Migration 342 adds nullable Organization/Reseller/Vendor/FieldVendor Party
-bindings, migration 343 adds Person-principal and membership-context bindings,
-and migration 344 adds reviewed SubscriberContact and Inbox contact-point
-projections. Migration 345 adds Party-first Leads, immutable origin capture,
+This decision is implemented incrementally. Migration 349 creates the native
+foundation, migration 350 adds the nullable, provenance-bound Subscriber to
+Party link, migration 351 adds PII-free backfill execution receipts, and
+Migration 352 adds nullable Organization/Reseller/Vendor/FieldVendor Party
+bindings, migration 353 adds Person-principal and membership-context bindings,
+and migration 354 adds reviewed SubscriberContact and Inbox contact-point
+projections. Migration 355 adds Party-first Leads, immutable origin capture,
 and downstream account-alignment guards. None
 of these migrations switches current subscriber, reseller, vendor,
 organization, Team Inbox, or authentication reads. Each domain receives a
@@ -54,7 +54,7 @@ They do not write these tables independently.
    customers.
 4. A merged Party points at its canonical replacement and cannot remain active.
    The complete merge/repoint command is intentionally deferred until every
-   target domain has a declared reconciler; migration 339 does not enable a
+   target domain has a declared reconciler; migration 349 does not enable a
    partial merge.
 5. Roles are concurrent and independently suspended or ended. There is no
    single global role or lifecycle status.
@@ -186,7 +186,7 @@ The binding contract is deliberately narrow:
 6. binding assigns no role, permission, contact point, account status,
    subscription state, billing state, access state, or authentication context.
 
-Migration 340 leaves every existing row unbound. It does not infer Person
+Migration 350 leaves every existing row unbound. It does not infer Person
 versus Organization from `company_name`, copy legacy contacts, or activate a
 subscriber role. The reviewed identity worklist must decide those facts in a
 later backfill slice.
@@ -244,7 +244,7 @@ a cleanup mechanism.
    provenance, idempotent exact binding, and refusal of unreviewed repoints. No
    rows are backfilled and no existing reads change.
 4. **Identity adjudication/backfill:** the reviewed, digest-bound planner and
-   separately approved guarded executor are implemented. Migration 341 adds a
+   separately approved guarded executor are implemented. Migration 351 adds a
    PII-free execution receipt; no production data is migrated by the schema.
    A fresh audit, protected review, expiring approval, explicit execution
    authorization, and deployment remain pending. Merge/repoint commands remain

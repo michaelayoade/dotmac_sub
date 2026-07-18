@@ -13,7 +13,6 @@ from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.network_monitoring import (
     DeviceRole,
     NetworkDevice,
-    NetworkTopologyLink,
 )
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
@@ -29,6 +28,7 @@ from app.services.topology.health_classifier import (
     online_subscribers,
     online_subscription_ids,
 )
+from tests.services.topology.forwarding_test_support import declare_forwarding_edge
 
 # --- helpers (mirror test_affected) ---------------------------------------
 
@@ -78,16 +78,14 @@ def _session(db, subscription, nas_device_id, *, age=timedelta(0)):
     return ras
 
 
-def _link(db, a, b):
-    db.add(
-        NetworkTopologyLink(
-            source_device_id=a.id,
-            target_device_id=b.id,
-            source="lldp_neighbor",
-            is_active=True,
-        )
+def _link(db, upstream, downstream):
+    declare_forwarding_edge(
+        db,
+        downstream,
+        upstream,
+        downstream_role="access",
+        upstream_role="core",
     )
-    db.flush()
 
 
 # --- classify_node: the four states + unknown (design §1) ------------------

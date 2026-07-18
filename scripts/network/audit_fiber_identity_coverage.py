@@ -26,7 +26,8 @@ def parse_args() -> argparse.Namespace:
             "reviewed batch, decision, change-request, canonical asset, and source "
             "provenance evidence. This command cannot infer identities, propose or "
             "execute decisions, approve change requests, mutate assets, or "
-            "authorize cutover. Poles/supports remain explicit reject-only evidence."
+            "authorize cutover or decide support mounts. Pole/support identities "
+            "support reviewed canonical create, link, or reject decisions."
         )
     )
     parser.add_argument(

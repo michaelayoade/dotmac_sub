@@ -56,6 +56,9 @@ from app.tasks.events import (
     retry_failed_events,
 )
 from app.tasks.exports import run_export_job, run_scheduled_export
+from app.tasks.forwarding_control_observations import (
+    run_forwarding_control_observation_poll,
+)
 from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
 from app.tasks.infrastructure_availability import (
@@ -310,6 +313,7 @@ __all__ = [
     "reconcile_device_projections",
     "run_radius_health_check",
     "run_lldp_topology_poll",
+    "run_forwarding_control_observation_poll",
     "reconcile_detected_outages",
     "run_uisp_topology_sync",
     "run_uisp_mgmt_ip_backfill",

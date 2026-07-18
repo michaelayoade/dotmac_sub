@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -131,6 +131,7 @@ def field_manager_assign_job(
     crm_work_order_id: str,
     payload: FieldManagerJobAssignRequest,
     auth: dict = Depends(_dispatch_write),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
     return field_manager.assign_job(
@@ -140,6 +141,8 @@ def field_manager_assign_job(
         scheduled_start=payload.scheduled_start,
         scheduled_end=payload.scheduled_end,
         status=payload.status,
+        auth=auth,
+        request_id=request_id,
     )
 
 

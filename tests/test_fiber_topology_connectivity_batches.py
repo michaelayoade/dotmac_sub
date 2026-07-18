@@ -90,6 +90,7 @@ def _create_item(path, cabinet, access_point) -> dict:
         "start_endpoint_ref_id": str(cabinet.id),
         "end_endpoint_type": "fiber_access_point",
         "end_endpoint_ref_id": str(access_point.id),
+        "fiber_count": 12,
         "segment_type": "distribution",
         "reason": "Field-verified endpoints",
     }

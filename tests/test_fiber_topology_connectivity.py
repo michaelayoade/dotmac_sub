@@ -26,6 +26,7 @@ from app.models.network import (
     FiberSpliceClosure,
     FiberTerminationPoint,
     ODNEndpointType,
+    PonPort,
 )
 from app.schemas.network import (
     FiberSegmentCreate,
@@ -98,14 +99,15 @@ def _stage_path(
 
 
 def test_reviewed_path_waits_for_terminations_then_segment_change_request(
-    db_session, subscriber, monkeypatch
+    db_session, subscriber, olt_device, monkeypatch
 ):
     path = _stage_path(
         db_session, external_id="SPAN-REVIEWED-1", display_name="Reviewed span 1"
     )
-    cabinet = FdhCabinet(name="Reviewed cabinet", code="REVIEWED-CAB")
+    olt_device.is_active = True
+    pon = PonPort(olt_id=olt_device.id, name="0/1/0", is_active=True)
     access_point = FiberAccessPoint(name="Reviewed FAT", code="REVIEWED-FAT")
-    db_session.add_all([cabinet, access_point])
+    db_session.add_all([pon, access_point])
     db_session.commit()
 
     decision = propose_connectivity_decision(
@@ -114,8 +116,8 @@ def test_reviewed_path_waits_for_terminations_then_segment_change_request(
         "create",
         proposed_by="planner@example.com",
         reason="Field-verified endpoints for the staged path",
-        start_endpoint_type="fdh",
-        start_endpoint_ref_id=cabinet.id,
+        start_endpoint_type="pon_port",
+        start_endpoint_ref_id=pon.id,
         end_endpoint_type="fiber_access_point",
         end_endpoint_ref_id=access_point.id,
         segment_type="distribution",
@@ -128,8 +130,8 @@ def test_reviewed_path_waits_for_terminations_then_segment_change_request(
         "create",
         proposed_by="planner@example.com",
         reason="Field-verified endpoints for the staged path",
-        start_endpoint_type="fdh",
-        start_endpoint_ref_id=cabinet.id,
+        start_endpoint_type="pon_port",
+        start_endpoint_ref_id=pon.id,
         end_endpoint_type="fiber_access_point",
         end_endpoint_ref_id=access_point.id,
         segment_type="distribution",
@@ -248,6 +250,7 @@ def test_shared_endpoint_reuses_one_pending_termination_resolution(db_session):
             start_endpoint_ref_id=cabinet.id,
             end_endpoint_type="fiber_access_point",
             end_endpoint_ref_id=endpoint.id,
+            fiber_count=12,
         )
         approve_connectivity_decision(
             db_session,
@@ -275,16 +278,19 @@ def test_shared_endpoint_reuses_one_pending_termination_resolution(db_session):
     assert db_session.query(FiberChangeRequest).count() == 3
 
 
-def test_existing_operational_segment_can_be_linked_without_mutation(db_session):
+def test_existing_operational_segment_can_be_linked_without_mutation(
+    db_session, olt_device
+):
     path = _stage_path(db_session, external_id="SPAN-LINK-1")
-    cabinet = FdhCabinet(name="Link cabinet", code="LINK-CAB")
+    olt_device.is_active = True
+    pon = PonPort(olt_id=olt_device.id, name="0/1/1", is_active=True)
     closure = FiberSpliceClosure(name="Link closure")
-    db_session.add_all([cabinet, closure])
+    db_session.add_all([pon, closure])
     db_session.commit()
     start = FiberTerminationPoint(
-        name="Cabinet termination",
-        endpoint_type=ODNEndpointType.fdh,
-        ref_id=cabinet.id,
+        name="PON termination",
+        endpoint_type=ODNEndpointType.pon_port,
+        ref_id=pon.id,
     )
     end = FiberTerminationPoint(
         name="Closure termination",
@@ -296,6 +302,7 @@ def test_existing_operational_segment_can_be_linked_without_mutation(db_session)
         from_point=start,
         to_point=end,
         route_geom="LINESTRING(7.40 9.00, 7.42 9.02)",
+        fiber_count=24,
     )
     db_session.add(segment)
     db_session.commit()
@@ -364,6 +371,7 @@ def test_reject_and_endpoint_rejection_preserve_terminal_evidence(
         start_endpoint_ref_id=cabinet.id,
         end_endpoint_type="fiber_access_point",
         end_endpoint_ref_id=access_point.id,
+        fiber_count=12,
     )
     approve_connectivity_decision(
         db_session,
@@ -454,6 +462,7 @@ def test_source_change_after_endpoint_requests_prevents_segment_emission(
         start_endpoint_ref_id=cabinet.id,
         end_endpoint_type="fiber_access_point",
         end_endpoint_ref_id=access_point.id,
+        fiber_count=12,
     )
     approve_connectivity_decision(
         db_session,

@@ -471,6 +471,16 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Scheduled Huawei ONT desired/observed reconciliation.",
     ),
     Control(
+        key="network.forwarding_observation_collection",
+        layer=Layer.feature,
+        owner_module="network",
+        default=False,
+        on_missing=False,
+        description=(
+            "Read-only RouterOS BGP-peer and routing-table observation collection."
+        ),
+    ),
+    Control(
         key="network.tr069_sync",
         layer=Layer.feature,
         owner_module="network",

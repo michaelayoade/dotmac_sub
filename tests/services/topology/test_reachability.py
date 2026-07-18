@@ -1,18 +1,15 @@
-"""Reachability classification: down vs unreachable_upstream (Phase 5a)."""
+"""Reachability classification from reviewed forwarding ancestry."""
 
 from __future__ import annotations
 
-from app.models.network_monitoring import (
-    DeviceRole,
-    NetworkDevice,
-    NetworkTopologyLink,
-)
+from app.models.network_monitoring import DeviceRole, NetworkDevice
 from app.services.topology.reachability import (
     CLASS_DOWN,
     CLASS_UNREACHABLE_UPSTREAM,
     classify_down_devices,
     reachability_overview,
 )
+from tests.services.topology.forwarding_test_support import declare_forwarding_edge
 
 
 def _dev(db, name, *, role=DeviceRole.edge, live_status="up"):
@@ -22,16 +19,14 @@ def _dev(db, name, *, role=DeviceRole.edge, live_status="up"):
     return d
 
 
-def _link(db, a, b):
-    db.add(
-        NetworkTopologyLink(
-            source_device_id=a.id,
-            target_device_id=b.id,
-            source="lldp_neighbor",
-            is_active=True,
-        )
+def _link(db, upstream, downstream):
+    declare_forwarding_edge(
+        db,
+        downstream,
+        upstream,
+        downstream_role="aggregation",
+        upstream_role=("core" if upstream.role == DeviceRole.core else "aggregation"),
     )
-    db.flush()
 
 
 def test_router_down_makes_children_unreachable(db_session):
@@ -81,7 +76,7 @@ def test_down_with_healthy_path_is_its_own_root_cause(db_session):
 
 
 def test_no_core_path_degrades_to_down(db_session):
-    """An island (no LLDP path to core) has no provable ancestry — degrade to
+    """An island (no authoritative path to core) has no provable ancestry — degrade to
     a root cause rather than silently swallowing it."""
     _dev(db_session, "Core", role=DeviceRole.core)
     orphan = _dev(db_session, "Orphan", live_status="down")

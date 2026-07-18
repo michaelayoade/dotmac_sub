@@ -67,7 +67,6 @@ app.services.field.expense_requests
 app.services.field.fiber
 app.services.field.jobs
 app.services.field.location_tracking
-app.services.field.manager
 app.services.field.map_assets
 app.services.field.material_requests
 app.services.field.materials
