@@ -241,11 +241,11 @@
             </h2>
         </div>
         <div class="divide-y divide-slate-100 dark:divide-slate-700/50">
-            {% if status_lower in ['suspended', 'blocked'] %}
+            {% if account.status_actions.restore.allowed %}
             <div class="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Restore account</h3>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Restoring reactivates deactivated services when no payment or enforcement locks are active.</p>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Restoring reactivates deactivated services when no payment or enforcement locks are active. Affects {{ account.status_actions.restore.affected }} service{{ '' if account.status_actions.restore.affected == 1 else 's' }}.</p>
                 </div>
                 <form method="post" action="/reseller/accounts/{{ account.id }}/status" onsubmit="return confirm('Restore this customer account?');">
                     {% include "components/forms/csrf_input.html" %}
@@ -260,13 +260,13 @@
             <div class="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Deactivate account</h3>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Deactivating temporarily stops active services without marking the account as payment-suspended.</p>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Deactivating temporarily stops active services without marking the account as payment-suspended. Affects {{ account.status_actions.deactivate.affected }} service{{ '' if account.status_actions.deactivate.affected == 1 else 's' }}.</p>
                 </div>
-                {% if status_lower not in ['disabled', 'canceled'] %}
+                {% if account.status_actions.deactivate.allowed %}
                 <form method="post" action="/reseller/accounts/{{ account.id }}/status" onsubmit="return confirm('Deactivate this customer account?');">
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="action" value="deactivate">
-                    <button type="submit" {% if status_lower in ['suspended', 'blocked'] %}disabled{% endif %} class="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-700 transition-all duration-200 hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30 dark:disabled:border-slate-700 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-700 transition-all duration-200 hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30 dark:disabled:border-slate-700 dark:disabled:bg-slate-800 dark:disabled:text-slate-500">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9v6m4-6v6M5 5h14v14H5z"/></svg>
                         Deactivate
                     </button>
@@ -276,9 +276,9 @@
             <div class="flex flex-col gap-4 px-6 py-5 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Disable account</h3>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Warning: disabling this account will disable its services and remove it from the default reseller accounts list.</p>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Warning: disabling this account will disable its services and remove it from the default reseller accounts list. Affects {{ account.status_actions.disable.affected }} service{{ '' if account.status_actions.disable.affected == 1 else 's' }}.</p>
                 </div>
-                {% if status_lower not in ['disabled', 'canceled'] %}
+                {% if account.status_actions.disable.allowed %}
                 <form id="disable-account-form" method="post" action="/reseller/accounts/{{ account.id }}/status">
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="action" value="disable">

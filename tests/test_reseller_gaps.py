@@ -115,6 +115,63 @@ class TestAccountDetail:
         assert len(result["subscriptions"]) == 1
         assert result["subscriptions"][0]["offer_name"] == "Basic 10Mbps"
 
+    def test_get_account_detail_status_actions_come_from_owner(
+        self, db_session
+    ) -> None:
+        from app.models.catalog import (
+            AccessType,
+            CatalogOffer,
+            OfferStatus,
+            PriceBasis,
+            ServiceType,
+            Subscription,
+            SubscriptionStatus,
+        )
+        from app.models.subscriber import Reseller, Subscriber
+
+        reseller = Reseller(name="Actions Test", is_active=True)
+        db_session.add(reseller)
+        db_session.commit()
+        account = Subscriber(
+            first_name="Act",
+            last_name="User",
+            email="actions@example.com",
+            reseller_id=reseller.id,
+        )
+        db_session.add(account)
+        db_session.commit()
+        offer = CatalogOffer(
+            name="Basic",
+            status=OfferStatus.active,
+            service_type=ServiceType.residential,
+            access_type=AccessType.fiber,
+            price_basis=PriceBasis.flat,
+        )
+        db_session.add(offer)
+        db_session.commit()
+        for status in (SubscriptionStatus.active, SubscriptionStatus.suspended):
+            db_session.add(
+                Subscription(
+                    subscriber_id=account.id,
+                    offer_id=offer.id,
+                    status=status,
+                    start_at=datetime.now(UTC),
+                )
+            )
+        db_session.commit()
+
+        from app.services.reseller_portal import get_account_detail
+
+        actions = get_account_detail(db_session, str(reseller.id), str(account.id))[
+            "status_actions"
+        ]
+        # Restore acts on the suspended service; deactivate on the active one;
+        # disable on both (neither is terminal) — eligibility and counts come
+        # from the owner, not a status string in the template.
+        assert actions["restore"] == {"allowed": True, "affected": 1}
+        assert actions["deactivate"] == {"allowed": True, "affected": 1}
+        assert actions["disable"] == {"allowed": True, "affected": 2}
+
     def test_get_account_detail_returns_none_for_reseller_login_user(
         self, db_session
     ) -> None:

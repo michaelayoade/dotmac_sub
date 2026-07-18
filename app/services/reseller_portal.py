@@ -1397,6 +1397,38 @@ def get_account_detail(
         .scalar()
     ) or 0
 
+    # Per-action eligibility comes from the owner (mirroring the status sets in
+    # update_customer_account_status), never re-derived from a status string in
+    # the template. Each entry says whether the action would change anything and
+    # how many services it affects — a lightweight impact preview.
+    statuses = [sub.status for sub in subscriptions]
+    restorable = {
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.stopped,
+    }
+    deactivatable = {
+        SubscriptionStatus.active,
+        SubscriptionStatus.pending,
+        SubscriptionStatus.blocked,
+        SubscriptionStatus.stopped,
+    }
+    terminal = {
+        SubscriptionStatus.disabled,
+        SubscriptionStatus.canceled,
+        SubscriptionStatus.expired,
+        SubscriptionStatus.hidden,
+        SubscriptionStatus.archived,
+    }
+    restore_n = sum(1 for s in statuses if s in restorable)
+    deactivate_n = sum(1 for s in statuses if s in deactivatable)
+    disable_n = sum(1 for s in statuses if s not in terminal)
+    status_actions = {
+        "restore": {"allowed": restore_n > 0, "affected": restore_n},
+        "deactivate": {"allowed": deactivate_n > 0, "affected": deactivate_n},
+        "disable": {"allowed": disable_n > 0, "affected": disable_n},
+    }
+
     return {
         "id": str(account.id),
         "account_number": account.account_number,
@@ -1413,6 +1445,7 @@ def get_account_detail(
         "created_at": account.created_at,
         "subscriptions": sub_list,
         "open_balance": open_balance,
+        "status_actions": status_actions,
     }
 
 
