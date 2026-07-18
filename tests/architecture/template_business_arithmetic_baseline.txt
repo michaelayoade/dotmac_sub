@@ -6,7 +6,9 @@
 #
 # This is migration debt, NOT an allowlist. The set may only SHRINK. Resolve a
 # template by moving the total into its read owner (see the customer billing
-# KPIs, computed in get_billing_page from CustomerFinancialPosition) and delete
-# its line here. Adding a new entry is a review failure — fix the template
-# instead.
-templates/customer/usage/_content.html
+# KPIs in get_billing_page and the usage period total in get_usage_page) and
+# delete its line here. Adding a new entry is a review failure — fix the
+# template instead.
+#
+# The baseline is currently EMPTY: every template total is computed by its read
+# owner. The guard is zero-tolerance — a new offender fails the build.
