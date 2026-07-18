@@ -7,6 +7,7 @@
     'provisioning': 'system', 'provisioning-migrate': 'system', 'workflows': 'system', 'appointments': 'system',
     'support-tickets': 'support-tickets',
     'support-automation': 'support-tickets', 'support-assignment-rules': 'support-tickets',
+    'team-inbox': 'team-inbox',
     'service-requests': 'service-requests',
     'sales': 'sales', 'sales-leads': 'sales', 'sales-pipelines': 'sales',
     'sales-quotes': 'sales', 'sales-orders': 'sales',
@@ -38,6 +39,7 @@
     'vpn': 'vpn', 'wireguard': 'vpn', 'wireguard-peers': 'vpn',
     'reports': 'reports', 'reports-revenue': 'reports', 'reports-customers': 'reports', 'reports-subscribers': 'reports',
     'reports-network': 'reports', 'reports-billing': 'reports',
+    'dispatch-work-orders': 'dispatch-work-orders',
     'field-live-map': 'field-live-map', 'field-movement-playback': 'field-live-map',
     'vendor-routes': 'vendor-routes',
     'gis': 'gis', 'integrations': 'integrations',
@@ -187,6 +189,7 @@
     {{ nav_link("Customers", "/admin/customers", icon_customers, "customers", tour_id="nav-customers") }}
     {% endif %}
     {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets") }}
+    {{ nav_link("Inbox", "/admin/inbox", icon_support, "team-inbox") }}
     {{ nav_link("Sales", "/admin/sales/leads", icon_sales, "sales") }}
     {{ nav_link("Service Requests", "/admin/service-requests", icon_provisioning, "service-requests") }}
     {{ nav_link("Referrals", "/admin/referrals", icon_referrals, "referrals") }}
@@ -205,6 +208,7 @@
     {% if module_states.get('vpn', True) %}
     {{ nav_link("VPN", "/admin/network/vpn", icon_vpn, "vpn") }}
     {% endif %}
+    {{ nav_link("Work Orders", "/admin/dispatch/work-orders", icon_projects, "dispatch-work-orders") }}
     {{ nav_link("Field Live Map", "/admin/dispatch/live-map", icon_gis, "field-live-map",
         active_pages=["field-live-map", "field-movement-playback"]) }}
     {{ nav_link("Vendors", "/admin/vendors", icon_network, "vendors") }}
