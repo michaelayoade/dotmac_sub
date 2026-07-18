@@ -45,6 +45,36 @@ class Settings:
         os.getenv("DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS", "60000")
     )
 
+    # Dedicated team-inbox SMTP process. Compose explicitly enables this only
+    # for its profile-gated listener; web and worker processes leave it off.
+    team_inbox_smtp_inbound_enabled: bool = os.getenv(
+        "TEAM_INBOX_SMTP_INBOUND_ENABLED", "false"
+    ).lower() in ("true", "1", "yes", "on")
+    team_inbox_smtp_inbound_host: str = os.getenv(
+        "TEAM_INBOX_SMTP_INBOUND_HOST", "127.0.0.1"
+    )
+    team_inbox_smtp_inbound_port: int = int(
+        os.getenv("TEAM_INBOX_SMTP_INBOUND_PORT", "2525")
+    )
+    team_inbox_smtp_inbound_recipients: str = os.getenv(
+        "TEAM_INBOX_SMTP_INBOUND_RECIPIENTS", ""
+    )
+    team_inbox_smtp_fallback_service_team_id: str = os.getenv(
+        "TEAM_INBOX_SMTP_FALLBACK_SERVICE_TEAM_ID", ""
+    ).strip()
+    team_inbox_smtp_probe_recipient: str = os.getenv(
+        "TEAM_INBOX_SMTP_PROBE_RECIPIENT", ""
+    ).strip()
+    team_inbox_smtp_probe_interval_seconds: int = max(
+        300,
+        int(os.getenv("TEAM_INBOX_SMTP_PROBE_INTERVAL_SECONDS", "900")),
+    )
+    team_inbox_smtp_probe_timeout_seconds: int = min(
+        300,
+        max(10, int(os.getenv("TEAM_INBOX_SMTP_PROBE_TIMEOUT_SECONDS", "120"))),
+    )
+    team_inbox_smtp_log_level: str = os.getenv("TEAM_INBOX_SMTP_LOG_LEVEL", "INFO")
+
     # Avatar settings
     avatar_upload_dir: str = os.getenv("AVATAR_UPLOAD_DIR", "static/avatars")
     avatar_max_size_bytes: int = int(

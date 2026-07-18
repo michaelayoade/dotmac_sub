@@ -620,6 +620,53 @@ services:
     - python
     - -m
     - app.syslog
+  team-inbox-smtp:
+    profiles:
+    - smtp-inbound
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
+    container_name: dotmac_sub_team_inbox_smtp
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.25
+    pids_limit: 32
+    logging: *id001
+    extra_hosts: *observability_extra_hosts
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      OPENBAO_ADDR: ${OPENBAO_ADDR}
+      OPENBAO_TOKEN: ${OPENBAO_TOKEN}
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+      TEAM_INBOX_SMTP_INBOUND_ENABLED: 'true'
+      TEAM_INBOX_SMTP_INBOUND_HOST: 0.0.0.0
+      TEAM_INBOX_SMTP_INBOUND_PORT: '2525'
+      TEAM_INBOX_SMTP_INBOUND_RECIPIENTS: ${TEAM_INBOX_SMTP_INBOUND_RECIPIENTS:-}
+      TEAM_INBOX_SMTP_FALLBACK_SERVICE_TEAM_ID: ${TEAM_INBOX_SMTP_FALLBACK_SERVICE_TEAM_ID:-}
+      TEAM_INBOX_SMTP_PROBE_RECIPIENT: ${TEAM_INBOX_SMTP_PROBE_RECIPIENT:-}
+      TEAM_INBOX_SMTP_PROBE_INTERVAL_SECONDS: ${TEAM_INBOX_SMTP_PROBE_INTERVAL_SECONDS:-900}
+      TEAM_INBOX_SMTP_PROBE_TIMEOUT_SECONDS: ${TEAM_INBOX_SMTP_PROBE_TIMEOUT_SECONDS:-120}
+    env_file:
+    - .env
+    ports:
+    - "127.0.0.1:${TEAM_INBOX_SMTP_INBOUND_PUBLISH_PORT:-2525}:2525"
+    volumes: []
+    command:
+    - python
+    - -m
+    - app.team_inbox_smtp
+    - serve
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -m
+      - app.team_inbox_smtp
+      - readiness
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
   vmagent:
     image: victoriametrics/vmagent:v1.96.0
     container_name: dotmac_vmagent

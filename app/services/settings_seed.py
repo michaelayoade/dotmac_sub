@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.services.channel_health_contracts import DEFAULT_CHANNEL_HEALTH_CONTRACTS
 from app.services.domain_settings import (
     DomainSettings,
     audit_settings,
@@ -2440,6 +2441,12 @@ def seed_radius_policy_settings(db: Session) -> None:
 
 
 def seed_network_monitoring_settings(db: Session) -> None:
+    network_monitoring_settings.ensure_by_key(
+        db,
+        key="channel_health_contracts",
+        value_type=SettingValueType.json,
+        value_json=json.loads(json.dumps(DEFAULT_CHANNEL_HEALTH_CONTRACTS)),
+    )
     network_monitoring_settings.ensure_by_key(
         db,
         key="server_health_disk_warn_pct",

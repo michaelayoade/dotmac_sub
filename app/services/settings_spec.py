@@ -12,6 +12,7 @@ from app.services.brand_theme import (
     DEFAULT_SECONDARY_HEX,
     DEFAULT_SEMANTIC_COLORS,
 )
+from app.services.channel_health_contracts import DEFAULT_CHANNEL_HEALTH_CONTRACTS
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
 from app.services.settings_specs.integration import build_integration_specs
@@ -2893,6 +2894,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=300,
         min_value=60,
         label="OLT Profile Sync Interval (seconds)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="channel_health_contracts",
+        label="Sensitive channel health contracts",
+        env_var=None,
+        value_type=SettingValueType.json,
+        default=DEFAULT_CHANNEL_HEALTH_CONTRACTS,
     ),
     SettingSpec(
         domain=SettingDomain.network_monitoring,

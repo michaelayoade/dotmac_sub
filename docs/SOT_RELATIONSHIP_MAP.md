@@ -1346,9 +1346,19 @@ in forms, or rotate key material directly.
    and outbound-message materialization. Inbox ORM rows have no writer
    outside the `team_inbox_*` family — campaigns and other domains request
    materialization from it rather than constructing inbox rows themselves.
+   `app.team_inbox_smtp` owns only the dedicated SMTP process lifecycle,
+   readiness check, and continuous/deployment probe orchestration; it delegates
+   every inbound write and exact-probe verification to
+   `team_inbox_smtp_inbound`, delegates consent-gated probe delivery to the
+   canonical notification delivery point and email transport, and is never
+   started from a web-process lifespan.
 9. Campaign services own marketing audience, sequence, and content decisions.
-   They request a canonical sender key; email delivery alone resolves that key
-   to SMTP identity and credentials.
+   They apply `communications.eligibility` when building an audience, before
+   enqueueing a send, and again through the marketing communication intent at
+   delivery. Agent replies are transactional communication intents and remain
+   eligible unless the suppression ledger blocks all communication. Campaigns
+   request a canonical sender key; email delivery alone resolves that key to
+   SMTP identity and credentials.
 
 Rule: domain services request a notification outcome; they should not construct
 notification rows, choose email/SMS/WhatsApp directly, or maintain recipient
@@ -1371,10 +1381,16 @@ Rule: handlers orchestrate. Persistence and retry bookkeeping live in services.
 
 1. Observability service owns task/job run recording.
 2. Task reliability owns task metadata, heartbeat interpretation, and alerting.
-3. Metrics collectors expose read-only gauges/counters for runtime pressure.
-4. Scheduled single-flight producers own expensive business-health snapshots;
+3. `observability.channel_health_contracts`
+   (`app.services.channel_health_contracts`) owns monitoring activation, active
+   windows, natural-versus-synthetic mode, silence thresholds, severity, and
+   runbook declaration for every sensitive external channel. Every supported
+   channel has exactly one enabled contract or an explicit disabled reason.
+   Invalid or incomplete registries fail closed and alert immediately.
+4. Metrics collectors expose read-only gauges/counters for runtime pressure.
+5. Scheduled single-flight producers own expensive business-health snapshots;
    metrics collectors only read those bounded snapshots.
-5. The cross-Dotmac scrape contract is defined in
+6. The cross-Dotmac scrape contract is defined in
    `docs/METRICS_SCRAPE_SAFETY.md`: `/metrics` reads process-local instruments,
    bounded snapshots, and static metadata only. It never opens a database
    session or invokes a business resolver.
@@ -1384,6 +1400,12 @@ should not write heartbeat/run rows directly unless they are the helper.
 Scrape-time collectors must never perform unbounded business-table scans or
 per-customer financial reconstruction. Database and infrastructure queries are
 also produced out of band so pool exhaustion cannot make the scrape path block.
+Prometheus and transport adapters consume channel-health contract facts; they
+must not hard-code a second activation flag, business window, silence threshold,
+or severity. High-volume channels use natural freshness. Low-volume sensitive
+channels require a verified end-to-end synthetic signal that cannot be forged
+by an external payload marker. Once a contract is enabled its declared alert
+consequence is live—there is no shadow decision path.
 
 ## Network Domain
 

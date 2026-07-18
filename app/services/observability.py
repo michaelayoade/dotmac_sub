@@ -44,9 +44,9 @@ class StateObservation:
 
 _STATE_SNAPSHOT_SPECS = {
     "billing_health": {"max_observations": 64, "ttl_seconds": 7 * 86_400},
-    # Two signals (freshness + 15-min count) per inbound channel; the channel
-    # set is bounded by InboxChannelType.
-    "channel_ingestion": {"max_observations": 64, "ttl_seconds": 86_400},
+    # Raw freshness plus the validated health-contract signals per external
+    # channel; the channel set is bounded by InboxChannelType.
+    "channel_ingestion": {"max_observations": 96, "ttl_seconds": 86_400},
     "celery_queues": {"max_observations": 64, "ttl_seconds": 86_400},
     "credentials": {"max_observations": 500, "ttl_seconds": 7 * 86_400},
     "database_pressure": {"max_observations": 16, "ttl_seconds": 86_400},

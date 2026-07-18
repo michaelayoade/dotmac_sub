@@ -6,6 +6,7 @@ import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
 from app.models.domain_settings import SettingDomain
@@ -469,6 +470,40 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
 
 def _deliver_notification_queue(db, batch_size: int = 50) -> int:
     return _deliver_notification_queue_stats(db, batch_size=batch_size)["delivered"]
+
+
+def deliver_inbound_smtp_health_probe(
+    db: Session,
+    *,
+    recipient: str,
+    message_id: str,
+    marker: str,
+) -> bool:
+    """Deliver one fixed operational probe through the canonical email path."""
+    if not communication_eligibility.may_send(
+        db,
+        channel=NotificationChannel.email,
+        address=recipient,
+        category="observability",
+    ):
+        logger.error("inbound_smtp_health_probe_suppressed recipient=%s", recipient)
+        return False
+    return email_service.send_email(
+        db=db,
+        to_email=recipient,
+        subject="[Dotmac probe] Team inbox SMTP delivery",
+        body_html=(
+            "<p>Synthetic channel-health probe. This message verifies "
+            "canonical outbound SMTP and inbound team-inbox delivery.</p>"
+        ),
+        body_text=(
+            "Synthetic channel-health probe. This message verifies canonical "
+            "outbound SMTP and inbound team-inbox delivery."
+        ),
+        track=False,
+        activity="observability_smtp_probe",
+        headers={"Message-ID": message_id, "X-Dotmac-Probe": marker},
+    )
 
 
 @celery_app.task(name="app.tasks.notifications.deliver_notification_queue")

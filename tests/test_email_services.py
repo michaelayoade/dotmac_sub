@@ -69,6 +69,33 @@ def test_send_email_html_and_text(db_session, monkeypatch):
     assert "HTML Content" in msg or "Text Content" in msg
 
 
+def test_send_email_preserves_operational_headers(db_session, monkeypatch):
+    fake_smtp = FakeSMTP()
+    monkeypatch.setattr("smtplib.SMTP", lambda *args, **kwargs: fake_smtp)
+    monkeypatch.setattr("smtplib.SMTP_SSL", lambda *args, **kwargs: fake_smtp)
+    monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
+    monkeypatch.setenv("SMTP_FROM", "noreply@test.local")
+
+    result = email_service.send_email(
+        db=db_session,
+        to_email="probe@example.com",
+        subject="Probe",
+        body_html="<p>Probe</p>",
+        body_text="Probe",
+        track=False,
+        activity="observability_smtp_probe",
+        headers={
+            "Message-ID": "<probe-1@example.com>",
+            "X-Dotmac-Probe": "team_inbox_smtp_e2e",
+        },
+    )
+
+    assert result is True
+    message = fake_smtp.messages[0][2]
+    assert "Message-ID: <probe-1@example.com>" in message
+    assert "X-Dotmac-Probe: team_inbox_smtp_e2e" in message
+
+
 def test_send_email_with_tracking(db_session, monkeypatch):
     """Test sending email with notification tracking."""
     fake_smtp = FakeSMTP()

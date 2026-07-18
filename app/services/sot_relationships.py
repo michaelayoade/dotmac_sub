@@ -1899,6 +1899,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="observability.channel_health_contracts",
+                module="app.services.channel_health_contracts",
+                owns=(
+                    "sensitive channel monitoring activation",
+                    "channel active-window interpretation",
+                    "natural and synthetic silence thresholds",
+                    "channel alert severity contract",
+                ),
+                depends_on=(
+                    "communications.team_inbox",
+                    "observability.recording",
+                ),
+            ),
+            SOTService(
                 name="observability.task_reliability",
                 module="app.services.task_reliability",
                 owns=("task reliability classification", "stale-run alerts"),

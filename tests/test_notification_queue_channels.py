@@ -9,7 +9,10 @@ from app.models.notification import (
     NotificationStatus,
 )
 from app.services.branding_config import get_brand
-from app.tasks.notifications import _deliver_notification_queue
+from app.tasks.notifications import (
+    _deliver_notification_queue,
+    deliver_inbound_smtp_health_probe,
+)
 
 
 def _queued_notification(
@@ -35,6 +38,61 @@ def _set_notification_setting(db, key: str, value: str) -> None:
         )
     )
     db.commit()
+
+
+def test_inbound_smtp_probe_uses_delivery_gate_and_fixed_payload(
+    db_session, monkeypatch
+):
+    captured: dict = {}
+    monkeypatch.setattr(
+        "app.tasks.notifications.communication_eligibility.may_send",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "app.tasks.notifications.email_service.send_email",
+        lambda **kwargs: captured.update(kwargs) or True,
+    )
+
+    assert (
+        deliver_inbound_smtp_health_probe(
+            db_session,
+            recipient="probe@dotmac.io",
+            message_id="<probe-1@sub.local>",
+            marker="team_inbox_smtp_e2e",
+        )
+        is True
+    )
+    assert captured["activity"] == "observability_smtp_probe"
+    assert captured["track"] is False
+    assert captured["headers"] == {
+        "Message-ID": "<probe-1@sub.local>",
+        "X-Dotmac-Probe": "team_inbox_smtp_e2e",
+    }
+
+
+def test_inbound_smtp_probe_respects_all_scope_suppression(db_session, monkeypatch):
+    monkeypatch.setattr(
+        "app.tasks.notifications.communication_eligibility.may_send",
+        lambda *_args, **_kwargs: False,
+    )
+
+    def _unexpected_send(**_kwargs):
+        raise AssertionError("suppressed probe must not reach the transport")
+
+    monkeypatch.setattr(
+        "app.tasks.notifications.email_service.send_email",
+        _unexpected_send,
+    )
+
+    assert (
+        deliver_inbound_smtp_health_probe(
+            db_session,
+            recipient="probe@dotmac.io",
+            message_id="<probe-2@sub.local>",
+            marker="team_inbox_smtp_e2e",
+        )
+        is False
+    )
 
 
 def test_deliver_notification_queue_handles_sms_and_whatsapp(db_session, monkeypatch):

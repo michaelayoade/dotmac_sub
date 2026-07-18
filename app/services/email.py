@@ -69,6 +69,7 @@ SMTP_ACTIVITY_CHOICES: list[tuple[str, str]] = [
     ("auth_password_reset", "Password Reset"),
     ("auth_email_verification", "Email Verification"),
     ("auth_user_invite", "User Invite"),
+    ("observability_smtp_probe", "Inbound SMTP Health Probe"),
 ]
 
 DOTMAC_RED = "#FF0000"
@@ -824,6 +825,7 @@ def send_email(
     sender_key: str | None = None,
     activity: str | None = None,
     notification_id: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> bool:
     """
     Send an email via SMTP.
@@ -835,6 +837,7 @@ def send_email(
         body_html: HTML body content
         body_text: Plain text body (optional, derived from HTML if not provided)
         track: Whether to create a Notification record for tracking
+        headers: Optional transport headers; From, To, and Subject are reserved
 
     Returns:
         True if email was sent successfully, False otherwise
@@ -873,6 +876,11 @@ def send_email(
     msg["Subject"] = subject
     msg["From"] = f"{config['from_name']} <{config['from_email']}>"
     msg["To"] = to_email
+    for name, value in (headers or {}).items():
+        normalized_name = str(name).strip()
+        if normalized_name.lower() in {"from", "to", "subject"}:
+            raise ValueError(f"Reserved email header cannot be overridden: {name}")
+        msg[normalized_name] = str(value)
 
     if body_text:
         msg.attach(MIMEText(body_text, "plain"))

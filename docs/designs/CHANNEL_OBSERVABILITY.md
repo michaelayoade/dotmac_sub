@@ -1,7 +1,10 @@
 # Channel & Webhook Observability
 
-**Owner:** `observability` (facts) + Alertmanager on `dotmac-observe` (consequences)
-**Status:** Proposed — Sub-side instrumentation and alert rules ready; export to dotmac-observe gated on host access
+**Owner:** `observability.channel_health_contracts` (policy),
+`communications.team_inbox` (facts), and Alertmanager on `dotmac-observe`
+(consequences)
+**Status:** Implemented in Sub; production rule/scrape integration uses the
+existing Dotmac Observability control plane
 **Motivates:** the 2026-07-18 crm.dotmac.io inbox flood
 
 ## The incident this exists to catch
@@ -20,8 +23,10 @@ different, and the design must match Sub, not CRM:
 
 - **Inbound is entirely push.** WhatsApp, Messenger/Instagram, and CRM arrive
   as HMAC-verified webhooks (`app/api/inbox_webhooks.py`,
-  `meta_inbox_webhooks.py`, `crm_webhooks.py`); email arrives over SMTP
-  (`app/services/team_inbox_smtp_inbound.py`). There is no poller and no cursor,
+  `meta_inbox_webhooks.py`, `crm_webhooks.py`); when its explicit deployment
+  profile is active, email arrives over the dedicated SMTP runtime
+  (`app/team_inbox_smtp.py`), which delegates ingestion to
+  `app/services/team_inbox_smtp_inbound.py`. There is no poller and no cursor,
   so the incident's cursor-reset re-ingestion cannot occur here.
 - **Webhooks are processed inline**, not enqueued — the route calls
   `team_inbox_channel_receive.receive_inbound_channel` and commits in-request.
@@ -36,6 +41,40 @@ different, and the design must match Sub, not CRM:
 The push model trades the incident's two failure modes for three of its own,
 which is what this design instruments.
 
+## Authoritative channel health contracts
+
+`network_monitoring.channel_health_contracts` is the database-authoritative
+registry. `app.services.channel_health_contracts` validates and interprets it.
+Every supported external `InboxChannelType` must appear exactly once. A channel
+is either enabled with a complete enforceable policy or disabled with a written
+reason; a missing or malformed entry makes the snapshot `error` and pages
+`ChannelHealthContractInvalid`.
+
+Each contract names the channel fact owner, natural/synthetic/hybrid monitoring
+mode, active ISO weekdays and local-time window, maximum quiet period,
+synthetic-probe maximum age where applicable, severity, and runbook. Business
+windows are evaluated in the contract timezone before metrics are published,
+so Prometheus consumes policy facts instead of maintaining parallel thresholds.
+Inactive-window time is not charged as silence. A true 24x7 contract never
+resets at midnight.
+
+The checked-in defaults are enforceable policy templates, not inferred
+production activation:
+
+| channel | mode | active window | maximum age | severity |
+| --- | --- | --- | --- | --- |
+| email | synthetic | 24x7 | verified probe: 30m | critical |
+| whatsapp | natural | daily 07:00–23:00 WAT | quiet: 30m | critical |
+| facebook_messenger | natural | daily 07:00–23:00 WAT | quiet: 4h | warning |
+| instagram_dm | natural | daily 07:00–23:00 WAT | quiet: 4h | warning |
+| chat_widget | natural | daily 07:00–23:00 WAT | quiet: 1h | critical |
+
+Defaults explicitly disable each channel because supported code is not proof
+that an environment has credentials, routing, or a live upstream subscription.
+Activation is a reviewed update to the registry after the channel's deployment
+gate passes. Once enabled, the declared warning or critical alert is enforced
+immediately; there is no shadow or ticket-only phase.
+
 ## Signals
 
 Four signal groups. Two are web-process Counters (webhook and dedup events
@@ -48,18 +87,23 @@ process.
 ### 1. Channel ingestion freshness — the dead-man's-switch
 
 Worker snapshot, domain `channel_ingestion`. Per channel scope (`whatsapp`,
-`email`, `facebook_messenger`, `instagram_dm`, `chat_widget`, `sms`):
+`email`, `facebook_messenger`, `instagram_dm`, `chat_widget`):
 
 | signal | meaning | alert |
 | --- | --- | --- |
-| `seconds_since_last_inbound` | age of the newest inbound message for the channel | **silence**: exceeds the channel's expected quiet window during business hours |
+| `seconds_since_last_inbound` | raw age of the newest natural inbound message | context only |
 | `inbound_count_15m` | inbound rows written in the last 15 min | context for the silence alert; also a flood ceiling |
+| `monitoring_active` | enabled contract is inside its active window | gates every silence alert |
+| `silence_age_seconds` / `max_quiet_seconds` | policy-adjusted natural silence and its limit | natural dead-man's-switch |
+| `synthetic_age_seconds` / `synthetic_max_age_seconds` | verified end-to-end probe age and its limit | low-volume channel dead-man's-switch |
+| `natural_required` / `synthetic_required` | contract monitoring mode | selects the applicable alert |
+| `severity_critical` | contract consequence level | selects warning or critical rule |
 
 This is the signal the incident was missing. It fires when a channel stops
 producing — the earliest warning that an endpoint or the SMTP intake is down,
 before anyone notices missing conversations. It is channel-shaped, so a per-
-channel expected-quiet window lets a low-volume channel (email) and a high-
-volume one (WhatsApp) share one rule.
+channel contract lets low-volume email use a synthetic proof while high-volume
+WhatsApp uses natural traffic without duplicating policy in Prometheus.
 
 ### 2. Webhook receipt, latency, and errors
 
@@ -103,41 +147,99 @@ signal and is what the producer emits.)
 ## Producer
 
 One scheduled beat task, `observe_channel_health`, runs about every 60s and
-publishes the two worker snapshots in a single pass: one `MAX(received_at)` and
-one 15-minute count per channel for freshness, one `LLEN` per queue for depth.
-It writes facts only — it never mutates inbox, queue, or delivery state, so it
-stays a pure observer and does not call any transport, keeping it clear of the
+publishes the two worker snapshots in a single pass: natural/probe freshness,
+contract signals, and 15-minute natural volume per channel, plus one `LLEN` per
+queue. It writes no business state and calls no transport. Synthetic messages
+are produced separately by the dedicated SMTP runtime and committed/verified
+through the team-inbox owner, keeping the observer clear of the
 consent/transport-ownership boundary
 (`tests/architecture/test_communication_eligibility_ownership.py`).
 
-## A gap this surfaced
+## SMTP runtime and deployment gate
 
-`start_smtp_inbound_server` has no caller in the repo — no launcher in
-`scripts/`, deploy, Dockerfiles, or compose. If email is expected to be a live
-inbound channel in Sub, the SMTP intake may not be running at all. Signal 1
-makes this visible immediately (email `seconds_since_last_inbound` climbs
-without bound); it is worth confirming out-of-band whether that intake is
-wired before relying on the channel.
+`app.team_inbox_smtp` is the dedicated process supervisor for email intake. It
+starts exactly one `team_inbox_smtp_inbound` controller, exits if the controller
+dies, and shuts it down on SIGTERM/SIGINT. It is intentionally not attached to
+FastAPI lifespan: multiple web workers or reload processes would compete for
+the same SMTP port and blur runtime ownership.
 
-## Export to dotmac-observe
+The `team-inbox-smtp` Compose service is behind the `smtp-inbound` profile and
+publishes its listener on host loopback only. A host MTA owns public SMTP
+security and relays only the configured
+`TEAM_INBOX_SMTP_INBOUND_RECIPIENTS` to that port. The runtime refuses to start
+unless the listener is explicitly enabled and the recipient allowlist is
+non-empty.
+
+Deployment has two separate gates:
+
+1. `make prod-smtp-inbound-up` starts or recreates the single listener.
+2. `make prod-smtp-inbound-probe` submits a synthetic email through the
+   canonical outbound email transport and proves it returned through the real
+   inbound route before the ingestion owner committed the marked inbox row.
+   Configure a dedicated `TEAM_INBOX_SMTP_PROBE_RECIPIENT` route that does not
+   auto-assign to an agent, plus an `observability_smtp_probe` activity sender
+   mapping when the default sender must not be used.
+
+The Compose health check is deliberately narrower: SMTP `NOOP` proves socket
+readiness without writing inbox data. After cutover, the same runtime submits a
+verified end-to-end probe every
+`TEAM_INBOX_SMTP_PROBE_INTERVAL_SECONDS` (15 minutes by default). Only the exact
+random Message-ID generated and verified by the runtime is marked as a probe;
+a sender-controlled header cannot hide natural traffic from freshness. The
+runtime allows up to `TEAM_INBOX_SMTP_PROBE_TIMEOUT_SECONDS` (two minutes by
+default) for the outbound/MX round trip, and the email contract pages if no
+verified probe lands within 30 minutes.
+
+### Email
+
+Enable the email contract only after the SMTP profile, recipient allowlist,
+dedicated non-auto-assigned probe route, canonical outbound sender, host-MTA
+relay, `NOOP` health check, and manual end-to-end probe all pass. Continuous
+synthetic probing then proves outbound SMTP, the inbound relay, listener,
+parser, routing, canonical inbox write, and readback.
+
+### WhatsApp
+
+Enable the WhatsApp contract only after the canonical comms settings contain
+provider credentials, phone identity, webhook URL, app secret, and verify
+token, and Meta webhook verification succeeds. Natural inbound traffic is the
+dead-man's-switch during the declared active window.
+
+### Meta social
+
+Messenger and Instagram have separate contracts even though they share Meta
+signature settings. Enable each only after its page/account subscription is
+verified. One active platform never masks silence on the other.
+
+### Chat widget
+
+Enable the chat-widget contract only after the CRM bridge/configuration is
+active and an authenticated customer or reseller session can create a native
+inbox message end to end.
+
+## Production integration with Dotmac Observability
 
 Sub already exposes `/metrics` (`app/main.py`) and runs
 `dotmac_sub_victoriametrics` + promtail on prod; `dotmac-observe` runs
-Prometheus/Alertmanager/Grafana/Loki. Wiring:
+Prometheus/Alertmanager/Grafana/Loki as Dotmac's production observability
+control plane. This feature does not introduce another monitoring stack.
+Integration must follow the existing production deployment path:
 
-1. Add Sub's `/metrics` as a scrape target on `dotmac-observe` Prometheus, or
-   federate/remote-write from the Sub-side VictoriaMetrics — match whichever
-   the existing Sub scrape uses; confirm on the host.
-2. Load `deploy/observability/channel_observability.rules.yml` into Alertmanager's rules.
-3. Route these alerts to the on-call receiver.
+1. Verify the existing Sub target, labels, and ingestion path in Dotmac
+   Observability. Reuse that path; do not create a duplicate scrape.
+2. If the existing target does not yet carry Sub's `/metrics` series, extend
+   that established scrape/federation/remote-write configuration.
+3. Load `deploy/observability/channel_observability.rules.yml` through the
+   existing production rule deployment.
+4. Route these alerts to the established on-call receiver.
 
-**Blocked:** the observe host rejected key auth during the incident. Deploying
-the scrape config and rules needs Michael to name and authorize that host. The
-Sub-side instrumentation ships independently of that step.
+The key-auth rejection encountered during the incident was an access/session
+issue, not evidence that the production observability platform or Sub
+integration was absent.
 
 ## Alert rules
 
-See `deploy/observability/channel_observability.rules.yml`. Thresholds are starting points
-and must be tuned against real series before the silence alert is trusted for
-paging rather than ticketing — a per-channel expected-quiet window especially,
-since a legitimately idle overnight email channel must not page.
+See `deploy/observability/channel_observability.rules.yml`. Warning and critical
+rules evaluate the same authoritative registry signals. Separate natural and
+synthetic rules preserve failure meaning; missing/stale observer metrics and an
+invalid registry are critical because they make silence evaluation blind.
