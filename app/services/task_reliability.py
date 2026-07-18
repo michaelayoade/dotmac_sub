@@ -159,6 +159,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Durable schedule rows own leases, bounded retry, reviewed-head drift "
         "detection, and deterministic executor idempotency keys.",
     ),
+    "app.tasks.channel_health.observe_channel_health": _c(
+        "monitoring",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Publishes per-channel silence/freshness gauges from team-inbox facts; "
+        "every run recomputes the full snapshot, so a missed or repeated run "
+        "only affects staleness.",
+    ),
     "app.tasks.campaigns.process_due_campaigns": _c(
         "campaigns",
         SWEEP,
