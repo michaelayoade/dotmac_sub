@@ -77,6 +77,12 @@ def main() -> int:
                 {
                     "historical_application_id": str(result.historical_application.id),
                     "renewal_application_id": str(result.renewal_application.id),
+                    "renewal_invoice_id": str(
+                        result.renewal_application.payment_allocation.invoice_id
+                    ),
+                    "renewal_payment_allocation_id": str(
+                        result.renewal_application.payment_allocation_id
+                    ),
                     "idempotent_replay": result.idempotent_replay,
                     "access_recheck_status": access.access_recheck_status,
                     "access_recheck_error": access.access_recheck_error,

@@ -26,5 +26,6 @@ def test_payment_prepaid_application_revision_is_linear_and_structural():
     assert "payment_settlements.id" in source
     assert "service_entitlements.id" in source
     assert "payment_allocations.id" in source
-    assert "invoice_closures.id" in source
+    assert "payment_allocation_id" in source
     assert "ck_payment_prepaid_applications_period_order" in source
+    assert "ck_payment_prepaid_applications_evidence_shape" in source

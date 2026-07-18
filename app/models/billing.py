@@ -1620,8 +1620,19 @@ class PaymentPrepaidApplication(Base):
             name="ck_payment_prepaid_applications_period_order",
         ),
         CheckConstraint(
-            "origin IN ('historical_reconciliation', 'post_settlement')",
+            "origin IN ('historical_reconciliation', 'invoice_allocation')",
             name="ck_payment_prepaid_applications_origin",
+        ),
+        CheckConstraint(
+            "(origin = 'historical_reconciliation' "
+            "AND retired_allocation_id IS NOT NULL "
+            "AND historical_invoice_id IS NOT NULL "
+            "AND payment_allocation_id IS NULL) OR "
+            "(origin = 'invoice_allocation' "
+            "AND retired_allocation_id IS NULL "
+            "AND historical_invoice_id IS NULL "
+            "AND payment_allocation_id IS NOT NULL)",
+            name="ck_payment_prepaid_applications_evidence_shape",
         ),
         CheckConstraint(
             "access_recheck_status IN "
@@ -1655,8 +1666,8 @@ class PaymentPrepaidApplication(Base):
             unique=True,
         ),
         Index(
-            "uq_payment_prepaid_applications_invoice_closure_id",
-            "invoice_closure_id",
+            "uq_payment_prepaid_applications_payment_allocation_id",
+            "payment_allocation_id",
             unique=True,
         ),
         Index(
@@ -1710,8 +1721,9 @@ class PaymentPrepaidApplication(Base):
     historical_invoice_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="RESTRICT")
     )
-    invoice_closure_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("invoice_closures.id", ondelete="RESTRICT")
+    payment_allocation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payment_allocations.id", ondelete="RESTRICT"),
     )
     origin: Mapped[str] = mapped_column(String(32), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
@@ -1752,9 +1764,13 @@ class PaymentPrepaidApplication(Base):
         "LedgerEntry", foreign_keys=[debit_ledger_entry_id]
     )
     entitlement = relationship("ServiceEntitlement")
-    retired_allocation = relationship("PaymentAllocation")
+    retired_allocation = relationship(
+        "PaymentAllocation", foreign_keys=[retired_allocation_id]
+    )
+    payment_allocation = relationship(
+        "PaymentAllocation", foreign_keys=[payment_allocation_id]
+    )
     historical_invoice = relationship("Invoice")
-    invoice_closure = relationship("InvoiceClosure")
 
 
 class PaymentAllocationReconciliationException(Base):

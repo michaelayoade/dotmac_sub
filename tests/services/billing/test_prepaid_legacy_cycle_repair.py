@@ -188,7 +188,7 @@ def _repair_evidence(db, subscriber) -> dict[str, object]:
     }
 
 
-def test_repair_reconstructs_history_funds_next_cycle_and_voids_draft(
+def test_repair_reconstructs_history_and_pays_reanchored_renewal_invoice(
     db_session, subscriber
 ):
     selected = _repair_evidence(db_session, subscriber)
@@ -214,12 +214,39 @@ def test_repair_reconstructs_history_funds_next_cycle_and_voids_draft(
         PaymentAllocation, result.historical_application.retired_allocation_id
     )
     historical_payment = db_session.get(Payment, preview.historical_payment_id)
-    draft_invoice = db_session.get(Invoice, preview.draft_invoice_id)
+    renewal_invoice = db_session.get(Invoice, preview.draft_invoice_id)
+    renewal_payment = db_session.get(Payment, preview.renewal_payment_id)
     subscription = db_session.get(Subscription, preview.subscription_id)
     assert allocation is not None and allocation.is_active is False
     assert historical_payment is not None and historical_payment.settlement is not None
     assert historical_payment.settlement.prepaid_amount == Decimal("100.00")
-    assert draft_invoice is not None and draft_invoice.status == InvoiceStatus.void
+    assert renewal_payment is not None and renewal_payment.settlement is not None
+    assert renewal_payment.settlement.prepaid_amount == Decimal("0.00")
+    assert renewal_invoice is not None
+    assert renewal_invoice.status == InvoiceStatus.paid
+    assert renewal_invoice.balance_due == Decimal("0.00")
+    assert renewal_invoice.issued_at == renewal_payment.paid_at
+    assert renewal_invoice.paid_at == renewal_payment.paid_at
+    assert renewal_invoice.billing_period_start.date().isoformat() == "2026-07-18"
+    assert renewal_invoice.billing_period_end.date().isoformat() == "2026-08-18"
+    assert result.renewal_application.payment_allocation_id is not None
+    renewal_allocation = db_session.get(
+        PaymentAllocation, result.renewal_application.payment_allocation_id
+    )
+    assert renewal_allocation is not None and renewal_allocation.is_active is True
+    assert renewal_allocation.payment_id == renewal_payment.id
+    assert renewal_allocation.invoice_id == renewal_invoice.id
+    assert renewal_allocation.amount == Decimal("100.00")
+    assert renewal_allocation.ledger_entry_id is not None
+    assert renewal_allocation.consumption_ledger_entry_id is not None
+    assert (
+        db_session.query(LedgerEntry)
+        .filter(LedgerEntry.payment_id == renewal_payment.id)
+        .filter(LedgerEntry.entry_type == LedgerEntryType.debit)
+        .filter(LedgerEntry.source == LedgerSource.invoice)
+        .count()
+        == 0
+    )
     assert subscription is not None
     assert subscription.next_billing_at.date().isoformat() == "2026-08-18"
     assert db_session.query(PaymentPrepaidApplication).count() == 2
@@ -244,13 +271,6 @@ def test_access_failure_is_deferred_after_financial_commit(
 ):
     selected = _repair_evidence(db_session, subscriber)
     preview = payments.preview_prepaid_legacy_cycle_repair(db_session, **selected)
-    result = payments.confirm_prepaid_legacy_cycle_repair(
-        db_session,
-        **selected,
-        preview_fingerprint=preview.fingerprint,
-        idempotency_key="test-prepaid-cycle-repair-0002",
-        reason="Reviewed exact legacy payment, invoice, debit, and renewal credit",
-    )
 
     from app.services import collections as collections_service
 
@@ -260,6 +280,18 @@ def test_access_failure_is_deferred_after_financial_commit(
     monkeypatch.setattr(
         collections_service, "restore_account_services", missing_baseline
     )
+    result = payments.confirm_prepaid_legacy_cycle_repair(
+        db_session,
+        **selected,
+        preview_fingerprint=preview.fingerprint,
+        idempotency_key="test-prepaid-cycle-repair-0002",
+        reason="Reviewed exact legacy payment, invoice, debit, and renewal credit",
+    )
+    renewal_invoice = db_session.get(Invoice, preview.draft_invoice_id)
+    assert renewal_invoice is not None
+    assert renewal_invoice.status == InvoiceStatus.paid
+    assert result.renewal_application.payment_allocation_id is not None
+
     application = payments.recheck_prepaid_application_access(
         db_session, str(result.renewal_application.id)
     )
@@ -267,6 +299,6 @@ def test_access_failure_is_deferred_after_financial_commit(
     assert application.access_recheck_status == "deferred"
     assert application.access_recheck_error == "PrepaidFundingBaselineMissingError"
     assert (
-        db_session.get(Invoice, preview.draft_invoice_id).status == InvoiceStatus.void
+        db_session.get(Invoice, preview.draft_invoice_id).status == InvoiceStatus.paid
     )
     assert db_session.query(PaymentPrepaidApplication).count() == 2

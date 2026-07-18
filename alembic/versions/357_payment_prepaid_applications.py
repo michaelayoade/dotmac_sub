@@ -38,7 +38,9 @@ def upgrade() -> None:
         sa.Column(
             "historical_invoice_id", postgresql.UUID(as_uuid=True), nullable=True
         ),
-        sa.Column("invoice_closure_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column(
+            "payment_allocation_id", postgresql.UUID(as_uuid=True), nullable=True
+        ),
         sa.Column("origin", sa.String(length=32), nullable=False),
         sa.Column("amount", sa.Numeric(precision=12, scale=2), nullable=False),
         sa.Column("currency", sa.String(length=3), nullable=False),
@@ -75,8 +77,19 @@ def upgrade() -> None:
             name="ck_payment_prepaid_applications_period_order",
         ),
         sa.CheckConstraint(
-            "origin IN ('historical_reconciliation', 'post_settlement')",
+            "origin IN ('historical_reconciliation', 'invoice_allocation')",
             name="ck_payment_prepaid_applications_origin",
+        ),
+        sa.CheckConstraint(
+            "(origin = 'historical_reconciliation' "
+            "AND retired_allocation_id IS NOT NULL "
+            "AND historical_invoice_id IS NOT NULL "
+            "AND payment_allocation_id IS NULL) OR "
+            "(origin = 'invoice_allocation' "
+            "AND retired_allocation_id IS NULL "
+            "AND historical_invoice_id IS NULL "
+            "AND payment_allocation_id IS NOT NULL)",
+            name="ck_payment_prepaid_applications_evidence_shape",
         ),
         sa.CheckConstraint(
             "access_recheck_status IN "
@@ -111,7 +124,9 @@ def upgrade() -> None:
             ["historical_invoice_id"], ["invoices.id"], ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(
-            ["invoice_closure_id"], ["invoice_closures.id"], ondelete="RESTRICT"
+            ["payment_allocation_id"],
+            ["payment_allocations.id"],
+            ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -122,7 +137,7 @@ def upgrade() -> None:
         "debit_ledger_entry_id",
         "entitlement_id",
         "retired_allocation_id",
-        "invoice_closure_id",
+        "payment_allocation_id",
         "idempotency_key",
     ):
         op.create_index(
