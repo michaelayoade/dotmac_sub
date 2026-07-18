@@ -22,6 +22,11 @@ from app.models.referral_native import (
 )
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    PageMeta,
+)
 from app.services.referrals import referrals as referrals_service
 
 # The five referral_* program keys render on the generic system settings page
@@ -30,6 +35,23 @@ PROGRAM_SETTINGS_URL = "/admin/system/settings?domain=subscriber"
 
 STATUSES = [s.value for s in ReferralStatus]
 REWARD_STATUSES = [s.value for s in ReferralRewardStatus]
+
+# The referrals list's declared query capabilities (Carbon/WCAG list standard):
+# filterable by status/reward, sortable by created/status, deterministic order.
+REFERRAL_LIST_DEFINITION = ListDefinition(
+    key="referrals",
+    fields=(
+        ListFieldDefinition("created_at", "Created", sortable=True),
+        ListFieldDefinition("status", "Status", filterable=True, sortable=True),
+        ListFieldDefinition("reward_status", "Reward", filterable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+_REFERRAL_SORT_COLUMNS = {
+    "created_at": Referral.created_at,
+    "status": Referral.status,
+}
 
 
 def _subscriber_name(subscriber: Subscriber | None) -> str:
@@ -167,13 +189,35 @@ def list_data(
     *,
     status: str | None = None,
     reward_status: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int = 1,
     per_page: int = 25,
 ) -> dict:
-    # Unknown filter values are ignored (filter cleared), matching the
-    # service-requests queue idiom — never a 400 from a stale bookmark.
+    # Unknown filter/sort/page-size values are normalized to a valid state
+    # rather than raising, matching the queue idiom — a stale bookmark degrades
+    # to the default view, never a 400/500.
     status = status if status in STATUSES else None
     reward_status = reward_status if reward_status in REWARD_STATUSES else None
+    safe_sort = (
+        sort_by
+        if sort_by in REFERRAL_LIST_DEFINITION.sortable_keys
+        else REFERRAL_LIST_DEFINITION.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in REFERRAL_LIST_DEFINITION.per_page_options
+        else REFERRAL_LIST_DEFINITION.default_per_page
+    )
+    list_query = REFERRAL_LIST_DEFINITION.build_query(
+        search=None,
+        filters={"status": status, "reward_status": reward_status},
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
 
     query = (
         db.query(Referral)
@@ -184,18 +228,22 @@ def list_data(
         )
         .filter(Referral.is_active.is_(True))
     )
-    if status:
-        query = query.filter(Referral.status == status)
-    if reward_status:
-        query = query.filter(Referral.reward_status == reward_status)
+    if (value := list_query.filter_value("status")):
+        query = query.filter(Referral.status == value)
+    if (value := list_query.filter_value("reward_status")):
+        query = query.filter(Referral.reward_status == value)
 
     total = query.count()
-    total_pages = max((total + per_page - 1) // per_page, 1)
-    page = min(page, total_pages)
+    page_meta = PageMeta.from_query(list_query, total)
+    sort_column = _REFERRAL_SORT_COLUMNS[list_query.sort_by]
+    ordered = (
+        sort_column.desc() if list_query.sort_dir == "desc" else sort_column.asc()
+    )
     items = (
-        query.order_by(Referral.created_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
+        # Unique tie-breaker keeps ordering deterministic across pages.
+        query.order_by(ordered, Referral.id.asc())
+        .offset((page_meta.page - 1) * list_query.per_page)
+        .limit(list_query.per_page)
         .all()
     )
 
@@ -205,12 +253,14 @@ def list_data(
         "program": referrals_service.program(db),
         "statuses": STATUSES,
         "reward_statuses": REWARD_STATUSES,
-        "status_filter": status,
-        "reward_status_filter": reward_status,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
+        "status_filter": list_query.filter_value("status"),
+        "reward_status_filter": list_query.filter_value("reward_status"),
+        "list_query": list_query,
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": page_meta.total_items,
+        "total_pages": page_meta.total_pages,
         "program_settings_url": PROGRAM_SETTINGS_URL,
     }
 
