@@ -392,17 +392,13 @@ def _validate_serial(serial_number: str) -> tuple[bool, str]:
 def _setup_prompt_timeout() -> float:
     """Prompt timeout for session-setup reads (``enable`` / ``screen-length``).
 
-    Env-tunable via ``OLT_SSH_PROMPT_TIMEOUT_SECONDS`` (default 15, floor 5).
-    The old hardcoded 5s left ~1.5s headroom over a healthy ~3s connect+enable
-    (measured against Jabi/Gwarimpa 2026-07-17) and failed intermittently
-    under VTY contention or mgmt-path jitter.
+    Env-tunable via ``OLT_SSH_PROMPT_TIMEOUT_SECONDS`` (default 15, floor 5;
+    resolved once at startup by ``app.config``). The old hardcoded 5s left
+    ~1.5s headroom over a healthy ~3s connect+enable (measured against
+    Jabi/Gwarimpa 2026-07-17) and failed intermittently under VTY contention
+    or mgmt-path jitter.
     """
-    import os
-
-    try:
-        return max(5.0, float(os.getenv("OLT_SSH_PROMPT_TIMEOUT_SECONDS", "15")))
-    except (TypeError, ValueError):
-        return 15.0
+    return settings.olt_ssh_prompt_timeout_seconds
 
 
 def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:

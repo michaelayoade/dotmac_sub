@@ -32,6 +32,11 @@ class Settings:
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
     db_statement_timeout_ms: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000"))
     db_lock_timeout_ms: int = int(os.getenv("DB_LOCK_TIMEOUT_MS", "10000"))
+    # Prompt timeout for OLT SSH session-setup reads (enable/screen-length);
+    # floor 5s — see app/services/network/olt_ssh.py:_setup_prompt_timeout.
+    olt_ssh_prompt_timeout_seconds: float = max(
+        5.0, float(os.getenv("OLT_SSH_PROMPT_TIMEOUT_SECONDS", "15"))
+    )
     # Postgres lock_timeout for the ALEMBIC MIGRATION connection (env.py), so a
     # schema-locking migration fails fast instead of piling up behind the live
     # app. Sanitized in app.db.resolve_migration_lock_timeout; "0" disables.
