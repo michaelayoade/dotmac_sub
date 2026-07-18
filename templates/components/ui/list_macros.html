@@ -1,0 +1,37 @@
+{# Reusable list macros for the list_query migration.
+
+   sort_header renders one Carbon/WCAG-conformant sortable column header from a
+   ListQuery: a deep-linkable sort link that toggles direction, aria-sort on the
+   th, an accessible label, and a non-colour direction indicator. Every list
+   migrated to list_query uses this instead of hand-rolling ~20 lines per column.
+
+   Usage:
+     {% from "components/ui/list_macros.html" import sort_header %}
+     {{ sort_header(list_query, '/admin/referrals', 'created_at', 'Created', entity='referrals') }}
+
+   For plain full-page navigation, omit hx_target. Pass hx_target (e.g.
+   '#referrals-table') to swap the table in place via HTMX where the page wires
+   it up. #}
+{% macro sort_header(list_query, base_url, key, label, entity='items', extra_class='', hx_target=None) %}
+{% set _active = list_query.sort_by == key %}
+{% set _dir = 'desc' if _active and list_query.sort_dir == 'asc' else 'asc' %}
+{% set _url = list_query.url(base_url, page=1, sort_by=key, sort_dir=_dir) %}
+<th scope="col"
+    aria-sort="{% if _active %}{{ 'ascending' if list_query.sort_dir == 'asc' else 'descending' }}{% else %}none{% endif %}"
+    class="px-4 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 {{ extra_class }}">
+    <a class="group inline-flex items-center gap-1.5 hover:text-slate-700 dark:hover:text-slate-200"
+       href="{{ _url }}"
+       {% if hx_target %}hx-get="{{ _url }}" hx-target="{{ hx_target }}" hx-push-url="true"{% endif %}
+       aria-label="Sort {{ entity }} by {{ label|lower }} {{ 'descending' if _dir == 'desc' else 'ascending' }}">
+        {{ label }}
+        <svg class="h-3.5 w-3.5 text-slate-400 transition {% if not _active %}opacity-0 group-hover:opacity-100{% endif %}"
+             fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            {% if _active and list_query.sort_dir == 'desc' %}
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            {% else %}
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>
+            {% endif %}
+        </svg>
+    </a>
+</th>
+{% endmacro %}
