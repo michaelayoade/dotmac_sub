@@ -1,7 +1,7 @@
 """Add durable payment-allocation reconciliation exceptions.
 
-Revision ID: 357_paystack_allocation_exceptions
-Revises: 356_party_first_referral_capture
+Revision ID: 358_paystack_allocation_exceptions
+Revises: 357_account_credit_deposit_lifecycle
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "357_paystack_allocation_exceptions"
-down_revision = "356_party_first_referral_capture"
+revision = "358_paystack_allocation_exceptions"
+down_revision = "357_account_credit_deposit_lifecycle"
 branch_labels = None
 depends_on = None
 _TABLE = "payment_allocation_reconciliation_exceptions"
