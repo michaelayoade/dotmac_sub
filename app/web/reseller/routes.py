@@ -143,10 +143,12 @@ def reseller_account_invoices(
     account_id: str,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=5, le=100),
+    sort_by: str | None = Query(None, alias="sort"),
+    sort_dir: str | None = Query(None, alias="dir"),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_account_invoices(
-        request, db, account_id, page, per_page
+        request, db, account_id, page, per_page, sort_by=sort_by, sort_dir=sort_dir
     )
 
 

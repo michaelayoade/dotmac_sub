@@ -45,6 +45,22 @@ RESELLER_ACCOUNT_LIST_DEFINITION = ListDefinition(
     default_per_page=20,
 )
 
+# Per-account invoices sub-list. Sortable keys mirror list_account_invoices'
+# ACCOUNT_INVOICE_SORT_COLUMNS.
+RESELLER_INVOICE_LIST_DEFINITION = ListDefinition(
+    key="reseller_account_invoices",
+    fields=(
+        ListFieldDefinition("status", "Status", sortable=True),
+        ListFieldDefinition("total", "Total", sortable=True),
+        ListFieldDefinition("due_at", "Due", sortable=True),
+        ListFieldDefinition("created_at", "Issued", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+    per_page_options=(10, 25, 50, 100),
+    default_per_page=25,
+)
+
 templates = get_reseller_templates()
 
 
@@ -442,20 +458,18 @@ def reseller_account_invoices(
     account_id: str,
     page: int,
     per_page: int,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
 ):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
-    offset = (page - 1) * per_page
-    invoices = reseller_portal.list_account_invoices(
-        db,
-        reseller_id=str(context["reseller"].id),
-        account_id=account_id,
-        limit=per_page,
-        offset=offset,
+    reseller_id = str(context["reseller"].id)
+    total = reseller_portal.count_account_invoices(
+        db, reseller_id=reseller_id, account_id=account_id
     )
-    if invoices is None:
+    if total is None:  # account not owned by this reseller
         return templates.TemplateResponse(
             "reseller/errors/404.html",
             {
@@ -466,6 +480,36 @@ def reseller_account_invoices(
             status_code=404,
         )
 
+    definition = RESELLER_INVOICE_LIST_DEFINITION
+    safe_sort = (
+        sort_by if sort_by in definition.sortable_keys else definition.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page if per_page in definition.per_page_options else definition.default_per_page
+    )
+    list_query = definition.build_query(
+        search=None,
+        filters={},
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+    page_meta = PageMeta.from_query(list_query, total)
+    invoices = (
+        reseller_portal.list_account_invoices(
+            db,
+            reseller_id=reseller_id,
+            account_id=account_id,
+            limit=list_query.per_page,
+            offset=(page_meta.page - 1) * list_query.per_page,
+            order_by=list_query.sort_by,
+            order_dir=list_query.sort_dir,
+        )
+        or []
+    )
+
     return templates.TemplateResponse(
         "reseller/accounts/invoices.html",
         {
@@ -475,8 +519,12 @@ def reseller_account_invoices(
             "reseller": context["reseller"],
             "invoices": invoices,
             "account_id": account_id,
-            "page": page,
-            "per_page": per_page,
+            "list_query": list_query,
+            "page_meta": page_meta,
+            "page": page_meta.page,
+            "per_page": page_meta.per_page,
+            "total": total,
+            "total_pages": page_meta.total_pages,
         },
     )
 
