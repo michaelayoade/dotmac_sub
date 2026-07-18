@@ -66,6 +66,8 @@ def leads_list(
     stage_id: str | None = Query(default=None),
     lead_source: str | None = Query(default=None),
     search: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None, alias="sort"),
+    sort_dir: str | None = Query(default=None, alias="dir"),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -79,6 +81,8 @@ def leads_list(
             stage_id=stage_id,
             lead_source=lead_source,
             search=search,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
             page=page,
             per_page=per_page,
         )

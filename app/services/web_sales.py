@@ -53,6 +53,11 @@ from app.schemas.sales import (
 from app.services import sales as sales_service
 from app.services import sales_orders as sales_orders_service
 from app.services.common import coerce_uuid
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    PageMeta,
+)
 from app.services.sales.selfserve import compute_feasibility
 from app.services.sales_orders import _resolve_project_for_sales_order
 
@@ -86,6 +91,25 @@ def _as_bool(value: str | None) -> bool:
 
 def lead_status_values() -> list[str]:
     return [status.value for status in LeadStatus]
+
+
+# The leads list's declared query capabilities. Sortable keys mirror the
+# leads.list order_by whitelist (created_at/updated_at); filters and search are
+# the ones the underlying manager supports.
+LEAD_LIST_DEFINITION = ListDefinition(
+    key="leads",
+    fields=(
+        ListFieldDefinition("title", "Lead", searchable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("lead_source", "Source", filterable=True),
+        ListFieldDefinition("pipeline_id", "Pipeline", filterable=True),
+        ListFieldDefinition("stage_id", "Stage", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+        ListFieldDefinition("updated_at", "Updated", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
 
 
 def quote_status_values() -> list[str]:
@@ -248,6 +272,8 @@ def build_leads_list_context(
     stage_id: str | None,
     lead_source: str | None,
     search: str | None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
@@ -255,7 +281,41 @@ def build_leads_list_context(
     lead_source_options = list(sales_service.LEAD_SOURCE_OPTIONS)
     lead_source = _clean_choice(lead_source, lead_source_options)
 
-    offset = (page - 1) * per_page
+    # Stale sort/page-size params degrade to the default view rather than 500.
+    safe_sort = (
+        sort_by
+        if sort_by in LEAD_LIST_DEFINITION.sortable_keys
+        else LEAD_LIST_DEFINITION.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in LEAD_LIST_DEFINITION.per_page_options
+        else LEAD_LIST_DEFINITION.default_per_page
+    )
+    list_query = LEAD_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "status": status,
+            "pipeline_id": pipeline_id,
+            "stage_id": stage_id,
+            "lead_source": lead_source,
+        },
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+
+    total = _count_leads(
+        db,
+        status=status,
+        pipeline_id=pipeline_id or None,
+        stage_id=stage_id or None,
+        lead_source=lead_source,
+        search=search or None,
+    )
+    page_meta = PageMeta.from_query(list_query, total)
     leads = sales_service.leads.list(
         db,
         pipeline_id=pipeline_id or None,
@@ -263,18 +323,10 @@ def build_leads_list_context(
         owner_agent_id=None,
         status=status,
         is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=per_page,
-        offset=offset,
-        lead_source=lead_source,
-        search=search or None,
-    )
-    total = _count_leads(
-        db,
-        status=status,
-        pipeline_id=pipeline_id or None,
-        stage_id=stage_id or None,
+        order_by=list_query.sort_by,
+        order_dir=list_query.sort_dir,
+        limit=list_query.per_page,
+        offset=(page_meta.page - 1) * list_query.per_page,
         lead_source=lead_source,
         search=search or None,
     )
@@ -284,10 +336,12 @@ def build_leads_list_context(
 
     return {
         "leads": leads,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": _total_pages(total, per_page),
+        "list_query": list_query,
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": page_meta.total_items,
+        "total_pages": page_meta.total_pages,
         "status": status or "",
         "pipeline_id": pipeline_id or "",
         "stage_id": stage_id or "",
