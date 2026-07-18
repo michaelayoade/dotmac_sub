@@ -111,6 +111,21 @@ LEAD_LIST_DEFINITION = ListDefinition(
     default_sort_dir="desc",
 )
 
+# The quotes list's declared capabilities (quotes.list order_by whitelist is
+# created_at/updated_at; filters are status and lead).
+QUOTE_LIST_DEFINITION = ListDefinition(
+    key="quotes",
+    fields=(
+        ListFieldDefinition("number", "Quote", searchable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("lead_id", "Lead", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+        ListFieldDefinition("updated_at", "Updated", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+
 
 def quote_status_values() -> list[str]:
     return [status.value for status in QuoteStatus]
@@ -994,24 +1009,45 @@ def build_quotes_list_context(
     status: str | None,
     lead_id: str | None,
     search: str | None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
     status = _clean_choice(status, quote_status_values())
-    offset = (page - 1) * per_page
+    safe_sort = (
+        sort_by
+        if sort_by in QUOTE_LIST_DEFINITION.sortable_keys
+        else QUOTE_LIST_DEFINITION.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in QUOTE_LIST_DEFINITION.per_page_options
+        else QUOTE_LIST_DEFINITION.default_per_page
+    )
+    list_query = QUOTE_LIST_DEFINITION.build_query(
+        search=search,
+        filters={"status": status, "lead_id": lead_id},
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+    total = _count_quotes(
+        db, status=status, lead_id=lead_id or None, search=search or None
+    )
+    page_meta = PageMeta.from_query(list_query, total)
     quotes = sales_service.quotes.list(
         db,
         lead_id=lead_id or None,
         status=status,
         is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=per_page,
-        offset=offset,
+        order_by=list_query.sort_by,
+        order_dir=list_query.sort_dir,
+        limit=list_query.per_page,
+        offset=(page_meta.page - 1) * list_query.per_page,
         search=search or None,
-    )
-    total = _count_quotes(
-        db, status=status, lead_id=lead_id or None, search=search or None
     )
 
     leads = sales_service.leads.list(
@@ -1030,10 +1066,12 @@ def build_quotes_list_context(
 
     return {
         "quotes": quotes,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": _total_pages(total, per_page),
+        "list_query": list_query,
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": page_meta.total_items,
+        "total_pages": page_meta.total_pages,
         "status": status or "",
         "lead_id": lead_id or "",
         "search": search or "",
