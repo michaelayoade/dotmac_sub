@@ -136,6 +136,9 @@ def serialize(invoice: VendorPurchaseInvoice) -> dict:
         "vendor_id": invoice.vendor_id,
         "invoice_number": invoice.invoice_number,
         "status": invoice.status,
+        # Editability is owned here (the same set the mutation paths enforce),
+        # not re-derived from a status string in the template.
+        "can_edit": invoice.status in _EDITABLE,
         "currency": invoice.currency,
         "tax_rate_percent": invoice.tax_rate_percent,
         "subtotal": invoice.subtotal,

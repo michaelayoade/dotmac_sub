@@ -108,6 +108,9 @@ def _serialize_quote(row: ProjectQuote) -> dict:
         "project_id": row.project_id,
         "vendor_id": row.vendor_id,
         "status": row.status,
+        # Editability is owned here (the same set the mutation paths enforce),
+        # not re-derived from a status string in the template.
+        "can_edit": row.status in _EDITABLE_QUOTES,
         "currency": row.currency,
         "subtotal": row.subtotal,
         "vat_rate_percent": row.vat_rate_percent,
