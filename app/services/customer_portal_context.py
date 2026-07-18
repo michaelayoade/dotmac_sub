@@ -43,6 +43,9 @@ from app.services.customer_financial_position import get_customer_financial_posi
 from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.network.radius_sessions import live_framed_ips_by_subscription
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.services.status_presentation import (
     account_status_presentation,
     subscription_status_presentation,
@@ -452,6 +455,9 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
             "account_status": status_presentation.value,
             "account_status_display": status_presentation.label,
             "account_status_presentation": status_presentation,
+            "outstanding_balance": None,
+            "balance_unavailable": True,
+            "recent_invoices": [],
         }
 
     user_name = session.get("username") or "Customer"
@@ -461,10 +467,20 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
         user_name = f"{subscriber.first_name} {subscriber.last_name or ''}".strip()
 
     # Outstanding balance from invoices
-    balance = 0.0
+    balance: float | None = 0.0
+    balance_unavailable = False
     recent_invoices = []
     if account_id:
-        balance = get_total_outstanding_balance(db, account_id)
+        try:
+            balance = get_total_outstanding_balance(db, account_id)
+        except PrepaidFundingBaselineMissingError:
+            logger.warning(
+                "Restricted dashboard balance unavailable for account %s",
+                account_id,
+                exc_info=True,
+            )
+            balance = None
+            balance_unavailable = True
         invoices = billing_service.invoices.list(
             db=db,
             account_id=account_id,
@@ -512,6 +528,7 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
         "account_status_presentation": status_presentation,
         "plan_name": plan_name,
         "outstanding_balance": balance,
+        "balance_unavailable": balance_unavailable,
         "recent_invoices": recent_invoices,
         "account_start_date": subscriber.account_start_date,
         "blocked_since": get_restricted_since(subscriber),
