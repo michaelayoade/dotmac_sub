@@ -4,6 +4,7 @@
     table_row, row_action, status_badge,
     empty_state, animation_styles, icon_view
 %}
+{% from "components/ui/list_macros.html" import sort_header %}
 
 {% block title %}Referrals - Admin{% endblock %}
 
@@ -125,11 +126,11 @@
                     <tr class="border-b border-slate-100 bg-slate-50/80 dark:border-slate-700/50 dark:bg-slate-900/20">
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Referrer</th>
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Referred</th>
-                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Status</th>
+                        {{ sort_header(list_query, '/admin/referrals', 'status', 'Status', entity='referrals', th_class='px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500') }}
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Reward</th>
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Reward Status</th>
                         <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Source</th>
-                        <th scope="col" class="px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Captured</th>
+                        {{ sort_header(list_query, '/admin/referrals', 'created_at', 'Captured', entity='referrals', th_class='px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500') }}
                         <th scope="col" class="px-6 py-3 text-right text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Actions</th>
                     </tr>
                 </thead>
@@ -177,21 +178,29 @@
             </table>
         </div>
 
-        {# Pagination #}
-        {% if total_pages > 1 %}
-        {% set _extra %}{% if status_filter %}&status={{ status_filter }}{% endif %}{% if reward_status_filter %}&reward_status={{ reward_status_filter }}{% endif %}{% endset %}
+        {# Pagination — deep-linkable via list_query.url (preserves filters + sort). #}
+        {% if page_meta.total_pages > 1 %}
         <div class="border-t border-slate-200 bg-slate-50/50 px-6 py-3 dark:border-slate-700 dark:bg-slate-800/50">
             <div class="flex items-center justify-between">
                 <p class="text-sm text-slate-500 dark:text-slate-400">
-                    Showing {{ ((page - 1) * per_page) + 1 }} to {{ [page * per_page, total] | min }} of {{ total }} results
+                    Showing {{ page_meta.start_item }} to {{ page_meta.end_item }} of {{ page_meta.total_items }} results
                 </p>
-                <nav class="flex items-center gap-1">
-                    {% if page > 1 %}
-                    <a href="/admin/referrals?page={{ page - 1 }}&per_page={{ per_page }}{{ _extra }}"
+                <nav class="flex items-center gap-1" aria-label="Referrals pagination">
+                    {% if page_meta.has_previous %}
+                    <a href="{{ list_query.url('/admin/referrals', page=page_meta.page - 1) }}"
                        class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Previous</a>
                     {% endif %}
-                    {% if page < total_pages %}
-                    <a href="/admin/referrals?page={{ page + 1 }}&per_page={{ per_page }}{{ _extra }}"
+                    {% for p in page_meta.navigation %}
+                        {% if p is none %}
+                        <span class="px-2 text-sm text-slate-400" aria-hidden="true">…</span>
+                        {% else %}
+                        <a href="{{ list_query.url('/admin/referrals', page=p) }}"
+                           {% if p == page_meta.page %}aria-current="page"{% endif %}
+                           class="rounded-lg px-3 py-1.5 text-sm {% if p == page_meta.page %}bg-slate-200 font-semibold text-slate-900 dark:bg-slate-700 dark:text-white{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700{% endif %}">{{ p }}</a>
+                        {% endif %}
+                    {% endfor %}
+                    {% if page_meta.has_next %}
+                    <a href="{{ list_query.url('/admin/referrals', page=page_meta.page + 1) }}"
                        class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">Next</a>
                     {% endif %}
                 </nav>

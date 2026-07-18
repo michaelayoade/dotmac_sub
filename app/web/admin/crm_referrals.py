@@ -69,6 +69,10 @@ def referrals_list(
     request: Request,
     status: str | None = None,
     reward_status: str | None = None,
+    # Canonical list_query URL params (see ListQuery.params): sort/dir, not
+    # sort_by/sort_dir, so the sort_header links round-trip.
+    sort_by: str | None = Query(None, alias="sort"),
+    sort_dir: str | None = Query(None, alias="dir"),
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -79,6 +83,8 @@ def referrals_list(
             db,
             status=status,
             reward_status=reward_status,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
             page=page,
             per_page=per_page,
         )
