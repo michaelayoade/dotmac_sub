@@ -73,22 +73,25 @@ def referrals_list(
     # sort_by/sort_dir, so the sort_header links round-trip.
     sort_by: str | None = Query(None, alias="sort"),
     sort_dir: str | None = Query(None, alias="dir"),
-    page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=10, le=100),
+    page: int = Query(1),
+    per_page: int = Query(25),
     db: Session = Depends(get_db),
 ):
-    context = _ctx(request, db)
-    context.update(
-        web_referrals_service.list_data(
-            db,
-            status=status,
-            reward_status=reward_status,
-            sort_by=sort_by,
-            sort_dir=sort_dir,
-            page=page,
-            per_page=per_page,
-        )
+    state = web_referrals_service.list_data(
+        db,
+        status=status,
+        reward_status=reward_status,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
     )
+    if state["canonicalization_needed"]:
+        return RedirectResponse(
+            url=state["list_query"].url("/admin/referrals"), status_code=307
+        )
+    context = _ctx(request, db)
+    context.update(state)
     return templates.TemplateResponse("admin/referrals/index.html", context)
 
 

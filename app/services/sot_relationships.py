@@ -3344,6 +3344,27 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="ui.referral_list_projection",
+                module="app.services.web_referrals",
+                owns=(
+                    "admin referral filter and stable sort semantics",
+                    "admin referral row and page projection",
+                    "admin referral KPI values and exact cohort links",
+                    "admin referral list canonical URL",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "ui.projection_contracts",
+                    "referrals.program",
+                ),
+                notes=(
+                    "The route redirects stale or clamped request state to the "
+                    "owner-provided canonical URL. Templates render ListQuery, "
+                    "PageMeta, and Kpi contracts without deriving totals, cohort "
+                    "links, sort rules, or pagination strings."
+                ),
+            ),
+            SOTService(
                 name="ui.customer_list_projection",
                 module="app.services.web_customer_lists",
                 owns=(
@@ -3804,6 +3825,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
     DomainSOT(
         domain="ui_semantic_presentation",
         services=(
+            SOTService(
+                name="ui.projection_contracts",
+                module="app.services.ui_contracts",
+                owns=(
+                    "UI value availability and freshness contract",
+                    "UI KPI exact-cohort contract",
+                    "UI action eligibility and confirmation contract",
+                ),
+                depends_on=("ui.status_presentation",),
+                notes=(
+                    "Transport-neutral StateValue, Kpi, and Action shapes. Domain "
+                    "read and command owners supply the facts and decisions; "
+                    "templates and clients render them without deriving meaning."
+                ),
+            ),
             SOTService(
                 name="ui.status_presentation",
                 module="app.services.status_presentation",

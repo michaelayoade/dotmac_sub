@@ -26,6 +26,10 @@ The approved cross-Dotmac presentation contract is
    responsive depth, and interaction shape.
 5. Routes, templates, HTMX handlers, and mobile clients render the contract and
    submit commands; they do not derive business state, totals, or eligibility.
+6. `ui.projection_contracts` owns the transport-neutral `StateValue`, `Kpi`, and
+   `Action` shapes. Owners use them to distinguish unknown/stale/unavailable
+   values, bind every KPI to its exact cohort, and separate action tone from
+   eligibility and confirmation requirements.
 
 Rule: the UI is a projection boundary, not a new business source of truth. Web,
 API, exports, and mobile surfaces may present different depths for their task,
@@ -1323,13 +1327,20 @@ will reject.
     declared, so no selection/bulk is declared. Each dispatch route is granularly
     gated (`operations:dispatch:read`/`:write`/`:assign`).
 
-15. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
+16. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
     project list capabilities with `ui.list_contracts` — searchable name,
     status/type/priority/region filters, name/priority/created sort, pagination —
     and delegates the read to `projects_service.projects.list`
     (`operations.project_lifecycle`), which owns the canonical filtered/sorted
     query; the projection issues no query of its own. Gated by the existing
     granular `project:read`.
+
+17. `ui.referral_list_projection` (`app.services.web_referrals`) owns the admin
+    referral filter, stable sort, page/row projection, canonical URL, and KPI
+    cohort links. It depends on `ui.list_contracts`, `ui.projection_contracts`,
+    and `referrals.program`. The route redirects invalid or clamped request state
+    to the owner-provided URL; the template uses shared sortable-header,
+    pagination, page-size, and keyboard-visible row-action controls.
 
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep

@@ -509,6 +509,14 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("ui.customer_list_projection") == (
         "ui.list_contracts",
     )
+    assert sot_relationships.dependencies_for("ui.referral_list_projection") == (
+        "ui.list_contracts",
+        "ui.projection_contracts",
+        "referrals.program",
+    )
+    assert sot_relationships.dependencies_for("ui.projection_contracts") == (
+        "ui.status_presentation",
+    )
     customer_api_mapping = sot_relationships.owning_service_for(
         "legacy customer offset API compatibility mapping"
     )

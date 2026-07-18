@@ -21,13 +21,16 @@ from app.models.referral_native import (
     ReferralStatus,
 )
 from app.models.subscriber import Subscriber
+from app.schemas.status_presentation import StatusTone
 from app.services.common import coerce_uuid
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
+    ListQuery,
     PageMeta,
 )
 from app.services.referrals import referrals as referrals_service
+from app.services.ui_contracts import Kpi, StateValue
 
 # The five referral_* program keys render on the generic system settings page
 # under the subscriber domain (settings_spec gives them labels).
@@ -161,7 +164,18 @@ def _row(referral: Referral) -> dict:
     }
 
 
-def _stats(db: Session) -> dict:
+def _cohort_url(*, status: ReferralStatus | None = None) -> str:
+    query = REFERRAL_LIST_DEFINITION.build_query(
+        search=None,
+        filters={
+            "status": status.value if status is not None else None,
+            "reward_status": None,
+        },
+    )
+    return query.url("/admin/referrals")
+
+
+def _stats(db: Session) -> dict[str, Kpi | Decimal]:
     counts: dict[str, int] = {
         status: count
         for status, count in db.query(Referral.status, func.count(Referral.id))
@@ -176,12 +190,54 @@ def _stats(db: Session) -> dict:
         .scalar()
     ) or Decimal("0")
     return {
-        "total": sum(counts.values()),
-        "pending": counts.get(ReferralStatus.pending.value, 0),
-        "qualified": counts.get(ReferralStatus.qualified.value, 0),
-        "rewarded": counts.get(ReferralStatus.rewarded.value, 0),
+        "total": Kpi(
+            label="Total",
+            value=StateValue.present(sum(counts.values())),
+            cohort_url=_cohort_url(),
+        ),
+        "pending": Kpi(
+            label="Pending",
+            value=StateValue.present(counts.get(ReferralStatus.pending.value, 0)),
+            cohort_url=_cohort_url(status=ReferralStatus.pending),
+            tone=StatusTone.warning,
+        ),
+        "qualified": Kpi(
+            label="Qualified (reward due)",
+            value=StateValue.present(counts.get(ReferralStatus.qualified.value, 0)),
+            cohort_url=_cohort_url(status=ReferralStatus.qualified),
+            tone=StatusTone.info,
+        ),
+        "rewarded": Kpi(
+            label="Rewarded",
+            value=StateValue.present(counts.get(ReferralStatus.rewarded.value, 0)),
+            cohort_url=_cohort_url(status=ReferralStatus.rewarded),
+            tone=StatusTone.positive,
+        ),
         "rewarded_total": rewarded_total,
     }
+
+
+def _request_needs_canonicalization(
+    *,
+    list_query: ListQuery,
+    status: str | None,
+    reward_status: str | None,
+    sort_by: str | None,
+    sort_dir: str | None,
+    page: int,
+    per_page: int,
+) -> bool:
+    return (
+        page != list_query.page
+        or per_page != list_query.per_page
+        or (status is not None and status != list_query.filter_value("status"))
+        or (
+            reward_status is not None
+            and reward_status != list_query.filter_value("reward_status")
+        )
+        or (sort_by is not None and sort_by != list_query.sort_by)
+        or (sort_dir is not None and sort_dir != list_query.sort_dir)
+    )
 
 
 def list_data(
@@ -197,6 +253,8 @@ def list_data(
     # Unknown filter/sort/page-size values are normalized to a valid state
     # rather than raising, matching the queue idiom — a stale bookmark degrades
     # to the default view, never a 400/500.
+    requested_status = status
+    requested_reward_status = reward_status
     status = status if status in STATUSES else None
     reward_status = reward_status if reward_status in REWARD_STATUSES else None
     safe_sort = (
@@ -210,7 +268,7 @@ def list_data(
         if per_page in REFERRAL_LIST_DEFINITION.per_page_options
         else REFERRAL_LIST_DEFINITION.default_per_page
     )
-    list_query = REFERRAL_LIST_DEFINITION.build_query(
+    requested_query = REFERRAL_LIST_DEFINITION.build_query(
         search=None,
         filters={"status": status, "reward_status": reward_status},
         sort_by=safe_sort,
@@ -228,17 +286,16 @@ def list_data(
         )
         .filter(Referral.is_active.is_(True))
     )
-    if (value := list_query.filter_value("status")):
+    if value := requested_query.filter_value("status"):
         query = query.filter(Referral.status == value)
-    if (value := list_query.filter_value("reward_status")):
+    if value := requested_query.filter_value("reward_status"):
         query = query.filter(Referral.reward_status == value)
 
     total = query.count()
-    page_meta = PageMeta.from_query(list_query, total)
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     sort_column = _REFERRAL_SORT_COLUMNS[list_query.sort_by]
-    ordered = (
-        sort_column.desc() if list_query.sort_dir == "desc" else sort_column.asc()
-    )
+    ordered = sort_column.desc() if list_query.sort_dir == "desc" else sort_column.asc()
     items = (
         # Unique tie-breaker keeps ordering deterministic across pages.
         query.order_by(ordered, Referral.id.asc())
@@ -256,6 +313,15 @@ def list_data(
         "status_filter": list_query.filter_value("status"),
         "reward_status_filter": list_query.filter_value("reward_status"),
         "list_query": list_query,
+        "canonicalization_needed": _request_needs_canonicalization(
+            list_query=list_query,
+            status=requested_status,
+            reward_status=requested_reward_status,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        ),
         "page_meta": page_meta,
         "page": page_meta.page,
         "per_page": page_meta.per_page,

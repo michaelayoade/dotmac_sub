@@ -168,6 +168,26 @@ def test_action_routes_require_crm_lead_write():
     )
 
 
+def test_list_route_redirects_stale_params_to_the_owner_canonical_url(db_session):
+    from unittest.mock import MagicMock
+
+    response = admin_referrals_web.referrals_list(
+        request=MagicMock(),
+        status="not-a-status",
+        reward_status=None,
+        sort_by="reward_status",
+        sort_dir="sideways",
+        page=999,
+        per_page=12,
+        db=db_session,
+    )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == (
+        "/admin/referrals?sort=created_at&dir=desc&page=1&per_page=25"
+    )
+
+
 # ── list context ─────────────────────────────────────────────────────────────
 
 
@@ -177,8 +197,11 @@ def test_list_data_rows_stats_and_links(db_session):
 
     data = web_referrals.list_data(db_session, page=1, per_page=25)
     assert data["total"] >= 1
-    assert data["stats"]["total"] >= 1
-    assert data["stats"]["pending"] >= 1
+    assert data["stats"]["total"].value.value >= 1
+    assert data["stats"]["pending"].value.value >= 1
+    assert data["stats"]["pending"].cohort_url.startswith(
+        "/admin/referrals?status=pending&"
+    )
     assert data["program"]["enabled"] is True
     assert data["program_settings_url"] == web_referrals.PROGRAM_SETTINGS_URL
 

@@ -9,11 +9,12 @@ filterable cohorts.
 **Reference exemplar:** `app/services/web_customer_lists.py` (definition + build +
 apply) and `templates/admin/customers/_table.html` (rendering). Copy those.
 
-**Pattern-setter shipped here:** `templates/components/ui/list_macros.html`
-`sort_header` — one Carbon/WCAG sortable header from a `ListQuery` (deep-link,
-aria-sort, non-colour direction, accessible label). Combined with the existing
-`pagination` macro (`components/ui/macros.html`), a migrated table needs no
-hand-rolled header/pagination markup.
+**Pattern-setters shipped here:** `templates/components/ui/list_macros.html`
+provides `sort_header` — one Carbon/WCAG sortable header from a `ListQuery`
+(deep-link, aria-sort, non-colour direction, accessible label) — and
+`list_pagination`, which renders the live result count, page-size form, and
+navigation entirely from `ListQuery` + `PageMeta`. A migrated table needs no
+hand-rolled query strings, header, or pagination markup.
 
 ## Per-resource recipe (one validated commit each)
 
@@ -35,7 +36,7 @@ hand-rolled header/pagination markup.
 5. **Template** — replace hand-rolled headers with
    `{% from "components/ui/list_macros.html" import sort_header %}` +
    `sort_header(list_query, base_url, key, label, entity=...)` per sortable
-   column, and replace Prev/Next with the `pagination` macro. Make row
+   column, and replace Prev/Next with the `list_pagination` macro. Make row
    navigation an `<a>` (keyboard-operable), never `onclick`.
 6. **KPI tiles** — wire each stat tile to `list_query.url(base_url, filters=...)`
    for its cohort; where the cohort needs a new filter, add it to the
