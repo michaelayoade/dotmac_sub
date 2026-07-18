@@ -1,7 +1,7 @@
 """Enforce operational cable and splitter capacity integrity.
 
-Revision ID: 361_fiber_plant_operational_integrity
-Revises: 360_forwarding_topology_declarations
+Revision ID: 363_fiber_plant_operational_integrity
+Revises: 362_forwarding_topology_declarations
 Create Date: 2026-07-18
 
 The migration deliberately fails closed when active plant does not satisfy the
@@ -16,8 +16,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "361_fiber_plant_operational_integrity"
-down_revision = "360_forwarding_topology_declarations"
+revision = "363_fiber_plant_operational_integrity"
+down_revision = "362_forwarding_topology_declarations"
 branch_labels = None
 depends_on = None
 

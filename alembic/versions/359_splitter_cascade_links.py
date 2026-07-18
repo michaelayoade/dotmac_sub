@@ -1,7 +1,7 @@
 """Add reviewed exact splitter cascade links.
 
-Revision ID: 359_splitter_cascade_links
-Revises: 358_fiber_support_structures
+Revision ID: 361_splitter_cascade_links
+Revises: 360_fiber_support_structures
 Create Date: 2026-07-18
 """
 
@@ -12,8 +12,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "359_splitter_cascade_links"
-down_revision = "358_fiber_support_structures"
+revision = "361_splitter_cascade_links"
+down_revision = "360_fiber_support_structures"
 branch_labels = None
 depends_on = None
 

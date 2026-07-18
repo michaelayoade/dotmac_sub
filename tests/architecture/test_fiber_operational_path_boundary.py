@@ -47,8 +47,8 @@ def test_operational_cable_shape_and_exact_core_identity_are_schema_enforced():
         )
     assert "fiber plant integrity preflight failed" in migration
     assert "UPDATE fiber_segments SET is_active" not in migration
-    assert 'revision = "361_fiber_plant_operational_integrity"' in migration
-    assert 'down_revision = "360_forwarding_topology_declarations"' in migration
+    assert 'revision = "363_fiber_plant_operational_integrity"' in migration
+    assert 'down_revision = "362_forwarding_topology_declarations"' in migration
 
 
 def test_reviewed_change_owner_enforces_rootedness_capacity_and_safe_retirement():

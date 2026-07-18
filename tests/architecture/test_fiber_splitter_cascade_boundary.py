@@ -119,8 +119,8 @@ def test_model_and_migration_enforce_canonical_cascade_evidence():
         assert required in model
         assert required in migration
     assert "ck_splitters_insertion_loss_db" in network_model
-    assert 'revision = "359_splitter_cascade_links"' in migration
-    assert 'down_revision = "358_fiber_support_structures"' in migration
+    assert 'revision = "361_splitter_cascade_links"' in migration
+    assert 'down_revision = "360_fiber_support_structures"' in migration
 
 
 def test_operator_command_exposes_cascade_without_a_direct_apply_mode():

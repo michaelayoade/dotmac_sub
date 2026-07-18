@@ -1,7 +1,7 @@
 """Add canonical fiber supports and reviewed exact mount edges.
 
-Revision ID: 358_fiber_support_structures
-Revises: 357_account_credit_deposit_lifecycle
+Revision ID: 360_fiber_support_structures
+Revises: 359_payment_prepaid_applications
 Create Date: 2026-07-18
 """
 
@@ -13,8 +13,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "358_fiber_support_structures"
-down_revision = "357_account_credit_deposit_lifecycle"
+revision = "360_fiber_support_structures"
+down_revision = "359_payment_prepaid_applications"
 branch_labels = None
 depends_on = None
 

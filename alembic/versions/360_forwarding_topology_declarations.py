@@ -1,7 +1,7 @@
 """Add reviewed forwarding declarations and control-plane observations.
 
-Revision ID: 360_forwarding_topology_declarations
-Revises: 359_splitter_cascade_links
+Revision ID: 362_forwarding_topology_declarations
+Revises: 361_splitter_cascade_links
 Create Date: 2026-07-18
 """
 
@@ -12,8 +12,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "360_forwarding_topology_declarations"
-down_revision = "359_splitter_cascade_links"
+revision = "362_forwarding_topology_declarations"
+down_revision = "361_splitter_cascade_links"
 branch_labels = None
 depends_on = None
 

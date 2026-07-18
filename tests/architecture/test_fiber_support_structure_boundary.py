@@ -119,8 +119,8 @@ def test_operator_command_is_thin_and_exposes_no_unreviewed_apply_mode():
 def test_migration_adds_only_support_identity_and_mount_evidence_tables():
     source = MIGRATION.read_text(encoding="utf-8")
 
-    assert 'revision = "358_fiber_support_structures"' in source
-    assert 'down_revision = "357_account_credit_deposit_lifecycle"' in source
+    assert 'revision = "360_fiber_support_structures"' in source
+    assert 'down_revision = "359_payment_prepaid_applications"' in source
     assert '"fiber_support_structures"' in source
     assert '"fiber_support_mount_decisions"' in source
     assert '"fiber_support_mounts"' in source

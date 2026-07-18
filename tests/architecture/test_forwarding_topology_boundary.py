@@ -106,8 +106,8 @@ def test_model_and_migration_enforce_exact_reviewed_evidence():
     ):
         assert required in model
         assert required in migration
-    assert 'revision = "360_forwarding_topology_declarations"' in migration
-    assert 'down_revision = "359_splitter_cascade_links"' in migration
+    assert 'revision = "362_forwarding_topology_declarations"' in migration
+    assert 'down_revision = "361_splitter_cascade_links"' in migration
 
 
 def test_operator_command_is_thin_and_cannot_apply_router_configuration():
