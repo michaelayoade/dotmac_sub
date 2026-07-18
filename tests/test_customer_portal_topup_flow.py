@@ -521,9 +521,11 @@ def test_create_topup_intent_persists_server_owned_reference(
 
     assert payload["reference"] == "topup-intent-ref-1"
     assert payload["checkout_metadata"]["topup_intent_id"] == str(intent.id)
-    assert payload["checkout_metadata"]["account_id"] == str(subscriber.id)
+    assert set(payload["checkout_metadata"]) == {"topup_intent_id"}
     assert intent.requested_amount == Decimal("5000.00")
     assert intent.status == "pending"
+    assert intent.purpose == "account_credit_deposit"
+    assert intent.allocation_policy == "credit_only"
 
 
 def test_create_topup_intent_records_selected_payment_method(
@@ -572,11 +574,11 @@ def test_create_topup_intent_records_selected_payment_method(
         db_session.query(TopupIntent).filter_by(reference="topup-intent-ref-card").one()
     )
     assert intent.metadata_["payment_method_id"] == str(card.id)
-    assert payload["checkout_metadata"]["payment_method_id"] == str(card.id)
+    assert payload["checkout_metadata"] == {"topup_intent_id": str(intent.id)}
     assert payload["charged"] is True
     assert captured_charge["authorization_code"] == "AUTH_4081"
     assert captured_charge["reference"] == "topup-intent-ref-card"
-    assert captured_charge["metadata"]["payment_method_id"] == str(card.id)
+    assert captured_charge["metadata"] == {"topup_intent_id": str(intent.id)}
 
 
 def test_create_topup_intent_initializes_flutterwave_checkout(
@@ -622,8 +624,7 @@ def test_create_topup_intent_initializes_flutterwave_checkout(
         "https://selfcare.test/portal/billing/topup/verify"
         "?reference=topup-intent-ref-flw&provider=flutterwave"
     )
-    assert captured_checkout["metadata"]["payment_flow"] == "account_topup"
-    assert captured_checkout["metadata"]["account_id"] == str(subscriber.id)
+    assert captured_checkout["metadata"] == {"topup_intent_id": payload["intent_id"]}
 
 
 def test_create_topup_intent_rejects_gateway_when_customer_email_blank(
@@ -677,6 +678,48 @@ def test_create_invoice_payment_intent_gateway_paystack(
     assert payload["amount"] == Decimal("2500.00")
     assert payload["checkout_metadata"]["invoice_id"] == str(invoice.id)
     assert payload["checkout_metadata"]["payment_flow"] == "invoice_payment"
+
+
+def test_create_invoice_payment_intent_issues_draft_through_lifecycle_owner(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber.id,
+            invoice_number="INV-PAY-DRAFT",
+            currency="NGN",
+            subtotal=Decimal("2500.00"),
+            total=Decimal("2500.00"),
+            balance_due=Decimal("2500.00"),
+            status=InvoiceStatus.draft,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk_test_pay",
+            reference="pay-ref-issued-draft",
+        ),
+    )
+
+    create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="paystack",
+    )
+
+    db_session.refresh(invoice)
+    assert invoice.status == InvoiceStatus.issued
+    assert invoice.issued_at is not None
+    intent = db_session.scalar(
+        select(TopupIntent).where(TopupIntent.reference == "pay-ref-issued-draft")
+    )
+    assert intent is not None
+    assert intent.metadata_["invoice_id"] == str(invoice.id)
 
 
 def test_create_invoice_payment_intent_charges_saved_card(
@@ -1094,12 +1137,6 @@ def test_create_topup_intent_rejects_payment_method_for_other_account(
 def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
     monkeypatch, db_session, subscriber
 ):
-    invoice = _make_invoice(
-        db_session,
-        subscriber.id,
-        amount="3000.00",
-        invoice_number="INV-TOPUP-1",
-    )
     _patch_topup_settings(monkeypatch)
     intent = _create_intent(
         monkeypatch,
@@ -1108,10 +1145,17 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
         amount="5000.00",
         reference="ref-topup-1",
     )
+    invoice = _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="3000.00",
+        invoice_number="INV-TOPUP-1",
+    )
 
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
         lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
             amount=Decimal("5000.00"),
             currency="NGN",
             external_id="ext-topup-1",
@@ -1120,10 +1164,6 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
         ),
     )
     monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.restore_account_services",
-        lambda *_args, **_kwargs: 1,
-    )
 
     result = verify_and_record_topup(
         db_session,
@@ -1146,6 +1186,56 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
             "amount": Decimal("3000.00"),
         }
     ]
+    assert invoice.balance_due == Decimal("0.00")
+
+
+def test_verify_preserves_pre_migration_intent_policy(
+    monkeypatch, db_session, subscriber
+):
+    invoice = _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="3000.00",
+        invoice_number="INV-LEGACY-TOPUP",
+    )
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="ref-legacy-topup",
+        provider_type="paystack",
+        currency="NGN",
+        requested_amount=Decimal("5000.00"),
+        status="pending",
+        metadata_={"payment_flow": "account_topup"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
+            amount=Decimal("5000.00"),
+            currency="NGN",
+            external_id="ext-legacy-topup",
+            memo_prefix="Paystack",
+            metadata={},
+        ),
+    )
+    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
+
+    result = verify_and_record_topup(
+        db_session,
+        {"account_id": str(subscriber.id)},
+        intent.reference,
+        provider="paystack",
+    )
+
+    db_session.refresh(intent)
+    db_session.refresh(invoice)
+    assert intent.purpose is None
+    assert intent.completed_payment_id == result["payment"].id
+    assert result["allocated_total"] == Decimal("3000.00")
+    assert result["credit_added"] == Decimal("2000.00")
+    assert invoice.status == InvoiceStatus.paid
     assert invoice.balance_due == Decimal("0.00")
 
 
@@ -1287,7 +1377,7 @@ def test_verify_and_record_topup_rejects_reference_for_other_customer(
         )
 
 
-def test_verify_and_record_topup_records_out_of_policy_charge_with_warning(
+def test_verify_and_record_topup_rejects_provider_amount_below_intent(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch, min_amount=1000, max_amount=500000)
@@ -1301,6 +1391,7 @@ def test_verify_and_record_topup_records_out_of_policy_charge_with_warning(
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
         lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
             amount=Decimal("500.00"),
             currency="NGN",
             external_id="ext-topup-low",
@@ -1308,34 +1399,20 @@ def test_verify_and_record_topup_records_out_of_policy_charge_with_warning(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.restore_account_services",
-        lambda *_args, **_kwargs: 1,
-    )
-
-    result = verify_and_record_topup(
-        db_session,
-        {"account_id": str(subscriber.id)},
-        "ref-topup-low",
-        provider="paystack",
-    )
+    with pytest.raises(ValueError, match="did not match"):
+        verify_and_record_topup(
+            db_session,
+            {"account_id": str(subscriber.id)},
+            "ref-topup-low",
+            provider="paystack",
+        )
 
     payments = db_session.query(Payment).filter_by(external_id="ext-topup-low").all()
 
-    assert result["already_recorded"] is False
-    assert result["amount"] == Decimal("500.00")
-    assert result["allocated_total"] == Decimal("0.00")
-    assert result["credit_added"] == Decimal("500.00")
-    assert len(payments) == 1
-    assert result["policy_warnings"]
-    assert (
-        "Requested ₦5,000.00 but the provider confirmed ₦500.00."
-        in result["policy_warnings"]
-    )
+    assert len(payments) == 0
 
 
-def test_verify_and_record_topup_records_amount_above_max_with_warning(
+def test_verify_and_record_topup_rejects_provider_amount_above_intent(
     monkeypatch, db_session, subscriber
 ):
     _patch_topup_settings(monkeypatch, min_amount=1000, max_amount=500000)
@@ -1349,6 +1426,7 @@ def test_verify_and_record_topup_records_amount_above_max_with_warning(
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
         lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
             amount=Decimal("500001.00"),
             currency="NGN",
             external_id="ext-topup-high",
@@ -1356,42 +1434,22 @@ def test_verify_and_record_topup_records_amount_above_max_with_warning(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.restore_account_services",
-        lambda *_args, **_kwargs: 1,
-    )
-
-    result = verify_and_record_topup(
-        db_session,
-        {"account_id": str(subscriber.id)},
-        "ref-topup-high",
-        provider="paystack",
-    )
+    with pytest.raises(ValueError, match="did not match"):
+        verify_and_record_topup(
+            db_session,
+            {"account_id": str(subscriber.id)},
+            "ref-topup-high",
+            provider="paystack",
+        )
 
     payments = db_session.query(Payment).filter_by(external_id="ext-topup-high").all()
 
-    assert result["already_recorded"] is False
-    assert result["amount"] == Decimal("500001.00")
-    assert result["allocated_total"] == Decimal("0.00")
-    assert result["credit_added"] == Decimal("500001.00")
-    assert len(payments) == 1
-    assert result["policy_warnings"]
-    assert (
-        "Requested ₦5,000.00 but the provider confirmed ₦500,001.00."
-        in result["policy_warnings"]
-    )
+    assert len(payments) == 0
 
 
 def test_verify_and_record_topup_is_idempotent_and_preserves_summary(
     monkeypatch, db_session, subscriber
 ):
-    invoice = _make_invoice(
-        db_session,
-        subscriber.id,
-        amount="3000.00",
-        invoice_number="INV-TOPUP-2",
-    )
     _patch_topup_settings(monkeypatch)
     intent = _create_intent(
         monkeypatch,
@@ -1400,10 +1458,17 @@ def test_verify_and_record_topup_is_idempotent_and_preserves_summary(
         amount="5000.00",
         reference="ref-topup-2",
     )
+    invoice = _make_invoice(
+        db_session,
+        subscriber.id,
+        amount="3000.00",
+        invoice_number="INV-TOPUP-2",
+    )
 
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
         lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
             amount=Decimal("5000.00"),
             currency="NGN",
             external_id="ext-topup-2",
@@ -1412,10 +1477,6 @@ def test_verify_and_record_topup_is_idempotent_and_preserves_summary(
         ),
     )
     monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.restore_account_services",
-        lambda *_args, **_kwargs: 1,
-    )
 
     first = verify_and_record_topup(
         db_session,
@@ -1454,6 +1515,7 @@ def test_verify_and_record_topup_omits_available_balance_when_lookup_fails(
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.payment_gateway_adapter.verify",
         lambda *_args, **_kwargs: SimpleNamespace(
+            provider_type="paystack",
             amount=Decimal("5000.00"),
             currency="NGN",
             external_id="ext-topup-balance-miss",
@@ -1462,10 +1524,6 @@ def test_verify_and_record_topup_omits_available_balance_when_lookup_fails(
         ),
     )
     monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "app.services.customer_portal_flow_payments.restore_account_services",
-        lambda *_args, **_kwargs: 1,
-    )
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.get_available_balance",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(

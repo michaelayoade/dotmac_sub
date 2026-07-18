@@ -172,6 +172,13 @@ canonical customer position, posts one idempotent adjustment debit, links one
 active entitlement to that exact debit, and advances the subscription anchor
 in the same transaction. An anchor more than two days late is held for reviewed
 reconciliation; the scheduled owner never invents historical catch-up charges.
+The recurring owner also requires a positive contracted
+`Subscription.unit_price`; it never substitutes the current catalog amount for
+missing imported terms. Missing or zero contract prices are reported as
+`prepaid_renewals_missing_price` and must be repaired through the subscription
+owner before recurring renewal is enabled. Payment-triggered renewal consumes
+the same resolver and leaves confirmed money as account credit when contract
+price evidence is missing.
 
 `billing.prepaid_service_renewals` is default-off. When enabled, it suppresses
 the older `billing.prepaid_monthly_invoicing` draft-invoice path, including in

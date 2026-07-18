@@ -84,6 +84,25 @@ class PaymentStatus(enum.Enum):
     canceled = "canceled"
 
 
+class TopupIntentPurpose(enum.Enum):
+    """Server-owned reason for collecting money through a top-up intent."""
+
+    account_credit_deposit = "account_credit_deposit"
+
+
+class TopupAllocationPolicy(enum.Enum):
+    """How a confirmed intent first records the provider receipt."""
+
+    credit_only = "credit_only"
+    invoice_first_then_credit = "invoice_first_then_credit"
+
+
+class AccountCreditApplicationPolicy(enum.Enum):
+    """What Sub does with evidenced account credit after settlement."""
+
+    pay_eligible_invoices = "pay_eligible_invoices"
+
+
 class PaymentRefundOrigin(enum.Enum):
     manual = "manual"
     provider_event = "provider_event"
@@ -1588,6 +1607,70 @@ class PaymentSettlement(Base):
     )
 
 
+class PaymentAllocationReconciliationException(Base):
+    """Durable evidence that settled money could not reach its target invoice."""
+
+    __tablename__ = "payment_allocation_reconciliation_exceptions"
+    __table_args__ = (
+        Index(
+            "uq_payment_allocation_reconciliation_exceptions_key",
+            "idempotency_key",
+            unique=True,
+        ),
+        Index(
+            "ix_payment_allocation_reconciliation_exceptions_status_created",
+            "status",
+            "created_at",
+        ),
+        Index(
+            "ix_payment_allocation_reconciliation_exceptions_payment",
+            "payment_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    payment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("payments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    topup_intent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("topup_intents.id", ondelete="RESTRICT"),
+    )
+    provider_reference: Mapped[str] = mapped_column(String(120), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="open", server_default="open"
+    )
+    error_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    payment = relationship("Payment")
+    invoice = relationship("Invoice")
+    topup_intent = relationship("TopupIntent")
+
+
 class ConsolidatedPaymentSettlementReconciliationEvidence(Base):
     """Reviewed provenance for one historical consolidated settlement."""
 
@@ -1651,6 +1734,28 @@ class TopupIntent(Base):
     __table_args__ = (
         Index("ix_topup_intents_account_id", "account_id"),
         Index("uq_topup_intents_reference", "reference", unique=True),
+        Index(
+            "uq_topup_intents_deposit_idempotency",
+            "account_id",
+            "purpose",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text(
+                "purpose = 'account_credit_deposit' AND idempotency_key IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "purpose = 'account_credit_deposit' AND idempotency_key IS NOT NULL"
+            ),
+        ),
+        CheckConstraint(
+            "purpose IS NULL OR ("
+            "purpose = 'account_credit_deposit' AND "
+            "allocation_policy = 'credit_only' AND "
+            "credit_application_policy = 'pay_eligible_invoices' AND "
+            "policy_version = 1 AND preview_fingerprint IS NOT NULL AND "
+            "idempotency_key IS NOT NULL AND channel IS NOT NULL)",
+            name="ck_topup_intents_account_credit_contract",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1665,6 +1770,17 @@ class TopupIntent(Base):
     completed_payment_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payments.id")
     )
+    provider_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("payment_providers.id")
+    )
+    purpose: Mapped[str | None] = mapped_column(String(40))
+    allocation_policy: Mapped[str | None] = mapped_column(String(40))
+    credit_application_policy: Mapped[str | None] = mapped_column(String(40))
+    policy_version: Mapped[int | None] = mapped_column(Integer)
+    preview_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
+    channel: Mapped[str | None] = mapped_column(String(40))
+    created_by: Mapped[str | None] = mapped_column(String(120))
     reference: Mapped[str] = mapped_column(String(120), nullable=False)
     provider_type: Mapped[str] = mapped_column(String(40), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="NGN")
@@ -1690,6 +1806,7 @@ class TopupIntent(Base):
     account = relationship("Subscriber")
     billing_account = relationship("BillingAccount")
     completed_payment = relationship("Payment", back_populates="topup_intents")
+    provider = relationship("PaymentProvider")
 
 
 class PaymentAllocation(Base):

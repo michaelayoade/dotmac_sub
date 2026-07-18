@@ -27,7 +27,9 @@ from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
 from app.services import control_registry
 from app.services import customer_portal_flow_payment_methods as customer_cards
+from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.billing._common import lock_account
+from app.services.billing.account_credit import eligible_invoices
 from app.services.billing_adapter import PaymentIntent, billing_adapter
 from app.services.collections import get_available_balance, restore_account_services
 from app.services.common import round_money, to_decimal
@@ -45,6 +47,9 @@ from app.services.payment_routing import (
     eligible_routes,
     provider_for_intent,
     select_checkout_provider,
+)
+from app.services.provider_payment_settlements import (
+    settle_verified_invoice_payment,
 )
 from app.services.settings_spec import resolve_value
 from app.services.topup_intents import set_topup_intent_status
@@ -330,7 +335,7 @@ def _topup_policy_warnings(intent: TopupIntent) -> list[str]:
     return warnings
 
 
-def _build_topup_policy_violations(
+def _build_legacy_topup_policy_violations(
     *,
     requested_amount: Decimal,
     actual_amount: Decimal,
@@ -338,6 +343,7 @@ def _build_topup_policy_violations(
     max_amount: int,
     expires_at: datetime | None,
 ) -> list[str]:
+    """Preserve the policy evidence contract for pre-migration intents."""
     violations: list[str] = []
     if actual_amount != requested_amount:
         violations.append("amount_mismatch")
@@ -353,7 +359,7 @@ def _build_topup_policy_violations(
     return violations
 
 
-def _finalize_topup_intent(
+def _finalize_legacy_topup_intent(
     db: Session,
     intent: TopupIntent,
     *,
@@ -377,7 +383,7 @@ def _finalize_topup_intent(
     intent.completed_payment_id = payment.id
     intent.external_id = external_id
     intent.actual_amount = actual_amount
-    set_topup_intent_status(intent, "completed", source="portal_verify")
+    set_topup_intent_status(intent, "completed", source="legacy_portal_verify")
     intent.completed_at = datetime.now(UTC)
     intent.metadata_ = metadata
     db.add(intent)
@@ -385,7 +391,8 @@ def _finalize_topup_intent(
     db.refresh(intent)
 
 
-def _retry_topup_restore(db: Session, account_id: uuid.UUID) -> None:
+def _retry_legacy_topup_restore(db: Session, account_id: uuid.UUID) -> None:
+    """Keep the old consequence only for already-issued, untyped intents."""
     try:
         from app.services.billing.reconcile_unposted import (
             settle_prepaid_draft_invoices_from_credit,
@@ -393,20 +400,138 @@ def _retry_topup_restore(db: Session, account_id: uuid.UUID) -> None:
 
         settled = settle_prepaid_draft_invoices_from_credit(db, str(account_id))
         if settled.changed:
-            logger.info(
-                "Settled %d prepaid draft invoice(s) after top-up for account %s",
-                len(settled.invoices_settled),
-                account_id,
-            )
             db.commit()
         restore_account_services(db, str(account_id))
     except Exception as exc:
         db.rollback()
         logger.warning(
-            "Best-effort service restore retry failed for account %s: %s",
+            "Legacy top-up restore retry failed for account %s: %s",
             account_id,
             exc,
         )
+
+
+def _verify_and_record_legacy_topup(
+    db: Session,
+    *,
+    intent: TopupIntent,
+    reference: str,
+    provider_type: str,
+) -> dict:
+    """Settle a pre-migration intent without silently changing its policy."""
+    assert intent.account_id is not None
+    provider_id = _coerce_uuid_or_none(
+        (intent.metadata_ or {}).get("provider_id")
+    ) or _provider_uuid(db, provider_type)
+    lock_account(db, str(intent.account_id))
+    db.refresh(intent)
+    if intent.completed_payment_id:
+        completed_payment = db.get(Payment, intent.completed_payment_id)
+        if (
+            completed_payment is None
+            or completed_payment.account_id != intent.account_id
+        ):
+            raise ValueError("Recorded top-up payment could not be found")
+        _retry_legacy_topup_restore(db, intent.account_id)
+        return _build_topup_result(
+            db,
+            payment=completed_payment,
+            intent=intent,
+            amount=round_money(to_decimal(completed_payment.amount or 0)),
+            reference=reference,
+            already_recorded=True,
+        )
+
+    transaction = payment_gateway_adapter.verify(
+        db,
+        provider_type=provider_type,
+        reference=reference,
+    )
+    amount = round_money(transaction.amount)
+    metadata_intent_id = str((transaction.metadata or {}).get("topup_intent_id") or "")
+    if metadata_intent_id and metadata_intent_id != str(intent.id):
+        raise ValueError("Verified payment did not match the original checkout session")
+    min_amount, max_amount = _resolve_topup_limits(db)
+    policy_violations = _build_legacy_topup_policy_violations(
+        requested_amount=round_money(intent.requested_amount),
+        actual_amount=amount,
+        min_amount=min_amount,
+        max_amount=max_amount,
+        expires_at=intent.expires_at,
+    )
+    existing = _payment_by_gateway_identity(
+        db,
+        external_id=transaction.external_id,
+        provider_id=provider_id,
+    )
+    if existing is not None:
+        if existing.account_id != intent.account_id:
+            raise ValueError("Payment reference is linked to a different account")
+        payment = existing
+        already_recorded = True
+    else:
+        try:
+            payment = billing_adapter.record_payment(
+                db,
+                PaymentIntent(
+                    account_id=intent.account_id,
+                    amount=amount,
+                    currency=transaction.currency,
+                    status=PaymentStatus.succeeded,
+                    provider_id=provider_id,
+                    external_id=transaction.external_id,
+                    memo=(
+                        f"{transaction.memo_prefix} legacy prepaid top-up ref: "
+                        f"{reference}"
+                    ),
+                    allocations=[],
+                ),
+            )
+            already_recorded = False
+        except IntegrityError:
+            db.rollback()
+            payment = _payment_by_gateway_identity(
+                db,
+                external_id=transaction.external_id,
+                provider_id=provider_id,
+            )
+            if payment is None or payment.account_id != intent.account_id:
+                raise
+            already_recorded = True
+
+    _finalize_legacy_topup_intent(
+        db,
+        intent,
+        payment=payment,
+        external_id=transaction.external_id,
+        actual_amount=amount,
+        policy_violations=policy_violations,
+        min_amount=min_amount,
+        max_amount=max_amount,
+    )
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    emit_event(
+        db,
+        EventType.usage_topped_up,
+        {
+            "account_id": str(intent.account_id),
+            "amount": str(amount),
+            "reference": reference,
+            "legacy_intent": True,
+        },
+        account_id=intent.account_id,
+    )
+    _retry_legacy_topup_restore(db, intent.account_id)
+    return _build_topup_result(
+        db,
+        payment=payment,
+        intent=intent,
+        amount=amount,
+        reference=reference,
+        already_recorded=already_recorded,
+    )
 
 
 def _build_topup_result(
@@ -833,6 +958,17 @@ def create_invoice_payment_intent(
         InvoiceStatus.written_off,
     ):
         raise ValueError("Invoice is no longer payable")
+    if invoice.status == InvoiceStatus.draft:
+        transition = billing_service.invoices.issue_draft_system(
+            db,
+            str(invoice.id),
+            issued_at=datetime.now(UTC),
+            due_at=invoice.due_at,
+            reason="customer_invoice_payment_checkout",
+            announce=False,
+            commit=True,
+        )
+        invoice = transition.invoice
 
     amount = round_money(
         to_decimal(
@@ -1027,26 +1163,8 @@ def verify_and_record_payment(
     provider_id = _coerce_uuid_or_none(
         (intent.metadata_ or {}).get("provider_id")
     ) or _provider_uuid(db, provider_type)
-
-    # Idempotency: check if a payment with this external reference already exists
-    existing_payment = _payment_by_gateway_identity(
-        db, external_id=tx.external_id, provider_id=provider_id
-    )
-    if existing_payment:
-        if existing_payment.account_id != intent.account_id:
-            raise ValueError("Payment reference is linked to a different account")
-        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-        summary = _build_topup_summary(db, existing_payment)
-        complete_invoice_payment_intent(db, reference, existing_payment)
-        return {
-            "payment": existing_payment,
-            "invoice": invoice,
-            "amount": getattr(existing_payment, "amount", amount_naira),
-            "reference": reference,
-            "provider_type": provider_type,
-            "already_recorded": True,
-            **summary,
-        }
+    if provider_id is None:
+        raise ValueError("Payment provider configuration is unavailable")
 
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     if not invoice or not customer_can_access_account(
@@ -1054,78 +1172,21 @@ def verify_and_record_payment(
     ):
         raise ValueError("Invoice not found or access denied")
 
-    from uuid import UUID as _UUID
-
-    from app.schemas.billing import PaymentAllocationApply
-
-    # Serialize concurrent verifies (double-click, refresh, verify racing the
-    # webhook) for this account, then re-check under the lock.
-    lock_account(db, str(invoice.account_id))
-    existing_payment = _payment_by_gateway_identity(
-        db, external_id=tx.external_id, provider_id=provider_id
+    settlement = settle_verified_invoice_payment(
+        db,
+        account_id=uuid.UUID(str(invoice.account_id)),
+        invoice_id=uuid.UUID(str(invoice_id)),
+        topup_intent_id=intent.id,
+        provider_id=provider_id,
+        provider_reference=reference,
+        external_id=tx.external_id,
+        gross_amount=amount_naira,
+        provider_fee=round_money(to_decimal(getattr(tx, "provider_fee", 0))),
+        net_amount=round_money(to_decimal(intent.requested_amount)),
+        currency=tx.currency,
+        memo=f"{tx.memo_prefix} payment ref: {reference}",
     )
-    if existing_payment:
-        if existing_payment.account_id != intent.account_id:
-            raise ValueError("Payment reference is linked to a different account")
-        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-        summary = _build_topup_summary(db, existing_payment)
-        complete_invoice_payment_intent(db, reference, existing_payment)
-        return {
-            "payment": existing_payment,
-            "invoice": invoice,
-            "amount": getattr(existing_payment, "amount", amount_naira),
-            "reference": reference,
-            "provider_type": provider_type,
-            "already_recorded": True,
-            **summary,
-        }
-
-    invoice_balance_due = round_money(
-        to_decimal(getattr(invoice, "balance_due", amount_naira) or amount_naira)
-    )
-    if invoice_balance_due <= Decimal("0.00"):
-        raise ValueError("Invoice no longer has an outstanding balance")
-    allocated_amount = min(amount_naira, invoice_balance_due)
-    try:
-        payment = billing_adapter.record_payment(
-            db,
-            PaymentIntent(
-                account_id=_UUID(str(invoice.account_id)),
-                amount=amount_naira,
-                currency=tx.currency,
-                status=PaymentStatus.succeeded,
-                provider_id=provider_id,
-                external_id=tx.external_id,
-                memo=f"{tx.memo_prefix} payment ref: {reference}",
-                allocations=[
-                    PaymentAllocationApply(
-                        invoice_id=_UUID(str(invoice_id)),
-                        amount=allocated_amount,
-                    )
-                ],
-            ),
-        )
-    except IntegrityError:
-        db.rollback()
-        payment = _payment_by_gateway_identity(
-            db, external_id=tx.external_id, provider_id=provider_id
-        )
-        if payment is None:
-            raise
-        if payment.account_id != intent.account_id:
-            raise ValueError("Payment reference is linked to a different account")
-        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-        summary = _build_topup_summary(db, payment)
-        complete_invoice_payment_intent(db, reference, payment)
-        return {
-            "payment": payment,
-            "invoice": invoice,
-            "amount": getattr(payment, "amount", amount_naira),
-            "reference": reference,
-            "provider_type": provider_type,
-            "already_recorded": True,
-            **summary,
-        }
+    payment = settlement.payment
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     summary = _build_topup_summary(db, payment)
     complete_invoice_payment_intent(db, reference, payment)
@@ -1136,7 +1197,12 @@ def verify_and_record_payment(
         "amount": amount_naira,
         "reference": reference,
         "provider_type": provider_type,
-        "already_recorded": False,
+        "already_recorded": not settlement.payment_created,
+        "allocation_exception_id": (
+            str(settlement.reconciliation_exception.id)
+            if settlement.reconciliation_exception
+            else None
+        ),
         **summary,
     }
 
@@ -1212,11 +1278,29 @@ def get_topup_page(
                 exc_info=True,
             )
 
+    payable_invoices = eligible_invoices(db, str(account_id)) if account_id else []
     context = {
         "provider_type": provider_type,
         "payment_options": _topup_payment_options(db),
         "customer_email": email,
         "prepaid_balance": prepaid_balance,
+        "account_credit": prepaid_balance,
+        "eligible_unpaid_invoices": [
+            {
+                "id": str(invoice.id),
+                "invoice_number": invoice.invoice_number,
+                "balance_due": round_money(invoice.balance_due),
+                "currency": invoice.currency,
+            }
+            for invoice in payable_invoices
+        ],
+        "eligible_unpaid_total": round_money(
+            sum(
+                (to_decimal(invoice.balance_due) for invoice in payable_invoices),
+                Decimal("0.00"),
+            )
+        ),
+        "deposit_allowed": not payable_invoices,
         "min_amount": min_amount_value,
         "max_amount": max_amount_value,
         "preset_amounts": _resolve_topup_presets(
@@ -1318,6 +1402,11 @@ def _topup_intent_replay(db: Session, ref_id: str | None) -> dict | None:
     intent = db.get(TopupIntent, _coerce_uuid_or_none(ref_id)) if ref_id else None
     if intent is None:
         return None
+    checkout_metadata = (
+        {"topup_intent_id": str(intent.id)}
+        if intent.purpose == "account_credit_deposit"
+        else dict(intent.metadata_ or {})
+    )
     return {
         "intent_id": str(intent.id),
         "provider_type": intent.provider_type,
@@ -1325,7 +1414,7 @@ def _topup_intent_replay(db: Session, ref_id: str | None) -> dict | None:
         "reference": intent.reference,
         "requested_amount": intent.requested_amount,
         "currency": intent.currency,
-        "checkout_metadata": dict(intent.metadata_ or {}),
+        "checkout_metadata": checkout_metadata,
         "charged": True,
         "checkout_url": None,
         "replayed": True,
@@ -1349,7 +1438,7 @@ def create_topup_intent(
     redirect_url: str | None = None,
     idempotency_key: str | None = None,
 ) -> dict:
-    """Create a server-owned top-up intent for checkout.
+    """Create a server-owned Deposit Account Credit intent for checkout.
 
     When ``payment_method_id`` selects a saved card the customer's card is
     charged server-side; passing ``idempotency_key`` makes that charge safe
@@ -1357,18 +1446,7 @@ def create_topup_intent(
     charging the card a second time)."""
     account_id = _customer_account_uuid(db, customer)
     requested_amount = round_money(to_decimal(amount))
-    if requested_amount <= Decimal("0.00"):
-        raise ValueError("Top-up amount must be greater than ₦0.00")
-
     min_amount_value, max_amount_value = _resolve_topup_limits(db)
-    if requested_amount < Decimal(str(min_amount_value)):
-        raise ValueError(
-            f"Top-up amount must be at least {_format_naira(min_amount_value)}"
-        )
-    if requested_amount > Decimal(str(max_amount_value)):
-        raise ValueError(
-            f"Top-up amount must not exceed {_format_naira(max_amount_value)}"
-        )
 
     if provider == _DIRECT_TRANSFER_PROVIDER:
         return create_direct_transfer_topup_intent(db, customer, requested_amount)
@@ -1379,7 +1457,6 @@ def create_topup_intent(
     customer_email = _resolve_customer_email(db, customer)
     _require_gateway_email(provider_type, customer_email)
 
-    _cancel_pending_direct_transfer_intents(db, account_id)
     selected_payment_method_id = str(payment_method_id or "").strip() or None
     selected_payment_method = None
     selected_payment_token = None
@@ -1418,37 +1495,31 @@ def create_topup_intent(
         if replayed is not None:
             return replayed
 
-    intent_metadata = {
-        "payment_flow": "account_topup",
-        "provider_id": route.provider_id,
-    }
+    intent_metadata = {"payment_flow": "account_credit_deposit"}
     if selected_payment_method_id:
         intent_metadata["payment_method_id"] = selected_payment_method_id
 
-    intent = TopupIntent(
+    deposit_key = idem_key or f"account-credit-intent-{gateway_context.reference}"
+    intent, preview, _intent_replayed = AccountCreditDeposits.create_intent(
+        db,
         account_id=account_id,
+        amount=requested_amount,
+        currency="NGN",
+        minimum=min_amount_value,
+        maximum=max_amount_value,
         reference=gateway_context.reference,
         provider_type=gateway_context.provider_type,
-        currency="NGN",
-        requested_amount=requested_amount,
-        status="pending",
+        provider_id=_coerce_uuid_or_none(route.provider_id),
         expires_at=datetime.now(UTC) + _TOPUP_INTENT_TTL,
-        metadata_=intent_metadata,
+        idempotency_key=deposit_key,
+        channel="customer_selfcare",
+        created_by=str(optional_customer_subscriber_id(db, customer) or account_id),
+        metadata=intent_metadata,
     )
-    db.add(intent)
-    db.commit()
-    db.refresh(intent)
 
-    checkout_metadata = {
-        "payment_flow": "account_topup",
-        "topup_intent_id": str(intent.id),
-        "account_id": str(account_id),
-        **(
-            {"payment_method_id": selected_payment_method_id}
-            if selected_payment_method_id
-            else {}
-        ),
-    }
+    # Provider metadata is deliberately opaque. Settlement reloads every amount,
+    # account and policy field from Sub using this reference.
+    checkout_metadata = {"topup_intent_id": str(intent.id)}
     charged = False
     if selected_payment_method is not None:
         from app.services import paystack
@@ -1464,6 +1535,9 @@ def create_topup_intent(
             )
         except Exception:
             # Release the key so the customer can retry with a different card.
+            set_topup_intent_status(intent, "failed", source="saved_card_charge")
+            db.add(intent)
+            db.commit()
             _release_charge_idempotency_key(db, reservation)
             raise
         charged = True
@@ -1486,8 +1560,9 @@ def create_topup_intent(
         "provider_type": gateway_context.provider_type,
         "provider_public_key": gateway_context.public_key,
         "reference": gateway_context.reference,
-        "requested_amount": requested_amount,
+        "requested_amount": preview.requested_deposit,
         "currency": intent.currency,
+        "preview_fingerprint": preview.fingerprint,
         "checkout_metadata": checkout_metadata,
         "charged": charged,
         "checkout_url": checkout_url,
@@ -1561,25 +1636,45 @@ def create_direct_transfer_topup_intent(
 
     intent_metadata: dict[str, str] = {
         "payment_method": "bank_transfer",
-        "payment_flow": "invoice_payment" if invoice_id else "account_topup",
+        "payment_flow": ("invoice_payment" if invoice_id else "account_credit_deposit"),
     }
     if invoice_id:
         intent_metadata["invoice_id"] = invoice_id
 
-    _cancel_pending_direct_transfer_intents(db, account_id)
-    intent = TopupIntent(
-        account_id=account_id,
-        reference=f"TRF-{uuid.uuid4().hex[:12].upper()}",
-        provider_type=_DIRECT_TRANSFER_PROVIDER,
-        currency="NGN",
-        requested_amount=requested_amount,
-        status="pending",
-        expires_at=datetime.now(UTC) + _DIRECT_TRANSFER_TTL,
-        metadata_=intent_metadata,
-    )
-    db.add(intent)
-    db.commit()
-    db.refresh(intent)
+    reference = f"TRF-{uuid.uuid4().hex[:12].upper()}"
+    if invoice_id:
+        _cancel_pending_direct_transfer_intents(db, account_id)
+        intent = TopupIntent(
+            account_id=account_id,
+            reference=reference,
+            provider_type=_DIRECT_TRANSFER_PROVIDER,
+            currency="NGN",
+            requested_amount=requested_amount,
+            status="pending",
+            expires_at=datetime.now(UTC) + _DIRECT_TRANSFER_TTL,
+            metadata_=intent_metadata,
+        )
+        db.add(intent)
+        db.commit()
+        db.refresh(intent)
+    else:
+        min_amount_value, max_amount_value = _resolve_topup_limits(db)
+        intent, _preview, _replayed = AccountCreditDeposits.create_intent(
+            db,
+            account_id=account_id,
+            amount=requested_amount,
+            currency="NGN",
+            minimum=min_amount_value,
+            maximum=max_amount_value,
+            reference=reference,
+            provider_type=_DIRECT_TRANSFER_PROVIDER,
+            provider_id=None,
+            expires_at=datetime.now(UTC) + _DIRECT_TRANSFER_TTL,
+            idempotency_key=f"account-credit-intent-{reference}",
+            channel="customer_selfcare",
+            created_by=str(optional_customer_subscriber_id(db, customer) or account_id),
+            metadata=intent_metadata,
+        )
     return {
         "intent_id": str(intent.id),
         "provider_type": _DIRECT_TRANSFER_PROVIDER,
@@ -1676,7 +1771,7 @@ def verify_and_record_topup(
     *,
     provider: str | None = None,
 ) -> dict:
-    """Verify a top-up payment and add credit to account balance."""
+    """Verify and atomically settle a Deposit Account Credit receipt."""
     account_id = _customer_account_uuid(db, customer)
     intent = db.scalars(
         select(TopupIntent).where(TopupIntent.reference == reference)
@@ -1686,197 +1781,33 @@ def verify_and_record_topup(
     if intent.account_id != account_id:
         raise ValueError("Payment reference does not belong to this account")
     provider_type = provider_for_intent(intent, provider).value
-    provider_id = _coerce_uuid_or_none(
-        (intent.metadata_ or {}).get("provider_id")
-    ) or _provider_uuid(db, provider_type)
-
-    # Serialize concurrent verifies of the same reference (double-click,
-    # web+mobile, verify racing the webhook), then re-read the intent under
-    # the lock so a winner's completion is visible here.
-    lock_account(db, str(account_id))
-    db.refresh(intent)
-
-    if intent.completed_payment_id:
-        completed_payment = db.get(Payment, intent.completed_payment_id)
-        if not completed_payment:
-            raise ValueError("Recorded top-up payment could not be found")
-        if completed_payment.account_id != intent.account_id:
-            raise ValueError("Recorded top-up belongs to a different account")
-        _retry_topup_restore(db, intent.account_id)
-        return _build_topup_result(
+    if intent.purpose is None:
+        return _verify_and_record_legacy_topup(
             db,
-            payment=completed_payment,
             intent=intent,
-            amount=round_money(to_decimal(completed_payment.amount or 0)),
             reference=reference,
-            already_recorded=True,
+            provider_type=provider_type,
         )
-
     tx = payment_gateway_adapter.verify(
         db,
         provider_type=provider_type,
         reference=reference,
     )
-    amount_naira = round_money(tx.amount)
-    external_id = tx.external_id
     metadata = dict(tx.metadata or {})
     metadata_intent_id = str(metadata.get("topup_intent_id") or "")
     if metadata_intent_id and metadata_intent_id != str(intent.id):
         raise ValueError("Verified payment did not match the original checkout session")
 
-    min_amount_value, max_amount_value = _resolve_topup_limits(db)
-    policy_violations = _build_topup_policy_violations(
-        requested_amount=round_money(intent.requested_amount),
-        actual_amount=amount_naira,
-        min_amount=min_amount_value,
-        max_amount=max_amount_value,
-        expires_at=intent.expires_at,
+    settlement = AccountCreditDeposits.settle_verified(
+        db, intent_id=intent.id, transaction=tx
     )
-
-    # Idempotency check
-    existing = _payment_by_gateway_identity(
-        db, external_id=external_id, provider_id=provider_id
-    )
-    if existing:
-        if existing.account_id != intent.account_id:
-            raise ValueError(
-                "Payment reference is already linked to a different account"
-            )
-        _finalize_topup_intent(
-            db,
-            intent,
-            payment=existing,
-            external_id=external_id,
-            actual_amount=amount_naira,
-            policy_violations=policy_violations,
-            min_amount=min_amount_value,
-            max_amount=max_amount_value,
-        )
-        _retry_topup_restore(db, intent.account_id)
-        return _build_topup_result(
-            db,
-            payment=existing,
-            intent=intent,
-            amount=round_money(to_decimal(existing.amount or amount_naira)),
-            reference=reference,
-            already_recorded=True,
-        )
-
-    # Create unallocated payment (credit to account balance)
-    from uuid import UUID as _UUID
-
-    # No explicit allocations — auto-allocation pays outstanding invoices
-    # first, then remaining amount goes to account credit. This is
-    # intentional: a subscriber who owes money should settle debts before
-    # accumulating credit.
-    try:
-        payment = billing_adapter.record_payment(
-            db,
-            PaymentIntent(
-                account_id=_UUID(str(intent.account_id)),
-                amount=amount_naira,
-                currency=tx.currency,
-                status=PaymentStatus.succeeded,
-                provider_id=provider_id,
-                external_id=external_id,
-                memo=f"{tx.memo_prefix} prepaid top-up ref: {reference}",
-                allocations=[],  # No invoice allocation — goes to account credit
-            ),
-        )
-    except IntegrityError:
-        # The (provider_id, external_id) unique index caught a concurrent
-        # writer recording the same gateway transaction.
-        db.rollback()
-        existing = _payment_by_gateway_identity(
-            db, external_id=external_id, provider_id=provider_id
-        )
-        if existing is None:
-            raise
-        if existing.account_id != intent.account_id:
-            raise ValueError(
-                "Payment reference is already linked to a different account"
-            )
-        _finalize_topup_intent(
-            db,
-            intent,
-            payment=existing,
-            external_id=external_id,
-            actual_amount=amount_naira,
-            policy_violations=policy_violations,
-            min_amount=min_amount_value,
-            max_amount=max_amount_value,
-        )
-        _retry_topup_restore(db, intent.account_id)
-        return _build_topup_result(
-            db,
-            payment=existing,
-            intent=intent,
-            amount=round_money(to_decimal(existing.amount or amount_naira)),
-            reference=reference,
-            already_recorded=True,
-        )
-    _finalize_topup_intent(
-        db,
-        intent,
-        payment=payment,
-        external_id=external_id,
-        actual_amount=amount_naira,
-        policy_violations=policy_violations,
-        min_amount=min_amount_value,
-        max_amount=max_amount_value,
-    )
-
-    # Emit usage_topped_up event (triggers notification + potential service restore)
-    from app.services.events import emit_event
-    from app.services.events.types import EventType
-
-    emit_event(
-        db,
-        EventType.usage_topped_up,
-        {
-            "account_id": str(intent.account_id),
-            "amount": str(amount_naira),
-            "reference": reference,
-        },
-        account_id=intent.account_id,
-    )
-
-    # Attempt to restore suspended prepaid subscriptions
-    try:
-        from app.services.billing.reconcile_unposted import (
-            settle_prepaid_draft_invoices_from_credit,
-        )
-
-        settled = settle_prepaid_draft_invoices_from_credit(db, str(intent.account_id))
-        if settled.changed:
-            logger.info(
-                "Settled %d prepaid draft invoice(s) after top-up for account %s",
-                len(settled.invoices_settled),
-                intent.account_id,
-            )
-            db.commit()
-        restored = restore_account_services(db, str(intent.account_id))
-        if restored:
-            logger.info(
-                "Restored %d subscription(s) after prepaid top-up for account %s",
-                restored,
-                intent.account_id,
-            )
-    except Exception as exc:
-        db.rollback()
-        logger.warning(
-            "Failed to auto-restore after top-up for account %s: %s",
-            intent.account_id,
-            exc,
-        )
-
     return _build_topup_result(
         db,
-        payment=payment,
-        intent=intent,
-        amount=amount_naira,
+        payment=settlement.payment,
+        intent=settlement.intent,
+        amount=round_money(settlement.payment.amount),
         reference=reference,
-        already_recorded=False,
+        already_recorded=settlement.already_recorded,
     )
 
 

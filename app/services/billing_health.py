@@ -159,6 +159,7 @@ class BillingHealthSnapshot:
     negative_prepaid_with_sweep_disabled_count: int = 0
     billing_profile_mismatch_count: int = 0
     billing_profile_mixed_count: int = 0
+    account_credit_invariant_count: int = 0
     scan_min_ratio: float = SCAN_MIN_RATIO
     payment_volume_min_ratio: float = PAYMENT_VOLUME_MIN_RATIO
     payment_baseline_min_daily: float = PAYMENT_BASELINE_MIN_DAILY
@@ -190,6 +191,8 @@ class BillingHealthSnapshot:
             out.append("billing_profile_mismatch")
         if self.billing_profile_mixed_count > 0:
             out.append("billing_profile_mixed_modes")
+        if self.account_credit_invariant_count > 0:
+            out.append("account_credit_invariant_violations")
         return out
 
 
@@ -246,6 +249,11 @@ def billing_health_observations(snapshot: BillingHealthSnapshot):  # noqa: ANN20
             "billing_profile_mixed_accounts",
             "all",
             snapshot.billing_profile_mixed_count,
+        ),
+        (
+            "account_credit_invariant_violations",
+            "all",
+            snapshot.account_credit_invariant_count,
         ),
         (
             "unbilled_active_subscriptions",
@@ -655,6 +663,11 @@ def billing_health_snapshot(
         negative_prepaid_sweep_disabled,
     ) = negative_prepaid_balance_exposure(db)
     profile_mismatch_count, profile_mixed_count = billing_profile_integrity(db)
+    from app.services.billing.account_credit import AccountCreditApplications
+
+    account_credit_invariant_count = len(
+        AccountCreditApplications.inspect_invariants(db)
+    )
     return BillingHealthSnapshot(
         paid_with_balance_count=pwb_count,
         paid_with_balance_total=pwb_total,
@@ -675,6 +688,7 @@ def billing_health_snapshot(
         negative_prepaid_with_sweep_disabled_count=negative_prepaid_sweep_disabled,
         billing_profile_mismatch_count=profile_mismatch_count,
         billing_profile_mixed_count=profile_mixed_count,
+        account_credit_invariant_count=account_credit_invariant_count,
         scan_min_ratio=scan_min_ratio,
         payment_volume_min_ratio=payment_volume_min_ratio,
         payment_baseline_min_daily=payment_baseline_min_daily,

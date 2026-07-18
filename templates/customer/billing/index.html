@@ -33,7 +33,7 @@
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
                 </svg>
-                Add Funds
+                Deposit Account Credit
             </a>
             {% endif %}
         </div>
@@ -187,7 +187,7 @@
                     {% set invoice_currency = invoice.currency or currency_label %}
                     <tr class="group hover:bg-stone-50 dark:hover:bg-stone-700/30 transition-colors">
                         <td class="px-6 py-4">
-                            <p class="text-sm font-semibold text-stone-900 dark:text-white">INV-{{ invoice.id | string | truncate(8, True, '') | upper }}</p>
+                            <p class="text-sm font-semibold text-stone-900 dark:text-white">{{ invoice.invoice_number or ('INV-' ~ (invoice.id | string | truncate(8, True, '') | upper)) }}</p>
                         </td>
                         <td class="px-6 py-4">
                             <p class="text-sm font-semibold tabular-nums text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total_amount or invoice.total or 0) }}</p>

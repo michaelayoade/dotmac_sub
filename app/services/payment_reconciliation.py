@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID as _UUID
 
 import httpx
@@ -40,6 +41,9 @@ from app.services.common import round_money, to_decimal
 from app.services.customer_portal_flow_payments import _provider_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.payment_gateway_adapter import payment_gateway_adapter
+from app.services.provider_payment_settlements import (
+    settle_verified_invoice_payment,
+)
 from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
@@ -144,11 +148,48 @@ def _settle_intent(
     *,
     external_id: str,
     amount,
+    provider_fee,
     currency: str,
     memo: str,
     now: datetime,
 ) -> bool:
     """Record (or link) the payment for a confirmed intent. True if recovered."""
+    metadata = intent.metadata_ or {}
+    if str(metadata.get("payment_flow")) == "invoice_payment":
+        invoice_id = metadata.get("invoice_id")
+        try:
+            target_invoice_id = _UUID(str(invoice_id))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Invoice-payment intent has no valid target invoice"
+            ) from exc
+        provider_id = _provider_uuid(db, intent.provider_type)
+        if provider_id is None:
+            raise ValueError("Payment provider configuration is unavailable")
+        result = settle_verified_invoice_payment(
+            db,
+            account_id=_UUID(str(intent.account_id)),
+            invoice_id=target_invoice_id,
+            topup_intent_id=intent.id,
+            provider_id=provider_id,
+            provider_reference=intent.reference,
+            external_id=external_id,
+            gross_amount=round_money(to_decimal(amount)),
+            provider_fee=round_money(to_decimal(provider_fee)),
+            net_amount=round_money(to_decimal(intent.requested_amount)),
+            currency=currency,
+            memo=memo,
+            paid_at=now,
+        )
+        payment = result.payment
+        intent.completed_payment_id = payment.id
+        set_topup_intent_status(intent, "completed", source="reconcile_settle")
+        intent.completed_at = now
+        intent.actual_amount = round_money(to_decimal(amount))
+        intent.external_id = external_id
+        db.commit()
+        return result.payment_created
+
     existing = db.scalars(
         select(Payment).where(Payment.external_id == external_id)
     ).first()
@@ -322,6 +363,9 @@ def reconcile_pending_topups(
                 intent,
                 external_id=tx.external_id,
                 amount=round_money(to_decimal(tx.amount)),
+                provider_fee=round_money(
+                    to_decimal(getattr(tx, "provider_fee", Decimal("0.00")))
+                ),
                 currency=tx.currency,
                 memo=f"{tx.memo_prefix} top-up reconciliation ref: {intent.reference}",
                 now=now,

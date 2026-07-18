@@ -681,7 +681,7 @@ def my_topup_page(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Top-up page context: balance, limits, presets, and the pay-with selector.
+    """Deposit Account Credit context, eligibility, limits, and payment options.
 
     ``payment_options`` mirrors the web chooser (online gateways + a direct
     bank-transfer option) and ``direct_bank_transfer`` carries the admin bank
@@ -714,6 +714,10 @@ def my_topup_page(
         provider_type=ctx["provider_type"],
         provider_public_key=ctx.get("provider_public_key"),
         prepaid_balance=ctx.get("prepaid_balance"),
+        account_credit=ctx.get("account_credit"),
+        deposit_allowed=ctx.get("deposit_allowed", True),
+        eligible_unpaid_total=ctx.get("eligible_unpaid_total", Decimal("0.00")),
+        eligible_unpaid_invoices=ctx.get("eligible_unpaid_invoices", []),
         min_amount=ctx["min_amount"],
         max_amount=ctx["max_amount"],
         preset_amounts=ctx.get("preset_amounts", []),
@@ -729,7 +733,7 @@ def my_topup_initiate(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Create a top-up checkout intent for the caller's prepaid account."""
+    """Create a Deposit Account Credit intent for the caller's account."""
     customer = _customer(db, principal)
     try:
         result = customer_payments.create_topup_intent(
@@ -760,6 +764,7 @@ def my_topup_initiate(
         customer_email=customer["username"] or None,
         charged=result.get("charged", False),
         checkout_url=result.get("checkout_url"),
+        preview_fingerprint=result["preview_fingerprint"],
     )
 
 
@@ -769,7 +774,7 @@ def my_topup_verify(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Verify a top-up transaction and credit the account."""
+    """Verify and settle a Deposit Account Credit transaction."""
     customer = _customer(db, principal)
     account_id = require_customer_account_id(db, customer)
     try:
@@ -797,6 +802,8 @@ def my_topup_verify(
         already_recorded=result.get("already_recorded", False),
         available_balance=result.get("available_balance"),
         credit_added=result.get("credit_added"),
+        allocated_total=result.get("allocated_total", Decimal("0.00")),
+        allocated_to_invoices=result.get("allocated_to_invoices", []),
         card_saved=card_saved,
         card_save_message=card_save_message,
     )
