@@ -679,6 +679,48 @@ def test_create_invoice_payment_intent_gateway_paystack(
     assert payload["checkout_metadata"]["payment_flow"] == "invoice_payment"
 
 
+def test_create_invoice_payment_intent_issues_draft_through_lifecycle_owner(
+    monkeypatch, db_session, subscriber
+):
+    _patch_topup_settings(monkeypatch)
+    invoice = billing_service.invoices.create(
+        db_session,
+        InvoiceCreate(
+            account_id=subscriber.id,
+            invoice_number="INV-PAY-DRAFT",
+            currency="NGN",
+            subtotal=Decimal("2500.00"),
+            total=Decimal("2500.00"),
+            balance_due=Decimal("2500.00"),
+            status=InvoiceStatus.draft,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.payment_gateway_adapter.build_context",
+        lambda *_a, **_k: SimpleNamespace(
+            provider_type="paystack",
+            public_key="pk_test_pay",
+            reference="pay-ref-issued-draft",
+        ),
+    )
+
+    create_invoice_payment_intent(
+        db_session,
+        _invoice_customer(subscriber),
+        str(invoice.id),
+        provider="paystack",
+    )
+
+    db_session.refresh(invoice)
+    assert invoice.status == InvoiceStatus.issued
+    assert invoice.issued_at is not None
+    intent = db_session.scalar(
+        select(TopupIntent).where(TopupIntent.reference == "pay-ref-issued-draft")
+    )
+    assert intent is not None
+    assert intent.metadata_["invoice_id"] == str(invoice.id)
+
+
 def test_create_invoice_payment_intent_charges_saved_card(
     monkeypatch, db_session, subscriber
 ):

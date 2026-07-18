@@ -510,6 +510,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "historical payment settlement evidence reconciliation",
                     "payment settlement access-reconciliation handoff",
                     "payment-originated ledger postings",
+                    "cash-first verified provider settlement evidence",
+                    "payment allocation reconciliation exception lifecycle",
                     "payment refund eligibility and preview",
                     "payment refund confirmation and exact ledger evidence",
                     "payment refund idempotency and audit evidence",
@@ -863,6 +865,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.provider_payment_settlements",
+                module="app.services.provider_payment_settlements",
+                owns=(
+                    "verified invoice-payment cash-first orchestration",
+                    "post-settlement invoice-allocation request",
+                    "allocation-failure exception handoff",
+                ),
+                depends_on=("financial.payments", "financial.invoices"),
+            ),
+            SOTService(
                 name="financial.payment_provider_events",
                 module="app.services.billing.providers",
                 owns=(
@@ -871,7 +883,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "provider-event idempotency",
                     "incomplete provider settlement resumption",
                 ),
-                depends_on=("financial.payments",),
+                depends_on=(
+                    "financial.payments",
+                    "financial.provider_payment_settlements",
+                ),
             ),
             SOTService(
                 name="financial.payment_webhooks",
@@ -889,8 +904,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "stranded top-up reconciliation",
                     "scheduled top-up reconciliation execution",
+                    "verified provider settlement then allocation orchestration",
                 ),
-                depends_on=("financial.ledger", "financial.payment_provider_events"),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.payment_provider_events",
+                    "financial.provider_payment_settlements",
+                ),
             ),
         ),
         entrypoints=(

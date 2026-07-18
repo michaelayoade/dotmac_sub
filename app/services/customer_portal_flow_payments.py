@@ -46,6 +46,9 @@ from app.services.payment_routing import (
     provider_for_intent,
     select_checkout_provider,
 )
+from app.services.provider_payment_settlements import (
+    settle_verified_invoice_payment,
+)
 from app.services.settings_spec import resolve_value
 from app.services.topup_intents import set_topup_intent_status
 
@@ -833,6 +836,17 @@ def create_invoice_payment_intent(
         InvoiceStatus.written_off,
     ):
         raise ValueError("Invoice is no longer payable")
+    if invoice.status == InvoiceStatus.draft:
+        transition = billing_service.invoices.issue_draft_system(
+            db,
+            str(invoice.id),
+            issued_at=datetime.now(UTC),
+            due_at=invoice.due_at,
+            reason="customer_invoice_payment_checkout",
+            announce=False,
+            commit=True,
+        )
+        invoice = transition.invoice
 
     amount = round_money(
         to_decimal(
@@ -1027,26 +1041,8 @@ def verify_and_record_payment(
     provider_id = _coerce_uuid_or_none(
         (intent.metadata_ or {}).get("provider_id")
     ) or _provider_uuid(db, provider_type)
-
-    # Idempotency: check if a payment with this external reference already exists
-    existing_payment = _payment_by_gateway_identity(
-        db, external_id=tx.external_id, provider_id=provider_id
-    )
-    if existing_payment:
-        if existing_payment.account_id != intent.account_id:
-            raise ValueError("Payment reference is linked to a different account")
-        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-        summary = _build_topup_summary(db, existing_payment)
-        complete_invoice_payment_intent(db, reference, existing_payment)
-        return {
-            "payment": existing_payment,
-            "invoice": invoice,
-            "amount": getattr(existing_payment, "amount", amount_naira),
-            "reference": reference,
-            "provider_type": provider_type,
-            "already_recorded": True,
-            **summary,
-        }
+    if provider_id is None:
+        raise ValueError("Payment provider configuration is unavailable")
 
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     if not invoice or not customer_can_access_account(
@@ -1054,78 +1050,21 @@ def verify_and_record_payment(
     ):
         raise ValueError("Invoice not found or access denied")
 
-    from uuid import UUID as _UUID
-
-    from app.schemas.billing import PaymentAllocationApply
-
-    # Serialize concurrent verifies (double-click, refresh, verify racing the
-    # webhook) for this account, then re-check under the lock.
-    lock_account(db, str(invoice.account_id))
-    existing_payment = _payment_by_gateway_identity(
-        db, external_id=tx.external_id, provider_id=provider_id
+    settlement = settle_verified_invoice_payment(
+        db,
+        account_id=uuid.UUID(str(invoice.account_id)),
+        invoice_id=uuid.UUID(str(invoice_id)),
+        topup_intent_id=intent.id,
+        provider_id=provider_id,
+        provider_reference=reference,
+        external_id=tx.external_id,
+        gross_amount=amount_naira,
+        provider_fee=round_money(to_decimal(getattr(tx, "provider_fee", 0))),
+        net_amount=round_money(to_decimal(intent.requested_amount)),
+        currency=tx.currency,
+        memo=f"{tx.memo_prefix} payment ref: {reference}",
     )
-    if existing_payment:
-        if existing_payment.account_id != intent.account_id:
-            raise ValueError("Payment reference is linked to a different account")
-        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-        summary = _build_topup_summary(db, existing_payment)
-        complete_invoice_payment_intent(db, reference, existing_payment)
-        return {
-            "payment": existing_payment,
-            "invoice": invoice,
-            "amount": getattr(existing_payment, "amount", amount_naira),
-            "reference": reference,
-            "provider_type": provider_type,
-            "already_recorded": True,
-            **summary,
-        }
-
-    invoice_balance_due = round_money(
-        to_decimal(getattr(invoice, "balance_due", amount_naira) or amount_naira)
-    )
-    if invoice_balance_due <= Decimal("0.00"):
-        raise ValueError("Invoice no longer has an outstanding balance")
-    allocated_amount = min(amount_naira, invoice_balance_due)
-    try:
-        payment = billing_adapter.record_payment(
-            db,
-            PaymentIntent(
-                account_id=_UUID(str(invoice.account_id)),
-                amount=amount_naira,
-                currency=tx.currency,
-                status=PaymentStatus.succeeded,
-                provider_id=provider_id,
-                external_id=tx.external_id,
-                memo=f"{tx.memo_prefix} payment ref: {reference}",
-                allocations=[
-                    PaymentAllocationApply(
-                        invoice_id=_UUID(str(invoice_id)),
-                        amount=allocated_amount,
-                    )
-                ],
-            ),
-        )
-    except IntegrityError:
-        db.rollback()
-        payment = _payment_by_gateway_identity(
-            db, external_id=tx.external_id, provider_id=provider_id
-        )
-        if payment is None:
-            raise
-        if payment.account_id != intent.account_id:
-            raise ValueError("Payment reference is linked to a different account")
-        invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
-        summary = _build_topup_summary(db, payment)
-        complete_invoice_payment_intent(db, reference, payment)
-        return {
-            "payment": payment,
-            "invoice": invoice,
-            "amount": getattr(payment, "amount", amount_naira),
-            "reference": reference,
-            "provider_type": provider_type,
-            "already_recorded": True,
-            **summary,
-        }
+    payment = settlement.payment
     invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
     summary = _build_topup_summary(db, payment)
     complete_invoice_payment_intent(db, reference, payment)
@@ -1136,7 +1075,12 @@ def verify_and_record_payment(
         "amount": amount_naira,
         "reference": reference,
         "provider_type": provider_type,
-        "already_recorded": False,
+        "already_recorded": not settlement.payment_created,
+        "allocation_exception_id": (
+            str(settlement.reconciliation_exception.id)
+            if settlement.reconciliation_exception
+            else None
+        ),
         **summary,
     }
 

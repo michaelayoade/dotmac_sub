@@ -28,6 +28,7 @@ from app.models.billing import (
     LedgerSource,
     Payment,
     PaymentAllocation,
+    PaymentAllocationReconciliationException,
     PaymentChannel,
     PaymentChannelAccount,
     PaymentMethod,
@@ -2087,6 +2088,193 @@ def _settle_existing_account_payment(
 
 class Payments(ListResponseMixin):
     @staticmethod
+    def record_verified_provider_settlement(
+        db: Session,
+        *,
+        account_id: UUID,
+        provider_id: UUID,
+        external_id: str,
+        gross_amount: Decimal,
+        provider_fee: Decimal,
+        net_amount: Decimal,
+        currency: str,
+        memo: str,
+        paid_at: datetime | None = None,
+    ) -> PaymentCreationResult:
+        """Durably record verified provider money before any invoice allocation.
+
+        The customer-facing charge remains ``Payment.amount`` (gross). The
+        provider fee is preserved separately, while only the net settlement is
+        posted as unallocated account credit. This owner deliberately does not
+        read invoice or prepaid-funding state: those are downstream allocation
+        and consequence concerns and cannot be allowed to erase confirmed cash.
+        """
+        gross = round_money(to_decimal(gross_amount))
+        fee = round_money(to_decimal(provider_fee))
+        net = round_money(to_decimal(net_amount))
+        code = str(currency or "").strip().upper()
+        external = str(external_id or "").strip()
+        if gross <= Decimal("0.00"):
+            raise HTTPException(
+                status_code=400, detail="Provider settlement amount must be positive"
+            )
+        if (
+            fee < Decimal("0.00")
+            or net <= Decimal("0.00")
+            or net > gross
+            or fee > gross
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Provider fee and net credit must form a valid gross settlement"
+                ),
+            )
+        if len(code) != 3:
+            raise HTTPException(status_code=400, detail="Invalid settlement currency")
+        if not external:
+            raise HTTPException(
+                status_code=400,
+                detail="Verified provider settlement needs an external id",
+            )
+
+        _validate_account(db, str(account_id))
+        _validate_payment_provider(db, str(provider_id))
+
+        def replay() -> PaymentCreationResult | None:
+            payment = db.scalar(
+                select(Payment)
+                .where(Payment.provider_id == provider_id)
+                .where(Payment.external_id == external)
+                .where(Payment.is_active.is_(True))
+            )
+            if payment is None:
+                return None
+            settlement = payment.settlement
+            if (
+                payment.account_id != account_id
+                or payment.status != PaymentStatus.succeeded
+                or payment.currency != code
+                or round_money(to_decimal(payment.amount)) != gross
+                or round_money(to_decimal(payment.provider_fee)) != fee
+                or settlement is None
+                or round_money(to_decimal(settlement.amount)) != net
+                or round_money(to_decimal(settlement.unallocated_amount)) != net
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Provider transaction is already linked to different "
+                        "settlement evidence"
+                    ),
+                )
+            return PaymentCreationResult(
+                payment=payment,
+                settlement=settlement,
+                preview=None,
+                idempotent_replay=True,
+            )
+
+        existing = replay()
+        if existing is not None:
+            return existing
+
+        lock_account(db, str(account_id))
+        existing = replay()
+        if existing is not None:
+            return existing
+
+        key_material = f"{provider_id}:{external}"
+        settlement_key = (
+            "provider-settlement-"
+            + hashlib.sha256(key_material.encode("utf-8")).hexdigest()
+        )
+        payment = Payment(
+            account_id=account_id,
+            provider_id=provider_id,
+            amount=gross,
+            provider_fee=fee,
+            currency=code,
+            status=PaymentStatus.succeeded,
+            paid_at=paid_at or datetime.now(UTC),
+            auto_allocate_on_settlement=False,
+            creation_preview_fingerprint=settlement_key,
+            external_id=external,
+            memo=memo,
+        )
+        db.add(payment)
+        try:
+            db.flush()
+            unallocated_entry = _record_unallocated_payment_credit(db, payment, net)
+            if unallocated_entry is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Verified settlement did not create account-credit evidence",
+                )
+            db.flush()
+            settlement = PaymentSettlement(
+                payment_id=payment.id,
+                unallocated_ledger_entry_id=unallocated_entry.id,
+                amount=net,
+                unallocated_amount=net,
+                prepaid_amount=Decimal("0.00"),
+                currency=code,
+                origin=PaymentSettlementOrigin.provider_event,
+                preview_fingerprint=settlement_key,
+                idempotency_key=settlement_key,
+            )
+            db.add(settlement)
+            db.flush()
+            AuditEvents.stage(
+                db,
+                AuditEventCreate(
+                    actor_type=AuditActorType.system,
+                    action="record_verified_provider_settlement",
+                    entity_type="payment",
+                    entity_id=str(payment.id),
+                    metadata_={
+                        "settlement_id": str(settlement.id),
+                        "provider_id": str(provider_id),
+                        "external_id": external,
+                        "gross_amount": str(gross),
+                        "provider_fee": str(fee),
+                        "net_account_credit": str(net),
+                        "currency": code,
+                        "allocation_state": "unallocated",
+                    },
+                ),
+            )
+            emit_event(
+                db,
+                EventType.payment_received,
+                {
+                    "payment_id": str(payment.id),
+                    "settlement_id": str(settlement.id),
+                    "amount": str(gross),
+                    "provider_fee": str(fee),
+                    "net_amount": str(net),
+                    "currency": code,
+                    "invoice_id": None,
+                    "status": PaymentStatus.succeeded.value,
+                },
+                account_id=account_id,
+            )
+            db.commit()
+            db.refresh(payment)
+            db.refresh(settlement)
+            return PaymentCreationResult(
+                payment=payment,
+                settlement=settlement,
+                preview=None,
+            )
+        except IntegrityError:
+            db.rollback()
+            existing = replay()
+            if existing is not None:
+                return existing
+            raise
+
+    @staticmethod
     def preview_creation(
         db: Session,
         payload: PaymentCreationPreviewRequest,
@@ -3659,6 +3847,118 @@ def _payment_allocation_fingerprint(
         separators=(",", ":"),
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+class PaymentAllocationReconciliationExceptions:
+    """Own durable, idempotent allocation-failure evidence."""
+
+    @staticmethod
+    def idempotency_key(
+        *, payment_id: UUID, invoice_id: UUID, provider_reference: str
+    ) -> str:
+        material = f"{payment_id}:{invoice_id}:{provider_reference}"
+        return (
+            "payment-allocation-exception-"
+            + hashlib.sha256(material.encode("utf-8")).hexdigest()
+        )
+
+    @staticmethod
+    def record(
+        db: Session,
+        *,
+        payment_id: UUID,
+        invoice_id: UUID,
+        provider_reference: str,
+        external_id: str,
+        error: Exception,
+        topup_intent_id: UUID | None = None,
+    ) -> PaymentAllocationReconciliationException:
+        key = PaymentAllocationReconciliationExceptions.idempotency_key(
+            payment_id=payment_id,
+            invoice_id=invoice_id,
+            provider_reference=provider_reference,
+        )
+        existing = db.scalar(
+            select(PaymentAllocationReconciliationException).where(
+                PaymentAllocationReconciliationException.idempotency_key == key
+            )
+        )
+        detail = getattr(error, "detail", None)
+        message = str(detail if detail is not None else error)[:4000]
+        error_type = type(error).__name__[:120]
+        if existing is None:
+            existing = PaymentAllocationReconciliationException(
+                payment_id=payment_id,
+                invoice_id=invoice_id,
+                topup_intent_id=topup_intent_id,
+                provider_reference=provider_reference,
+                external_id=external_id,
+                idempotency_key=key,
+                status="open",
+                error_type=error_type,
+                error_message=message,
+            )
+            db.add(existing)
+        else:
+            existing.status = "open"
+            existing.resolved_at = None
+            existing.error_type = error_type
+            existing.error_message = message
+            existing.attempt_count = int(existing.attempt_count or 0) + 1
+            if existing.topup_intent_id is None:
+                existing.topup_intent_id = topup_intent_id
+        db.flush()
+        AuditEvents.stage(
+            db,
+            AuditEventCreate(
+                actor_type=AuditActorType.system,
+                action="record_payment_allocation_reconciliation_exception",
+                entity_type="payment_allocation_reconciliation_exception",
+                entity_id=str(existing.id),
+                metadata_={
+                    "payment_id": str(payment_id),
+                    "invoice_id": str(invoice_id),
+                    "topup_intent_id": (
+                        str(topup_intent_id) if topup_intent_id else None
+                    ),
+                    "provider_reference": provider_reference,
+                    "external_id": external_id,
+                    "error_type": error_type,
+                    "attempt_count": existing.attempt_count,
+                    "money_effect": "none_settlement_remains_account_credit",
+                },
+            ),
+        )
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    @staticmethod
+    def resolve(
+        db: Session,
+        *,
+        payment_id: UUID,
+        invoice_id: UUID,
+        provider_reference: str,
+    ) -> PaymentAllocationReconciliationException | None:
+        key = PaymentAllocationReconciliationExceptions.idempotency_key(
+            payment_id=payment_id,
+            invoice_id=invoice_id,
+            provider_reference=provider_reference,
+        )
+        existing = db.scalar(
+            select(PaymentAllocationReconciliationException).where(
+                PaymentAllocationReconciliationException.idempotency_key == key
+            )
+        )
+        if existing is None or existing.status == "resolved":
+            return existing
+        existing.status = "resolved"
+        existing.resolved_at = datetime.now(UTC)
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return existing
 
 
 def _build_payment_allocation_preview(

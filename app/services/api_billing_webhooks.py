@@ -229,9 +229,11 @@ def _resolve_settlement_topup_intent(
     transaction reference in the provider payload.
     """
     intent_id = _coerce_uuid((settlement.metadata or {}).get("topup_intent_id"))
-    if intent_id is None:
-        return None
-    intent = db.get(TopupIntent, intent_id)
+    intent = db.get(TopupIntent, intent_id) if intent_id is not None else None
+    if intent is None and settlement.reference:
+        intent = db.scalar(
+            select(TopupIntent).where(TopupIntent.reference == settlement.reference)
+        )
     if intent is None:
         return None
     if settlement.reference and intent.reference != settlement.reference:
@@ -289,6 +291,16 @@ def _prepare_provider_event_ingest(
         and settlement.amount > Decimal("0.00")
     ):
         ingest_payload.amount = settlement.amount
+        ingest_payload.provider_fee = settlement.fee
+        ingest_payload.net_amount = (
+            topup_intent.requested_amount
+            if topup_intent is not None
+            else settlement.amount - settlement.fee
+        )
+        ingest_payload.provider_reference = settlement.reference
+        ingest_payload.topup_intent_id = (
+            topup_intent.id if topup_intent is not None else None
+        )
         ingest_payload.currency = settlement.currency
         ingest_payload.invoice_id = invoice_id
         ingest_payload.account_id = account_id

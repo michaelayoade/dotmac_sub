@@ -45,6 +45,7 @@ from app.services.billing.ledger import LedgerEntries
 from app.services.billing.payments import (
     BankAccounts,
     CollectionAccounts,
+    PaymentAllocationReconciliationExceptions,
     PaymentAllocations,
     PaymentChannelAccounts,
     PaymentChannels,
@@ -70,6 +71,9 @@ payments = Payments()
 refunds = Refunds()
 reversals = PaymentReversals()
 payment_allocations = PaymentAllocations()
+payment_allocation_reconciliation_exceptions = (
+    PaymentAllocationReconciliationExceptions()
+)
 payment_channels = PaymentChannels()
 collection_accounts = CollectionAccounts()
 payment_channel_accounts = PaymentChannelAccounts()
@@ -106,6 +110,7 @@ __all__ = [
     "PaymentMethods",
     "BankAccounts",
     "PaymentAllocations",
+    "PaymentAllocationReconciliationExceptions",
     "PaymentChannels",
     "CollectionAccounts",
     "PaymentChannelAccounts",
@@ -127,6 +132,7 @@ __all__ = [
     "refunds",
     "reversals",
     "payment_allocations",
+    "payment_allocation_reconciliation_exceptions",
     "payment_channels",
     "collection_accounts",
     "payment_channel_accounts",
