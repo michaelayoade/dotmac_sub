@@ -26,9 +26,10 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from types import SimpleNamespace
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import cast
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -407,8 +408,11 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
         walked: list[tuple[str, str]] = []
         try:
             for fsp in contexts[olt_id]:
+                # The snapshot mirrors every attribute the SSH path reads
+                # (mgmt_ip/hostname/ssh_*/vendor/model/name/id) as plain data;
+                # a live OLTDevice here would reopen a transaction post-commit.
                 ok, status, output = _run_readonly_command(
-                    snapshot, f"display mac-address port {fsp}"
+                    cast("OLTDevice", snapshot), f"display mac-address port {fsp}"
                 )
                 counters["ports_walked"] += 1
                 if not ok:
