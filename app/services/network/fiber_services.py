@@ -54,6 +54,16 @@ def _retired_connectivity_mutation() -> None:
     )
 
 
+def _retired_legacy_splice_mutation() -> None:
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Direct legacy splice mutation is retired; use the reviewed exact "
+            "network.fiber_physical_continuity workflow."
+        ),
+    )
+
+
 class FiberStrands(CRUDManager[FiberStrand]):
     model = FiberStrand
     not_found_detail = "Fiber strand not found"
@@ -230,6 +240,11 @@ class FiberSplices(CRUDManager[FiberSplice]):
     not_found_detail = "Fiber splice not found"
     soft_delete_field = None
 
+    @classmethod
+    def create(cls, db: Session, payload, *, commit: bool = True):
+        del cls, db, payload, commit
+        _retired_legacy_splice_mutation()
+
     @staticmethod
     def list(
         db: Session,
@@ -269,11 +284,13 @@ class FiberSplices(CRUDManager[FiberSplice]):
 
     @classmethod
     def update(cls, db: Session, splice_id: str, payload: FiberSpliceUpdate):
-        return super().update(db, splice_id, payload)
+        del cls, db, splice_id, payload
+        _retired_legacy_splice_mutation()
 
     @classmethod
     def delete(cls, db: Session, splice_id: str):
-        return super().delete(db, splice_id)
+        del cls, db, splice_id
+        _retired_legacy_splice_mutation()
 
     @staticmethod
     def trace_response(

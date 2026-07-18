@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.models.catalog import NasDevice
 from app.models.network_monitoring import DeviceInterface, PopSite
 from app.services.network.access_path import resolve_fiber_end_to_end_path
-from app.services.network.fiber_plant_integrity import ensure_segment_strand_inventory
+from tests.test_fiber_physical_continuity import install_complete_core_path
 from tests.test_fiber_subscription_trace import _complete_path
 from tests.test_forwarding_topology import (
     _apply_decision,
@@ -24,8 +24,7 @@ def test_composed_fiber_path_reaches_provisioning_nas_and_core(
     assets = _complete_path(
         db_session, subscription, subscriber, olt_device, network_device
     )
-    for segment in (assets["feeder"], assets["drop"]):
-        ensure_segment_strand_inventory(db_session, segment)
+    install_complete_core_path(db_session, assets, network_device)
     site = db_session.get(PopSite, network_device.pop_site_id)
     assert site is not None
     _nas_site, nas_node, nas_interface = _device(
@@ -112,6 +111,7 @@ def test_composed_fiber_path_reaches_provisioning_nas_and_core(
     assert result.gaps == ()
     assert result.complete is True
     assert result.passive_complete is True
+    assert result.core_continuity_complete is True
     assert result.forwarding_complete is True
     assert result.provisioning_nas_device_id == nas.id
     assert result.live_nas_device_id is None
@@ -119,12 +119,17 @@ def test_composed_fiber_path_reaches_provisioning_nas_and_core(
     passive_kinds = [hop.kind for hop in result.hops if hop.domain == "passive_fiber"]
     assert passive_kinds[0] == "customer"
     assert "ont" in passive_kinds
+    core_kinds = [hop.kind for hop in result.hops if hop.domain == "physical_core"]
+    assert "fiber_rack" in core_kinds
+    assert "odf" in core_kinds
+    assert "patch_cord" in core_kinds
     assert [hop.asset_id for hop in result.hops if hop.domain == "forwarding"] == [
         network_device.id,
         nas_node.id,
         core_node.id,
     ]
     assert len(result.forwarding_declaration_ids) == 2
+    assert len(result.core_continuity_sha256) == 64
     assert len(result.evidence_sha256) == 64
 
 
@@ -138,12 +143,12 @@ def test_composed_path_does_not_infer_missing_provisioning_nas(
     assets = _complete_path(
         db_session, subscription, subscriber, olt_device, network_device
     )
-    for segment in (assets["feeder"], assets["drop"]):
-        ensure_segment_strand_inventory(db_session, segment)
+    install_complete_core_path(db_session, assets, network_device)
 
     result = resolve_fiber_end_to_end_path(db_session, subscription)
 
     assert result.complete is False
+    assert result.core_continuity_complete is True
     assert result.provisioning_nas_device_id is None
     assert "provisioning.nas_missing" in {gap.code for gap in result.gaps}
     assert result.live_nas_state == "missing_observation"

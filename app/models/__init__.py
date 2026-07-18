@@ -219,6 +219,15 @@ from app.models.fiber_change_request import (  # noqa: F401
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
 )
+from app.models.fiber_physical import (  # noqa: F401
+    FiberConnectorPort,
+    FiberCoreSplice,
+    FiberPatchCord,
+    FiberPatchPanel,
+    FiberPhysicalLinkDecision,
+    FiberRack,
+    FiberStrandTermination,
+)
 from app.models.fiber_support import (  # noqa: F401
     FiberSupportMount,
     FiberSupportMountDecision,

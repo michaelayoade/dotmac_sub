@@ -243,11 +243,16 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("network.splitter_inventory") == (
         "network.fiber_plant_integrity",
     )
+    assert sot_relationships.dependencies_for("network.fiber_physical_continuity") == (
+        "network.fiber_topology",
+        "network.fiber_plant_integrity",
+    )
     assert sot_relationships.dependencies_for("network.fiber_asset_changes") == (
         "network.fiber_topology",
         "network.fiber_plant_integrity",
         "network.splitter_inventory",
         "network.fiber_support_structures",
+        "network.fiber_physical_continuity",
     )
     assert sot_relationships.dependencies_for("network.fiber_support_structures") == (
         "network.fiber_topology",
@@ -377,6 +382,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.ont_assignment_commands",
         "network.ont_assignment_identity",
         "network.fiber_access_attachments",
+        "network.fiber_physical_continuity",
         "network.forwarding_topology",
     )
     assert sot_relationships.dependencies_for("network.outage_lifecycle") == (

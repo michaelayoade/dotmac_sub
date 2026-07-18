@@ -4,6 +4,7 @@ Status: canonical topology ownership in active development
 Owner: `network.fiber_topology`
 Mutation owner: `network.fiber_asset_changes`
 Plant-integrity owner: `network.fiber_plant_integrity`
+Physical-continuity owner: `network.fiber_physical_continuity`
 Splitter-inventory owner: `network.splitter_inventory`
 Support-structure owner: `network.fiber_support_structures`
 Identity-decision owner: `network.fiber_identity_decisions`
@@ -40,9 +41,10 @@ customer impact.
 The target trace is:
 
 ```text
-POP -> OLT -> PON port -> termination/segment chain -> root splitter
-    -> zero or more reviewed splitter cascades -> leaf output/drop
-    -> ONT -> subscription -> customer
+POP -> fiber rack -> OLT connector -> patch cord -> ODF connector
+    -> exact cable core/termination/splice chain -> root splitter
+    -> zero or more reviewed splitter cascades -> exact drop core
+    -> ONT connector -> ONT -> subscription -> customer
 ```
 
 Only validated edges participate in outage impact or customer diagnosis. A
@@ -66,13 +68,46 @@ declarations with current exact required observation agreement.
 | Splitter output to downstream input | active `SplitterCascadeLink` between exact directed ports | cabinet, name, ratio, geometry, and proximity are evidence only |
 | Splitter output to ONT | `OntUnit.splitter_port_id` to an output port | `SplitterPortAssignment` is legacy matching evidence |
 | Asset-to-asset cable path | `FiberTerminationPoint` plus `FiberSegment` endpoints | route geometry alone is not connectivity |
-| Strand/splice detail | `FiberStrand` and `FiberSplice` nested inside the asset graph | strand endpoint fields do not create a parallel asset graph |
+| Exact core continuity | active reviewed `FiberStrandTermination`, `FiberCoreSplice`, and `FiberPatchCord` links over exact `FiberConnectorPort` and `FiberStrand.segment_id` identities | `FiberSplice`, strand endpoint fields, `FiberSegment.fiber_strand_id`, names, labels, and geometry are historical/display evidence only |
+| Rack and ODF position | reviewed `FiberRack`, `FiberPatchPanel`, and `FiberConnectorPort` inventory with exact host, rack-unit, and port capacity | equipment names, cabinet proximity, patch labels, and map symbols never create a rack, port, or link |
 | Customer fault verdict | `network.connection_health` using access path and outage impact | UI map state and raw telemetry do not decide the verdict |
 | Fiber fault candidate ranking | `network.fiber_topology.localize_fiber_fault` over validated trace assets and fresh OLT cohorts | a highlighted map asset is not a confirmed failure or incident |
 
 Coordinates and spatial projections remain owned by `gis.spatial_sync`. Fiber
 topology owns what an asset is and how it connects; GIS owns where its approved
 spatial projection is stored.
+
+## Exact racks, patches, and cable-core continuity
+
+`network.fiber_physical_continuity` is the only writer for active core splices,
+strand-end terminations, and patch cords. It also owns the invariants applied to
+reviewed fiber-rack, ODF/patch-panel, and connector-port inventory changes.
+Every connector row represents one optical channel. Duplex or other grouped
+single-channel patch cords may share an `assembly_label`, but grouping never
+creates unrecorded channels or connectivity. `mpo` and `mtp` inventory fails
+closed: MPO/MTP fan-out remains unsupported until an explicit lane/assembly
+contract can preserve every optical channel and resulting continuity edge.
+
+An active physical link requires a write-free preview, an exact hashed proposal,
+independent review, locked revalidation, and an exact hashed result. A strand end
+can have only one active splice or termination; a connector can have only one
+active back-side termination and one active patch; panel positions must remain
+inside declared rack and port capacity. Disconnecting any link in a component
+that reaches an `in_use` core fails closed until service use is removed.
+
+Core resolution starts and ends at exact PON, splitter-port, or ONT connectors.
+It traverses only reviewed terminations, patch cords, numbered cable cores, and
+core splices, and must use every logical cable segment once and in order. Missing
+connectors, ambiguous paths, a core not marked `in_use`, or disagreement between
+a rack host and the cable endpoint is a typed gap. Names, labels, geometry,
+legacy `FiberSplice` rows, and the legacy `FiberSegment.fiber_strand_id` scalar
+are never promoted into a path.
+
+Field splice proposals now name both exact strand ends and create the canonical
+physical-link proposal. `network.fiber_asset_changes` remains the independent
+review transport and delegates approval and execution back to the physical
+owner. Direct legacy splice create, update, and delete adapters return `410`;
+legacy rows remain readable as historical evidence.
 
 ## Production audit — 2026-07-17
 
@@ -1453,13 +1488,14 @@ produce `missing_observation` and no inferred ancestry.
 
 `network.access_path.resolve_fiber_end_to_end_path` now forms the single
 read-only subscription proof. It reverses the validated passive trace from the
-customer/ONT toward the OLT, requires complete declared cable/core capacity,
-resolves exactly one OLT `NetworkDevice`, and follows only reviewed forwarding
-declarations with current observation agreement through the subscription's
-authoritative provisioning NAS to a core/border root. The live RADIUS NAS is a
-separate observation (`agreement`, `drift`, or `missing_observation`) and never
-replaces provisioning identity. Every refused join is a typed domain gap and
-the full hop/gap/declaration/fault-candidate payload has one combined SHA-256.
+customer/ONT toward the OLT, requires complete declared cable capacity and one
+exact reviewed connector/patch/core/splice route, resolves exactly one OLT
+`NetworkDevice`, and follows only reviewed forwarding declarations with current
+observation agreement through the subscription's authoritative provisioning NAS
+to a core/border root. The live RADIUS NAS is a separate observation
+(`agreement`, `drift`, or `missing_observation`) and never replaces provisioning
+identity. Every refused join is a typed domain gap and the full
+hop/gap/declaration/fault-candidate payload has one combined SHA-256.
 Production cutover still requires the documented complete reviewed declaration,
 passive-inventory, observation-agreement, and field-verification cohorts; the
 existence of this projection does not make empty or partial production data
