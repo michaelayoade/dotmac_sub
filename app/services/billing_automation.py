@@ -1526,6 +1526,7 @@ def run_invoice_cycle(
                     issued_at=run_at,
                     due_at=run_at,
                     reason="prepaid_funding_attempt",
+                    apply_available_credit=False,
                 )
                 settle_single_invoice_from_credit(db, invoice, only_if_full=True)
                 db.flush()

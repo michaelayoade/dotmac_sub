@@ -451,7 +451,16 @@ detailed security and delivery boundary is
    neither CRM nor referral services post a parallel wallet balance. Automated
    referral issuance uses the same owner-generated preview, locked confirmation,
    idempotency, audit, and exact funding-ledger evidence as other credit issuance.
-21. Every money-moving financial command is previewed by the same owner that executes it.
+21. `financial.account_credit_deposits` owns the typed Deposit Account Credit
+   intent and atomic provider-confirmation composition. The full receipt first
+   becomes payment-backed unallocated account credit and grants no prepaid
+   duration. `financial.account_credit_applications` then owns deterministic
+   oldest-debt consumption through `financial.payments` allocation preview and
+   confirmation. Customer routes, provider webhooks, payment-proof review,
+   invoice issuance/void, and reconcilers are adapters around those owners;
+   none may maintain a wallet counter, allocate rows directly, or restore
+   access merely because cash was deposited.
+22. Every money-moving financial command is previewed by the same owner that executes it.
    Execution locks and recomputes the preview, rejects stale confirmation,
    records idempotency and actor audit evidence, and structurally links the
    command result to its exact ledger transaction(s). Financial settlement may
