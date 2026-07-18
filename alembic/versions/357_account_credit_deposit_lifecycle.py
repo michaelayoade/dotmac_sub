@@ -1,7 +1,7 @@
 """Add the typed Deposit Account Credit intent contract.
 
-Revision ID: 349_account_credit_deposit_lifecycle
-Revises: 348_location_capture_prompt_state
+Revision ID: 357_account_credit_deposit_lifecycle
+Revises: 356_party_first_referral_capture
 Create Date: 2026-07-18
 """
 
@@ -12,8 +12,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "349_account_credit_deposit_lifecycle"
-down_revision = "348_location_capture_prompt_state"
+revision = "357_account_credit_deposit_lifecycle"
+down_revision = "356_party_first_referral_capture"
 branch_labels = None
 depends_on = None
 
