@@ -586,19 +586,19 @@ def test_report_routes_require_domain_permissions():
         admin_reports.router,
         "/reports/technician",
         "GET",
-        "provisioning:read",
+        "reports:support:read",
     )
     assert _route_has_permission(
         admin_reports.router,
         "/reports/inbox-performance",
         "GET",
-        "provisioning:read",
+        "reports:support:read",
     )
     assert _route_has_permission(
         admin_reports.router,
         "/reports/inbox-escalations",
         "GET",
-        "provisioning:read",
+        "reports:support:read",
     )
     assert _route_has_permission(
         admin_reports.router,
