@@ -22,7 +22,7 @@ from typing import Any
 
 from app.schemas.status_presentation import StatusIcon, StatusTone
 
-__all__ = ["StateKind", "StateValue", "Kpi", "Action"]
+__all__ = ["Action", "Kpi", "StateKind", "StateValue"]
 
 
 class StateKind(StrEnum):
@@ -51,6 +51,15 @@ class StateValue:
     kind: StateKind
     value: Any = None
     as_of: datetime | None = None  # freshness for present/stale values
+
+    def __post_init__(self) -> None:
+        renderable = self.kind in (StateKind.present, StateKind.stale)
+        if renderable and self.value is None:
+            raise ValueError("Present and stale UI state requires a value")
+        if not renderable and (self.value is not None or self.as_of is not None):
+            raise ValueError("Absent UI state cannot carry a value or freshness")
+        if self.as_of is not None and self.as_of.tzinfo is None:
+            raise ValueError("UI state freshness must be timezone-aware")
 
     @classmethod
     def present(cls, value: Any, *, as_of: datetime | None = None) -> StateValue:
@@ -105,10 +114,16 @@ class Kpi:
 
     label: str
     value: StateValue
-    cohort_url: str | None = None
+    cohort_url: str
     tone: StatusTone = StatusTone.neutral
     icon: StatusIcon | None = None
     unit: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("KPI label is required")
+        if not self.cohort_url.startswith("/"):
+            raise ValueError("KPI cohort URL must be an application-relative URL")
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,10 +133,10 @@ class Action:
     ``allowed`` and ``reason`` come from the owning transition service, never a
     status string re-derived in the template. ``permission`` is the granular
     RBAC key the route enforces (the UI hides what the principal cannot do; the
-    route still authorizes). ``preview_url`` + ``danger`` mark
-    destructive/financial actions that must show an impact preview and an
-    explicit confirmation before running; ``affected`` is a lightweight impact
-    count for the same purpose.
+    route still authorizes). ``requires_confirmation`` is a safety control,
+    separate from semantic ``tone``. Destructive and financial actions bind it
+    to ``preview_url`` so presentation style can never decide whether
+    confirmation is required; ``affected`` is a lightweight impact count.
     """
 
     key: str
@@ -131,4 +146,21 @@ class Action:
     permission: str | None = None
     preview_url: str | None = None
     affected: int | None = None
-    danger: bool = False
+    tone: StatusTone = StatusTone.neutral
+    requires_confirmation: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.key.strip() or not self.label.strip():
+            raise ValueError("Action key and label are required")
+        if self.allowed and self.reason:
+            raise ValueError("Allowed action cannot carry a blocked reason")
+        if not self.allowed and not str(self.reason or "").strip():
+            raise ValueError("Blocked action requires a reason")
+        if self.affected is not None and self.affected < 0:
+            raise ValueError("Action affected count cannot be negative")
+        if self.requires_confirmation != bool(self.preview_url):
+            raise ValueError(
+                "Confirmation requirement and preview URL must be declared together"
+            )
+        if self.preview_url and not self.preview_url.startswith("/"):
+            raise ValueError("Action preview URL must be application-relative")

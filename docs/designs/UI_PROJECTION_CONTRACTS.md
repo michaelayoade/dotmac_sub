@@ -38,7 +38,7 @@ template checks `is_present` before formatting `value`. This is the standard's
 ### KPI — `Kpi`
 
 `value` is a `StateValue` (an unresolvable KPI shows "Unavailable", not `0`).
-`cohort_url` is the drill-down to the **exact filtered cohort** that produced the
+`cohort_url` is the required drill-down to the **exact filtered cohort** that produced the
 number — supplied by the owner so a headline total and its list can never
 diverge (the KPI-parity rule). `tone`/`icon` reuse the canonical `StatusTone` /
 `StatusIcon`, giving a non-colour-only signal.
@@ -48,8 +48,15 @@ diverge (the KPI-parity rule). `tone`/`icon` reuse the canonical `StatusTone` /
 `allowed` + `reason` come from the owning transition service, never a status
 string in the template. `permission` is the granular RBAC key the route
 enforces (the UI hides what the principal can't do; the route still authorizes).
-`preview_url` + `danger` + `affected` mark destructive/financial actions that
-must preview impact and confirm before running.
+`requires_confirmation` + `preview_url` + `affected` mark destructive/financial
+actions that must preview impact and confirm before running. Confirmation policy
+is deliberately separate from semantic `tone`: styling cannot weaken a safety
+control.
+
+The dataclasses reject contradictory shapes at construction time: absent state
+cannot carry a value/freshness, every KPI has an application-relative cohort
+URL, blocked actions explain why, negative impact counts are invalid, and a
+confirmation requirement cannot exist without its preview URL.
 
 ## Adoption
 
