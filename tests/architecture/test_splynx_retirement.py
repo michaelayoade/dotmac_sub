@@ -1,11 +1,11 @@
 """Guard the retired Splynx surface against accidental resurrection.
 
-See docs/designs/SPLYNX_RETIREMENT.md. Splynx was the pre-migration BSS; its
-archive models were never populated (every table held zero rows) and are gone,
-as is the legacy-BSS id-mapping path (``legacy_bss`` was unreachable — nothing
-imported it, so its before_flush listener never registered).
+See docs/designs/SPLYNX_RETIREMENT.md. Splynx was the pre-migration BSS. Its
+runtime archive models and legacy-BSS id-mapping path are retired, while the
+populated ticket and mapping tables remain as database evidence without active
+models or writers.
 
-**Two carve-outs matter as much as the removals**, and both are asserted
+**The live-code carve-outs matter as much as the removals**, and both are asserted
 positively so a future "clean up splynx" sweep fails a test rather than a
 filing or a money audit:
 
