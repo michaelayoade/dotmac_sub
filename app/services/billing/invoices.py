@@ -81,6 +81,26 @@ _RECONCILIATION_IDEMPOTENCY_SCOPE = "invoice_closure_reconciliation"
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,120}$")
 
 
+def _apply_available_account_credit(db: Session, invoice: Invoice) -> None:
+    """Hand an allocatable invoice to the canonical account-credit owner."""
+    if (
+        invoice.is_active
+        and invoice.status
+        in {
+            InvoiceStatus.issued,
+            InvoiceStatus.partially_paid,
+            InvoiceStatus.overdue,
+        }
+        and round_money(to_decimal(invoice.balance_due)) > Decimal("0.00")
+    ):
+        from app.services.billing.account_credit import AccountCreditApplications
+
+        # Sessions use autoflush=False; make the issued state visible to the
+        # applicator's deterministic query before it selects the account cohort.
+        db.flush()
+        AccountCreditApplications.apply(db, str(invoice.account_id))
+
+
 @dataclass(frozen=True)
 class InvoiceClosureLedgerEffect:
     reverses_ledger_entry_id: UUID | None
@@ -112,6 +132,7 @@ class InvoiceClosurePreview:
     receivable_after: Decimal
     closure_amount: Decimal
     currency: str
+    released_allocation_ids: tuple[UUID, ...]
     ledger_effects: tuple[InvoiceClosureLedgerEffect, ...]
     access_consequence: str
     fingerprint: str
@@ -323,6 +344,7 @@ def _build_closure_preview(
     settlement = resolve_invoice_settlement_amounts(db, invoice.id)
     payments_applied = round_money(settlement.payments_applied)
     credits_applied = round_money(settlement.credits_applied)
+    released_allocation_ids: tuple[UUID, ...] = ()
     derived_receivable = max(
         Decimal("0.00"),
         round_money(to_decimal(invoice.total) - payments_applied - credits_applied),
@@ -375,7 +397,12 @@ def _build_closure_preview(
                 status_code=409,
                 detail="A paid invoice must be reversed through payment/credit owners",
             )
-        if payments_applied > 0 or credits_applied > 0:
+        from app.services.billing.account_credit import AccountCreditApplications
+
+        release_preview = AccountCreditApplications.preview_invoice_void_release(
+            db, invoice.id
+        )
+        if credits_applied > 0 or release_preview.amount != payments_applied:
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -384,7 +411,7 @@ def _build_closure_preview(
                 ),
             )
         debits = _invoice_debits_to_reverse(db, invoice)
-        effects = tuple(
+        invoice_effects = tuple(
             InvoiceClosureLedgerEffect(
                 reverses_ledger_entry_id=entry.id,
                 result_entry_type=LedgerEntryType.credit,
@@ -394,6 +421,18 @@ def _build_closure_preview(
             )
             for entry in debits
         )
+        allocation_effects = tuple(
+            InvoiceClosureLedgerEffect(
+                reverses_ledger_entry_id=entry.original_entry_id,
+                result_entry_type=entry.result_entry_type,
+                result_source=entry.result_source,
+                amount=entry.amount,
+                currency=entry.currency,
+            )
+            for entry in release_preview.entries
+        )
+        effects = invoice_effects + allocation_effects
+        released_allocation_ids = release_preview.allocation_ids
         status_after = InvoiceStatus.void
         receivable_before = (
             Decimal("0.00")
@@ -428,6 +467,7 @@ def _build_closure_preview(
         receivable_after=Decimal("0.00"),
         closure_amount=receivable_before,
         currency=invoice.currency,
+        released_allocation_ids=released_allocation_ids,
         ledger_effects=effects,
         access_consequence=access_consequence,
         fingerprint=fingerprint,
@@ -458,6 +498,10 @@ def _stage_invoice_closure_audit(
                 "ledger_entry_ids": [
                     str(evidence.ledger_entry_id)
                     for evidence in closure.ledger_evidence
+                ],
+                "released_payment_allocation_ids": [
+                    str(allocation_id)
+                    for allocation_id in preview.released_allocation_ids
                 ],
                 "access_consequence": preview.access_consequence,
             },
@@ -617,8 +661,32 @@ class Invoices(ListResponseMixin):
                 )
                 ledger_results.append((entry, None))
             else:
+                release_entry_ids: set[UUID] = set()
+                if preview.released_allocation_ids:
+                    from app.services.billing.account_credit import (
+                        AccountCreditApplications,
+                    )
+
+                    release_preview = (
+                        AccountCreditApplications.preview_invoice_void_release(
+                            db, invoice.id
+                        )
+                    )
+                    if (
+                        release_preview.allocation_ids
+                        != preview.released_allocation_ids
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Account-credit allocation evidence changed",
+                        )
+                    release_entry_ids = {
+                        entry.original_entry_id for entry in release_preview.entries
+                    }
                 for effect in preview.ledger_effects:
                     assert effect.reverses_ledger_entry_id is not None
+                    if effect.reverses_ledger_entry_id in release_entry_ids:
+                        continue
                     reversal = LedgerEntries.reverse(
                         db,
                         str(effect.reverses_ledger_entry_id),
@@ -627,6 +695,17 @@ class Invoices(ListResponseMixin):
                         commit=False,
                     )
                     ledger_results.append((reversal, effect.reverses_ledger_entry_id))
+
+                if preview.released_allocation_ids:
+                    ledger_results.extend(
+                        AccountCreditApplications.release_for_invoice_void(
+                            db,
+                            invoice_id=invoice.id,
+                            expected_allocation_ids=preview.released_allocation_ids,
+                            memo=payload.memo
+                            or f"Void invoice {invoice.invoice_number or invoice.id}",
+                        )
+                    )
 
             closure = InvoiceClosure(
                 invoice_id=invoice.id,
@@ -1144,6 +1223,7 @@ class Invoices(ListResponseMixin):
                 },
             ),
         )
+        _apply_available_account_credit(db, invoice)
         return invoice
 
     @staticmethod
@@ -1155,9 +1235,15 @@ class Invoices(ListResponseMixin):
         due_at: datetime | None,
         reason: str,
         announce: bool = False,
+        apply_available_credit: bool = True,
         commit: bool = False,
     ) -> InvoiceLifecycleTransitionResult:
-        """Own the deterministic draft -> issued transition."""
+        """Own the deterministic draft -> issued transition.
+
+        ``apply_available_credit=False`` is reserved for domain owners that
+        immediately compose a stricter allocation policy, such as prepaid
+        draft-until-fully-funded renewal. Thin adapters must keep the default.
+        """
         invoice = lock_for_update(db, Invoice, invoice_id)
         if invoice is None:
             raise HTTPException(status_code=404, detail="Invoice not found")
@@ -1203,6 +1289,8 @@ class Invoices(ListResponseMixin):
                 account_id=invoice.account_id,
                 invoice_id=invoice.id,
             )
+        if apply_available_credit:
+            _apply_available_account_credit(db, invoice)
         if commit:
             db.commit()
             db.refresh(invoice)
@@ -1462,10 +1550,6 @@ class Invoices(ListResponseMixin):
         invoice = Invoice(**data)
         db.add(invoice)
         db.flush()
-        db.commit()
-        db.refresh(invoice)
-
-        # Emit invoice.created event
         emit_event(
             db,
             EventType.invoice_created,
@@ -1479,6 +1563,9 @@ class Invoices(ListResponseMixin):
             account_id=invoice.account_id,
             invoice_id=invoice.id,
         )
+        _apply_available_account_credit(db, invoice)
+        db.commit()
+        db.refresh(invoice)
 
         return invoice
 
@@ -1604,9 +1691,6 @@ class Invoices(ListResponseMixin):
             is_active=True,
         )
         db.add(line)
-        db.commit()
-        db.refresh(invoice)
-
         emit_event(
             db,
             EventType.invoice_created,
@@ -1620,6 +1704,9 @@ class Invoices(ListResponseMixin):
             account_id=invoice.account_id,
             invoice_id=invoice.id,
         )
+        _apply_available_account_credit(db, invoice)
+        db.commit()
+        db.refresh(invoice)
 
         logger.info(
             "Created invoice %s for subscription %s: %s %s",
@@ -1788,8 +1875,6 @@ class Invoices(ListResponseMixin):
             assert_legal_invoice_transition(previous_status, data["status"])
         for key, value in data.items():
             setattr(invoice, key, value)
-        db.commit()
-        db.refresh(invoice)
 
         # Emit invoice events based on status transitions
         new_status = invoice.status
@@ -1811,6 +1896,7 @@ class Invoices(ListResponseMixin):
                     account_id=invoice.account_id,
                     invoice_id=invoice.id,
                 )
+                _apply_available_account_credit(db, invoice)
             elif new_status == InvoiceStatus.paid:
                 emit_event(
                     db,
@@ -1827,6 +1913,9 @@ class Invoices(ListResponseMixin):
                     account_id=invoice.account_id,
                     invoice_id=invoice.id,
                 )
+
+        db.commit()
+        db.refresh(invoice)
 
         return invoice
 
