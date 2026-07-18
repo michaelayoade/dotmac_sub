@@ -57,6 +57,7 @@ from app.models.billing import (  # noqa: F401
     LedgerSource,
     Payment,
     PaymentAllocationReconciliationException,
+    PaymentPrepaidApplication,
     PaymentMethod,
     PaymentMethodType,
     PaymentProvider,
