@@ -2,7 +2,12 @@
 
 import pytest
 
-from app.models.network import FiberSegment, FiberTerminationPoint, IPVersion
+from app.models.network import (
+    FiberSegment,
+    FiberSplice,
+    FiberTerminationPoint,
+    IPVersion,
+)
 from app.schemas.network import (
     FdhCabinetCreate,
     FiberSegmentCreate,
@@ -1255,41 +1260,15 @@ class TestFiberStrandsCRUD:
 
 
 class TestFiberSplicesCRUD:
-    """Tests for FiberSplices CRUD operations."""
+    """Legacy splice rows remain readable but are no longer writable."""
 
     def test_create_fiber_splice(self, db_session):
-        """Test creating a fiber splice."""
-        closure = network_service.fiber_splice_closures.create(
-            db_session,
-            FiberSpliceClosureCreate(name="Splice Closure"),
-        )
-        tray = network_service.fiber_splice_trays.create(
-            db_session,
-            FiberSpliceTrayCreate(closure_id=closure.id, tray_number=1),
-        )
-        splice = network_service.fiber_splices.create(
-            db_session,
-            FiberSpliceCreate(tray_id=tray.id, position=1),
-        )
-        assert splice.tray_id == tray.id
-        assert splice.position == 1
-
-    def test_get_fiber_splice(self, db_session):
-        """Test getting fiber splice by ID."""
-        closure = network_service.fiber_splice_closures.create(
-            db_session,
-            FiberSpliceClosureCreate(name="Get Splice Closure"),
-        )
-        tray = network_service.fiber_splice_trays.create(
-            db_session,
-            FiberSpliceTrayCreate(closure_id=closure.id, tray_number=1),
-        )
-        splice = network_service.fiber_splices.create(
-            db_session,
-            FiberSpliceCreate(tray_id=tray.id, position=2),
-        )
-        fetched = network_service.fiber_splices.get(db_session, str(splice.id))
-        assert fetched.id == splice.id
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.fiber_splices.create(
+                db_session,
+                FiberSpliceCreate(tray_id=uuid.uuid4(), position=1),
+            )
+        assert exc_info.value.status_code == 410
 
     def test_get_fiber_splice_not_found(self, db_session):
         """Test 404 for non-existent fiber splice."""
@@ -1298,57 +1277,16 @@ class TestFiberSplicesCRUD:
         assert exc_info.value.status_code == 404
 
     def test_update_fiber_splice(self, db_session):
-        """Test updating fiber splice."""
-        closure = network_service.fiber_splice_closures.create(
-            db_session,
-            FiberSpliceClosureCreate(name="Update Splice Closure"),
-        )
-        tray = network_service.fiber_splice_trays.create(
-            db_session,
-            FiberSpliceTrayCreate(closure_id=closure.id, tray_number=1),
-        )
-        splice = network_service.fiber_splices.create(
-            db_session,
-            FiberSpliceCreate(tray_id=tray.id, position=3),
-        )
-        updated = network_service.fiber_splices.update(
-            db_session, str(splice.id), FiberSpliceUpdate(position=4)
-        )
-        assert updated.position == 4
-
-    def test_update_fiber_splice_not_found(self, db_session):
-        """Test 404 for updating non-existent fiber splice."""
         with pytest.raises(HTTPException) as exc_info:
             network_service.fiber_splices.update(
                 db_session, str(uuid.uuid4()), FiberSpliceUpdate(position=1)
             )
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.status_code == 410
 
     def test_delete_fiber_splice(self, db_session):
-        """Test deleting fiber splice (hard delete)."""
-        closure = network_service.fiber_splice_closures.create(
-            db_session,
-            FiberSpliceClosureCreate(name="Delete Splice Closure"),
-        )
-        tray = network_service.fiber_splice_trays.create(
-            db_session,
-            FiberSpliceTrayCreate(closure_id=closure.id, tray_number=1),
-        )
-        splice = network_service.fiber_splices.create(
-            db_session,
-            FiberSpliceCreate(tray_id=tray.id, position=5),
-        )
-        splice_id = str(splice.id)
-        network_service.fiber_splices.delete(db_session, splice_id)
-        with pytest.raises(HTTPException) as exc_info:
-            network_service.fiber_splices.get(db_session, splice_id)
-        assert exc_info.value.status_code == 404
-
-    def test_delete_fiber_splice_not_found(self, db_session):
-        """Test 404 for deleting non-existent fiber splice."""
         with pytest.raises(HTTPException) as exc_info:
             network_service.fiber_splices.delete(db_session, str(uuid.uuid4()))
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.status_code == 410
 
     def test_list_fiber_splices(self, db_session):
         """Test listing fiber splices."""
@@ -1360,13 +1298,12 @@ class TestFiberSplicesCRUD:
             db_session,
             FiberSpliceTrayCreate(closure_id=closure.id, tray_number=1),
         )
-        network_service.fiber_splices.create(
-            db_session,
-            FiberSpliceCreate(tray_id=tray.id, position=6),
-        )
-        network_service.fiber_splices.create(
-            db_session,
-            FiberSpliceCreate(tray_id=tray.id, position=7),
+        first = FiberSplice(tray_id=tray.id, position=6)
+        second = FiberSplice(tray_id=tray.id, position=7)
+        db_session.add_all([first, second])
+        db_session.commit()
+        assert (
+            network_service.fiber_splices.get(db_session, str(first.id)).id == first.id
         )
         splices = network_service.fiber_splices.list(
             db_session,
@@ -1376,7 +1313,7 @@ class TestFiberSplicesCRUD:
             limit=100,
             offset=0,
         )
-        assert len(splices) >= 2
+        assert {row.id for row in splices} == {first.id, second.id}
 
 
 class TestFiberSpliceTraysCRUD:

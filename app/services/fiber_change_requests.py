@@ -13,6 +13,7 @@ from app.models.fiber_change_request import (
     FiberChangeRequestOperation,
     FiberChangeRequestStatus,
 )
+from app.models.fiber_physical import FiberConnectorPort, FiberPatchPanel, FiberRack
 from app.models.fiber_support import FiberSupportStructure
 from app.models.network import (
     FdhCabinet,
@@ -33,6 +34,9 @@ logger = logging.getLogger(__name__)
 ASSET_MODEL_MAP = {
     "fdh_cabinet": FdhCabinet,
     "fiber_access_point": FiberAccessPoint,
+    "fiber_connector_port": FiberConnectorPort,
+    "fiber_patch_panel": FiberPatchPanel,
+    "fiber_rack": FiberRack,
     "splice_closure": FiberSpliceClosure,
     "fiber_segment": FiberSegment,
     "fiber_splice": FiberSplice,
@@ -99,6 +103,16 @@ def create_request(
     commit: bool = True,
 ):
     normalized, _ = _get_model(asset_type)
+    if normalized == "fiber_splice" and not (payload or {}).get(
+        "physical_link_decision_id"
+    ):
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Legacy strand-pair splice requests are retired; provide an exact "
+                "reviewed network.fiber_physical_continuity decision."
+            ),
+        )
     request = FiberChangeRequest(
         asset_type=normalized,
         asset_id=asset_id,
@@ -141,6 +155,41 @@ def reject_request(
     request = get_request(db, request_id)
     if request.status != FiberChangeRequestStatus.pending:
         raise HTTPException(status_code=400, detail="Change request already processed")
+    if request.asset_type == "fiber_splice" and (request.payload or {}).get(
+        "physical_link_decision_id"
+    ):
+        from app.models.fiber_physical import FiberPhysicalLinkDecision
+        from app.services.network.fiber_physical_continuity import (
+            FiberPhysicalContinuityError,
+            decline_physical_link,
+        )
+
+        decision = db.get(
+            FiberPhysicalLinkDecision,
+            coerce_uuid(request.payload["physical_link_decision_id"]),
+        )
+        if decision is None or decision.link_type != "core_splice":
+            raise HTTPException(
+                status_code=422,
+                detail="Exact core-splice decision not found",
+            )
+        if decision.status == "proposed":
+            try:
+                decline_physical_link(
+                    db,
+                    decision.id,
+                    reviewed_by=f"fiber-change-reviewer:{reviewer_person_id}",
+                    review_notes=review_notes
+                    or "Exact core splice declined through fiber change request",
+                    commit=False,
+                )
+            except FiberPhysicalContinuityError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        elif decision.status != "declined":
+            raise HTTPException(
+                status_code=400,
+                detail="Exact core-splice decision is no longer reviewable",
+            )
     request.status = FiberChangeRequestStatus.rejected
     request.reviewed_by_person_id = coerce_uuid(reviewer_person_id)
     request.review_notes = review_notes
@@ -150,8 +199,72 @@ def reject_request(
     return request
 
 
-def _apply_request(db: Session, request: FiberChangeRequest):
+def _apply_request(
+    db: Session,
+    request: FiberChangeRequest,
+    *,
+    reviewer_person_id: str,
+    review_notes: str | None,
+):
     normalized, model = _get_model(request.asset_type)
+    if normalized == "fiber_splice":
+        from app.models.fiber_physical import FiberPhysicalLinkDecision
+        from app.services.network.fiber_physical_continuity import (
+            FiberPhysicalContinuityError,
+            approve_physical_link,
+            execute_physical_link,
+        )
+
+        if request.operation != FiberChangeRequestOperation.create:
+            raise HTTPException(
+                status_code=410,
+                detail="Legacy splice update/delete is retired; use an exact disconnect decision.",
+            )
+        raw_decision_id = (request.payload or {}).get("physical_link_decision_id")
+        if raw_decision_id is None:
+            raise HTTPException(
+                status_code=410,
+                detail="Legacy splice request has no exact physical-link decision.",
+            )
+        decision_id = coerce_uuid(raw_decision_id)
+        decision = db.get(FiberPhysicalLinkDecision, decision_id)
+        if decision is None or decision.link_type != "core_splice":
+            raise HTTPException(
+                status_code=422,
+                detail="Exact core-splice decision not found",
+            )
+        actor = f"fiber-change-reviewer:{reviewer_person_id}"
+        notes = (
+            review_notes or "Exact core splice reviewed through fiber change request"
+        )
+        try:
+            if decision.status == "proposed":
+                decision = approve_physical_link(
+                    db,
+                    decision.id,
+                    reviewed_by=actor,
+                    review_notes=notes,
+                    commit=False,
+                )
+            if decision.status == "approved":
+                decision = execute_physical_link(
+                    db,
+                    decision.id,
+                    executed_by=actor,
+                    commit=False,
+                )
+        except FiberPhysicalContinuityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if decision.status != "applied":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Exact core-splice decision closed without mutation: "
+                    f"{decision.closed_reason or decision.status}"
+                ),
+            )
+        request.asset_id = decision.id
+        return
     if normalized == "support_structure":
         from app.services.network.fiber_support_structures import (
             FiberSupportStructureError,
@@ -168,6 +281,24 @@ def _apply_request(db: Session, request: FiberChangeRequest):
         except FiberSupportStructureError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         request.asset_id = support.id
+        return
+    if normalized in {"fiber_rack", "fiber_patch_panel", "fiber_connector_port"}:
+        from app.services.network.fiber_physical_continuity import (
+            FiberPhysicalContinuityError,
+            apply_reviewed_physical_inventory_change,
+        )
+
+        try:
+            asset = apply_reviewed_physical_inventory_change(
+                db,
+                asset_type=normalized,
+                operation=request.operation,
+                asset_id=request.asset_id,
+                payload=request.payload,
+            )
+        except FiberPhysicalContinuityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        request.asset_id = asset.id
         return
     payload = _prepare_payload(model, request.payload)
     if normalized in {"splitter", "splitter_port"}:
@@ -297,7 +428,12 @@ def approve_request(
     request = get_request(db, request_id)
     if request.status != FiberChangeRequestStatus.pending:
         raise HTTPException(status_code=400, detail="Change request already processed")
-    _apply_request(db, request)
+    _apply_request(
+        db,
+        request,
+        reviewer_person_id=reviewer_person_id,
+        review_notes=review_notes,
+    )
     request.status = FiberChangeRequestStatus.applied
     request.reviewed_by_person_id = coerce_uuid(reviewer_person_id)
     request.review_notes = review_notes

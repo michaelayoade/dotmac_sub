@@ -1067,23 +1067,49 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="network.fiber_physical_continuity",
+                module="app.services.network.fiber_physical_continuity",
+                owns=(
+                    "fiber rack, ODF/patch-panel, and connector-port inventory invariants",
+                    "reviewed exact core-splice, strand-termination, and patch-cord decisions",
+                    "canonical active physical optical links and immutable result evidence",
+                    "exact ordered cable-core continuity and evidence hash",
+                ),
+                depends_on=(
+                    "network.fiber_topology",
+                    "network.fiber_plant_integrity",
+                ),
+                notes=(
+                    "Every connector represents one optical channel; duplex uses "
+                    "two explicit links sharing an assembly label, while MPO/MTP "
+                    "fails closed until an exact lane model exists. Cable names, "
+                    "labels, geometry, proximity, legacy FiberSplice rows, and the "
+                    "legacy FiberSegment.fiber_strand_id scalar never create exact "
+                    "continuity. Links require preview, independent review, locked "
+                    "execution, and exact result evidence."
+                ),
+            ),
+            SOTService(
                 name="network.fiber_asset_changes",
                 module="app.services.fiber_change_requests",
                 owns=(
                     "reviewed passive-fiber asset change requests",
                     "approved passive-fiber asset mutations",
                     "reviewed requests for operational cable size and lifecycle state",
+                    "review transport for rack, panel, connector, and exact splice decisions",
                 ),
                 depends_on=(
                     "network.fiber_topology",
                     "network.fiber_plant_integrity",
                     "network.splitter_inventory",
                     "network.fiber_support_structures",
+                    "network.fiber_physical_continuity",
                 ),
                 notes=(
                     "This workflow owns review and application. It delegates cable "
-                    "and splitter invariants plus exact core materialization to their "
-                    "named owners instead of maintaining parallel mutation rules."
+                    "and splitter invariants, exact core materialization, physical "
+                    "inventory, and splice execution to their named owners instead "
+                    "of maintaining parallel mutation rules."
                 ),
             ),
             SOTService(
@@ -1622,6 +1648,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.ont_assignment_commands",
                     "network.ont_assignment_identity",
                     "network.fiber_access_attachments",
+                    "network.fiber_physical_continuity",
                     "network.forwarding_topology",
                 ),
             ),

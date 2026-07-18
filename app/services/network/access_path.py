@@ -18,6 +18,9 @@ from app.models.network_monitoring import NetworkDevice
 from app.models.radius_active_session import RadiusActiveSession
 from app.services.common import coerce_uuid
 from app.services.fiber_topology import localize_fiber_fault, trace_fiber_subscription
+from app.services.network.fiber_physical_continuity import (
+    resolve_subscription_core_continuity,
+)
 from app.services.network.fiber_plant_integrity import cable_capacity
 from app.services.network.forwarding_topology import (
     project_authoritative_forwarding_graph,
@@ -63,6 +66,8 @@ class FiberEndToEndPath:
     hops: tuple[FiberServicePathHop, ...]
     gaps: tuple[FiberServicePathGap, ...]
     passive_complete: bool
+    core_continuity_complete: bool
+    core_continuity_sha256: str
     forwarding_complete: bool
     provisioning_nas_device_id: object | None
     live_nas_device_id: object | None
@@ -75,12 +80,17 @@ class FiberEndToEndPath:
 
     @property
     def complete(self) -> bool:
-        return self.passive_complete and self.forwarding_complete and not self.gaps
+        return (
+            self.passive_complete
+            and self.core_continuity_complete
+            and self.forwarding_complete
+            and not self.gaps
+        )
 
     def to_dict(self) -> dict[str, object]:
         payload = asdict(self)
         payload["complete"] = self.complete
-        payload["schema_version"] = 1
+        payload["schema_version"] = 2
         return payload
 
 
@@ -237,7 +247,34 @@ def resolve_fiber_end_to_end_path(
             )
         )
 
-    passive_complete = trace.customer_trace_complete and cable_capacity_complete
+    core_continuity = resolve_subscription_core_continuity(db, subscription_obj)
+    for gap in core_continuity.gaps:
+        gaps.append(
+            FiberServicePathGap(
+                code=gap.code,
+                domain="physical_core",
+                message=gap.message,
+                after_asset_id=gap.after_asset_id,
+            )
+        )
+    for core_hop in reversed(core_continuity.hops):
+        hops.append(
+            FiberServicePathHop(
+                domain="physical_core",
+                kind=core_hop.kind,
+                asset_id=core_hop.asset_id,
+                label=core_hop.label,
+                evidence_refs=(
+                    *core_hop.evidence_refs,
+                    f"core-continuity-report:{core_continuity.evidence_sha256}",
+                ),
+            )
+        )
+    passive_complete = bool(
+        trace.customer_trace_complete
+        and cable_capacity_complete
+        and core_continuity.complete
+    )
     olt_hops = [hop for hop in trace.hops if hop.kind == "olt" and hop.asset_id]
     olt_node: NetworkDevice | None = None
     if len(olt_hops) != 1:
@@ -463,6 +500,8 @@ def resolve_fiber_end_to_end_path(
         "live_nas_device_id": str(live_nas_id) if live_nas_id else None,
         "live_nas_state": live_nas_state,
         "passive_complete": passive_complete,
+        "core_continuity_complete": core_continuity.complete,
+        "core_continuity_sha256": core_continuity.evidence_sha256,
         "provisioning_nas_device_id": (
             str(expected_nas_id) if expected_nas_id else None
         ),
@@ -474,6 +513,8 @@ def resolve_fiber_end_to_end_path(
         hops=tuple(hops),
         gaps=tuple(gaps),
         passive_complete=passive_complete,
+        core_continuity_complete=core_continuity.complete,
+        core_continuity_sha256=core_continuity.evidence_sha256,
         forwarding_complete=forwarding_complete,
         provisioning_nas_device_id=expected_nas_id,
         live_nas_device_id=live_nas_id,

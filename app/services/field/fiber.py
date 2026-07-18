@@ -32,6 +32,7 @@ from app.services import fiber_change_requests
 from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.network import (
+    fiber_physical_continuity,
     fiber_topology_field_observations,
     fiber_topology_work_order_evidence_map,
 )
@@ -58,7 +59,9 @@ def propose_splice(
     *,
     closure_id: str,
     from_strand_id: str,
+    from_strand_end: str,
     to_strand_id: str,
+    to_strand_end: str,
     tray_id: str | None = None,
     position: int | None = None,
     splice_type: str | None = None,
@@ -69,6 +72,8 @@ def propose_splice(
     closure_uuid = _uuid_or_422(closure_id, "closure_id")
     from_uuid = _uuid_or_422(from_strand_id, "from_strand_id")
     to_uuid = _uuid_or_422(to_strand_id, "to_strand_id")
+    from_end = _strand_end_or_422(from_strand_end, "from_strand_end")
+    to_end = _strand_end_or_422(to_strand_end, "to_strand_end")
     if from_uuid == to_uuid:
         raise HTTPException(
             status_code=422, detail="A strand cannot be spliced to itself"
@@ -119,24 +124,47 @@ def propose_splice(
             status_code=409, detail="A splice between these strands already exists"
         )
 
-    pair = {str(from_uuid), str(to_uuid)}
+    pair = {(str(from_uuid), from_end), (str(to_uuid), to_end)}
     for request in _pending_splice_requests(db):
         payload = request.payload or {}
         if {
-            str(payload.get("from_strand_id")),
-            str(payload.get("to_strand_id")),
+            (str(payload.get("from_strand_id")), payload.get("from_strand_end")),
+            (str(payload.get("to_strand_id")), payload.get("to_strand_end")),
         } == pair:
             return _proposal_response(request, replayed=True)
+
+    try:
+        decision = fiber_physical_continuity.propose_physical_link(
+            db,
+            "core_splice",
+            "connect",
+            proposed_by=f"field-technician:{profile.id}",
+            reason=note or "Field-captured exact fiber core splice",
+            first_strand_id=from_uuid,
+            first_strand_end=from_end,
+            second_strand_id=to_uuid,
+            second_strand_end=to_end,
+            splice_closure_id=closure.id,
+            splice_tray_id=tray_uuid,
+            position=position,
+            splice_type=splice_type,
+            insertion_loss_db=loss_db,
+        )
+    except fiber_physical_continuity.FiberPhysicalContinuityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     payload = {
         "closure_id": str(closure.id),
         "from_strand_id": str(from_uuid),
+        "from_strand_end": from_end,
         "to_strand_id": str(to_uuid),
+        "to_strand_end": to_end,
         "tray_id": str(tray_uuid) if tray_uuid else None,
         "position": position,
         "splice_type": splice_type,
         "loss_db": loss_db,
         "notes": note,
+        "physical_link_decision_id": str(decision.id),
         "field_actor": {
             "technician_id": str(profile.id),
             "person_id": str(profile.person_id),
@@ -148,7 +176,7 @@ def propose_splice(
     request = fiber_change_requests.create_request(
         db,
         asset_type="fiber_splice",
-        asset_id=None,
+        asset_id=str(decision.id),
         operation=FiberChangeRequestOperation.create,
         payload=payload,
         requested_by_person_id=None,
@@ -390,7 +418,9 @@ def _proposal_response(
         "replayed": replayed,
         "closure_id": payload.get("closure_id"),
         "from_strand_id": payload.get("from_strand_id"),
+        "from_strand_end": payload.get("from_strand_end"),
         "to_strand_id": payload.get("to_strand_id"),
+        "to_strand_end": payload.get("to_strand_end"),
     }
 
 
@@ -404,6 +434,13 @@ def _load_spliceable_strand(db: Session, strand_id, label: str) -> FiberStrand:
             detail=f"{label} strand is {strand.status.value}; only available or reserved strands can be spliced",
         )
     return strand
+
+
+def _strand_end_or_422(value: str, field_name: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in {"a", "b"}:
+        raise HTTPException(status_code=422, detail=f"{field_name} must be a or b")
+    return normalized
 
 
 def _scoped_work_order(db: Session, profile, crm_work_order_id: str) -> WorkOrder:

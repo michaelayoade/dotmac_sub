@@ -100,6 +100,18 @@ class FiberPatchPanel(Base):
         CheckConstraint(
             "port_capacity > 0", name="ck_fiber_patch_panels_positive_capacity"
         ),
+        CheckConstraint(
+            "connector_type IN ('sc', 'lc', 'fc', 'st')",
+            name="ck_fiber_patch_panels_connector_type",
+        ),
+        CheckConstraint(
+            "polish_type IN ('apc', 'upc', 'pc')",
+            name="ck_fiber_patch_panels_polish_type",
+        ),
+        CheckConstraint(
+            "fiber_mode IN ('single_mode', 'multi_mode')",
+            name="ck_fiber_patch_panels_fiber_mode",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -160,7 +172,7 @@ class FiberConnectorPort(Base):
             name="ck_fiber_connector_ports_exact_owner",
         ),
         CheckConstraint(
-            "connector_type IN ('sc', 'lc', 'fc', 'st', 'mpo')",
+            "connector_type IN ('sc', 'lc', 'fc', 'st')",
             name="ck_fiber_connector_ports_connector_type",
         ),
         CheckConstraint(
@@ -298,6 +310,7 @@ class FiberPhysicalLinkDecision(Base):
         ForeignKey("fiber_splice_trays.id", ondelete="RESTRICT"),
     )
     position: Mapped[int | None] = mapped_column(Integer)
+    splice_type: Mapped[str | None] = mapped_column(String(80))
     label: Mapped[str | None] = mapped_column(String(160))
     assembly_label: Mapped[str | None] = mapped_column(String(160))
     length_m: Mapped[Decimal | None] = mapped_column(Numeric(12, 3))
@@ -378,6 +391,7 @@ class FiberCoreSplice(Base):
         ForeignKey("fiber_splice_trays.id", ondelete="RESTRICT"),
     )
     position: Mapped[int | None] = mapped_column(Integer)
+    splice_type: Mapped[str] = mapped_column(String(80), nullable=False)
     insertion_loss_db: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
     created_by_decision_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

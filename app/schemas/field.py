@@ -658,10 +658,12 @@ class FieldMapSearchResponse(BaseModel):
 class FieldSpliceCreate(BaseModel):
     closure_id: UUID
     from_strand_id: UUID
+    from_strand_end: Literal["a", "b"]
     to_strand_id: UUID
+    to_strand_end: Literal["a", "b"]
     tray_id: UUID | None = None
     position: int | None = Field(default=None, ge=1)
-    splice_type: str | None = Field(default=None, max_length=80)
+    splice_type: str = Field(min_length=1, max_length=80)
     loss_db: float | None = Field(default=None, ge=0, le=5)
     note: str | None = Field(default=None, max_length=2000)
 
@@ -672,7 +674,9 @@ class FieldSpliceProposalResponse(BaseModel):
     replayed: bool
     closure_id: UUID
     from_strand_id: UUID
+    from_strand_end: Literal["a", "b"]
     to_strand_id: UUID
+    to_strand_end: Literal["a", "b"]
 
 
 class FieldFiberTestCreate(BaseModel):

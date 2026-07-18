@@ -1747,6 +1747,18 @@ Dependency order:
    confirmed proposals bind exact state, require independent review, and lock
    and revalidate before execution. Geometry, names, external IDs, and
    proximity never create a mount. A support with active mounts cannot retire.
+
+Physical-continuity owner: `network.fiber_physical_continuity` owns reviewed
+fiber racks, ODF/patch panels, one-channel connector ports, exact strand-end
+terminations, core splices, patch cords, and the ordered physical-core evidence
+hash. Every link has preview, independent review, locked execution, and exact
+result evidence. Rack-unit, panel-port, cable-core, and splitter capacity remain
+explicit and bounded. Duplex patching is two explicit channel links sharing an
+assembly label; MPO/MTP inventory fails closed until an exact assembly/lane
+model exists. Names, labels, proximity, geometry, legacy `FiberSplice` rows,
+and `FiberSegment.fiber_strand_id` never create continuity. Direct legacy splice
+writers are retired; historical rows remain readable evidence.
+
 6. `network.fiber_asset_changes`: owns reviewed passive-fiber change requests
    and their approved mutations. Approved support mutations delegate to
    `network.fiber_support_structures`; this generic request owner does not
@@ -1755,8 +1767,11 @@ Dependency order:
    enforcement to `network.fiber_plant_integrity`. Splitter and splitter-port
    decisions delegate persistence to `network.splitter_inventory`, which is also
    the owner used by API and admin form adapters and rejects declared ratio/count
-   conflicts. Attachment decisions remain separately owned and neither names nor
-   geometry create those edges. Direct map imports are not a second writer.
+   conflicts. Rack, panel, and connector changes plus field core-splice review
+   delegate to `network.fiber_physical_continuity`; the change-request workflow
+   does not write a parallel splice graph. Attachment decisions remain separately
+   owned and neither names nor geometry create those edges. Direct map imports
+   are not a second writer.
 7. `network.fiber_identity_decisions`: owns dual-reviewed source identity
    decisions and canonical source links. Point-asset creates become pending
    `network.fiber_asset_changes` requests; the source link is projected only
@@ -1977,11 +1992,12 @@ Dependency order:
    execution closes without mutation.
 30. `network.access_path`: resolves `subscriber/subscription -> access path`
    from identity plus validated fiber topology. Its fiber end-to-end projection
-   composes customer/ONT, exact passive cables and core-capacity evidence, OLT
-   identity, authoritative provisioning NAS, and the observation-agreeing
-   forwarding chain to a core/border root. It emits typed gaps and one combined
-   evidence hash. Live RADIUS NAS remains a separate observation and never
-   supplies a missing authoritative hop.
+   composes customer/ONT, exact passive cables, reviewed racks/ODFs/patch cords,
+   numbered in-use cores and core splices, OLT identity, authoritative
+   provisioning NAS, and the observation-agreeing forwarding chain to a
+   core/border root. It emits typed gaps and one combined evidence hash. Live
+   RADIUS NAS remains a separate observation and never supplies a missing
+   authoritative hop.
 31. `network.radius_sessions`: resolves online-now state from active sessions.
 32. `network.ont_runtime_status`: owns Huawei bulk ONT status observations, the
    Huawei OLT pollability predicate, and admission of those poll tasks. Scheduled
@@ -2053,7 +2069,8 @@ Dependency order:
    configuration, customer/outage cutover, or any router write.
    `network.access_path.resolve_fiber_end_to_end_path` is the read-only composed
    proof across this graph and `network.fiber_topology`. It requires the exact
-   subscription/ONT and passive segment/core inventory, one OLT identity node,
+   subscription/ONT, passive segment inventory, and one exact reviewed physical
+   connector/patch/core/splice route, one OLT identity node,
    the authoritative provisioning NAS on the selected agreeing declaration
    chain, and a core/border root. It preserves typed gaps and one combined
    evidence hash. Live RADIUS NAS identity remains a separate observation and
