@@ -1048,6 +1048,21 @@ def run_invoice_cycle(
         ),
     )
 
+    prepaid_renewals_enabled = control_registry.is_enabled(
+        db, "billing.prepaid_service_renewals"
+    )
+    prepaid_renewal_summary: dict[str, int | str] = {}
+    if prepaid_renewals_enabled:
+        from app.services.prepaid_service_renewals import (
+            run_due_prepaid_service_renewals,
+        )
+
+        prepaid_renewal_summary = run_due_prepaid_service_renewals(
+            db,
+            run_at=run_at,
+            dry_run=dry_run,
+        )
+
     # Query billable active subscriptions. Network/account enforcement states
     # like blocked/suspended must not suppress invoicing: those accounts still
     # owe for active service periods and may need the invoice to clear the block.
@@ -1057,8 +1072,15 @@ def run_invoice_cycle(
     # drafts until funded from the wallet. Default OFF keeps the scheduled cycle
     # postpaid-only.
     # Genuine daily/balance prepaid stays off-invoice regardless.
-    include_prepaid_monthly = control_registry.is_enabled(
+    prepaid_monthly_invoicing_requested = control_registry.is_enabled(
         db, "billing.prepaid_monthly_invoicing"
+    )
+    # These are alternative owners for the same prepaid service period. Once
+    # the canonical renewal owner is enabled, the older draft-invoice path must
+    # not run in parallel—even in dry-run—because its credit pool and lifecycle
+    # are not the verified prepaid-funding contract.
+    include_prepaid_monthly = (
+        prepaid_monthly_invoicing_requested and not prepaid_renewals_enabled
     )
     # Deposit-is-truth: prepaid advance invoices created by the scheduled runner
     # are DRAFT (not AR, never overdue, never dunned) until the wallet fully
@@ -1144,6 +1166,10 @@ def run_invoice_cycle(
         "credit_settled_invoices": 0,
         "accounts_restored": 0,
         "zero_amount_advanced": 0,
+        "prepaid_invoice_path_suppressed": (
+            prepaid_monthly_invoicing_requested and prepaid_renewals_enabled
+        ),
+        **prepaid_renewal_summary,
     }
 
     for subscription in subscriptions:

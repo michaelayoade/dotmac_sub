@@ -41,8 +41,6 @@ from app.models.billing import (
     PaymentSettlement,
     PaymentSettlementOrigin,
     PaymentStatus,
-    TaxApplication,
-    TaxRate,
 )
 from app.models.catalog import (
     BillingCycle,
@@ -958,37 +956,11 @@ def _prepaid_monthly_charge_amount(
     subscription: Subscription,
     effective_at: datetime,
 ) -> tuple[Decimal, str, BillingCycle] | None:
-    from app.services.billing._common import _calculate_tax_amount
-    from app.services.billing_automation import (
-        _default_tax_application,
-        _effective_unit_price,
-        _resolve_price,
-        _resolve_tax_rate_id,
+    from app.services.prepaid_service_renewals import (
+        resolve_prepaid_monthly_charge,
     )
 
-    amount, currency, cycle = _resolve_price(db, subscription)
-    if amount is None:
-        return None
-    effective_cycle = cycle or BillingCycle.monthly
-    if effective_cycle != BillingCycle.monthly:
-        return None
-    base = _effective_unit_price(subscription, amount, effective_at)
-    tax_rate_id = _resolve_tax_rate_id(db, subscription)
-    if not tax_rate_id:
-        return base, currency or "NGN", effective_cycle
-    tax_rate = db.get(TaxRate, tax_rate_id)
-    if tax_rate is None:
-        return base, currency or "NGN", effective_cycle
-    tax_application = _default_tax_application(db)
-    tax_amount = _calculate_tax_amount(
-        base, Decimal(str(tax_rate.rate)), tax_application
-    )
-    total = (
-        base
-        if tax_application == TaxApplication.inclusive
-        else round_money(base + tax_amount)
-    )
-    return total, currency or "NGN", effective_cycle
+    return resolve_prepaid_monthly_charge(db, subscription, effective_at)
 
 
 def apply_prepaid_service_credit(

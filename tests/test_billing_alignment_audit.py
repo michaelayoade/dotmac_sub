@@ -26,12 +26,15 @@ from app.models.billing import (
     CreditNote,
     CreditNoteStatus,
     Invoice,
+    InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
     Payment,
     PaymentStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
 )
 from app.models.catalog import (
     AccessType,
@@ -75,6 +78,7 @@ from scripts.one_off.reconstruct_splynx_mirror import (
 from scripts.one_off.reconstruct_splynx_mirror import (
     _entry_type as normalize_splynx_entry_type,
 )
+from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 from tests.prepaid_funding_test_support import ephemeral_private_signing_key_pem
 
 
@@ -368,7 +372,14 @@ def test_batch_position_does_not_double_count_payment_linked_refund(
     assert actual[(str(subscriber.id), "NGN")] == expected
 
 
-def _replay_tables(db_session, subscriber_id, subscription_id):
+def _replay_tables(
+    db_session,
+    subscriber_id,
+    subscription_id,
+    *,
+    with_native_invoice=True,
+    source_charge=Decimal("50.00"),
+):
     metadata = MetaData()
     final_balances = Table(
         "audit_splynx_final_balances",
@@ -387,6 +398,8 @@ def _replay_tables(db_session, subscriber_id, subscription_id):
         Column("last_charge_total", Numeric(19, 4)),
         Column("last_period_from", Date),
         Column("last_period_to", Date),
+        Column("noncharge_transaction_rows", Integer, nullable=False),
+        Column("noncharge_period_rows", Integer, nullable=False),
     )
     metadata.create_all(db_session.get_bind())
     db_session.execute(
@@ -402,11 +415,53 @@ def _replay_tables(db_session, subscriber_id, subscription_id):
             subscription_id=subscription_id,
             source_status="active",
             source_deleted=False,
-            last_charge_total=Decimal("50.00"),
+            last_charge_total=source_charge,
             last_period_from=date(2026, 6, 1),
             last_period_to=date(2026, 6, 30),
+            noncharge_transaction_rows=0,
+            noncharge_period_rows=0,
         )
     )
+    if with_native_invoice:
+        invoice = Invoice(
+            account_id=subscriber_id,
+            status=InvoiceStatus.paid,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("0.00"),
+            currency="NGN",
+            billing_period_start=datetime(2026, 7, 1, tzinfo=UTC),
+            billing_period_end=datetime(2026, 7, 30, 23, 59, 59, tzinfo=UTC),
+            issued_at=datetime(2026, 7, 1, tzinfo=UTC),
+            created_at=datetime(2026, 7, 1, tzinfo=UTC),
+            is_proforma=False,
+        )
+        db_session.add(invoice)
+        db_session.flush()
+        line = InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription_id,
+            description="Canonical prepaid service cycle",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("50.00"),
+            amount=Decimal("50.00"),
+        )
+        db_session.add(line)
+        db_session.flush()
+        db_session.add(
+            ServiceEntitlement(
+                account_id=subscriber_id,
+                subscription_id=subscription_id,
+                source_invoice_id=invoice.id,
+                source_invoice_line_id=line.id,
+                starts_at=datetime(2026, 7, 1, tzinfo=UTC),
+                ends_at=datetime(2026, 7, 31, tzinfo=UTC),
+                amount_funded=Decimal("50.00"),
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+                created_at=datetime(2026, 7, 1, tzinfo=UTC),
+            )
+        )
     return metadata
 
 
@@ -568,7 +623,201 @@ def test_funding_export_blocks_candidate_without_source_baseline(
         export.funding_payload()
 
 
-def test_funding_export_reports_incomplete_replay_reason(db_session, subscriber):
+def test_replay_separates_absent_service_history_from_noncanonical_period_evidence(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    final_services = metadata.tables["audit_splynx_final_services"]
+    db_session.execute(
+        final_services.update().values(
+            last_charge_total=None,
+            last_period_from=None,
+            last_period_to=None,
+            noncharge_transaction_rows=1,
+            noncharge_period_rows=1,
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    reasons = replay.incomplete[str(subscriber.id)]
+    assert "source_service_has_noncanonical_period_evidence" in reasons
+    assert "source_service_without_paid_through_period" not in reasons
+
+
+def test_replay_marks_service_with_no_transaction_evidence_as_no_paid_through(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    final_services = metadata.tables["audit_splynx_final_services"]
+    db_session.execute(
+        final_services.update().values(
+            last_charge_total=None,
+            last_period_from=None,
+            last_period_to=None,
+            noncharge_transaction_rows=0,
+            noncharge_period_rows=0,
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    reasons = replay.incomplete[str(subscriber.id)]
+    assert "source_service_without_paid_through_period" in reasons
+    assert "source_service_has_noncanonical_period_evidence" not in reasons
+
+
+def test_replay_starts_proven_native_only_account_at_zero(db_session, subscriber):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    subscriber.created_at = datetime(2026, 7, 1, tzinfo=UTC)
+    final_balances = metadata.tables["audit_splynx_final_balances"]
+    final_services = metadata.tables["audit_splynx_final_services"]
+    db_session.execute(final_balances.delete())
+    db_session.execute(final_services.delete())
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.positions[str(subscriber.id)] == Decimal("0.00")
+    assert str(subscriber.id) not in replay.incomplete
+
+
+def test_replay_keeps_late_entered_backdated_native_payment(db_session, subscriber):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    subscriber.created_at = datetime(2026, 7, 1, tzinfo=UTC)
+    final_balances = metadata.tables["audit_splynx_final_balances"]
+    final_services = metadata.tables["audit_splynx_final_services"]
+    db_session.execute(final_balances.delete())
+    db_session.execute(final_services.delete())
+    db_session.add(
+        Payment(
+            account_id=subscriber.id,
+            amount=Decimal("330965.62"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime(2026, 6, 16, tzinfo=UTC),
+            created_at=datetime(2026, 7, 4, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.positions[str(subscriber.id)] == Decimal("330965.62")
+    assert str(subscriber.id) not in replay.incomplete
+
+
+def test_replay_keeps_late_entered_backdated_payment_for_source_account(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    db_session.add(
+        Payment(
+            account_id=subscriber.id,
+            amount=Decimal("30.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime(2026, 6, 15, tzinfo=UTC),
+            created_at=datetime(2026, 7, 4, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.positions[str(subscriber.id)] == Decimal("80.00")
+    assert str(subscriber.id) not in replay.incomplete
+
+
+def test_replay_excludes_backdated_payment_created_after_snapshot(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    db_session.add(
+        Payment(
+            account_id=subscriber.id,
+            amount=Decimal("30.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime(2026, 7, 1, tzinfo=UTC),
+            created_at=datetime(2026, 7, 13, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.positions[str(subscriber.id)] == Decimal("50.00")
+    assert str(subscriber.id) not in replay.incomplete
+
+
+def test_replay_does_not_require_service_mapping_without_extensions(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    final_services = metadata.tables["audit_splynx_final_services"]
+    db_session.execute(final_services.update().values(subscription_id=None))
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert "source_service_not_mapped_to_subscription" not in replay.incomplete.get(
+        str(subscriber.id), set()
+    )
+
+
+def test_funding_export_replays_customer_position_adjustment(db_session, subscriber):
     subscription = _source_mapped_subscription(db_session, subscriber)
     metadata = _replay_tables(db_session, subscriber.id, subscription.id)
     db_session.add(
@@ -579,6 +828,7 @@ def test_funding_export_reports_incomplete_replay_reason(db_session, subscriber)
             amount=Decimal("500.00"),
             currency="NGN",
             effective_date=datetime(2026, 7, 2, tzinfo=UTC),
+            created_at=datetime(2026, 7, 2, tzinfo=UTC),
         )
     )
     db_session.commit()
@@ -592,17 +842,13 @@ def test_funding_export_reports_incomplete_replay_reason(db_session, subscriber)
         metadata.drop_all(db_session.get_bind())
 
     account_id = str(subscriber.id)
-    assert export.ready is False
-    assert export.incomplete[account_id] == (
-        "post_legacy_adjustment_requires_provenance",
-    )
+    assert export.ready is True
+    assert export.positions[account_id] == Decimal("550.00")
     diagnostics = export.diagnostics_payload()
-    assert diagnostics["incomplete_reason_counts"] == {
-        "post_legacy_adjustment_requires_provenance": 1
-    }
+    assert diagnostics["incomplete_reason_counts"] == {}
 
 
-def test_replay_quarantines_unproven_post_legacy_adjustment(db_session, subscriber):
+def test_replay_applies_customer_position_adjustment(db_session, subscriber):
     subscription = _source_mapped_subscription(db_session, subscriber)
     metadata = _replay_tables(db_session, subscriber.id, subscription.id)
     db_session.add(
@@ -612,6 +858,237 @@ def test_replay_quarantines_unproven_post_legacy_adjustment(db_session, subscrib
             source=LedgerSource.adjustment,
             amount=Decimal("500.00"),
             currency="NGN",
+            effective_date=datetime(2026, 7, 2, tzinfo=UTC),
+            created_at=datetime(2026, 7, 2, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.positions[str(subscriber.id)] == Decimal("550.00")
+    assert str(subscriber.id) not in replay.incomplete
+
+
+def test_replay_keeps_late_entered_backdated_customer_position_adjustment(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.debit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("25.00"),
+            currency="NGN",
+            effective_date=datetime(2026, 6, 15, tzinfo=UTC),
+            created_at=datetime(2026, 7, 4, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.positions[str(subscriber.id)] == Decimal("25.00")
+    assert str(subscriber.id) not in replay.incomplete
+
+
+def test_replay_requires_funded_entitlement_for_post_authority_service_charge(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(
+        db_session,
+        subscriber.id,
+        subscription.id,
+        with_native_invoice=False,
+    )
+    authority_at = datetime(2026, 6, 30, 12, tzinfo=UTC)
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("100.00"),
+        position_at=authority_at,
+    )
+    try:
+        missing = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+
+        reason = "due_service_charge_without_native_entitlement"
+        assert reason in missing.incomplete[str(subscriber.id)]
+        assert len(missing.service_cycle_gaps) == 1
+
+        invoice = Invoice(
+            account_id=subscriber.id,
+            status=InvoiceStatus.paid,
+            subtotal=Decimal("50.00"),
+            total=Decimal("50.00"),
+            balance_due=Decimal("0.00"),
+            currency="NGN",
+            billing_period_start=datetime(2026, 7, 1, tzinfo=UTC),
+            billing_period_end=datetime(2026, 7, 30, 23, 59, 59, tzinfo=UTC),
+            issued_at=datetime(2026, 7, 1, tzinfo=UTC),
+            created_at=datetime(2026, 7, 1, tzinfo=UTC),
+            is_proforma=False,
+        )
+        db_session.add(invoice)
+        db_session.flush()
+        line = InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Canonical prepaid service cycle",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("50.00"),
+            amount=Decimal("50.00"),
+        )
+        db_session.add(line)
+        db_session.flush()
+        db_session.add(
+            ServiceEntitlement(
+                account_id=subscriber.id,
+                subscription_id=subscription.id,
+                source_invoice_id=invoice.id,
+                source_invoice_line_id=line.id,
+                starts_at=datetime(2026, 7, 1, tzinfo=UTC),
+                ends_at=datetime(2026, 7, 31, tzinfo=UTC),
+                amount_funded=Decimal("50.00"),
+                currency="NGN",
+                status=ServiceEntitlementStatus.active,
+                created_at=datetime(2026, 7, 1, tzinfo=UTC),
+            )
+        )
+        db_session.commit()
+
+        owned = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert reason not in owned.incomplete.get(str(subscriber.id), set())
+    assert owned.positions[str(subscriber.id)] == Decimal("50.00")
+
+
+def test_replay_accepts_wallet_debit_entitlement_for_service_charge(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(
+        db_session,
+        subscriber.id,
+        subscription.id,
+        with_native_invoice=False,
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("100.00"),
+        position_at=datetime(2026, 6, 30, 12, tzinfo=UTC),
+    )
+    entry = LedgerEntry(
+        account_id=subscriber.id,
+        entry_type=LedgerEntryType.debit,
+        source=LedgerSource.invoice,
+        amount=Decimal("50.00"),
+        currency="NGN",
+        affects_customer_position=True,
+        effective_date=datetime(2026, 7, 1, tzinfo=UTC),
+        created_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    db_session.add(entry)
+    db_session.flush()
+    db_session.add(
+        ServiceEntitlement(
+            account_id=subscriber.id,
+            subscription_id=subscription.id,
+            source_ledger_entry_id=entry.id,
+            starts_at=datetime(2026, 7, 1, tzinfo=UTC),
+            ends_at=datetime(2026, 7, 31, tzinfo=UTC),
+            amount_funded=Decimal("50.00"),
+            currency="NGN",
+            status=ServiceEntitlementStatus.active,
+            created_at=datetime(2026, 7, 1, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert "due_service_charge_without_native_entitlement" not in replay.incomplete.get(
+        str(subscriber.id), set()
+    )
+    assert replay.service_cycle_gaps == ()
+    assert replay.positions[str(subscriber.id)] == Decimal("50.00")
+
+
+def test_replay_zero_charge_cycle_does_not_require_money_evidence(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(
+        db_session,
+        subscriber.id,
+        subscription.id,
+        with_native_invoice=False,
+        source_charge=Decimal("0.00"),
+    )
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("100.00"),
+        position_at=datetime(2026, 6, 30, 12, tzinfo=UTC),
+    )
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.positions[str(subscriber.id)] == Decimal("100.00")
+    assert replay.service_cycle_gaps == ()
+    assert "due_service_charge_without_native_entitlement" not in replay.incomplete.get(
+        str(subscriber.id), set()
+    )
+
+
+def test_replay_ignores_structural_adjustment_evidence(db_session, subscriber):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("500.00"),
+            currency="NGN",
+            affects_customer_position=False,
             effective_date=datetime(2026, 7, 2, tzinfo=UTC),
         )
     )
@@ -625,9 +1102,41 @@ def test_replay_quarantines_unproven_post_legacy_adjustment(db_session, subscrib
     finally:
         metadata.drop_all(db_session.get_bind())
 
-    assert (
-        "post_legacy_adjustment_requires_provenance"
-        in replay.incomplete[str(subscriber.id)]
+    assert replay.positions[str(subscriber.id)] == Decimal("50.00")
+    assert "post_legacy_adjustment_requires_provenance" not in replay.incomplete.get(
+        str(subscriber.id), set()
+    )
+
+
+def test_replay_excludes_backdated_adjustment_created_after_snapshot(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("500.00"),
+            currency="NGN",
+            effective_date=datetime(2026, 7, 2, tzinfo=UTC),
+            created_at=datetime(2026, 7, 13, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert replay.positions[str(subscriber.id)] == Decimal("50.00")
+    assert "post_legacy_adjustment_requires_provenance" not in replay.incomplete.get(
+        str(subscriber.id), set()
     )
 
 
@@ -688,6 +1197,25 @@ def test_d2_keeps_credit_when_account_has_no_legacy_mirror(db_session, subscribe
     assert finding.count == 1
     assert finding.amount == Decimal("100.00")
     assert finding.rows[0]["verdict"] == "no_cutoff_mirror"
+
+
+def test_d2_ignores_zero_value_deactivated_credit(db_session, subscriber):
+    db_session.add(
+        LedgerEntry(
+            account_id=subscriber.id,
+            entry_type=LedgerEntryType.credit,
+            source=LedgerSource.adjustment,
+            amount=Decimal("0.00"),
+            currency="NGN",
+            is_active=False,
+        )
+    )
+    db_session.commit()
+
+    finding = d2_unbacked_deactivated_credits(db_session)
+
+    assert finding.count == 0
+    assert finding.amount == Decimal("0.00")
 
 
 def test_d2_keeps_post_cutover_credit_even_when_account_has_cutoff_mirror(

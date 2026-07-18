@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models.billing import (
+    AccountAdjustment,
     Invoice,
     InvoiceLine,
     InvoiceStatus,
@@ -138,7 +139,18 @@ def ensure_prepaid_entitlement_for_wallet_debit(
 ) -> ServiceEntitlement | None:
     """Create prepaid service entitlement for a direct wallet-funded renewal."""
 
-    if ledger_entry.source != LedgerSource.invoice or not ledger_entry.is_active:
+    adjustment_owned = False
+    if ledger_entry.source == LedgerSource.adjustment:
+        adjustment_owned = (
+            db.query(AccountAdjustment.id)
+            .filter(AccountAdjustment.ledger_entry_id == ledger_entry.id)
+            .filter(AccountAdjustment.origin == "prepaid_service_renewal")
+            .first()
+            is not None
+        )
+    if (
+        ledger_entry.source != LedgerSource.invoice and not adjustment_owned
+    ) or not ledger_entry.is_active:
         return None
     metadata = ledger_entry.memo or ""
     existing = (
@@ -159,7 +171,11 @@ def ensure_prepaid_entitlement_for_wallet_debit(
         currency=ledger_entry.currency or "NGN",
         status=ServiceEntitlementStatus.active,
         metadata_={
-            "source": "wallet_prepaid_renewal",
+            "source": (
+                "scheduled_prepaid_service_renewal"
+                if adjustment_owned
+                else "wallet_prepaid_renewal"
+            ),
             "source_ledger_entry_id": str(ledger_entry.id),
             "memo": metadata,
         },

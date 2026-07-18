@@ -312,6 +312,7 @@ def test_runtime_uses_baseline_plus_native_events_and_never_splynx(
                 currency="NGN",
                 memo="Approved pre-reconstruction credit",
                 effective_date=position_at - timedelta(hours=1),
+                created_at=position_at - timedelta(hours=1),
             ),
         ]
     )
