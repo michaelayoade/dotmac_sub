@@ -1,0 +1,12 @@
+# Templates that compute a business total by accumulating a domain value over
+# loop rows in Jinja (e.g. summing usage/money across {% for %} rows). Over a
+# paginated list this figure is wrong past page one, and it duplicates a value
+# the owning read/context service must compute — the presentation layer projects
+# numbers, it never derives them.
+#
+# This is migration debt, NOT an allowlist. The set may only SHRINK. Resolve a
+# template by moving the total into its read owner (see the customer billing
+# KPIs, computed in get_billing_page from CustomerFinancialPosition) and delete
+# its line here. Adding a new entry is a review failure — fix the template
+# instead.
+templates/customer/usage/_content.html
