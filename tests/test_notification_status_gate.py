@@ -30,6 +30,7 @@ from app.services.notification_status_policy import status_allows_notification
         (SubscriberStatus.suspended, "service", True),
         (SubscriberStatus.suspended, "usage", False),
         (SubscriberStatus.blocked, "billing", True),
+        (SubscriberStatus.blocked, "credentials", True),
         (SubscriberStatus.blocked, "usage", False),
         # Unrestricted.
         (SubscriberStatus.active, "usage", True),

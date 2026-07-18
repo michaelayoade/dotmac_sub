@@ -470,6 +470,88 @@ def _default_reseller_id(db: Session):
 
 class Subscribers(ListResponseMixin):
     @staticmethod
+    def prepare_new_account(db: Session, payload: SubscriberCreate) -> Subscriber:
+        """Stage one new Subscriber without committing its transaction.
+
+        Cross-domain account-creation orchestrators use this owner command so
+        Party, Lead, and Referral bindings can be accepted atomically with the
+        account. Existing-row ``person_id`` compatibility updates are not new
+        account creation and are deliberately refused here.
+        """
+        from app.services.customer_identity_resolution import (
+            rebuild_identity_index_for_subscriber,
+        )
+
+        if getattr(payload, "person_id", None):
+            raise ValueError("prepare_new_account cannot target an existing Subscriber")
+        data = _normalize_subscriber_identity_fields(payload.model_dump())
+        data = _apply_validated_lga(data)
+        requested_status = data.pop("status", SubscriberStatus.active)
+        data.pop("is_active", None)
+        category = data.pop("category", None)
+        data.pop("organization_id", None)
+        if data.get("user_type") is None:
+            data["user_type"] = UserType.customer
+        if not data.get("reseller_id"):
+            # reseller_id is NOT NULL; default unassigned customers to the House
+            # reseller so creation paths without a reseller field still succeed.
+            data["reseller_id"] = _default_reseller_id(db)
+        if not data.get("subscriber_number"):
+            generated = numbering.generate_number(
+                db,
+                SettingDomain.subscriber,
+                "subscriber_number",
+                "subscriber_number_enabled",
+                "subscriber_number_prefix",
+                "subscriber_number_padding",
+                "subscriber_number_start",
+            )
+            if generated:
+                data["subscriber_number"] = generated
+        if not data.get("account_number"):
+            derived_account = account_number_from_subscriber_number(
+                db, data.get("subscriber_number")
+            )
+            if derived_account:
+                data["account_number"] = derived_account
+        subscriber = Subscriber(**data)
+        if category is not None:
+            subscriber.category = (
+                category if isinstance(category, SubscriberCategory) else str(category)
+            )
+        _apply_billing_defaults(db, subscriber)
+        db.add(subscriber)
+        db.flush()
+        from app.services.account_lifecycle import apply_requested_account_status
+
+        apply_requested_account_status(
+            db,
+            str(subscriber.id),
+            requested_status,
+            reason="Initial subscriber account state",
+            source="subscriber_service:create",
+        )
+        rebuild_identity_index_for_subscriber(db, subscriber.id)
+        return subscriber
+
+    @staticmethod
+    def commit_prepared_account(db: Session, subscriber: Subscriber) -> Subscriber:
+        """Stage ``subscriber.created`` and commit a prepared account atomically."""
+
+        emit_event(
+            db,
+            EventType.subscriber_created,
+            {
+                "subscriber_id": str(subscriber.id),
+                "subscriber_number": subscriber.subscriber_number,
+            },
+            subscriber_id=subscriber.id,
+        )
+        db.commit()
+        db.refresh(subscriber)
+        return subscriber
+
+    @staticmethod
     def create(db: Session, payload: SubscriberCreate):
         from app.services.customer_identity_resolution import (
             rebuild_identity_index_for_subscriber,
@@ -541,69 +623,8 @@ class Subscribers(ListResponseMixin):
             db.refresh(subscriber)
             return subscriber
 
-        data = _normalize_subscriber_identity_fields(payload.model_dump())
-        data = _apply_validated_lga(data)
-        requested_status = data.pop("status", SubscriberStatus.active)
-        data.pop("is_active", None)
-        category = data.pop("category", None)
-        data.pop("organization_id", None)
-        if data.get("user_type") is None:
-            data["user_type"] = UserType.customer
-        if not data.get("reseller_id"):
-            # reseller_id is NOT NULL; default unassigned customers to the House
-            # reseller so creation paths without a reseller field still succeed.
-            data["reseller_id"] = _default_reseller_id(db)
-        if not data.get("subscriber_number"):
-            generated = numbering.generate_number(
-                db,
-                SettingDomain.subscriber,
-                "subscriber_number",
-                "subscriber_number_enabled",
-                "subscriber_number_prefix",
-                "subscriber_number_padding",
-                "subscriber_number_start",
-            )
-            if generated:
-                data["subscriber_number"] = generated
-        if not data.get("account_number"):
-            derived_account = account_number_from_subscriber_number(
-                db, data.get("subscriber_number")
-            )
-            if derived_account:
-                data["account_number"] = derived_account
-        subscriber = Subscriber(**data)
-        if category is not None:
-            subscriber.category = (
-                category if isinstance(category, SubscriberCategory) else str(category)
-            )
-        _apply_billing_defaults(db, subscriber)
-        db.add(subscriber)
-        db.flush()
-        from app.services.account_lifecycle import apply_requested_account_status
-
-        apply_requested_account_status(
-            db,
-            str(subscriber.id),
-            requested_status,
-            reason="Initial subscriber account state",
-            source="subscriber_service:create",
-        )
-        rebuild_identity_index_for_subscriber(db, subscriber.id)
-        db.commit()
-        db.refresh(subscriber)
-
-        # Emit subscriber.created event
-        emit_event(
-            db,
-            EventType.subscriber_created,
-            {
-                "subscriber_id": str(subscriber.id),
-                "subscriber_number": subscriber.subscriber_number,
-            },
-            subscriber_id=subscriber.id,
-        )
-
-        return subscriber
+        subscriber = Subscribers.prepare_new_account(db, payload)
+        return Subscribers.commit_prepared_account(db, subscriber)
 
     @staticmethod
     def get(db: Session, subscriber_id: str):

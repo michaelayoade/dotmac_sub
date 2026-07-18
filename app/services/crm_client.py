@@ -830,35 +830,6 @@ class CRMClient:
         )
         return data if isinstance(data, dict) else {}
 
-    def create_portal_referral(
-        self,
-        crm_subscriber_id: str,
-        *,
-        name: str | None = None,
-        email: str | None = None,
-        phone: str | None = None,
-        note: str | None = None,
-    ) -> dict[str, Any]:
-        """Refer-a-friend write-through to the CRM Portal API (server-side)."""
-        token = self._portal_token(crm_subscriber_id, ["referrals:write"])
-        payload: dict[str, Any] = {
-            k: v
-            for k, v in {
-                "name": name,
-                "email": email,
-                "phone": phone,
-                "note": note,
-            }.items()
-            if v
-        }
-        data = self._request(
-            "POST",
-            "/api/v1/portal/referrals",
-            json_data=payload,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        return data if isinstance(data, dict) else {}
-
     def get_portal_quotes(self, crm_subscriber_id: str) -> dict[str, Any]:
         """Read a subscriber's self-serve quotes (feasibility, estimate, deposit,
         status) from the CRM Portal API (server-side). Used by the mirror reconcile."""

@@ -1,6 +1,6 @@
-"""Native referral service (Phase 3 §2.1): capture → qualify → reward flows,
+"""Native referral service: capture → qualify → reward flows,
 external_ref idempotency continuity with the CRM's payout path, the
-subscriber-activation hook wiring, and §2.5 read-shape compatibility with the
+subscriber-activation hook wiring, and read-shape compatibility with the
 referral mirror."""
 
 from __future__ import annotations
@@ -14,10 +14,18 @@ from fastapi import HTTPException
 
 from app.models.billing import CreditNote
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
+from app.models.party import (
+    Party,
+    PartyContactPoint,
+    PartyContactPointType,
+    PartyIdentityStatus,
+)
 from app.models.referral_native import Referral, ReferralCode
-from app.models.sales import Lead
-from app.models.subscriber import PartyStatus, Subscriber, SubscriberStatus
+from app.models.sales import Lead, LeadOriginCapture
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import crm_api
+from app.services import party as party_service
+from app.services.customer_lifecycle_audit import build_customer_lifecycle_audit
 from app.services.referrals import _CODE_ALPHABET, referrals
 
 
@@ -104,6 +112,7 @@ def test_capture_creates_prospect_lead_and_referral(db_session):
     code = referrals.ensure_code(db_session, str(referrer.id))
 
     email = _unique_email()
+    subscriber_count = db_session.query(Subscriber).count()
     referral = referrals.capture(
         db_session,
         code=code.code,
@@ -118,24 +127,46 @@ def test_capture_creates_prospect_lead_and_referral(db_session):
     assert referral.referrer_subscriber_id == referrer.id
     assert referral.referral_code_id == code.id
     assert referral.source == "public"
-    assert referral.metadata_["capture"]["email"] == email
-    assert referral.metadata_["capture"]["name"] == "Ada Lovelace"
+    assert referral.referred_subscriber_id is None
+    assert db_session.query(Subscriber).count() == subscriber_count
+    assert not (referral.metadata_ or {}).get("capture")
 
-    # Prospect party row: status=new keeps it out of billing/RADIUS sweeps.
-    prospect = db_session.get(Subscriber, referral.referred_subscriber_id)
+    prospect = db_session.get(Party, referral.referred_party_id)
     assert prospect is not None
-    assert prospect.status == SubscriberStatus.new
-    assert prospect.party_status == PartyStatus.lead.value
-    assert prospect.first_name == "Ada"
-    assert prospect.email == email
+    assert prospect.display_name == "Ada Lovelace"
+    assert prospect.status == PartyIdentityStatus.quarantined.value
+    points = {
+        point.channel_type: point
+        for point in db_session.query(PartyContactPoint)
+        .filter(PartyContactPoint.party_id == prospect.id)
+        .all()
+    }
+    assert points[PartyContactPointType.email.value].normalized_value == email
+    assert (
+        points[PartyContactPointType.phone.value].normalized_value == "+2348030000001"
+    )
+    assert all(point.verification_status == "unverified" for point in points.values())
 
     # Attributed lead.
     lead = db_session.get(Lead, referral.referred_lead_id)
     assert lead is not None
-    assert lead.subscriber_id == prospect.id
-    assert lead.lead_source == "Referral"
+    assert lead.party_id == prospect.id
+    assert lead.subscriber_id is None
+    assert lead.lead_source == "Referrer"
     assert lead.metadata_["referral_code"] == code.code
     assert lead.metadata_["referrer_subscriber_id"] == str(referrer.id)
+    origin = db_session.query(LeadOriginCapture).filter_by(lead_id=lead.id).one()
+    assert origin.capture_method == "referral"
+    assert origin.source_platform == "referral"
+    assert origin.lead_source == "Referrer"
+
+    audit = build_customer_lifecycle_audit(db_session)
+    assert audit["referrals"]["party_bound"] == 1
+    assert audit["referrals"]["awaiting_account_conversion"] == 1
+    assert audit["referrals"]["quarantined_awaiting_account_adjudication"] == 1
+    assert audit["referrals"]["active_awaiting_account_conversion"] == 0
+    assert audit["referrals"]["legacy_capture_pii_metadata"] == 0
+    assert audit["referrals"]["aligned"] == 1
 
 
 def test_capture_is_idempotent_per_referred_prospect(db_session):
@@ -148,10 +179,34 @@ def test_capture_is_idempotent_per_referred_prospect(db_session):
     second = referrals.capture(db_session, code=code.code, email=email, name="Twice")
     assert second.id == first.id
 
-    # Phone-only capture dedupes too (prospect row matched by phone).
+    # Phone-only exact retries dedupe too.
     phone_first = referrals.capture(db_session, code=code.code, phone="0812 345 6789")
     phone_second = referrals.capture(db_session, code=code.code, phone="+2348123456789")
     assert phone_second.id == phone_first.id
+
+
+def test_capture_retry_requires_the_exact_submitted_contact_set(db_session):
+    _program(db_session)
+    referrer = _subscriber(db_session)
+    code = referrals.ensure_code(db_session, str(referrer.id))
+    email = _unique_email()
+
+    both = referrals.capture(
+        db_session,
+        code=code.code,
+        email=email,
+        phone="0812 345 6790",
+    )
+    email_only = referrals.capture(db_session, code=code.code, email=email)
+
+    assert email_only.id != both.id
+    exact_retry = referrals.capture(
+        db_session,
+        code=code.code,
+        email=email.upper(),
+        phone="+2348123456790",
+    )
+    assert exact_retry.id == both.id
 
 
 def test_capture_validations(db_session):
@@ -198,7 +253,25 @@ def _captured_referral(db, referrer=None, **capture_kwargs):
     referrer = referrer or _subscriber(db)
     code = referrals.ensure_code(db, str(referrer.id))
     capture_kwargs.setdefault("email", _unique_email())
-    return referrals.capture(db, code=code.code, **capture_kwargs), referrer
+    referral = referrals.capture(db, code=code.code, **capture_kwargs)
+    prospect = _subscriber(db, status=SubscriberStatus.new)
+    party_service.bind_subscriber_account(
+        db,
+        subscriber_id=prospect.id,
+        party_id=referral.referred_party_id,
+        source="test_review",
+        reason="Test fixture reviewed referral conversion",
+    )
+    referrals.attach_subscriber(
+        db,
+        referral_id=str(referral.id),
+        subscriber_id=str(prospect.id),
+        source="test_review",
+        reason="Test fixture reviewed referral conversion",
+    )
+    db.commit()
+    db.refresh(referral)
+    return referral, referrer
 
 
 def test_qualify_on_activation(db_session):
@@ -245,22 +318,64 @@ def test_qualify_expires_outside_window(db_session):
     assert result.reward_status == "none"
 
 
-def test_qualify_bridges_identity_when_signup_creates_new_row(db_session):
-    """The signup flow may create a fresh subscriber row instead of reusing the
-    capture-time prospect — qualification bridges by capture email/phone and
-    re-links the referral (the CRM got this via person_identity)."""
+def test_qualify_attaches_only_a_reviewed_matching_party(db_session):
     _program(db_session)
     email = _unique_email()
-    referral, _ = _captured_referral(db_session, email=email)
-    prospect_id = referral.referred_subscriber_id
+    referrer = _subscriber(db_session)
+    code = referrals.ensure_code(db_session, str(referrer.id))
+    referral = referrals.capture(db_session, code=code.code, email=email)
 
     signup = _subscriber(db_session, status=SubscriberStatus.active, email=email)
-    assert signup.id != prospect_id
+    assert signup.party_id is None
+    assert referrals.qualify_for_subscriber(db_session, signup) is None
+    assert referral.referred_subscriber_id is None
+
+    party_service.bind_subscriber_account(
+        db_session,
+        subscriber_id=signup.id,
+        party_id=referral.referred_party_id,
+        source="signup_identity_review",
+        reason="Signup was reviewed as the referred Party",
+    )
 
     result = referrals.qualify_for_subscriber(db_session, signup)
     assert result is not None and result.id == referral.id
     assert result.status == "qualified"
-    assert result.referred_subscriber_id == signup.id  # re-linked
+    assert result.referred_subscriber_id == signup.id
+    assert result.subscriber_link_source == "subscriber_activation"
+    lead = db_session.get(Lead, referral.referred_lead_id)
+    assert lead.subscriber_id == signup.id
+
+
+def test_attach_subscriber_refuses_a_different_party(db_session):
+    _program(db_session)
+    referrer = _subscriber(db_session)
+    code = referrals.ensure_code(db_session, str(referrer.id))
+    referral = referrals.capture(db_session, code=code.code, email=_unique_email())
+    wrong_party = party_service.create_party(
+        db_session,
+        party_type="person",
+        display_name="Different person",
+    )
+    subscriber = _subscriber(db_session, status=SubscriberStatus.new)
+    party_service.bind_subscriber_account(
+        db_session,
+        subscriber_id=subscriber.id,
+        party_id=wrong_party.id,
+        source="test_review",
+        reason="Test fixture reviewed a different identity",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        referrals.attach_subscriber(
+            db_session,
+            referral_id=str(referral.id),
+            subscriber_id=str(subscriber.id),
+            source="test_review",
+            reason="Attempted mismatched conversion",
+        )
+    assert exc.value.status_code == 409
+    assert referral.referred_subscriber_id is None
 
 
 def test_qualify_noops(db_session):
@@ -464,7 +579,7 @@ def test_handler_ignores_unrelated_events_and_missing_subscriber(db_session):
     assert db_session.get(Referral, referral.id).status == "pending"
 
 
-# ── §2.5 read-shape compatibility ────────────────────────────────────────────
+# ── read-shape compatibility ────────────────────────────────────────────
 
 
 def test_read_for_subscriber_matches_mirror_shape(db_session):
@@ -475,7 +590,7 @@ def test_read_for_subscriber_matches_mirror_shape(db_session):
 
     payload = referrals.read_for_subscriber(db_session, str(referrer.id))
 
-    # Exact key sets of referrals_mirror.read_for_subscriber (§2.5 contract).
+    # Exact key sets of referrals_mirror.read_for_subscriber.
     assert set(payload) == {"code", "share_url", "program", "totals", "referrals"}
     assert set(payload["program"]) == {"enabled", "reward_amount", "reward_currency"}
     assert set(payload["totals"]) == {
@@ -501,7 +616,7 @@ def test_read_for_subscriber_matches_mirror_shape(db_session):
     assert payload["share_url"].endswith(f"/r/{payload['code']}")
 
     item = payload["referrals"][0]
-    assert item["id"] == str(referral.id)  # id = referral UUID (§2.5)
+    assert item["id"] == str(referral.id)  # id = referral UUID
     assert item["status"] == "rewarded"
     assert item["reward_status"] == "issued"  # native standardizes on issued
     totals = payload["totals"]

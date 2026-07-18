@@ -1,8 +1,8 @@
 """S4: inbound CRM webhook delivery dedup (idempotency).
 
 A byte-identical redelivery of a signed webhook must not re-run its side effect
-(a duplicate chat/reward push, a re-fired lifecycle push, or a delta re-apply
-that reverts a newer status). Covered here for the side-effecting handlers and,
+(a duplicate chat push, a re-fired lifecycle push, or a delta re-apply that
+reverts a newer status). Covered here for the side-effecting handlers and,
 since P-3, the project/work-order/quote mirror handlers that apply a delta +
 fire a customer push (the ticket handler re-pulls authoritative state, so it
 stays idempotent without a claim).
@@ -27,7 +27,6 @@ from app.api.crm_webhooks import (
 )
 from app.config import settings
 from app.models.crm_webhook_delivery import CrmWebhookDelivery
-from app.models.referral import ReferralMirror
 from app.models.subscriber import Subscriber
 from app.models.work_order import WorkOrder
 
@@ -98,7 +97,7 @@ def _linked_subscriber(db_session, crm_id: uuid.UUID) -> Subscriber:
     return sub
 
 
-# ── referral dedup ────────────────────────────────────────────────────────
+# ── retired referral webhook ─────────────────────────────────────────────
 
 
 def _post_referral(db_session, body: dict, event="referral.captured"):
@@ -108,7 +107,7 @@ def _post_referral(db_session, body: dict, event="referral.captured"):
     )
 
 
-def test_referral_redelivery_is_deduped(db_session):
+def test_referral_redelivery_is_absorbed_without_claim_or_mirror(db_session):
     crm_id = uuid.uuid4()
     _linked_subscriber(db_session, crm_id)
     body = {
@@ -121,30 +120,27 @@ def test_referral_redelivery_is_deduped(db_session):
         first = _post_referral(db_session, body)
         second = _post_referral(db_session, body)
 
-    assert first["status"] == "ok"
-    assert second["status"] == "ignored" and second["reason"] == "duplicate"
-    # The mirror service ran exactly once.
-    assert (
-        db_session.query(ReferralMirror).filter_by(crm_referral_id="r-1").count() == 1
-    )
-    assert db_session.query(CrmWebhookDelivery).count() == 1
+    assert first["status"] == "ignored"
+    assert first["reason"] == "crm_referral_path_retired"
+    assert second == first
+    assert db_session.query(CrmWebhookDelivery).count() == 0
 
 
-def test_distinct_referral_events_both_process(db_session):
+def test_distinct_referral_events_are_both_absorbed_without_claims(db_session):
     crm_id = uuid.uuid4()
     _linked_subscriber(db_session, crm_id)
 
     with _with_secret(SECRET):
-        _post_referral(
+        first = _post_referral(
             db_session, {"crm_subscriber_id": str(crm_id), "referral_id": "r-1"}
         )
-        _post_referral(
+        second = _post_referral(
             db_session, {"crm_subscriber_id": str(crm_id), "referral_id": "r-2"}
         )
 
-    # Different bodies -> different signatures -> different delivery ids.
-    assert db_session.query(ReferralMirror).count() == 2
-    assert db_session.query(CrmWebhookDelivery).count() == 2
+    assert first["reason"] == "crm_referral_path_retired"
+    assert second["reason"] == "crm_referral_path_retired"
+    assert db_session.query(CrmWebhookDelivery).count() == 0
 
 
 # ── chat push dedup ───────────────────────────────────────────────────────

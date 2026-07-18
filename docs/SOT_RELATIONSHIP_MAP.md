@@ -33,30 +33,34 @@ but equivalent state and actions resolve through the same backend owners.
 
 ## Domain Order
 
-1. `customer_context`
-2. `financial_access`
-3. `network`
-4. `subscriber_sessions`
-5. `application_sessions`
-6. `secrets_credentials`
-7. `notifications_communications`
-8. `events_webhooks`
-9. `runtime_infrastructure`
-10. `observability`
-11. `provisioning_operations`
+1. `party_identity`
+2. `customer_context`
+3. `financial_access`
+4. `network`
+5. `subscriber_sessions`
+6. `application_sessions`
+7. `secrets_credentials`
+8. `notifications_communications`
+9. `events_webhooks`
+10. `runtime_infrastructure`
+11. `observability`
 12. `support_operations`
-13. `feature_control_plane`
-14. `authorization_control_plane`
-15. `scheduler_control_plane`
-16. `network_access_control_plane`
-17. `service_intent_control_plane`
-18. `integration_control_plane`
-19. `ui_list_projection`
-20. `ui_bulk_actions`
-21. `ui_semantic_presentation`
-22. `vpn_remote_access`
-23. `geospatial`
-24. `sales_referrals`
+13. `ai_advisory`
+14. `provisioning_operations`
+15. `feature_control_plane`
+16. `authorization_control_plane`
+17. `scheduler_control_plane`
+18. `network_access_control_plane`
+19. `service_intent_control_plane`
+20. `integration_control_plane`
+21. `ui_list_projection`
+22. `ui_bulk_actions`
+23. `ui_display_formatting`
+24. `ui_action_forms`
+25. `ui_semantic_presentation`
+26. `vpn_remote_access`
+27. `geospatial`
+28. `sales_referrals`
 
 Rule: each change should finish one coherent domain boundary: define the owner
 service, migrate the highest-risk callers, and add focused tests. Avoid broad
@@ -73,7 +77,7 @@ be restated in durable domain language here or in the owning design document.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
-persistence-like mutation must name a declared owner. The 297 existing
+persistence-like mutation must name a declared owner. The 279 existing
 undeclared writer-like modules are an explicit shrink-only migration baseline,
 not approved parallel writers; resolving an owner or removing its write requires
 deleting the baseline entry. Adding an entry requires an explicit ownership
@@ -84,6 +88,201 @@ audit-event writer, `control.settings_bootstrap` as the startup
 default-materialization owner, and `secrets.settings_migration` as the live
 OpenBao settings migration boundary. Bootstrap writes defaults through
 `control.domain_settings`; it does not create a second runtime settings writer.
+
+## Party Identity, Roles, and Relationships
+
+The complete approved contract is `docs/PARTY_ROLE_RELATIONSHIP_SOT.md`.
+The read-only cleanup contract is `docs/PARTY_IDENTITY_CLEANUP_AUDIT.md`.
+
+`party.registry` is the one native owner for this coherent identity boundary:
+
+1. person/organization identity, data classification, quarantine, merge policy,
+   and external-reference provenance;
+2. concurrent role lifecycle and the controlled distinction between reseller,
+   vendor, partner, customer/subscriber, staff, and agent;
+3. directional descriptive relationships between parties, which never grant
+   authorization;
+4. a person's explicit organization context and bounded access scope, with
+   authorization still resolved through `auth.rbac` and
+   `auth.permission_gate`; and
+5. normalized reachability, provider/account scope, immutable social subject
+   identity, verification, and consent evidence.
+
+Rule: one real-world person or organization has one canonical Party and may
+hold several independent roles. A reseller is a specific commercial channel
+role; partner is an explicitly typed collaboration agreement and is not a
+reseller alias or permission shortcut. Subscriber, reseller, vendor, staff,
+contact, and login records are domain profiles, relationships, memberships, or
+principals linked to Party—not separate identities. CRM identifiers are import
+provenance only and CRM has no runtime party/lifecycle authority.
+
+Migrations 339 through 345 are additive foundations. Migration 340 gives
+Subscriber a nullable, evidence-bound canonical Party link owned by
+`party.registry`; one
+Party may own several accounts, and an existing link cannot be repointed by the
+binding command. The link assigns no role or permission and no row is
+backfilled. Existing subscriber, organization, reseller, vendor, FieldVendor,
+Team Inbox, and authentication reads remain unchanged until their individual
+backfills, parity gates, cutovers, and compatibility-path retirements. Callers
+must not infer that the presence of the new tables or link means a domain has
+cut over.
+
+`party.identity_audit` is a read-only resolver over native Sub facts. It owns
+subscriber cleanup cohort classification, duplicate-candidate evidence groups,
+and the private UUID-only worklist contract. It never writes a source model,
+calls CRM, or treats any evidence level as permission to merge. Applying a
+quarantine, Party backfill, merge, or repoint remains a separate reviewed slice.
+Account-level billing blocks remain access-enforcement facts: they do not demote
+an active subscription or remove the subscriber lifecycle cohort. The audit
+observes subscription lifecycle and account status but owns neither.
+
+`party.identity_adjudication` owns the reviewed decision contract and PII-free
+Party backfill dry-run plan. Every decision is bound to the current audit digest
+and subscriber-row fingerprint. Medium/high duplicate groups must be resolved
+completely before any member enters a plan; multiple accounts share one planned
+Party only through an explicit common Party UUID. The planner has no database
+writer or apply mode, never infers Person versus Organization, and never turns
+duplicate evidence into automatic merge authority. `party.registry` remains the
+record writer.
+
+`party.identity_backfill_executor` owns the separately approved execution gate
+and PII-free receipt, while delegating predetermined Party creation and binding
+to `party.registry`. It requires the exact decision and plan file hashes, audit
+and plan digests, an expiring approval with exact count limits, typed digest
+confirmation, and a PostgreSQL `SERIALIZABLE, READ WRITE` transaction. Selected
+Subscriber rows are locked and any stale fact, UUID collision, partial state,
+repoint, or receipt drift fails closed. The durable receipt manifest makes an
+exact retry verifiable and preserves later compensation evidence. The executor
+cannot merge identities, assign roles, copy contacts, or change account,
+subscription, billing, access, or authorization state. Migration 341 creates
+only the receipt schema; it performs no backfill and authorizes no production
+execution.
+
+Migration 342 adds evidence-bound, one-to-one Party links to `Organization`,
+`Reseller`, `Vendor`, and `FieldVendor`. `party.registry` is their only binding
+writer. Profile binding requires an active/quarantined Organization Party, is
+idempotent only for the exact existing target, preserves original evidence,
+and refuses repoints. It assigns no role or permission. The native Vendor and
+its string-bridged FieldVendor auth projection must bind together to the same
+Party; missing, partial, conflicting, or duplicate projections fail closed.
+
+`Organization.account_type`, Reseller/Vendor/FieldVendor `is_active`, and the
+FieldVendor string UUID remain compatibility state until their runtime callers
+pass a documented parity and cutover gate. They are not converted into Party
+roles by migration 342. `party.organization_profile_audit` reports aggregate
+binding, role-coverage, and vendor-twin debt without identity values or writes.
+The complete migration boundary is
+`docs/PARTY_ORGANIZATION_PROFILE_BINDING.md`.
+
+Migration 343 adds reviewed Person Party links to `SystemUser` and
+`ResellerUser`, and reviewed canonical `PartyMembership` links to
+`ResellerUser`, `OrganizationMembership`, and `FieldVendorUser`.
+`party.registry` is the only binding writer. A reseller principal must bind to
+one `reseller_admin` membership whose Person and Organization agree with its
+reviewed reseller profile. A FieldVendorUser binds to one `vendor_user`
+membership; its SystemUser must already identify that same Person and both
+vendor profiles must already identify the same Organization.
+OrganizationMembership role and Organization must agree with the canonical
+membership. The unused native VendorUser is not wired into the new boundary.
+
+Migration 343 does not create or activate a PartyMembership, infer identity
+from names/email/legacy UUIDs, assign Party roles, change `is_active`, alter
+credentials/tokens/RBAC, or change a login/read path. Compatibility state stays
+authoritative until an explicit parity cutover. The read-only
+`party.principal_context_audit` reports only aggregate schema, binding,
+membership-context, and FieldVendorUser context debt. The complete boundary is
+`docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`.
+
+Migration 344 adds an evidence-bound Person Party link to `SubscriberContact`,
+reviewed projection tables for its descriptive relationship and individual
+legacy contact fields, and an evidence-bound canonical `PartyContactPoint`
+projection on `InboxContactLink`. `party.registry` is the only writer for the
+SubscriberContact Person, relationship, and source-field projections.
+`communications.team_inbox`, through `team_inbox_contact_links`, remains the
+only writer for Inbox routing and for the Inbox contact-point projection.
+
+The migration is schema-only. It does not infer a person from an email, phone,
+name, social handle, or shared account; create a Party, relationship, or contact
+point; copy verification or consent; grant access from a descriptive
+relationship; change `SubscriberContact.is_authorized`, notification flags, an
+Inbox target/active route, subscription state, billing block, or any current
+read path. Social projections require provider, connected-account, and
+immutable provider-subject scope. Unsupported `other_social`, `chat_widget`,
+and `note` values remain explicit audit debt rather than guessed identities.
+
+`party.contact_inbox_audit` reports only aggregate schema, binding,
+relationship, contact-point, verification/consent coverage, and Inbox
+projection debt. Its operator runs in a PostgreSQL read-only, repeatable-read
+transaction. Backfill, shadow parity, reader cutover, and compatibility-path
+retirement remain separate approvals. The complete boundary and cutover gates
+are `docs/PARTY_CONTACT_INBOX_PROJECTION.md`.
+
+Migration 345 establishes the additive customer-lifecycle boundary. A Lead can
+identify a reviewed Party before any Subscriber account exists, and
+`sales.lead_lifecycle` owns its immutable structured origin and later reviewed
+account attachment. Native Sub communication campaign UUIDs remain owned by
+`communications.campaigns`; Meta/Google and other provider campaign IDs remain
+external origin provenance and are never coerced into those UUIDs.
+
+`sales.service`, `sales.orders`, `access.subscription_lifecycle`, and
+`support.ticket_lifecycle` retain their domain state. Their links are guarded:
+Quote Subscriber must match Lead Party, Sales Order Subscriber must match
+Quote, and any Ticket customer links must match its Lead Party. A Lead-only
+Ticket remains valid for pre-sales support. Billing blocks and Subscription
+status are observed by the PII-free `customer.lifecycle_audit`, never decided
+or changed by it. CRM and `dotmac_mkt` have no runtime customer-lifecycle or
+person-level attribution authority. The complete boundary and cutover gates
+are `docs/PARTY_CUSTOMER_LIFECYCLE.md`.
+
+Migration 346 applies that boundary to Refer & Earn. `referrals.program` owns
+capture, exact-Party account conversion, qualification, and reward decisions.
+It asks `party.registry` to create quarantined identity/reachability facts and
+`sales.lead_lifecycle` to create the Lead and immutable referral origin. New
+capture creates no Subscriber and duplicates no contact PII into Referral
+metadata. Account attachment requires exact reviewed Party equality; contact
+matching cannot qualify or relink a referral. The detailed contract is
+`docs/PARTY_FIRST_REFERRAL_CAPTURE.md`.
+
+Referral customer reads/writes are permanently native. The prior referral
+read/write controls, CRM referral mutation, mirror write-through, and scheduled
+outbound reconciliation are retired. The legacy mirror is read-only historical
+compatibility evidence, is not an active SOT owner, and cannot feed native
+referral decisions. The signed legacy webhook route and old Celery names are
+no-op tombstones that absorb queued traffic without database or network work.
+
+Referral signup and operator account adjudication resolve through
+`referrals.account_conversion`. Its stable context is the canonical
+Referral/Party/Lead UUID triple already stored by migration 346, so this slice
+adds no parallel conversion table or migration. The coordinator locks and
+revalidates that context, asks `customer.accounts` to prepare a Subscriber,
+then delegates Party binding, Lead attachment, and Referral attachment to their
+existing owners before one commit. A stale context, different Party/account,
+or self-referral is refused; contact values never select identity. The detailed
+contract is `docs/REFERRAL_ACCOUNT_CONVERSION.md`.
+
+Public capture carries that context forward as a 24-hour signed, PII-free
+capability. `auth.token_signing` owns configured signing-key/algorithm
+resolution and the cryptographic envelope; `referrals.account_conversion` owns
+purpose, claims, lifetime, and canonical revalidation. Public signup exposes no
+lifecycle, reseller, billing, verification, numbering, or permission controls.
+It also cannot set marketing consent outside the communication-eligibility
+owner. The token proves capture continuity only and does not verify identity
+or authorize contact matching.
+
+After account creation, `auth.customer_credential_enrollment` owns the separate
+credential handoff. It creates no random or placeholder password. It sends a
+typed, non-secret communication intent; `communications.ephemeral_actions`
+revalidates the canonical context and mints the 24-hour capability only when
+the delivery worker is ready to call the email transport. The rendered bearer
+exists only in worker memory and is never projected back into the intent,
+Notification, audit, delivery error, or log. The local `UserCredential` is
+created only when the recipient chooses a password. Successful redemption and
+`Subscriber.email_verified` are one transaction and make the capability
+single-use through canonical credential state. They do not verify a Party
+contact point, activate or merge the quarantined Party, or change account,
+subscription, billing-block, access, consent, role, or permission state. The
+detailed security and delivery boundary is
+`docs/REFERRAL_CREDENTIAL_ENROLLMENT.md`.
 
 ## Financial and Access
 
@@ -894,21 +1093,27 @@ Tax-accounting migration record:
 
 ## Customer Context
 
-1. Customer context owns identity, account, billing, service, support, and
+1. `customer.accounts` owns Subscriber account creation and the
+   transaction-neutral preparation command used by approved cross-domain
+   coordinators. It delegates requested status to
+   `access.subscription_lifecycle` and stages `subscriber.created`; callers do
+   not construct Subscriber rows directly. Existing direct constructors remain
+   explicit shrink-only migration debt, not approved parallel owners.
+2. Customer context owns identity, account, billing, service, support, and
 network summary composition.
-2. Customer network context owns the raw customer-to-network footprint.
-3. Network access path owns the customer service path.
-4. `customer.profile_commands` owns admin customer profile edits and explicit
+3. Customer network context owns the raw customer-to-network footprint.
+4. Network access path owns the customer service path.
+5. `customer.profile_commands` owns admin customer profile edits and explicit
    person-to-business customer conversion. Normal person edit submission must
    not mutate account type; conversion is a dedicated command with its own
    validation and audit trail.
-5. `customer.service_status` owns customer-visible service health and action
+6. `customer.service_status` owns customer-visible service health and action
    hints, including whether payment can restore every active service hold and
    the authoritative amount required by financial policy.
-6. `customer.usage_summary` owns customer usage windows, headline totals, and
+7. `customer.usage_summary` owns customer usage windows, headline totals, and
    total provenance. An authoritative zero is a valid value, not a missing-data
    sentinel.
-7. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
+8. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
    admin subscriber growth and churn report reads: monthly growth/churn series,
    month-over-month new counts, churn/at-risk summaries, status counts, and
    cumulative signups. The derived-cancelled rule (explicit `canceled`, or NULL
@@ -1371,16 +1576,21 @@ in forms, or rotate key material directly.
    transactional-versus-marketing send decision.
 4. `communications.intents` owns communication intent lifecycle, recipient and
    channel expansion, and delivery-outcome projection.
-5. Notification service owns notification rows and delivery lifecycle.
-6. Staff notification service owns internal/admin notification creation.
-7. `communications.customer_read_state` owns customer notification read/unread
+5. `communications.ephemeral_actions` owns the allowlisted, typed, non-secret
+   action envelope and just-in-time sensitive-message materialization
+   orchestration. Calling domains still own capability purpose, claims,
+   lifetime, and consequences. The worker must not persist or log rendered
+   bearer content or exception text that may contain it.
+6. Notification service owns notification rows and delivery lifecycle.
+7. Staff notification service owns internal/admin notification creation.
+8. `communications.customer_read_state` owns customer notification read/unread
    state and unread counts across the web portal and mobile app. Subscriber
    metadata is its bounded persistence mechanism; `/me/notifications` projects
    that state, and `/me/notifications/read` is the self-scoped mutation
    boundary. Device storage is only a one-way legacy migration input. The
    identity-cleared GET response cache may render last-known state offline but
    never accepts read decisions.
-8. `communications.team_inbox` owns conversation notes, assignment, replies,
+9. `communications.team_inbox` owns conversation notes, assignment, replies,
    contact-linking, widget writes, inbound-channel ingestion, collaboration,
    and admin mutation transactions. `app.services.team_inbox_commands` is the
    committed admin command boundary; `app.web.admin.inbox` only translates HTTP
@@ -1401,6 +1611,10 @@ in forms, or rotate key material directly.
    `team_inbox_smtp_inbound`, delegates consent-gated probe delivery to the
    canonical notification delivery point and email transport, and is never
    started from a web-process lifespan.
+   `team_inbox_contact_links` also owns the reviewed projection from an
+   existing Inbox route to a canonical Party contact point. It validates the
+   point, provider scope, target Party, and active contact relationship against
+   `party.registry`, but does not let Party services mutate Inbox routing.
 9. Campaign services own marketing audience, sequence, and content decisions.
    They apply `communications.eligibility` when building an audience, before
    enqueueing a send, and again through the marketing communication intent at
@@ -2012,7 +2226,16 @@ Authorization:
 
 1. `auth.rbac`: owns roles, permissions, and assignments.
 2. `auth.permission_gate`: owns request/route permission dependencies.
-3. `auth.staff_provisioning`: owns staff account bootstrap.
+3. `auth.token_signing`: owns configured JWT key/algorithm resolution and the
+   cryptographic envelope for typed capability tokens. Calling domains own
+   purpose, claims, duration, and consequences.
+4. `auth.staff_provisioning`: owns staff account bootstrap.
+5. `auth.customer_credential_enrollment`: owns purpose-bound local credential
+   enrollment for referral-created customer accounts and the atomic
+   Subscriber-email verification consequence. It creates no placeholder
+   credential and owns no Party or subscription lifecycle state. It submits a
+   non-secret action to `communications.ephemeral_actions`; token issuance and
+   email rendering occur only at the worker transport boundary.
 
 Rule: routes declare permissions and business services receive an authorized
 principal. RBAC mutation stays inside RBAC services.
@@ -2148,15 +2371,20 @@ outcome; they do not embed their own geocode lookups or spatial write logic.
 1. `sales.orders`: owns sales order lifecycle.
 2. `sales.selfserve`: owns the self-serve quote and signup flow.
 3. `sales.service`: owns sales service operations.
-4. `referrals.data`: owns referral DB and CRM data access — the Refer & Earn
-   data mirror.
-5. `referrals.program`: owns Refer & Earn referral program logic.
+4. `referrals.program`: owns Party-first Refer & Earn capture, reviewed account
+   conversion, qualification, and reward decisions.
+5. `referrals.account_conversion`: owns exact Referral/Party/Lead context
+   validation, the bounded public-signup capability contract, and atomic
+   account-creation/adjudication orchestration.
 
 Rule: sales order, self-serve quote/signup, sales service, and Refer & Earn
 referral logic resolve through these owners. `web_sales`/`web_referrals` adapters
-and API/task callers request an outcome; the referral mirror is the sole DB and
-CRM data-access path for Refer & Earn, treated as a cache of CRM data, never a
-parallel authority. Quote-request and deposit surfaces branch on the explicit
+and API/task callers request an outcome. `customer.accounts` creates or prepares
+Subscriber rows; the referral coordinator never constructs them itself.
+Customer referral reads and writes are native-only. The legacy referral mirror
+is isolated compatibility evidence and never a SOT, decision, identity, or
+attribution owner.
+Quote-request and deposit surfaces branch on the explicit
 `quotes_native_write_enabled` cutover control: the native branch is owned by
 `sales.selfserve`, and its deposit "already paid" decision belongs to the paid
 deposit Invoice in the billing ledger — never to a mirror flag the CRM could

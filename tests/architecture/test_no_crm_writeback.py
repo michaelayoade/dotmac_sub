@@ -24,17 +24,14 @@ RETIRED_MUTATIONS = {
 
 #: The last remaining Sub -> CRM writes.
 #:
-#: They are the *write half* of a cutover whose *read half* has not happened:
-#: ``quotes_mirror`` and ``referrals_mirror`` still serve reads behind
-#: ``quotes_native_read_enabled`` / ``referrals_native_read_enabled``, both of
-#: which default OFF. Deleting these before the reads are backfilled and cut
-#: over would leave portal quote requests and referrals with nowhere to write.
+#: Quote writes remain the write half of a cutover whose read half has not
+#: happened. Referral reads/writes cut over to Sub in revision 356, so the CRM
+#: referral mutation has been removed from this set.
 #:
 #: This set must only ever SHRINK. It goes to zero when the read cutover lands.
 DEFERRED_MUTATIONS = {
     "request_portal_quote",
     "accept_portal_quote",
-    "create_portal_referral",
 }
 
 
@@ -100,9 +97,30 @@ def test_outbound_crm_tasks_are_not_registered() -> None:
         assert forbidden not in sources
 
 
-# A guard asserting app/api/{me,reseller}.py no longer call
-# ``quotes_mirror.request_quote`` / ``referrals_mirror.refer_a_friend`` belongs
-# with the READ cutover, not here. Those calls are live and correct today: the
-# mirrors are still the read source (flags default OFF), so the portal must
-# still be able to write through them. Add that guard in the cutover PR, where
-# it will actually hold.
+def test_customer_referral_surfaces_do_not_call_crm_mirror() -> None:
+    sources = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in ("app/api/me.py", "app/web/customer/referrals.py")
+    )
+    assert "referrals_mirror" not in sources
+
+
+def test_retired_referral_compatibility_has_no_crm_or_native_write_path() -> None:
+    mirror_source = (ROOT / "app/services/referrals_mirror.py").read_text(
+        encoding="utf-8"
+    )
+    webhook_source = (ROOT / "app/api/crm_webhooks.py").read_text(encoding="utf-8")
+    delta_source = (ROOT / "app/services/crm_native_sync.py").read_text(
+        encoding="utf-8"
+    )
+
+    for forbidden in (
+        "get_crm_client",
+        "resolve_crm_subscriber_id",
+        "reconcile_subscriber",
+        "apply_webhook",
+        "enqueue_task",
+    ):
+        assert forbidden not in mirror_source
+    assert "crm_referral_path_retired" in webhook_source
+    assert '"referral": _apply_referral' not in delta_source

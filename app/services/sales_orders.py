@@ -5,13 +5,13 @@ native models, with Sub ownership deltas applied:
 
 * Customer party: CRM ``person_id`` becomes ``subscriber_id`` — the CRM's
   person-mediated SO → sub identity chain (SO → project → person →
-  ``selfcare_id``) collapses to the first-class column (§1.5/§2.3).
+  ``selfcare_id``) collapses to the first-class column.
 * The crm#233 ``account_id`` slot fix is ported as the FIXED shape: the
   legacy ``account_id``/``invoice_id`` schema fields are gone and the list
   API passes filters by keyword, so nothing can land in the wrong slot.
 * ``order_number`` continues the CRM ``SO-%06d`` sequence via sub's
   ``document_sequences`` (key ``sales_order_number``, ``with_for_update``).
-* **Financial side-effects are rewired native (§2.3):** the CRM's HTTP
+* **Financial side-effects are rewired native:** the CRM's HTTP
   pushes to sub become direct in-process calls —
 
   - ``push_sales_order_subscription_to_selfcare`` →
@@ -31,7 +31,7 @@ native models, with Sub ownership deltas applied:
   reseller-commission capability owns that side effect.
 * Install-project creation for manual (quote-less) sales orders is deferred
   to the projects service port (see ``_ensure_project_for_manual_sales_order``).
-* Statuses are stored as plain strings (sub convention, §1.7).
+* Statuses are stored as plain strings (sub convention, ).
 * Native services emit sub events from day one (risk #13):
   ``sales_order.paid``.
 """
@@ -69,6 +69,7 @@ from app.services.common import (
 )
 from app.services.events import EventType, emit_event
 from app.services.response import ListResponseMixin
+from app.services.sales import lifecycle as lead_lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,29 @@ def _ensure_subscriber(db: Session, subscriber_id) -> Subscriber:
     if not subscriber:
         raise HTTPException(status_code=404, detail="Subscriber not found")
     return subscriber
+
+
+def _validate_quote_subscriber_context(
+    db: Session,
+    *,
+    quote: Quote,
+    subscriber: Subscriber,
+) -> None:
+    if quote.subscriber_id != subscriber.id:
+        raise HTTPException(
+            status_code=409,
+            detail="Sales order Subscriber does not match the Quote Subscriber",
+        )
+    if quote.lead is None:
+        return
+    try:
+        lead_lifecycle.validate_lead_subscriber_alignment(
+            db,
+            lead=quote.lead,
+            subscriber=subscriber,
+        )
+    except lead_lifecycle.LeadLifecycleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _parse_decimal(value: str | None) -> Decimal | None:
@@ -133,13 +157,13 @@ def _next_sequence_value(db: Session, key: str, start_value: int = 1) -> int:
 
 def _generate_order_number(db: Session) -> str:
     # Continues the CRM sequence: the backfill imports the CRM row's
-    # next_value under the same key (§1.5, risk #10).
+    # next_value under the same key.
     value = _next_sequence_value(db, "sales_order_number", 1)
     return f"SO-{value:06d}"
 
 
 # ---------------------------------------------------------------------------
-# §2.3 — sales-order financial side-effects, rewired native.
+# — sales-order financial side-effects, rewired native.
 # CRM source: app/services/events/handlers/selfcare_customer.py (the
 # push_sales_order_* + ensure_installation_invoice_for_sales_order pushers).
 # ---------------------------------------------------------------------------
@@ -239,7 +263,7 @@ def _store_invoice_metadata(
     project: Project, invoice_id: str, amount: Decimal | None
 ) -> None:
     # Metadata keys keep their historical names — they are local Fact now
-    # (§1.5): the ids point at sub's own invoice rows.
+    #: the ids point at sub's own invoice rows.
     metadata = dict(project.metadata_ or {})
     metadata["selfcare_installation_invoice_id"] = str(invoice_id)
     if amount is not None:
@@ -311,7 +335,7 @@ def _resolve_installation_amount(db: Session, project: Project) -> Decimal:
 
 
 def ensure_installation_invoice_for_sales_order(db: Session, sales_order_id) -> None:
-    """Create the installation invoice for a sales order's project (§2.3).
+    """Create the installation invoice for a sales order's project.
 
     Native rewire of the CRM's ``ensure_installation_invoice_for_sales_order``:
     ``selfcare.create_installation_invoice`` (HTTP → ``POST /crm/invoices``)
@@ -740,7 +764,7 @@ def _sync_sales_order_add_ons(
 
 def _push_sales_order_subscriptions(db: Session, sales_order: SalesOrder) -> None:
     """Create a subscription (plus its first invoice) for each sales-order
-    line tagged with a sub offer (§2.3).
+    line tagged with a sub offer.
 
     Native rewire of ``push_sales_order_subscription_to_selfcare``:
     ``selfcare.create_subscription`` (HTTP → ``POST /crm/subscriptions``)
@@ -840,7 +864,7 @@ def _push_sales_order_subscriptions(db: Session, sales_order: SalesOrder) -> Non
 
 
 def _record_sales_order_payment(db: Session, sales_order: SalesOrder) -> None:
-    """Record the customer's payment against their account (§2.3).
+    """Record the customer's payment against their account.
 
     Native rewire of ``push_sales_order_payment_to_selfcare``:
     ``selfcare.record_payment`` (HTTP → ``POST /crm/payments``) becomes an
@@ -888,7 +912,7 @@ def _record_sales_order_payment(db: Session, sales_order: SalesOrder) -> None:
 
 
 def _sync_sales_order_financials(db: Session, sales_order: SalesOrder) -> None:
-    """Apply the paid-order financial side-effects natively (§2.3).
+    """Apply the paid-order financial side-effects natively.
 
     Replaces the CRM's ``_sync_sales_order_payment_to_sub`` HTTP fan-out.
     Only fires on a paid/partial order; every step is idempotent, so
@@ -976,7 +1000,7 @@ def _recalculate_order_totals(db: Session, sales_order_id: str) -> None:
 
 
 def _ensure_fulfillment(db: Session, sales_order: SalesOrder) -> None:
-    """Placeholder for fulfillment actions once implemented (§2.1: stays a
+    """Placeholder for fulfillment actions once implemented (stays a
     no-op through the port)."""
     return None
 
@@ -1027,13 +1051,14 @@ class SalesOrders(ListResponseMixin):
         total_value = Decimal(data.get("total") or 0)
         amount_paid_value = Decimal(data.get("amount_paid") or 0)
 
-        _ensure_subscriber(db, data.get("subscriber_id"))
+        subscriber = _ensure_subscriber(db, data.get("subscriber_id"))
         if data.get("quote_id"):
             quote = db.get(
                 Quote, coerce_uuid(data["quote_id"]), options=[selectinload(Quote.lead)]
             )
             if not quote:
                 raise HTTPException(status_code=404, detail="Quote not found")
+            _validate_quote_subscriber_context(db, quote=quote, subscriber=subscriber)
             existing = (
                 db.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).first()
             )
@@ -1080,6 +1105,9 @@ class SalesOrders(ListResponseMixin):
         existing = db.query(SalesOrder).filter(SalesOrder.quote_id == quote.id).first()
         if existing:
             return existing
+
+        subscriber = _ensure_subscriber(db, quote.subscriber_id)
+        _validate_quote_subscriber_context(db, quote=quote, subscriber=subscriber)
 
         order_number = _generate_order_number(db)
         sales_order = SalesOrder(
@@ -1182,14 +1210,28 @@ class SalesOrders(ListResponseMixin):
             data["payment_status"] = _enum_str(
                 data["payment_status"], SalesOrderPaymentStatus, "payment_status"
             )
-        if data.get("subscriber_id"):
-            _ensure_subscriber(db, data["subscriber_id"])
-        if data.get("quote_id"):
+        prospective_subscriber_id = (
+            data["subscriber_id"]
+            if "subscriber_id" in data
+            else sales_order.subscriber_id
+        )
+        if prospective_subscriber_id is None:
+            raise HTTPException(status_code=400, detail="subscriber_id is required")
+        subscriber = _ensure_subscriber(db, prospective_subscriber_id)
+        prospective_quote_id = (
+            data["quote_id"] if "quote_id" in data else sales_order.quote_id
+        )
+        quote = None
+        if prospective_quote_id is not None:
             quote = db.get(
-                Quote, coerce_uuid(data["quote_id"]), options=[selectinload(Quote.lead)]
+                Quote,
+                coerce_uuid(prospective_quote_id),
+                options=[selectinload(Quote.lead)],
             )
             if not quote:
                 raise HTTPException(status_code=404, detail="Quote not found")
+            _validate_quote_subscriber_context(db, quote=quote, subscriber=subscriber)
+        if "quote_id" in data and quote is not None:
             existing = (
                 db.query(SalesOrder)
                 .filter(

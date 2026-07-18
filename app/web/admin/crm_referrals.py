@@ -11,6 +11,7 @@ qualify override, issue reward (idempotent account credit), reject.
 from __future__ import annotations
 
 from urllib.parse import quote
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -18,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import referral_account_conversion
 from app.services import web_referrals as web_referrals_service
 from app.services.auth_dependencies import require_permission
 from app.services.referrals import referrals as referrals_service
@@ -47,6 +49,15 @@ def _redirect(
     elif message:
         url += f"?message={quote(message)}"
     return RedirectResponse(url=url, status_code=303)
+
+
+def _conversion_source(request: Request) -> str:
+    from app.web.admin import get_current_user
+
+    auth = get_current_user(request)
+    actor = str(auth.get("principal_id") or auth.get("id") or "unknown").strip()
+    principal_type = str(auth.get("principal_type") or "system_user").strip()
+    return f"admin_referral_attach:{principal_type}:{actor}"[:80]
 
 
 @router.get(
@@ -148,3 +159,45 @@ def referral_reject(
     except HTTPException as exc:
         return _redirect(referral_id, error=str(exc.detail))
     return _redirect(referral_id, message="Referral rejected.")
+
+
+@router.post(
+    "/{referral_id}/attach-subscriber",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("crm:lead:write")),
+        Depends(require_permission("customer:update")),
+    ],
+)
+def referral_attach_subscriber(
+    request: Request,
+    referral_id: str,
+    subscriber_id: str = Form(...),
+    referred_party_id: str = Form(...),
+    referred_lead_id: str = Form(...),
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Attach an existing account only after exact Party-context review."""
+
+    try:
+        result = referral_account_conversion.attach_existing_account(
+            db,
+            referral_id=UUID(referral_id),
+            referred_party_id=UUID(referred_party_id),
+            referred_lead_id=UUID(referred_lead_id),
+            subscriber_id=UUID(subscriber_id),
+            source=_conversion_source(request),
+            reason=reason,
+        )
+    except (
+        ValueError,
+        referral_account_conversion.ReferralAccountConversionError,
+    ) as exc:
+        return _redirect(referral_id, error=str(exc))
+    message = (
+        "Subscriber was already attached to this exact referral Party."
+        if result.outcome == "already_attached"
+        else "Subscriber attached to the reviewed referral Party."
+    )
+    return _redirect(referral_id, message=message)
