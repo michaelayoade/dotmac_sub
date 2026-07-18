@@ -1,7 +1,7 @@
 """Add exact evidence for prepaid use of settled payment credit.
 
-Revision ID: 357_payment_prepaid_applications
-Revises: 356_party_first_referral_capture
+Revision ID: 359_payment_prepaid_applications
+Revises: 358_paystack_allocation_exceptions
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "357_payment_prepaid_applications"
-down_revision = "356_party_first_referral_capture"
+revision = "359_payment_prepaid_applications"
+down_revision = "358_paystack_allocation_exceptions"
 branch_labels = None
 depends_on = None
 

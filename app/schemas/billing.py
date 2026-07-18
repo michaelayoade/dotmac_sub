@@ -927,6 +927,11 @@ class PaymentSyncRead(BaseModel):
     memo: str | None = None
     updated_at: datetime
     allocations: list[PaymentAllocationRead] = Field(default_factory=list)
+    settlement: PaymentSettlementRead | None = None
+    intent_purpose: str | None = None
+    allocation_policy: str | None = None
+    credit_application_policy: str | None = None
+    policy_version: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -938,6 +943,14 @@ class PaymentSyncRead(BaseModel):
         gross = getattr(record, "gross_amount", None)
         net = getattr(record, "net_amount", None)
         status = getattr(record, "status", None)
+        deposit_intent = next(
+            (
+                intent
+                for intent in getattr(value, "topup_intents", [])
+                if getattr(intent, "purpose", None) == "account_credit_deposit"
+            ),
+            None,
+        )
         return {
             "id": value.id,
             "account_id": value.account_id,
@@ -964,6 +977,13 @@ class PaymentSyncRead(BaseModel):
             "memo": value.memo,
             "updated_at": value.updated_at,
             "allocations": value.allocations,
+            "settlement": value.settlement,
+            "intent_purpose": getattr(deposit_intent, "purpose", None),
+            "allocation_policy": getattr(deposit_intent, "allocation_policy", None),
+            "credit_application_policy": getattr(
+                deposit_intent, "credit_application_policy", None
+            ),
+            "policy_version": getattr(deposit_intent, "policy_version", None),
         }
 
 
@@ -1043,11 +1063,22 @@ class DirectBankTransferConfig(BaseModel):
     accounts: list[BankTransferAccount] = Field(default_factory=list)
 
 
+class TopupEligibleInvoice(BaseModel):
+    id: UUID
+    invoice_number: str | None = None
+    balance_due: Decimal
+    currency: str
+
+
 class TopupPageResponse(BaseModel):
     provider_type: str
     provider_public_key: str | None = None
     currency: str = "NGN"
     prepaid_balance: Decimal | None = None
+    account_credit: Decimal | None = None
+    deposit_allowed: bool = True
+    eligible_unpaid_total: Decimal = Decimal("0.00")
+    eligible_unpaid_invoices: list[TopupEligibleInvoice] = Field(default_factory=list)
     min_amount: int
     max_amount: int
     preset_amounts: list[int] = Field(default_factory=list)
@@ -1083,6 +1114,11 @@ class TopupInitiateResponse(BaseModel):
     # the gateway webview and go straight to verify.
     charged: bool = False
     checkout_url: str | None = None
+    purpose: str = "account_credit_deposit"
+    allocation_policy: str = "credit_only"
+    credit_application_policy: str = "pay_eligible_invoices"
+    policy_version: int = 1
+    preview_fingerprint: str
 
 
 class TopupVerifyRequest(BaseModel):
@@ -1097,6 +1133,8 @@ class TopupVerifyResponse(BaseModel):
     already_recorded: bool = False
     available_balance: Decimal | None = None
     credit_added: Decimal | None = None
+    allocated_total: Decimal = Decimal("0.00")
+    allocated_to_invoices: list[dict[str, Any]] = Field(default_factory=list)
     card_saved: bool | None = None
     card_save_message: str | None = None
 
@@ -1238,6 +1276,10 @@ class PaymentProviderEventIngest(BaseModel):
     external_id: str | None = Field(default=None, max_length=160)
     idempotency_key: str | None = Field(default=None, max_length=160)
     amount: Decimal | None = Field(default=None, gt=0)
+    provider_fee: Decimal = Field(default=Decimal("0.00"), ge=0)
+    net_amount: Decimal | None = Field(default=None, gt=0)
+    provider_reference: str | None = Field(default=None, max_length=120)
+    topup_intent_id: UUID | None = None
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     financial_effect: PaymentProviderEventFinancialEffect | None = None
     payload: dict | None = None
@@ -2226,7 +2268,7 @@ class BillingAccountStatement(BaseModel):
 
 
 class AccountBalanceResponse(BaseModel):
-    """Customer wallet/credit balance (positive = credit on file)."""
+    """Customer account credit balance (positive = credit on file)."""
 
     credit_balance: Decimal = Decimal("0.00")
     currency: str = "NGN"

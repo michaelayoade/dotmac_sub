@@ -495,6 +495,44 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.account_credit_applications",
+                module="app.services.billing.account_credit",
+                owns=(
+                    "eligible invoice selection for evidenced account credit",
+                    "deterministic payment-credit source selection",
+                    "oldest-payable-debt application orchestration",
+                    "invoice-void release of exact account-credit allocations",
+                    "account-credit application invariant monitoring",
+                ),
+                depends_on=("financial.payments", "financial.invoices"),
+                notes=(
+                    "Account credit is derived from exact unconsumed settlement "
+                    "evidence, never a wallet counter. This owner composes the "
+                    "payment-allocation owner and does not write money directly."
+                ),
+            ),
+            SOTService(
+                name="financial.account_credit_deposits",
+                module="app.services.account_credit_deposits",
+                owns=(
+                    "Deposit Account Credit eligibility and preview",
+                    "typed deposit intent lifecycle and provider correlation",
+                    "atomic deposit settlement composition",
+                    "deposit-to-payment evidence link",
+                    "deposit settlement outbox event",
+                ),
+                depends_on=(
+                    "financial.payments",
+                    "financial.account_credit_applications",
+                    "financial.access_resolution",
+                ),
+                notes=(
+                    "A deposit first records the whole confirmed receipt as "
+                    "unallocated account credit, grants no service duration, and "
+                    "then asks the canonical applicator to settle eligible debt."
+                ),
+            ),
+            SOTService(
                 name="financial.payments",
                 module="app.services.billing.payments",
                 owns=(
@@ -510,6 +548,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "historical payment settlement evidence reconciliation",
                     "payment settlement access-reconciliation handoff",
                     "payment-originated ledger postings",
+                    "cash-first verified provider settlement evidence",
+                    "payment allocation reconciliation exception lifecycle",
                     "payment refund eligibility and preview",
                     "payment refund confirmation and exact ledger evidence",
                     "payment refund idempotency and audit evidence",
@@ -806,11 +846,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "billing health snapshot",
                     "billing anomaly classification",
                     "bounded billing health observations",
+                    "account-credit invariant observation publication",
                 ),
                 depends_on=(
                     "customer.financial_position",
                     "financial.access_resolution",
                     "financial.billing_profile",
+                    "financial.account_credit_applications",
                 ),
                 notes=(
                     "Billing health is monitoring evidence, never a financial "
@@ -863,6 +905,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.provider_payment_settlements",
+                module="app.services.provider_payment_settlements",
+                owns=(
+                    "verified invoice-payment cash-first orchestration",
+                    "post-settlement invoice-allocation request",
+                    "allocation-failure exception handoff",
+                ),
+                depends_on=("financial.payments", "financial.invoices"),
+            ),
+            SOTService(
                 name="financial.payment_provider_events",
                 module="app.services.billing.providers",
                 owns=(
@@ -871,7 +923,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "provider-event idempotency",
                     "incomplete provider settlement resumption",
                 ),
-                depends_on=("financial.payments",),
+                depends_on=(
+                    "financial.payments",
+                    "financial.provider_payment_settlements",
+                ),
             ),
             SOTService(
                 name="financial.payment_webhooks",
@@ -889,8 +944,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "stranded top-up reconciliation",
                     "scheduled top-up reconciliation execution",
+                    "verified provider settlement then allocation orchestration",
                 ),
-                depends_on=("financial.ledger", "financial.payment_provider_events"),
+                depends_on=(
+                    "financial.ledger",
+                    "financial.payment_provider_events",
+                    "financial.provider_payment_settlements",
+                ),
             ),
         ),
         entrypoints=(

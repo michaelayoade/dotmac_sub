@@ -25,6 +25,7 @@ class PaymentGatewayTransaction:
     external_id: str
     amount: Decimal
     currency: str
+    provider_fee: Decimal = Decimal("0.00")
     metadata: dict[str, object] = field(default_factory=dict)
     memo_prefix: str = ""
     raw: dict[str, object] = field(default_factory=dict)
@@ -100,6 +101,7 @@ class PaymentGatewayAdapter:
                 external_id=str(tx.get("id", "")),
                 amount=Decimal(str(tx.get("amount", 0))),
                 currency=str(tx.get("currency") or "NGN"),
+                provider_fee=Decimal(str(tx.get("app_fee") or 0)),
                 metadata=dict(tx.get("meta") or {}),
                 memo_prefix="Flutterwave",
                 raw=dict(tx),
@@ -118,6 +120,7 @@ class PaymentGatewayAdapter:
             external_id=str(tx.get("id", "")),
             amount=kobo_to_naira(tx.get("amount", 0)),
             currency=str(tx.get("currency") or "NGN"),
+            provider_fee=kobo_to_naira(tx.get("fees", 0)),
             metadata=dict(tx.get("metadata") or {}),
             memo_prefix="Paystack",
             raw=dict(tx),
