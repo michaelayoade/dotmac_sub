@@ -37,6 +37,10 @@ APPROVED_PAYMENT_SETTLEMENT_WRITERS = {
     Path("app/services/billing/consolidated_payments.py"),
 }
 
+APPROVED_PAYMENT_PREPAID_APPLICATION_WRITERS = {
+    Path("app/services/billing/payments.py")
+}
+
 APPROVED_BILLING_ACCOUNT_LEDGER_WRITERS = {
     Path("app/services/billing/consolidated_payments.py")
 }
@@ -264,6 +268,17 @@ def test_only_the_payment_owner_creates_payment_documents_and_settlements() -> N
     assert not settlements, (
         "PaymentSettlement constructed outside its owner:\n  "
         + "\n  ".join(settlements)
+    )
+
+
+def test_only_the_payment_owner_records_prepaid_applications() -> None:
+    violations = _violations(
+        lambda path: _constructor_lines(path, "PaymentPrepaidApplication"),
+        APPROVED_PAYMENT_PREPAID_APPLICATION_WRITERS,
+    )
+    assert not violations, (
+        "PaymentPrepaidApplication constructed outside its owner:\n  "
+        + "\n  ".join(violations)
     )
 
 
@@ -565,6 +580,10 @@ def test_financial_writer_allowlists_only_name_real_writers() -> None:
         (
             APPROVED_PAYMENT_SETTLEMENT_WRITERS,
             lambda path: _constructor_lines(path, "PaymentSettlement"),
+        ),
+        (
+            APPROVED_PAYMENT_PREPAID_APPLICATION_WRITERS,
+            lambda path: _constructor_lines(path, "PaymentPrepaidApplication"),
         ),
         (
             APPROVED_BILLING_ACCOUNT_LEDGER_WRITERS,
