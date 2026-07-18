@@ -8,7 +8,7 @@ reputation:
   mailboxes → bounces. They receive **nothing**.
 - **Walled** (``suspended``/``blocked``) — still customers, but service is cut.
   They receive only actionable categories (billing/dunning, account/security,
-  service-status) so they can pay and get back online; non-essential mail
+  credential enrollment, service-status) so they can pay and get back online; non-essential mail
   (usage/FUP for a service they can't use) is suppressed.
 - **Everything else** (``active``/``new``/``delinquent``) — unaffected.
 
@@ -28,7 +28,7 @@ _TERMINAL_STATUSES = frozenset({SubscriberStatus.canceled, SubscriberStatus.disa
 
 # Walled (service-cut) account states receive only these actionable categories.
 _WALLED_STATUSES = frozenset({SubscriberStatus.suspended, SubscriberStatus.blocked})
-_WALLED_ALLOWED_CATEGORIES = frozenset({"billing", "account", "service"})
+_WALLED_ALLOWED_CATEGORIES = frozenset({"billing", "account", "service", "credentials"})
 
 
 def status_allows_notification(

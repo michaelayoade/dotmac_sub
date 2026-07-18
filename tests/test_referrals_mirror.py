@@ -1,295 +1,97 @@
-"""Local referral mirror service (RFC #73): reconcile, read, write-through, events."""
+"""Read-only historical referral mirror compatibility."""
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
-
-import pytest
 
 from app.models.referral import ReferralMirror, ReferralProgramCache
 from app.models.subscriber import Subscriber
 from app.services import referrals_mirror
 
 
-def _subscriber(db, crm_id: uuid.UUID | None = None) -> Subscriber:
-    sub = Subscriber(
-        first_name="Cust",
-        last_name="Omer",
-        display_name="Cust Omer",
-        email=f"c-{uuid.uuid4().hex[:8]}@example.com",
-        crm_subscriber_id=crm_id,
+def _subscriber(db) -> Subscriber:
+    subscriber = Subscriber(
+        first_name="Legacy",
+        last_name="Referrer",
+        email=f"legacy-{uuid.uuid4().hex[:8]}@example.com",
     )
-    db.add(sub)
-    db.commit()
-    db.refresh(sub)
-    return sub
+    db.add(subscriber)
+    db.flush()
+    return subscriber
 
 
-def _fresh_cache(db, sub, **kw):
-    cache = ReferralProgramCache(
-        subscriber_id=sub.id,
-        code=kw.get("code", "DOTMAC-AB12"),
-        share_url=kw.get("share_url", "https://app.dotmac.io/r/DOTMAC-AB12"),
-        program_enabled=kw.get("program_enabled", True),
-        reward_amount=kw.get("reward_amount", Decimal("5000")),
-        reward_currency="NGN",
-        synced_at=datetime.now(UTC),
-    )
-    db.add(cache)
-    db.commit()
-    return cache
-
-
-# ── read (from mirror, no CRM call when cache is fresh) ──────────────────────
-
-
-def test_read_builds_payload_from_mirror(db_session):
-    sub = _subscriber(db_session)
-    _fresh_cache(db_session, sub)
+def test_historical_mirror_read_is_local_and_shape_compatible(db_session):
+    subscriber = _subscriber(db_session)
     db_session.add(
-        ReferralMirror(
-            crm_referral_id="r1",
-            subscriber_id=sub.id,
-            referred_name="Ada",
-            status="rewarded",
-            reward_amount=Decimal("5000"),
+        ReferralProgramCache(
+            subscriber_id=subscriber.id,
+            code="LEGACY01",
+            share_url="https://legacy.invalid/r/LEGACY01",
+            program_enabled=True,
+            reward_amount=Decimal("2500"),
             reward_currency="NGN",
-            reward_status="paid",
-            referral_created_at=datetime.now(UTC),
+            synced_at=datetime.now(UTC),
         )
     )
-    db_session.add(
-        ReferralMirror(
-            crm_referral_id="r2",
-            subscriber_id=sub.id,
-            referred_name="Bem",
-            status="pending",
-        )
-    )
-    db_session.commit()
-
-    out = referrals_mirror.read_for_subscriber(db_session, str(sub.id))
-    assert out["code"] == "DOTMAC-AB12"
-    assert out["share_url"].endswith("/r/DOTMAC-AB12")
-    assert out["program"]["enabled"] is True
-    assert out["program"]["reward_amount"] == "5000.00"  # Numeric(12,2) scale
-    assert out["totals"]["total"] == 2
-    assert out["totals"]["pending"] == 1
-    assert out["totals"]["rewarded"] == 1
-    assert out["totals"]["total_earned"] == "5000.00"
-    assert {r["id"] for r in out["referrals"]} == {"r1", "r2"}
-
-
-def test_read_serves_mirror_when_crm_unreachable(db_session):
-    # No cache row → stale → tries reconcile; CRM down → serve empty gracefully.
-    sub = _subscriber(db_session, crm_id=uuid.uuid4())
-    from app.services.crm_client import CRMClientError
-
-    with patch(
-        "app.services.referrals_mirror.reconcile_subscriber",
-        side_effect=CRMClientError("down"),
-    ):
-        out = referrals_mirror.read_for_subscriber(db_session, str(sub.id))
-    assert out["totals"]["total"] == 0
-    assert out["program"]["enabled"] is False
-
-
-# ── reconcile (pull) ─────────────────────────────────────────────────────────
-
-
-def test_reconcile_upserts_cache_and_rows(db_session):
-    sub = _subscriber(db_session, crm_id=uuid.uuid4())
-    crm_resp = {
-        "code": "DOTMAC-ZZ99",
-        "share_url": "https://app.dotmac.io/r/DOTMAC-ZZ99",
-        "program": {"enabled": True, "reward_amount": "5000", "reward_currency": "NGN"},
-        "referrals": [
-            {
-                "id": "r1",
-                "status": "qualified",
-                "referred_name": "Ada",
-                "reward_status": "pending",
-                "created_at": "2026-06-01T10:00:00+00:00",
-            },
-        ],
-    }
-    client = MagicMock()
-    client.get_portal_referrals.return_value = crm_resp
-    with (
-        patch("app.services.referrals_mirror.get_crm_client", return_value=client),
-        patch(
-            "app.services.referrals_mirror.resolve_crm_subscriber_id",
-            return_value="crm-1",
-        ),
-    ):
-        ok = referrals_mirror.reconcile_subscriber(db_session, str(sub.id))
-    assert ok is True
-    cache = db_session.get(ReferralProgramCache, sub.id)
-    assert cache.code == "DOTMAC-ZZ99"
-    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r1").one()
-    assert row.status == "qualified"
-    assert row.referred_name == "Ada"
-
-
-def test_reconcile_noops_when_not_linked(db_session):
-    sub = _subscriber(db_session, crm_id=None)
-    with patch(
-        "app.services.referrals_mirror.resolve_crm_subscriber_id", return_value=None
-    ):
-        assert referrals_mirror.reconcile_subscriber(db_session, str(sub.id)) is False
-
-
-# ── write-through (refer a friend) ──────────────────────────────────────────
-
-
-def test_refer_a_friend_writes_through_and_mirrors(db_session):
-    sub = _subscriber(db_session, crm_id=uuid.uuid4())
-    client = MagicMock()
-    client.create_portal_referral.return_value = {
-        "id": "r-new",
-        "status": "pending",
-        "created_at": "2026-06-20T09:00:00+00:00",
-    }
-    with (
-        patch("app.services.referrals_mirror.get_crm_client", return_value=client),
-        patch(
-            "app.services.referrals_mirror.resolve_crm_subscriber_id",
-            return_value="crm-1",
-        ),
-    ):
-        out = referrals_mirror.refer_a_friend(
-            db_session, str(sub.id), name="Friend", email="friend@example.com"
-        )
-    assert out["id"] == "r-new"
-    assert out["status"] == "pending"
-    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r-new").one()
-    assert row.referred_name == "Friend"
-    assert row.subscriber_id == sub.id
-
-
-def test_refer_a_friend_requires_contact(db_session):
-    sub = _subscriber(db_session, crm_id=uuid.uuid4())
-    with pytest.raises(referrals_mirror.ReferralError) as exc:
-        referrals_mirror.refer_a_friend(db_session, str(sub.id), name="No Contact")
-    assert exc.value.status_code == 422
-
-
-def test_refer_a_friend_requires_crm_link(db_session):
-    sub = _subscriber(db_session, crm_id=None)
-    with patch(
-        "app.services.referrals_mirror.resolve_crm_subscriber_id", return_value=None
-    ):
-        with pytest.raises(referrals_mirror.ReferralError) as exc:
-            referrals_mirror.refer_a_friend(
-                db_session, str(sub.id), email="x@example.com"
-            )
-    assert exc.value.status_code == 409
-
-
-# ── webhook application ─────────────────────────────────────────────────────
-
-
-def test_webhook_captured_creates_pending_row_via_crm_id(db_session):
-    crm_id = uuid.uuid4()
-    sub = _subscriber(db_session, crm_id=crm_id)
-    out = referrals_mirror.apply_webhook(
-        db_session,
-        "referral.captured",
-        {"crm_subscriber_id": str(crm_id), "referral_id": "r9", "referred_name": "Ada"},
-    )
-    assert out["status"] == "ok"
-    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r9").one()
-    assert row.status == "pending"
-    assert row.subscriber_id == sub.id
-
-
-def test_webhook_maps_by_local_subscriber_id(db_session):
-    # The CRM knows the sub's own id (external_id) and sends it as subscriber_id.
-    sub = _subscriber(db_session)  # no crm link
-    out = referrals_mirror.apply_webhook(
-        db_session,
-        "referral.qualified",
-        {"subscriber_id": str(sub.id), "referral_id": "r-loc"},
-    )
-    assert out["status"] == "ok"
-    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r-loc").one()
-    assert row.status == "qualified"
-    assert row.subscriber_id == sub.id
-
-
-def test_webhook_rewarded_mirrors_without_crediting(db_session):
-    # The CRM already credited via /crm/credits; the webhook only mirrors status.
-    crm_id = uuid.uuid4()
-    _subscriber(db_session, crm_id=crm_id)
-    with patch("app.services.push.send_push") as push:
-        out = referrals_mirror.apply_webhook(
-            db_session,
-            "referral.rewarded",
-            {
-                "crm_subscriber_id": str(crm_id),
-                "referral_id": "r9",
-                "amount": "5000",
-                "currency": "NGN",
-            },
-        )
-    assert out["status"] == "ok"
-    assert "credit_id" not in out  # we never credit here
-    push.assert_called_once()
-    row = db_session.query(ReferralMirror).filter_by(crm_referral_id="r9").one()
-    assert row.status == "rewarded"
-    assert row.reward_amount == Decimal("5000")
-    assert row.reward_status == "paid"
-
-
-def test_webhook_unmapped_subscriber_ignored(db_session):
-    out = referrals_mirror.apply_webhook(
-        db_session,
-        "referral.captured",
-        {"crm_subscriber_id": str(uuid.uuid4()), "referral_id": "rX"},
-    )
-    assert out["reason"] == "unmapped_subscriber"
-
-
-def test_webhook_incomplete_ignored(db_session):
-    out = referrals_mirror.apply_webhook(
-        db_session, "referral.captured", {"referral_id": "rX"}
-    )
-    assert out["reason"] == "incomplete_payload"
-
-
-def test_stale_read_serves_stale_and_refreshes_async(db_session):
-    """A warm-but-stale referral read serves the mirror immediately and refreshes
-    in the background instead of blocking on the CRM (P3-sub, cache variant)."""
-    from datetime import timedelta
-
-    sub = _subscriber(db_session, crm_id=uuid.uuid4())
-    cache = _fresh_cache(db_session, sub)
-    cache.synced_at = datetime.now(UTC) - timedelta(hours=1)  # make it stale
-    db_session.add(
-        ReferralMirror(
-            crm_referral_id="r-stale",
-            subscriber_id=sub.id,
-            referred_name="Old",
-            status="pending",
+    db_session.add_all(
+        (
+            ReferralMirror(
+                crm_referral_id="legacy-pending",
+                subscriber_id=subscriber.id,
+                referred_name="Historical prospect",
+                status="pending",
+            ),
+            ReferralMirror(
+                crm_referral_id="legacy-rewarded",
+                subscriber_id=subscriber.id,
+                referred_name="Historical customer",
+                status="rewarded",
+                reward_amount=Decimal("2500"),
+                reward_currency="NGN",
+                reward_status="paid",
+            ),
         )
     )
     db_session.commit()
 
-    enqueued: list = []
-    with (
-        patch("app.services.referrals_mirror.reconcile_subscriber") as recon,
-        patch(
-            "app.services.queue_adapter.enqueue_task",
-            side_effect=lambda *a, **k: enqueued.append((a, k)),
-        ),
-    ):
-        out = referrals_mirror.read_for_subscriber(db_session, str(sub.id))
+    result = referrals_mirror.read_for_subscriber(
+        db_session,
+        str(subscriber.id),
+        refresh_ttl_seconds=0,
+    )
 
-    recon.assert_not_called()  # did NOT block on the CRM
-    assert len(enqueued) == 1  # enqueued a background refresh
-    assert out["totals"]["total"] == 1  # served the stale row immediately
-    st = db_session.get(ReferralProgramCache, sub.id)
-    assert (datetime.now(UTC) - st.synced_at.replace(tzinfo=UTC)).total_seconds() < 60
+    assert result["code"] == "LEGACY01"
+    assert result["totals"] == {
+        "total": 2,
+        "pending": 1,
+        "qualified": 0,
+        "rewarded": 1,
+        "total_earned": "2500.00",
+    }
+    assert {item["id"] for item in result["referrals"]} == {
+        "legacy-pending",
+        "legacy-rewarded",
+    }
+
+
+def test_missing_historical_cache_returns_empty_without_refresh(db_session):
+    subscriber = _subscriber(db_session)
+    db_session.commit()
+
+    result = referrals_mirror.read_for_subscriber(db_session, str(subscriber.id))
+
+    assert result["program"]["enabled"] is False
+    assert result["totals"]["total"] == 0
+    assert result["referrals"] == []
+
+
+def test_historical_mirror_has_no_runtime_crm_paths():
+    for retired in (
+        "reconcile_subscriber",
+        "reconcile_all",
+        "apply_webhook",
+        "refer_a_friend",
+    ):
+        assert not hasattr(referrals_mirror, retired)

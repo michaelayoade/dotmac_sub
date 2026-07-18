@@ -7,6 +7,7 @@ from app.services import sot_relationships
 
 def test_domain_sot_relationships_cover_expected_domains():
     assert sot_relationships.domain_order() == [
+        "party_identity",
         "customer_context",
         "financial_access",
         "network",
@@ -38,6 +39,192 @@ def test_domain_sot_relationships_cover_expected_domains():
 
 
 def test_domain_sot_relationships_encode_cross_domain_dependencies():
+    assert sot_relationships.dependencies_for("customer.accounts") == (
+        "access.subscription_lifecycle",
+        "events.dispatcher",
+    )
+    assert sot_relationships.dependencies_for("party.registry") == (
+        "auth.rbac",
+        "auth.permission_gate",
+    )
+    assert sot_relationships.dependencies_for("party.identity_audit") == (
+        "party.registry",
+        "sales.service",
+        "sales.orders",
+        "access.subscription_lifecycle",
+        "operations.provisioning_workflow",
+        "financial.invoices",
+        "financial.payments",
+        "support.ticket_lifecycle",
+    )
+    assert sot_relationships.dependencies_for("party.identity_adjudication") == (
+        "party.identity_audit",
+        "party.registry",
+    )
+    assert sot_relationships.dependencies_for("party.identity_backfill_executor") == (
+        "party.identity_audit",
+        "party.identity_adjudication",
+        "party.registry",
+    )
+    assert sot_relationships.dependencies_for("party.organization_profile_audit") == (
+        "party.registry",
+    )
+    assert sot_relationships.dependencies_for("party.principal_context_audit") == (
+        "party.registry",
+        "auth.rbac",
+        "auth.permission_gate",
+    )
+    assert sot_relationships.dependencies_for("party.contact_inbox_audit") == (
+        "party.registry",
+        "communications.team_inbox",
+    )
+    assert sot_relationships.dependencies_for("communications.campaigns") == (
+        "communications.eligibility",
+        "communications.intents",
+        "communications.team_inbox_campaigns",
+    )
+    assert sot_relationships.dependencies_for("sales.lead_lifecycle") == (
+        "party.registry",
+        "communications.campaigns",
+    )
+    assert sot_relationships.dependencies_for("sales.service") == (
+        "sales.lead_lifecycle",
+    )
+    assert sot_relationships.dependencies_for("sales.orders") == (
+        "sales.service",
+        "sales.lead_lifecycle",
+    )
+    assert sot_relationships.dependencies_for("customer.lifecycle_audit") == (
+        "party.registry",
+        "communications.campaigns",
+        "sales.lead_lifecycle",
+        "sales.service",
+        "sales.orders",
+        "access.subscription_lifecycle",
+        "support.ticket_lifecycle",
+    )
+    assert sot_relationships.dependencies_for("referrals.program") == (
+        "party.registry",
+        "sales.lead_lifecycle",
+        "access.subscription_lifecycle",
+        "financial.credit_notes",
+    )
+    assert sot_relationships.dependencies_for("referrals.account_conversion") == (
+        "customer.accounts",
+        "party.registry",
+        "sales.lead_lifecycle",
+        "referrals.program",
+        "auth.token_signing",
+    )
+    lead_origin = sot_relationships.owning_service_for(
+        "immutable structured Lead origin capture"
+    )
+    assert lead_origin is not None
+    assert lead_origin.name == "sales.lead_lifecycle"
+    lifecycle_audit = sot_relationships.owning_service_for(
+        "PII-free customer lifecycle link convergence report"
+    )
+    assert lifecycle_audit is not None
+    assert lifecycle_audit.name == "customer.lifecycle_audit"
+    referral_audit = sot_relationships.owning_service_for(
+        "Party-first referral capture and conversion debt classification"
+    )
+    assert referral_audit is not None
+    assert referral_audit.name == "customer.lifecycle_audit"
+    referral_conversion = sot_relationships.owning_service_for(
+        "reviewed Referral to Subscriber account conversion"
+    )
+    assert referral_conversion is not None
+    assert referral_conversion.name == "referrals.program"
+    account_orchestration = sot_relationships.owning_service_for(
+        "atomic referral account creation and adjudication orchestration"
+    )
+    assert account_orchestration is not None
+    assert account_orchestration.name == "referrals.account_conversion"
+    public_signup_context = sot_relationships.owning_service_for(
+        "stable Referral Party Lead conversion context validation"
+    )
+    assert public_signup_context is not None
+    assert public_signup_context.name == "referrals.account_conversion"
+    token_envelope = sot_relationships.owning_service_for(
+        "cryptographic signing and verification of typed capability envelopes"
+    )
+    assert token_envelope is not None
+    assert token_envelope.name == "auth.token_signing"
+    ephemeral_materialization = sot_relationships.owning_service_for(
+        "just-in-time sensitive message materialization orchestration"
+    )
+    assert ephemeral_materialization is not None
+    assert ephemeral_materialization.name == "communications.ephemeral_actions"
+    assert sot_relationships.dependencies_for(
+        "auth.customer_credential_enrollment"
+    ) == (
+        "auth.token_signing",
+        "customer.accounts",
+        "referrals.account_conversion",
+        "communications.ephemeral_actions",
+        "observability.audit_log",
+    )
+    cleanup_worklist = sot_relationships.owning_service_for(
+        "subscriber cleanup worklist contract"
+    )
+    assert cleanup_worklist is not None
+    assert cleanup_worklist.name == "party.identity_audit"
+    reseller_contract = sot_relationships.owning_service_for(
+        "reseller versus partner role contract"
+    )
+    assert reseller_contract is not None
+    assert reseller_contract.name == "party.registry"
+    contact_identity = sot_relationships.owning_service_for(
+        "provider-scoped immutable social contact identity"
+    )
+    assert contact_identity is not None
+    assert contact_identity.name == "party.registry"
+    subscriber_binding = sot_relationships.owning_service_for(
+        "subscriber-account canonical party binding"
+    )
+    assert subscriber_binding is not None
+    assert subscriber_binding.name == "party.registry"
+    backfill_plan = sot_relationships.owning_service_for(
+        "Party backfill dry-run plan digest"
+    )
+    assert backfill_plan is not None
+    assert backfill_plan.name == "party.identity_adjudication"
+    backfill_receipt = sot_relationships.owning_service_for(
+        "Party identity backfill execution receipt"
+    )
+    assert backfill_receipt is not None
+    assert backfill_receipt.name == "party.identity_backfill_executor"
+    organization_profile_binding = sot_relationships.owning_service_for(
+        "organization role-profile canonical party binding"
+    )
+    assert organization_profile_binding is not None
+    assert organization_profile_binding.name == "party.registry"
+    vendor_bridge_audit = sot_relationships.owning_service_for(
+        "Vendor and FieldVendor bridge debt classification"
+    )
+    assert vendor_bridge_audit is not None
+    assert vendor_bridge_audit.name == "party.organization_profile_audit"
+    principal_binding = sot_relationships.owning_service_for(
+        "SystemUser principal to Person Party binding"
+    )
+    assert principal_binding is not None
+    assert principal_binding.name == "party.registry"
+    vendor_user_bridge_audit = sot_relationships.owning_service_for(
+        "FieldVendorUser vendor context debt classification"
+    )
+    assert vendor_user_bridge_audit is not None
+    assert vendor_user_bridge_audit.name == "party.principal_context_audit"
+    contact_projection = sot_relationships.owning_service_for(
+        "reviewed SubscriberContact source-field contact-point projection"
+    )
+    assert contact_projection is not None
+    assert contact_projection.name == "party.registry"
+    contact_inbox_audit = sot_relationships.owning_service_for(
+        "Team Inbox canonical contact-point projection debt report"
+    )
+    assert contact_inbox_audit is not None
+    assert contact_inbox_audit.name == "party.contact_inbox_audit"
     assert sot_relationships.dependencies_for("network.outage_impact") == (
         "network.access_path",
     )
@@ -361,6 +548,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "observability.recording",
     )
     assert sot_relationships.dependencies_for("communications.team_inbox") == (
+        "party.registry",
         "customer.identity_scope",
         "communications.channel_policy",
         "communications.notification_service",
@@ -775,6 +963,10 @@ def test_domain_sot_relationships_resolve_owning_service_by_concern():
     assert team_inbox_service is not None
     assert team_inbox_service.name == "communications.team_inbox"
     assert team_inbox_service.module == "app.services.team_inbox_commands"
+    assert (
+        "InboxContactLink canonical contact-point routing projection"
+        in team_inbox_service.owns
+    )
 
 
 def test_domain_sot_relationship_modules_are_importable():

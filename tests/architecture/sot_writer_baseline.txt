@@ -28,7 +28,6 @@ app.services.catalog.radius
 app.services.chat_session
 app.services.collections.prepaid_balance_sweep
 app.services.comms
-app.services.comms_campaigns
 app.services.connectivity_backup
 app.services.connectivity_reconciler
 app.services.connector
@@ -182,7 +181,6 @@ app.services.service_extensions
 app.services.sla_assignment
 app.services.sms
 app.services.stale_overdue_lock_reconcile
-app.services.subscriber
 app.services.subscription_changes
 app.services.subscription_engine
 app.services.subscription_lifecycle_events

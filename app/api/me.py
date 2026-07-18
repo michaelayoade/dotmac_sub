@@ -135,7 +135,6 @@ from app.services import (
     projects_mirror,
     quote_deposits,
     quotes_mirror,
-    referrals_mirror,
     web_support_tickets,
     work_orders_mirror,
 )
@@ -872,14 +871,9 @@ def my_referrals(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """The caller's Refer & Earn summary — code, share link, program terms, and
-    history. Behind the ``referrals_native_read_enabled`` ownership
-    flag (§4.2): OFF serves the local CRM mirror (refreshed lazily), ON serves
-    the native referral tables — same shape either way (§2.5)."""
+    """The caller's native Sub Refer & Earn summary."""
     subscriber_id = _subscriber_id(principal)
-    if referrals_service.native_read_enabled(db):
-        return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
-    return referrals_mirror.read_for_subscriber(db, subscriber_id)
+    return referrals_service.referrals.read_for_subscriber(db, subscriber_id)
 
 
 @router.get("/projects", response_model=MyProjectsResponse)
@@ -888,9 +882,9 @@ def my_projects(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's installations/projects — stage timeline + progress %.
-    Behind the ``projects_native_read_enabled`` ownership flag:
+    Behind the ``projects_native_read_enabled`` read-flip flag:
     OFF serves the local CRM mirror (refreshed lazily), ON serves the native
-    ``projects`` table — same shape and ids either way (§2.5)."""
+    ``projects`` table — same shape and ids either way."""
     subscriber_id = _subscriber_id(principal)
     if projects_service.native_read_enabled(db):
         return projects_service.portal_read_for_subscriber(db, subscriber_id)
@@ -960,9 +954,9 @@ def my_quotes(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's self-serve installation quotes — feasibility, estimate,
-    deposit, status. Behind the ``quotes_native_read_enabled`` ownership
-    read-flip flag (§4.2): OFF serves the local CRM mirror (refreshed lazily),
-    ON serves sub's native ``quotes`` table — same shape either way (§2.5)."""
+    deposit, status. Behind the ``quotes_native_read_enabled``
+    read-flip flag: OFF serves the local CRM mirror (refreshed lazily),
+    ON serves sub's native ``quotes`` table — same shape either way."""
     subscriber_id = _subscriber_id(principal)
     if selfserve_service.native_read_enabled(db):
         return selfserve_service.selfserve_quotes.read_for_subscriber(db, subscriber_id)
@@ -977,10 +971,10 @@ def my_quote_request(
 ):
     """Request a map-pinned installation quote. The dropped pin drives the
     feasibility check (proximity to fiber) + estimate + deposit. Behind the
-    ``quotes_native_write_enabled`` ownership flag: OFF writes through
+    ``quotes_native_write_enabled`` write-flip flag: OFF writes through
     to the CRM and returns the mirrored item; ON creates the quote in sub's
     native ``quotes`` table (no CRM link required, so native-only subscribers
-    can quote too) — same §2.5 payload shape either way."""
+    can quote too) — same payload shape either way."""
     subscriber_id = _subscriber_id(principal)
     if selfserve_service.native_write_enabled(db):
         quote = selfserve_service.selfserve_quotes.request_quote(
@@ -1056,32 +1050,16 @@ def my_refer_a_friend(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Refer a friend. Behind the ``referrals_native_write_enabled``
-    write-flip flag: OFF captures in the CRM (write-through, mirrored
-    locally); ON captures in sub's native referral tables — no CRM link
-    required, so native-only subscribers can refer too. Same response shape
-    either way."""
+    """Refer a friend through Sub's Party-first referral owner."""
     subscriber_id = _subscriber_id(principal)
-    if referrals_service.native_write_enabled(db):
-        return referrals_service.referrals.refer_a_friend(
-            db,
-            subscriber_id,
-            name=payload.name,
-            email=payload.email,
-            phone=payload.phone,
-            note=payload.note,
-        )
-    try:
-        return referrals_mirror.refer_a_friend(
-            db,
-            subscriber_id,
-            name=payload.name,
-            email=payload.email,
-            phone=payload.phone,
-            note=payload.note,
-        )
-    except referrals_mirror.ReferralError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    return referrals_service.referrals.refer_a_friend(
+        db,
+        subscriber_id,
+        name=payload.name,
+        email=payload.email,
+        phone=payload.phone,
+        note=payload.note,
+    )
 
 
 @router.get(

@@ -1,27 +1,27 @@
-"""Native lead, pipeline, and quote services ported from CRM.
+"""Leads / pipeline / quotes services — CRM port.
 
 Faithful port of ``dotmac_crm/app/services/crm/sales/service.py`` onto sub's
-native models (``app/models/sales.py``), with Sub ownership deltas applied:
+native models (``app/models/sales.py``), with the deltas applied:
 
-* Customer party: CRM ``person_id`` (people) becomes ``subscriber_id``
-  (Sub ``subscribers``); party-status upgrades write the native
-  ``subscribers.party_status`` lifecycle column (§1.3/§1.8).
+* Revision 355 makes Lead Party-first. Subscriber remains optional account
+  context on Lead and required account context on Quote.
 * Staff references (``quotes.owner_person_id``) are plain UUIDs — no FK and
-  no existence check; display resolves via the CRM-to-Sub staff identity map.
-* Agent/inbox compatibility stubs: owner-agent auto-assignment from the CRM inbox
+  no existence check; display resolves via the staff map.
+* stubs (risk #8): owner-agent auto-assignment from the CRM inbox
   (ConversationAssignment / last agent-authored message) and lead-source
-  inference from messages / person channels degrade to None. Attribution
-  metadata inference is kept — it never touched inbox models.
+  inference from messages / person channels degrade to None. Legacy metadata
+  source inference remains compatibility behavior, while canonical new
+  attribution uses immutable structured origin capture.
 * ``lead_source`` vocabulary gains ``Portal`` (+ ``portal`` alias): the fix
-  for the live self-serve quote-request 400 (§2.1 / risk #7 — CRM's
+  for the live self-serve quote-request 400 (/ risk #7 — CRM's
   ``PortalQuotes.request`` passes ``lead_source="portal"`` which the old
   vocabulary rejected).
 * Statuses are stored as plain strings (sub convention: String column +
   app-level enum); helpers normalise enum members to their values.
 * ``quote_line_items.inventory_item_id`` is carried verbatim without an
-  existence check while inventory remains externally owned.
-* Install-project creation from accepted quotes remains behind the native
-  projects-owner hook — see
+  existence check — inventory remains externally owned.
+* Install-project creation from accepted quotes is deferred to the projects
+  service port (next in the series) — see
   ``_ensure_project_from_quote``.
 * Native services emit sub events from day one (risk #13):
   ``lead.created`` / ``quote.accepted``.
@@ -38,6 +38,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.domain_settings import SettingDomain
+from app.models.party import Party
 from app.models.sales import (
     Lead,
     LeadStatus,
@@ -58,11 +59,12 @@ from app.services.common import (
 )
 from app.services.events import EventType, emit_event
 from app.services.response import ListResponseMixin
+from app.services.sales import lifecycle as lead_lifecycle
 
 _logger = logging.getLogger(__name__)
 
-# Normalized lead-source vocabulary. ``Portal`` supports the native
-# self-serve (map-pin) quote request tags its leads with it (§1.3, risk #7).
+# Normalized lead-source vocabulary. ``Portal`` is the addition — the
+# self-serve (map-pin) quote request tags its leads with it.
 LEAD_SOURCE_OPTIONS = (
     "Facebook",
     "Instagram",
@@ -135,12 +137,12 @@ def _enum_str(value, enum_cls, label: str) -> str | None:
 
 
 def _resolve_owner_agent_id(db: Session, subscriber_id) -> uuid.UUID | None:
-    """Compatibility stub until the native inbox owns agent assignment.
+    """stub (risk #8).
 
     The CRM resolved a lead's owner agent from the inbox: the active
     ConversationAssignment for the person, falling back to the author of the
     last agent-authored message. Those models (``crm_agents``,
-    conversations) are not native yet, so leads
+    conversations) arrive with the inbox port — until then leads
     land unowned (visible as "unassigned" in the kanban).
     """
     return None
@@ -245,7 +247,7 @@ def _infer_lead_source(
     """Best-effort lead-source inference.
 
     Kept: attribution blobs on the lead metadata / subscriber metadata (pure
-    dict inspection). Deferred until the native inbox exists: inference from recent
+    dict inspection). Dropped until (risk #8): inference from recent
     inbound inbox messages and person channels — those models live with the
     CRM inbox and have not been ported.
     """
@@ -282,20 +284,29 @@ def _default_currency(db: Session) -> str | None:
     return text or None
 
 
-def _find_open_duplicate_lead(db: Session, subscriber_id, *, pipeline_id=None):
-    """The subscriber's most recent open lead within the same pipeline bucket.
+def _find_open_duplicate_lead(
+    db: Session,
+    *,
+    subscriber_id=None,
+    party_id=None,
+    pipeline_id=None,
+):
+    """The Party/account's most recent open lead in the pipeline bucket.
 
-    Scope is per-(subscriber, pipeline). A null pipeline is its own bucket (it
-    only collides with other null-pipeline open leads), matching the partial
-    unique index ``uq_leads_one_open_per_subscriber_pipeline`` that COALESCEs
-    a null pipeline to a sentinel UUID.
+    New rows scope by Party; legacy unbound rows scope by Subscriber. A null
+    pipeline is its own bucket, matching the partial expression indexes.
     """
     query = (
         db.query(Lead)
-        .filter(Lead.subscriber_id == subscriber_id)
         .filter(Lead.is_active.is_(True))
         .filter(Lead.status.in_(_OPEN_LEAD_STATUSES))
     )
+    if party_id is not None:
+        query = query.filter(Lead.party_id == party_id)
+    elif subscriber_id is not None:
+        query = query.filter(Lead.subscriber_id == subscriber_id)
+    else:
+        return None
     if pipeline_id is None:
         query = query.filter(Lead.pipeline_id.is_(None))
     else:
@@ -369,10 +380,10 @@ def _datetime_from_metadata(metadata: dict | None, key: str) -> datetime | None:
 
 
 def _quote_owner_from_lead(db: Session, lead_id) -> uuid.UUID | None:
-    """Compatibility stub until the native inbox owns quote assignment.
+    """stub (risk #8).
 
     The CRM derived a quote's owner from the lead's owning agent
-    (``CrmAgent.person_id``). Agents are not native yet;
+    (``CrmAgent.person_id``). Agents arrive with the inbox port;
     until then only an explicit ``owner_person_id`` (payload or metadata)
     sets quote ownership.
     """
@@ -390,7 +401,7 @@ def _prepare_quote_ownership(
             else None
         )
 
-    # ``owner_person_id`` is a staff UUID carried verbatim (§1.8) — no
+    # ``owner_person_id`` is a staff UUID carried verbatim — no
     # existence check against a people table; the staff map resolves display.
     if not data.get("owner_person_id") and (
         existing is None or not existing.owner_person_id
@@ -487,7 +498,7 @@ def _assert_quote_is_sendable(db: Session, quote: Quote, status: str | None) -> 
 
 
 def _upgrade_party_status_to_customer(subscriber: Subscriber | None) -> None:
-    """Won lead / accepted quote converts a prospect into a customer (§1.3)."""
+    """Won lead / accepted quote converts a prospect into a customer."""
     if subscriber is None:
         return
     if subscriber.party_status in (PartyStatus.lead.value, PartyStatus.contact.value):
@@ -495,13 +506,13 @@ def _upgrade_party_status_to_customer(subscriber: Subscriber | None) -> None:
 
 
 def _ensure_project_from_quote(db: Session, quote: Quote, sales_order_id: str | None):
-    """Compatibility hook for native project creation from an accepted quote.
+    """Deferred to the projects service port.
 
     The CRM pipeline creates an install project when a quote is accepted
     (template by ``metadata.project_type``, status active, idempotent on
     ``Project.metadata_["quote_id"]``). Sub's projects *service* (template
-    instantiation, fiber-stage engine) must replace this placeholder. Until
-    then accepted quotes create only the
+    instantiation, fiber-stage engine) has not been ported yet — the projects
+    PR rewires this hook onto it. Until then accepted quotes create only the
     sales order.
     """
     _logger.info(
@@ -550,11 +561,8 @@ def _emit_quote_accepted(db: Session, quote: Quote, sales_order_id) -> None:
 
 
 def _handle_quote_accepted(db: Session, quote: Quote) -> None:
-    """Sales-service pipeline: accepted quote → sales order → install project.
-
-    Sales-order creation is idempotent on ``quote_id``; project creation uses
-    the explicit compatibility hook above.
-    """
+    """The unchanged sales-service pipeline: accepted quote →
+    sales order (idempotent on quote_id) → install project (PR 6 stub)."""
     from app.services import sales_orders as sales_order_service
 
     _upgrade_party_status_to_customer(quote.subscriber)
@@ -682,18 +690,71 @@ class Leads(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload):
         data = payload.model_dump()
+        origin_capture = data.pop("origin_capture", None)
+        explicit_party_id = data.pop("party_id", None)
+        party_binding_source = data.pop("party_binding_source", None)
+        party_binding_reason = data.pop("party_binding_reason", None)
         if data.get("status"):
             data["status"] = _enum_str(data["status"], LeadStatus, "status")
         if "lead_source" in data:
             data["lead_source"] = _normalize_lead_source_or_400(data.get("lead_source"))
 
-        subscriber_id = data.get("subscriber_id")
-        if not subscriber_id:
-            raise HTTPException(status_code=400, detail="subscriber_id is required")
+        legacy_campaign_id = data.get("campaign_id")
+        legacy_recipient_id = data.get("campaign_recipient_id")
+        if origin_capture is None and (legacy_campaign_id or legacy_recipient_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Campaign attribution requires origin_capture evidence",
+            )
+        if origin_capture is not None:
+            origin_capture = dict(origin_capture)
+            for field, legacy_value in (
+                ("campaign_id", legacy_campaign_id),
+                ("campaign_recipient_id", legacy_recipient_id),
+            ):
+                captured_value = origin_capture.get(field)
+                if legacy_value and captured_value and legacy_value != captured_value:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{field} conflicts with origin_capture",
+                    )
+                if legacy_value and not captured_value:
+                    origin_capture[field] = legacy_value
+            # Canonical capture writes these compatibility projections.
+            data["campaign_id"] = None
+            data["campaign_recipient_id"] = None
 
-        subscriber = db.get(Subscriber, subscriber_id)
-        if not subscriber:
+        subscriber_id = data.get("subscriber_id")
+        if not subscriber_id and not explicit_party_id:
+            raise HTTPException(
+                status_code=400,
+                detail="party_id or subscriber_id is required",
+            )
+
+        subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+        if subscriber_id and not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
+        resolved_party_id = explicit_party_id or (
+            subscriber.party_id if subscriber is not None else None
+        )
+        if (
+            explicit_party_id
+            and subscriber is not None
+            and subscriber.party_id is not None
+            and subscriber.party_id != explicit_party_id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="party_id does not match the Subscriber Party",
+            )
+        if explicit_party_id and not (
+            str(party_binding_source or "").strip()
+            and str(party_binding_reason or "").strip()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Explicit party_id requires binding source and reason",
+            )
 
         # Dedup: a subscriber shouldn't have two open leads. If one exists,
         # return it (idempotent) instead of creating a duplicate pipeline
@@ -701,9 +762,28 @@ class Leads(ListResponseMixin):
         dedup_enabled = _lead_dedup_enabled(db)
         if dedup_enabled:
             duplicate = _find_open_duplicate_lead(
-                db, subscriber_id, pipeline_id=data.get("pipeline_id")
+                db,
+                subscriber_id=subscriber_id,
+                party_id=resolved_party_id,
+                pipeline_id=data.get("pipeline_id"),
             )
             if duplicate is not None:
+                if origin_capture is not None:
+                    if not duplicate.party_id or not duplicate.lead_source:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Existing lead lacks canonical origin context",
+                        )
+                    try:
+                        lead_lifecycle.capture_lead_origin(
+                            db,
+                            lead_id=duplicate.id,
+                            lead_source=duplicate.lead_source,
+                            capture=origin_capture,
+                        )
+                    except lead_lifecycle.LeadLifecycleError as exc:
+                        db.rollback()
+                        raise HTTPException(status_code=409, detail=str(exc)) from exc
                 metadata = dict(duplicate.metadata_ or {})
                 metadata["dedup_hits"] = int(metadata.get("dedup_hits") or 0) + 1
                 duplicate.metadata_ = metadata
@@ -719,10 +799,6 @@ class Leads(ListResponseMixin):
                 duplicate.dedup_returned_existing = True
                 return duplicate
 
-        # Auto-upgrade the party to at least 'contact' status if they're a lead.
-        if subscriber.party_status == PartyStatus.lead.value:
-            subscriber.party_status = PartyStatus.contact.value
-
         title_value = data.get("title")
         if (
             not title_value
@@ -730,6 +806,9 @@ class Leads(ListResponseMixin):
             or _is_placeholder_lead_title(title_value)
         ):
             data["title"] = _lead_title_from_subscriber(subscriber)
+            if not data["title"] and resolved_party_id:
+                party = db.get(Party, resolved_party_id)
+                data["title"] = party.display_name if party is not None else None
 
         if not data.get("owner_agent_id"):
             data["owner_agent_id"] = _resolve_owner_agent_id(db, subscriber_id)
@@ -741,11 +820,60 @@ class Leads(ListResponseMixin):
             data["lead_source"] = _infer_lead_source(
                 db, subscriber, data.get("metadata_")
             )
+        if origin_capture is not None and not data.get("lead_source"):
+            raise HTTPException(
+                status_code=400,
+                detail="origin_capture requires a recognized lead_source",
+            )
         lead = Lead(**data)
         _apply_lead_closed_at(lead, lead.status)
+        if resolved_party_id is not None:
+            binding_source = (
+                party_binding_source
+                if explicit_party_id
+                else "subscriber_party_projection"
+            )
+            binding_reason = (
+                party_binding_reason
+                if explicit_party_id
+                else "Lead created for an already reviewed Subscriber Party"
+            )
+            try:
+                lead_lifecycle.initialize_lead_party(
+                    db,
+                    lead=lead,
+                    party_id=resolved_party_id,
+                    source=binding_source,
+                    reason=binding_reason,
+                )
+            except lead_lifecycle.LeadLifecycleError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Legacy Subscriber party_status remains compatibility state. Apply it
+        # only after every pre-insert Lead validation has succeeded.
+        if subscriber is not None and subscriber.party_status == PartyStatus.lead.value:
+            subscriber.party_status = PartyStatus.contact.value
         db.add(lead)
         try:
+            db.flush()
+            if resolved_party_id is not None and subscriber is not None:
+                lead_lifecycle.attach_lead_subscriber(
+                    db,
+                    lead_id=lead.id,
+                    subscriber_id=subscriber.id,
+                    source="lead_create_subscriber_context",
+                    reason="Subscriber supplied when the Party-bound Lead was created",
+                )
+            if origin_capture is not None:
+                lead_lifecycle.capture_lead_origin(
+                    db,
+                    lead_id=lead.id,
+                    lead_source=data["lead_source"],
+                    capture=origin_capture,
+                )
             db.commit()
+        except lead_lifecycle.LeadLifecycleError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except IntegrityError:
             # A concurrent create won the partial unique index
             # (uq_leads_one_open_per_subscriber_pipeline). Resolve the race by
@@ -753,7 +881,10 @@ class Leads(ListResponseMixin):
             db.rollback()
             if dedup_enabled:
                 existing = _find_open_duplicate_lead(
-                    db, subscriber_id, pipeline_id=data.get("pipeline_id")
+                    db,
+                    subscriber_id=subscriber_id,
+                    party_id=resolved_party_id,
+                    pipeline_id=data.get("pipeline_id"),
                 )
                 if existing is not None:
                     _logger.info(
@@ -848,11 +979,43 @@ class Leads(ListResponseMixin):
         if "lead_source" in data:
             data["lead_source"] = _normalize_lead_source_or_400(data.get("lead_source"))
 
-        # If subscriber_id is being changed, validate it exists.
-        if data.get("subscriber_id"):
-            subscriber = db.get(Subscriber, data["subscriber_id"])
+        if "lead_source" in data and lead.origin_capture is not None:
+            if data["lead_source"] != lead.origin_capture.lead_source:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Lead origin is immutable; lead_source cannot be changed",
+                )
+
+        subscriber_field_set = "subscriber_id" in data
+        subscriber_change = data.pop("subscriber_id", None)
+        if subscriber_field_set and subscriber_change is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Use the reviewed account-repoint workflow to detach a Subscriber",
+            )
+        if subscriber_change is not None:
+            subscriber = db.get(Subscriber, subscriber_change)
             if not subscriber:
                 raise HTTPException(status_code=404, detail="Subscriber not found")
+            if lead.party_id is not None:
+                try:
+                    lead_lifecycle.attach_lead_subscriber(
+                        db,
+                        lead_id=lead.id,
+                        subscriber_id=subscriber.id,
+                        source="sales_lead_update",
+                        reason="Subscriber selected through the Lead update workflow",
+                    )
+                except lead_lifecycle.LeadLifecycleError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+            elif lead.subscriber_id != subscriber.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Legacy Lead account cannot be repointed through generic update; "
+                        "use the reviewed merge/repoint workflow"
+                    ),
+                )
         else:
             subscriber = lead.subscriber
 
@@ -1062,6 +1225,19 @@ class Quotes(ListResponseMixin):
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
 
+        lead_id = data.get("lead_id")
+        lead: Lead | None = None
+        if lead_id is not None:
+            lead = db.get(Lead, lead_id)
+            if lead is None:
+                raise HTTPException(status_code=404, detail="Lead not found")
+            try:
+                lead_lifecycle.validate_lead_subscriber_alignment(
+                    db, lead=lead, subscriber=subscriber
+                )
+            except lead_lifecycle.LeadLifecycleError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
         # Set quote_name from the subscriber's display name.
         if not data.get("metadata_"):
             data["metadata_"] = {}
@@ -1082,6 +1258,18 @@ class Quotes(ListResponseMixin):
             raise ValueError(
                 "A new quote starts as a draft. Add line items, then send or accept it."
             )
+
+        if lead is not None and lead.party_id is not None:
+            try:
+                lead_lifecycle.attach_lead_subscriber(
+                    db,
+                    lead_id=lead.id,
+                    subscriber_id=subscriber.id,
+                    source="quote_create",
+                    reason="Account selected for the Lead's first Quote",
+                )
+            except lead_lifecycle.LeadLifecycleError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         if not data.get("currency"):
             default_currency = _default_currency(db)
@@ -1175,11 +1363,26 @@ class Quotes(ListResponseMixin):
         if "status" in data:
             data["status"] = _enum_str(data["status"], QuoteStatus, "status")
 
-        # If subscriber_id is being changed, validate it exists.
-        if data.get("subscriber_id"):
-            subscriber = db.get(Subscriber, data["subscriber_id"])
-            if not subscriber:
-                raise HTTPException(status_code=404, detail="Subscriber not found")
+        prospective_subscriber_id = (
+            data["subscriber_id"] if "subscriber_id" in data else quote.subscriber_id
+        )
+        if prospective_subscriber_id is None:
+            raise HTTPException(status_code=400, detail="subscriber_id is required")
+        subscriber = db.get(Subscriber, prospective_subscriber_id)
+        if subscriber is None:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
+        prospective_lead_id = data["lead_id"] if "lead_id" in data else quote.lead_id
+        lead: Lead | None = None
+        if prospective_lead_id is not None:
+            lead = db.get(Lead, prospective_lead_id)
+            if lead is None:
+                raise HTTPException(status_code=404, detail="Lead not found")
+            try:
+                lead_lifecycle.validate_lead_subscriber_alignment(
+                    db, lead=lead, subscriber=subscriber
+                )
+            except lead_lifecycle.LeadLifecycleError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         _prepare_quote_ownership(db, data, existing=quote)
 
@@ -1187,6 +1390,18 @@ class Quotes(ListResponseMixin):
         # exactly as it was, not half-applied.
         if data.get("status") != previous_status:
             _assert_quote_is_sendable(db, quote, data.get("status"))
+
+        if lead is not None and lead.party_id is not None:
+            try:
+                lead_lifecycle.attach_lead_subscriber(
+                    db,
+                    lead_id=lead.id,
+                    subscriber_id=subscriber.id,
+                    source="quote_update",
+                    reason="Account confirmed by the Quote update workflow",
+                )
+            except lead_lifecycle.LeadLifecycleError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         for key, value in data.items():
             setattr(quote, key, value)
@@ -1228,7 +1443,7 @@ class QuoteLineItems(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Quote not found")
         data = payload.model_dump()
         # ``inventory_item_id`` is a CRM inventory UUID carried verbatim —
-        # Inventory is externally owned, so there is nothing native to validate.
+        # inventory is so there is nothing to validate against.
         # Always derive amount server-side (net of any line discount).
         data["amount"] = _line_amount(
             data.get("quantity"), data.get("unit_price"), data.get("discount_percent")

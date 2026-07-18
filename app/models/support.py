@@ -80,7 +80,9 @@ class Ticket(Base):
     customer_account_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    lead_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("leads.id", ondelete="RESTRICT")
+    )
     customer_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
@@ -176,6 +178,7 @@ class Ticket(Base):
     sla_events = relationship(
         "TicketSlaEvent", back_populates="ticket", cascade="all, delete-orphan"
     )
+    lead = relationship("Lead", foreign_keys=[lead_id])
 
 
 class TicketAssignee(Base):

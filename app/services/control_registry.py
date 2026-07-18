@@ -676,32 +676,6 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         ),
     ),
     Control(
-        key="referrals.native_read",
-        layer=Layer.feature,
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _PRJ, "referrals_native_read_enabled", "REFERRALS_NATIVE_READ_ENABLED"
-            ),
-        ),
-        description="Serve referral reads from native referral tables.",
-    ),
-    Control(
-        key="referrals.native_write",
-        layer=Layer.feature,
-        default=False,
-        on_missing=False,
-        legacy=(
-            LegacyAlias(
-                _PRJ,
-                "referrals_native_write_enabled",
-                "REFERRALS_NATIVE_WRITE_ENABLED",
-            ),
-        ),
-        description="Capture refer-a-friend writes in native referral tables.",
-    ),
-    Control(
         key="sales.lead_dedup",
         layer=Layer.feature,
         default=True,

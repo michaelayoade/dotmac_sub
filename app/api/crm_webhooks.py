@@ -10,9 +10,9 @@ tickets appear locally in seconds instead of waiting for the 5-minute pull.
 Updates/comments have no CRM webhook events and remain covered by the pull.
 The ticket branch is gated by the same crm.ticket_pull control as the pull
 beat entries (legacy key crm_ticket_pull_enabled) — with it off, ticket
-events are acknowledged as no-op successes when native ticket authority is active. The work-order
+events are acked as 200 noops. The work-order
 branch is gated the same way by crm.work_order_pull (legacy key
-``crm_work_order_pull_enabled`` native-authority switch).
+crm_work_order_pull_enabled — flip kill switch).
 
 Mounted with no router-level auth (see main.py) — authentication is the HMAC
 signature, fail-closed: unconfigured secret → 503,
@@ -37,7 +37,6 @@ from app.services import (
     crm_webhook_deliveries,
     projects_mirror,
     quotes_mirror,
-    referrals_mirror,
     work_orders_mirror,
 )
 from app.services.crm_customers import upsert_customer_from_payload
@@ -76,7 +75,6 @@ def _delivery_uuid(request: Request) -> uuid.UUID:
 TICKET_EVENTS = {"ticket.created", "ticket.resolved", "ticket.escalated"}
 CUSTOMER_EVENTS = {"customer.accepted"}
 CHAT_EVENTS = {"message.outbound"}
-REFERRAL_EVENTS = {"referral.captured", "referral.qualified", "referral.rewarded"}
 PROJECT_EVENTS = {
     "project.created",
     "project.updated",
@@ -299,45 +297,21 @@ async def receive_crm_chat_event(
 async def receive_crm_referral_event(
     request: Request, db: Session = Depends(get_db)
 ) -> dict:
-    """Apply a CRM referral lifecycle event to the local mirror (RFC #73).
+    """Authenticate and absorb a retired CRM referral delivery.
 
-    Handles ``referral.captured`` / ``referral.qualified`` / ``referral.rewarded``;
-    rewarded also posts an account credit (idempotent on the referral id via
-    ``external_ref``). HMAC-gated; the service acks unmapped/incomplete events so
-    the CRM doesn't retry forever. All DB/CRM logic lives in the service.
+    The route remains temporarily so already queued deliveries receive a 200
+    and stop retrying. It performs no parse-dependent decision, delivery claim,
+    mirror/native mutation, notification, credit, or outbound CRM interaction.
     """
     raw_body = await request.body()
     _verify_signature(raw_body, request.headers.get(SIGNATURE_HEADER))
 
     event_type = str(request.headers.get(EVENT_HEADER) or "").strip()
-    if event_type and event_type not in REFERRAL_EVENTS:
-        return {"status": "ignored", "event": event_type}
-
-    try:
-        payload = json.loads(raw_body or b"{}")
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload."
-        ) from None
-    if not isinstance(payload, dict):
-        payload = {}
-
-    # Tolerate both the CRM event envelope ({"payload": {...}}) and a flat body.
-    inner = payload.get("payload")
-    body = inner if isinstance(inner, dict) else payload
-
-    # Dedup: a redelivered referral event must not re-fire the "reward added"
-    # push. The credit itself is already idempotent on the referral id.
-    if not crm_webhook_deliveries.claim_delivery(
-        db, _delivery_uuid(request), event_type
-    ):
-        return {"status": "ignored", "reason": "duplicate", "event": event_type}
-
-    result = referrals_mirror.apply_webhook(db, event_type, body)
-    # CRM compatibility sync window: also apply the thin delta to the
-    # native referrals table (flag-gated inside; best-effort, never raises).
-    crm_native_sync.apply_webhook_delta(db, "referral", event_type, body)
-    return result
+    return {
+        "status": "ignored",
+        "reason": "crm_referral_path_retired",
+        "event": event_type,
+    }
 
 
 @router.post("/projects")
@@ -379,7 +353,7 @@ async def receive_crm_project_event(
     body = inner if isinstance(inner, dict) else payload
 
     result = projects_mirror.apply_webhook(db, event_type, body)
-    # CRM compatibility sync window: also apply the thin delta to the
+    # sync window: ALSO apply the thin delta to the
     # native projects table (flag-gated inside; best-effort, never raises).
     crm_native_sync.apply_webhook_delta(db, "project", event_type, body)
     return result
@@ -402,7 +376,7 @@ async def receive_crm_work_order_event(
     if event_type and event_type not in WORK_ORDER_EVENTS:
         return {"status": "ignored", "event": event_type}
 
-    # Native work-order authority switch: the same
+    # Flip kill switch: the same
     # crm.work_order_pull control (legacy scheduler key
     # crm_work_order_pull_enabled) that gates the work_order_mirror_reconcile
     # beat entry also gates this branch — once sub is the work-order
@@ -480,7 +454,7 @@ async def receive_crm_quote_event(
     body = inner if isinstance(inner, dict) else payload
 
     result = quotes_mirror.apply_webhook(db, event_type, body)
-    # CRM compatibility sync window: also apply the thin delta to the
+    # sync window: ALSO apply the thin delta to the
     # native quotes table (flag-gated inside; best-effort, never raises).
     crm_native_sync.apply_webhook_delta(db, "quote", event_type, body)
     return result

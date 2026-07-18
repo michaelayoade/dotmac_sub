@@ -3,7 +3,12 @@
 import smtplib
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.notification import Notification
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationDelivery,
+    NotificationStatus,
+)
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import email as email_service
@@ -146,6 +151,102 @@ def test_send_email_tracking_stores_text_body(db_session, monkeypatch):
     assert result is True
     notification = db_session.query(Notification).one()
     assert notification.body == "Your invoice is ready."
+
+
+def test_sensitive_transport_tracks_outcome_without_persisting_content(
+    db_session, monkeypatch
+):
+    fake_smtp = FakeSMTP()
+
+    def mock_smtp(*args, **kwargs):
+        return fake_smtp
+
+    monkeypatch.setattr("smtplib.SMTP", mock_smtp)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp)
+    monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM", "noreply@test.local")
+    notification = Notification(
+        channel=NotificationChannel.email,
+        recipient="capability@example.com",
+        subject="Complete access",
+        body=None,
+        status=NotificationStatus.sending,
+    )
+    db_session.add(notification)
+    db_session.commit()
+    capability = "header.sensitive-capability.signature"
+
+    result = email_service.send_email(
+        db=db_session,
+        to_email=notification.recipient,
+        subject="Complete access",
+        body_html=f"<p>Use #{capability}</p>",
+        body_text=f"Use #{capability}",
+        track=False,
+        notification_id=str(notification.id),
+        sensitive_content=True,
+    )
+
+    assert result is True
+    assert capability in fake_smtp.messages[0][2]
+    db_session.refresh(notification)
+    assert notification.status == NotificationStatus.delivered
+    assert notification.body is None
+    delivery = (
+        db_session.query(NotificationDelivery)
+        .filter(NotificationDelivery.notification_id == notification.id)
+        .one()
+    )
+    assert capability not in str(delivery.response_body)
+
+
+def test_sensitive_transport_redacts_provider_exception_from_state_and_logs(
+    db_session, monkeypatch, caplog
+):
+    capability = "header.secret-from-provider.signature"
+
+    def mock_smtp_error(*args, **kwargs):
+        raise RuntimeError(f"provider echoed {capability}")
+
+    monkeypatch.setattr("smtplib.SMTP", mock_smtp_error)
+    monkeypatch.setattr("smtplib.SMTP_SSL", mock_smtp_error)
+    monkeypatch.setenv("SMTP_HOST", "smtp.test.local")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM", "noreply@test.local")
+    notification = Notification(
+        channel=NotificationChannel.email,
+        recipient="capability-error@example.com",
+        subject="Complete access",
+        body=None,
+        status=NotificationStatus.sending,
+    )
+    db_session.add(notification)
+    db_session.commit()
+
+    with caplog.at_level("ERROR"):
+        result = email_service.send_email(
+            db=db_session,
+            to_email=notification.recipient,
+            subject="Complete access",
+            body_html=f"<p>Use #{capability}</p>",
+            body_text=f"Use #{capability}",
+            track=False,
+            notification_id=str(notification.id),
+            sensitive_content=True,
+        )
+
+    assert result is False
+    db_session.refresh(notification)
+    assert notification.body is None
+    assert notification.last_error == "Sensitive email transport failed"
+    assert capability not in caplog.text
+    delivery = (
+        db_session.query(NotificationDelivery)
+        .filter(NotificationDelivery.notification_id == notification.id)
+        .one()
+    )
+    assert capability not in str(delivery.response_body)
 
 
 def test_get_smtp_config_from_env(monkeypatch):
@@ -453,6 +554,42 @@ def test_send_user_invite_email_uses_company_name_and_branding_logo(
     assert "<img" in captured["body_html"]
     assert "Welcome to Dotmac Selfcare." in captured["body_text"]
     assert captured["activity"] == "auth_user_invite"
+
+
+def test_send_user_invite_email_can_keep_bearer_out_of_http_query(
+    db_session, monkeypatch
+):
+    captured: dict[str, object] = {}
+
+    def fake_send_email(
+        db, to_email, subject, body_html, body_text, activity, **kwargs
+    ):
+        captured["body_html"] = body_html
+        captured["body_text"] = body_text
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
+    monkeypatch.setenv("APP_URL", "https://selfcare.dotmac.io")
+
+    result = email_service.send_user_invite_email(
+        db_session,
+        "invitee@example.com",
+        "sensitive-token",
+        action_path="/portal/auth/credential-enrollment",
+        track=False,
+        token_in_fragment=True,
+    )
+
+    assert result is True
+    expected = (
+        "https://selfcare.dotmac.io/portal/auth/credential-enrollment"
+        "#token=sensitive-token"
+    )
+    assert expected in str(captured["body_html"])
+    assert expected in str(captured["body_text"])
+    assert "?token=sensitive-token" not in str(captured["body_text"])
+    assert captured["track"] is False
 
 
 def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):

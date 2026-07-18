@@ -1,15 +1,16 @@
-"""B2B organization party model ported from CRM.
+"""B2B organization party model ported from the CRM.
 
 CRM shape carried verbatim (``dotmac_crm/app/models/subscriber.py`` Organization
 + ``organization_membership.py``) with the sub conventions applied:
 
-* PG enums become String columns plus app-level enums, matching Sub convention.
+* PG enums become String columns + app-level enums.
 * CRM ``people.id`` FKs (``primary_contact_id``, ``owner_id``,
-  ``organization_memberships.person_id``) become plain UUIDs — sub has no
-  ``people`` table. Customer-party persons resolve through the party-identity
-  backfill map (``subscribers.metadata->>'crm_person_id'``); staff persons
-  resolve for display via the CRM-to-Sub staff identity map.
+  ``organization_memberships.person_id``) remain plain provenance UUIDs.
+  OrganizationMembership now also has a nullable, evidence-bound canonical
+  PartyMembership projection; the legacy UUID is not native identity.
 * ``parent_id`` stays a real self-FK (hierarchy for enterprise accounts).
+* ``party_id`` is the additive canonical Organization Party binding. The
+  single-valued ``account_type`` remains compatibility data until role cutover.
 """
 
 import enum
@@ -20,6 +21,7 @@ from decimal import Decimal
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -68,6 +70,17 @@ class Organization(Base):
 
     __tablename__ = "organizations"
     __table_args__ = (
+        CheckConstraint(
+            "(party_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(party_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_organizations_party_binding_evidence",
+        ),
+        UniqueConstraint("party_id", name="uq_organizations_party_id"),
         Index("ix_organizations_parent", "parent_id"),
         Index("ix_organizations_account_type", "account_type"),
         Index("ix_organizations_status", "account_status"),
@@ -78,6 +91,12 @@ class Organization(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    party_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("parties.id", ondelete="RESTRICT")
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
 
     # Basic info
     name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -106,7 +125,7 @@ class Organization(Base):
     primary_contact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     # Account owner (sales rep/account manager). Staff person UUID carried
-    # verbatim; display resolves via the CRM-to-Sub staff identity map.
+    # verbatim; display resolves via the staff map.
     owner_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     # B2B CRM fields
@@ -150,6 +169,7 @@ class Organization(Base):
     )
 
     # Relationships
+    party = relationship("Party", back_populates="organization_profile")
     parent: Mapped["Organization | None"] = relationship(
         "Organization", remote_side=[id], back_populates="children"
     )
@@ -164,12 +184,11 @@ class Organization(Base):
 
 
 class OrganizationMembership(Base):
-    """Explicit access link between a person and an Organization.
+    """Legacy organization access row with canonical context projection.
 
-    Ported verbatim from CRM. ``person_id`` is the CRM person
-    UUID carried as a plain UUID — it resolves to a sub subscriber through the
-    party backfill map. Enables one person (one login) to manage multiple
-    Organizations (e.g. a reseller managing many child customer orgs).
+    ``person_id`` is the CRM person UUID carried as provenance. When reviewed,
+    ``party_membership_id`` resolves the native Person and Organization context.
+    Runtime access still uses compatibility state until an explicit cutover.
     """
 
     __tablename__ = "organization_memberships"
@@ -179,11 +198,32 @@ class OrganizationMembership(Base):
             "person_id",
             name="uq_organization_memberships_org_person",
         ),
+        CheckConstraint(
+            "(party_membership_id IS NULL AND party_bound_at IS NULL AND "
+            "party_binding_source IS NULL AND party_binding_reason IS NULL) OR "
+            "(party_membership_id IS NOT NULL AND party_bound_at IS NOT NULL AND "
+            "party_binding_source IS NOT NULL AND "
+            "party_binding_reason IS NOT NULL AND "
+            "length(trim(party_binding_source)) > 0 AND "
+            "length(trim(party_binding_reason)) > 0)",
+            name="ck_organization_memberships_party_binding_evidence",
+        ),
+        UniqueConstraint(
+            "party_membership_id",
+            name="uq_organization_memberships_party_membership_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    party_membership_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("party_memberships.id", ondelete="RESTRICT"),
+    )
+    party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    party_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_binding_reason: Mapped[str | None] = mapped_column(Text)
     organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
     )
@@ -204,3 +244,4 @@ class OrganizationMembership(Base):
     )
 
     organization = relationship("Organization", back_populates="memberships")
+    party_membership = relationship("PartyMembership")

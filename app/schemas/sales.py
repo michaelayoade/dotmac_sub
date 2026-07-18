@@ -1,9 +1,9 @@
-"""Native leads, pipeline, and quotes schemas ported from CRM.
+"""Leads / pipeline / quotes schemas — CRM port.
 
-Ported from ``dotmac_crm/app/schemas/crm/sales.py`` with native ownership deltas:
-the customer party is ``subscriber_id`` (sub ``subscribers``) instead of the
-CRM ``person_id``, and not-yet-native agent references (``owner_person_id``,
-``owner_agent_id``, campaign columns) are plain UUIDs.
+Ported from ``dotmac_crm/app/schemas/crm/sales.py`` and evolved natively. Leads
+identify a reviewed Party before an account is required; Subscriber remains
+the account link for Quote and SalesOrder. Native campaign UUIDs and external
+provider attribution are separated by the structured origin contract.
 """
 
 from __future__ import annotations
@@ -14,7 +14,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.sales import LeadStatus, QuoteStatus
+from app.models.sales import (
+    LeadCaptureMethod,
+    LeadSourcePlatform,
+    LeadStatus,
+    QuoteStatus,
+)
 
 
 class PipelineBase(BaseModel):
@@ -71,12 +76,12 @@ class PipelineStageRead(PipelineStageBase):
 
 
 class LeadBase(BaseModel):
-    """Lead linked to a subscriber in the unified party model (§1.3)."""
+    """Lead linked to Party identity; Subscriber is optional account context."""
 
-    subscriber_id: UUID  # Required — links to Subscriber
+    subscriber_id: UUID | None = None
     pipeline_id: UUID | None = None
     stage_id: UUID | None = None
-    # CRM agent UUID carried verbatim until the native inbox model owns it.
+    # CrmAgent UUID carried verbatim — inbox model.
     owner_agent_id: UUID | None = None
     title: str | None = Field(default=None, max_length=200)
     status: LeadStatus = LeadStatus.new
@@ -95,8 +100,32 @@ class LeadBase(BaseModel):
     is_active: bool = True
 
 
+class LeadOriginCaptureCreate(BaseModel):
+    capture_method: LeadCaptureMethod
+    source_platform: LeadSourcePlatform
+    campaign_id: UUID | None = None
+    campaign_recipient_id: UUID | None = None
+    external_campaign_id: str | None = Field(default=None, max_length=200)
+    external_ad_set_id: str | None = Field(default=None, max_length=200)
+    external_ad_id: str | None = Field(default=None, max_length=200)
+    external_form_id: str | None = Field(default=None, max_length=200)
+    external_click_id: str | None = Field(default=None, max_length=255)
+    utm_source: str | None = Field(default=None, max_length=200)
+    utm_medium: str | None = Field(default=None, max_length=200)
+    utm_campaign: str | None = Field(default=None, max_length=200)
+    utm_content: str | None = Field(default=None, max_length=200)
+    utm_term: str | None = Field(default=None, max_length=200)
+    landing_path: str | None = Field(default=None, max_length=500)
+    captured_at: datetime | None = None
+    capture_source: str = Field(min_length=1, max_length=80)
+    capture_reason: str = Field(min_length=1)
+
+
 class LeadCreate(LeadBase):
-    pass
+    party_id: UUID | None = None
+    party_binding_source: str | None = Field(default=None, max_length=80)
+    party_binding_reason: str | None = None
+    origin_capture: LeadOriginCaptureCreate | None = None
 
 
 class LeadUpdate(BaseModel):
@@ -123,6 +152,7 @@ class LeadRead(LeadBase):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
+    party_id: UUID | None = None
     weighted_value: Decimal | None = None
     closed_at: datetime | None = None
     created_at: datetime
@@ -130,11 +160,11 @@ class LeadRead(LeadBase):
 
 
 class QuoteBase(BaseModel):
-    """Quote linked to a subscriber in the unified party model (§1.4)."""
+    """Quote linked to a subscriber in the unified party model."""
 
     subscriber_id: UUID  # Required — links to Subscriber
     lead_id: UUID | None = None
-    # Staff person UUID carried verbatim — staff map for display (§1.8).
+    # Staff person UUID carried verbatim — staff map for display.
     owner_person_id: UUID | None = None
     status: QuoteStatus = QuoteStatus.draft
     currency: str = Field(default="NGN", min_length=3, max_length=3)
@@ -181,7 +211,7 @@ class QuoteRead(QuoteBase):
 
 class QuoteLineItemBase(BaseModel):
     quote_id: UUID
-    # CRM inventory UUID carried verbatim while inventory remains external.
+    # CRM inventory UUID carried verbatim while inventory remains externally owned.
     inventory_item_id: UUID | None = None
     description: str = Field(min_length=1, max_length=255)
     quantity: Decimal = Field(default=Decimal("1.000"), gt=0)

@@ -1,16 +1,16 @@
-"""Native referral program ported from CRM ``services/crm/referrals.py``
+"""Native referral program — the CRM's ``services/crm/referrals.py``
 merged onto sub identity and billing.
 
-Closed loop: an active subscriber gets a code → a prospect captures via that code
-(creating an attributed lead) → the referral qualifies when the prospect becomes
-an active subscriber → the referrer earns a configurable account credit.
+Closed loop: an active subscriber gets a code → a prospect capture creates a
+quarantined Party and attributed Lead without an account → reviewed Subscriber
+conversion attaches that exact Party → activation qualifies the referral → the
+referrer earns a configurable account credit.
 
-Native ownership deltas from the CRM source:
+Deltas from the CRM source:
 
-* ``person_identity.resolve_person`` → sub's ``customer_identity_resolution``
-  cascade (doc 02 §3.2). A captured prospect that matches no subscriber gets a
-  prospect subscriber row (``status='new'``, ``party_status='lead'``) — the
-  party model produced by the party-identity backfill.
+* Public contact values are risk guards and unverified Party contact points,
+  never automatic Subscriber identity proof. New capture does not create a
+  Subscriber or copy contact PII into referral metadata.
 * ``qualify_for_subscriber`` re-hooks from the CRM's customer-sync path onto
   sub's subscriber-activation lifecycle event
   (``app/services/events/handlers/referral.py``). It only flushes — event
@@ -22,10 +22,10 @@ Native ownership deltas from the CRM source:
   CRM already paid pre-cutover can never be paid twice, and the
   ``with_for_update`` row lock is kept.
 * The mirror's "You earned a referral reward!" push moves into ``issue_reward``
-  (the mirror webhook path dies at contract, §3.3).
+  (the mirror webhook path dies at contract, ).
 
 The five ``referral_*`` program settings keys migrate into sub settings
-(``SettingDomain.subscriber``); there is no program table (§1.6).
+(``SettingDomain.subscriber``); there is no program table.
 """
 
 from __future__ import annotations
@@ -36,21 +36,23 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import cast
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
+from app.models.party import Party, PartyContactPoint, PartyContactPointType, PartyType
 from app.models.referral_native import (
     Referral,
     ReferralCode,
     ReferralRewardStatus,
     ReferralStatus,
 )
-from app.models.sales import Lead, LeadStatus
-from app.models.subscriber import PartyStatus, Subscriber, SubscriberStatus
-from app.services import control_registry, settings_spec
+from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services import party as party_service
+from app.services import settings_spec
 from app.services.common import coerce_uuid, get_or_404, validate_enum
 from app.services.customer_identity_normalization import (
     default_country_code,
@@ -58,14 +60,14 @@ from app.services.customer_identity_normalization import (
     normalize_phone_identifier,
 )
 from app.services.customer_identity_resolution import resolve_customer_identity
-from app.services.subscriber import _default_reseller_id
+from app.services.sales import lifecycle as lead_lifecycle
 
 logger = logging.getLogger(__name__)
 
 # Unambiguous alphabet (no 0/O/1/I) so codes are easy to share verbally.
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CODE_LENGTH = 8
-_REFERRAL_LEAD_SOURCE = "Referral"
+_REFERRAL_LEAD_SOURCE = "Referrer"
 _DOMAIN = SettingDomain.subscriber
 
 
@@ -119,34 +121,10 @@ def _generate_code(db: Session) -> str:
     )
 
 
-def native_read_enabled(db: Session) -> bool:
-    """Select native referral reads or the CRM mirror.
-
-    OFF (default) — ``GET /me/referrals`` and the web Refer & Earn page keep
-    serving ``referrals_mirror``; ON — they serve the native tables via
-    ``Referrals.read_for_subscriber``. Lives in the §4.2
-    ``{vertical}_native_read_enabled`` flag family (``SettingDomain.projects``,
-    alongside ``quotes_native_write_enabled``), not with the five
-    ``referral_*`` program keys (``SettingDomain.subscriber``).
-    """
-    return control_registry.is_enabled(db, "referrals.native_read")
-
-
-def native_write_enabled(db: Session) -> bool:
-    """Select native refer-a-friend capture or the
-    CRM write-through. OFF (default) — ``POST /me/referrals`` and the portal
-    form write through ``referrals_mirror`` (409 for subscribers without a
-    CRM link); ON — ``Referrals.refer_a_friend`` captures natively (no CRM
-    link required). Reward crediting is owned by ``financial.credit_notes``
-    behind the shared ``referral:{id}`` idempotency namespace either way.
-    """
-    return control_registry.is_enabled(db, "referrals.native_write")
-
-
 def share_url(code: str) -> str:
     """The public share link for a referral code (the ``/r/{code}`` deep link).
 
-    ``PORTAL_REFERRAL_SHARE_BASE`` already defaults to sub's own domain (§2.4).
+    ``PORTAL_REFERRAL_SHARE_BASE`` already defaults to sub's own domain.
     """
     base = (os.getenv("PORTAL_REFERRAL_SHARE_BASE") or "https://app.dotmac.io").rstrip(
         "/"
@@ -185,12 +163,16 @@ def _normalized_contact(
     )
 
 
-def _resolve_prospect_subscriber(
+def _resolved_subscribers_for_risk_guard(
     db: Session, *, email: str | None, phone: str | None
-) -> Subscriber | None:
-    """Resolve a captured prospect to an existing subscriber via the identity
-    cascade (doc 02 §3.2) — email first, then phone. Ambiguous matches resolve
-    to None (the capture metadata dedup guard below keeps repeats idempotent)."""
+) -> list[Subscriber]:
+    """Return exact account matches only for self/existing-customer rejection.
+
+    Contact resolution here never supplies the referred Party or account link.
+    Ambiguous/shared contact values resolve to no identity, by design.
+    """
+
+    matches: dict[UUID, Subscriber] = {}
     for identifier, hint in ((email, "email"), (phone, "phone")):
         if not identifier:
             continue
@@ -198,8 +180,8 @@ def _resolve_prospect_subscriber(
         if resolution.matched and resolution.subscriber_id is not None:
             subscriber = db.get(Subscriber, resolution.subscriber_id)
             if subscriber is not None:
-                return subscriber
-    return None
+                matches[subscriber.id] = subscriber
+    return list(matches.values())
 
 
 def _capture_meta(referral: Referral) -> dict:
@@ -209,16 +191,25 @@ def _capture_meta(referral: Referral) -> dict:
 
 
 def _existing_referral_by_capture_contact(
-    db: Session, *, email: str | None, phone: str | None
+    db: Session,
+    *,
+    referral_code_id: UUID,
+    email: str | None,
+    phone: str | None,
 ) -> Referral | None:
-    """Fallback idempotent-capture guard when identity resolution can't pin a
-    subscriber (unmatched/ambiguous): match the normalized capture email/phone
-    stored in referral metadata against open (pending/qualified) referrals."""
+    """Recognize a same-code retry without treating contact as identity proof."""
+
     norm_email, norm_phone = _normalized_contact(db, email, phone)
     if not norm_email and not norm_phone:
         return None
+    submitted: dict[str, str] = {}
+    if norm_email:
+        submitted[PartyContactPointType.email.value] = norm_email
+    if norm_phone:
+        submitted[PartyContactPointType.phone.value] = norm_phone
     candidates = (
         db.query(Referral)
+        .filter(Referral.referral_code_id == referral_code_id)
         .filter(Referral.is_active.is_(True))
         .filter(
             Referral.status.in_(
@@ -228,56 +219,80 @@ def _existing_referral_by_capture_contact(
         .all()
     )
     for referral in candidates:
-        capture = _capture_meta(referral)
-        cap_email, cap_phone = _normalized_contact(
-            db, capture.get("email"), capture.get("phone")
-        )
-        if norm_email and cap_email and norm_email == cap_email:
-            return referral
-        if norm_phone and cap_phone and norm_phone == cap_phone:
+        captured: dict[str, str] = {}
+        if referral.referred_party_id is not None:
+            captured = {
+                point.channel_type: point.normalized_value
+                for point in db.query(PartyContactPoint)
+                .filter(PartyContactPoint.party_id == referral.referred_party_id)
+                .filter(PartyContactPoint.is_active.is_(True))
+                .filter(
+                    PartyContactPoint.channel_type.in_(
+                        [
+                            PartyContactPointType.email.value,
+                            PartyContactPointType.phone.value,
+                        ]
+                    )
+                )
+                .all()
+            }
+        else:
+            capture = _capture_meta(referral)
+            legacy_email, legacy_phone = _normalized_contact(
+                db, capture.get("email"), capture.get("phone")
+            )
+            if legacy_email:
+                captured[PartyContactPointType.email.value] = legacy_email
+            if legacy_phone:
+                captured[PartyContactPointType.phone.value] = legacy_phone
+        if captured == submitted:
             return referral
     return None
 
 
-def _split_display_name(name: str | None) -> tuple[str, str]:
-    parts = [p for p in str(name or "").strip().split() if p]
-    if not parts:
-        return "Referred", "Prospect"
-    if len(parts) == 1:
-        return parts[0][:80], "Prospect"
-    return parts[0][:80], " ".join(parts[1:])[:80]
-
-
-def _create_prospect_subscriber(
+def _create_capture_party(
     db: Session,
     *,
     name: str | None,
     email: str | None,
     phone: str | None,
-) -> Subscriber:
-    """Materialize a referred prospect as a party row (§1.9): ``status='new'``
-    keeps it out of billing/RADIUS sweeps, ``party_status='lead'`` marks it a
-    prospect. Email stays non-unique by design (shared/family emails)."""
-    first, last = _split_display_name(name)
-    prospect = Subscriber(
-        first_name=first,
-        last_name=last,
-        display_name=(str(name).strip()[:120] or None) if name else None,
-        email=(email or "").strip(),
-        phone=(phone or "").strip() or None,
-        status=SubscriberStatus.new,
-        party_status=PartyStatus.lead.value,
-        # subscribers.reseller_id is NOT NULL (migration 116); a referred
-        # prospect has no explicit reseller, so default to House like every
-        # other unowned customer (app.services.subscriber._default_reseller_id).
-        reseller_id=_default_reseller_id(db),
+) -> Party:
+    """Create quarantined identity and unverified reachability observations."""
+
+    display_name = str(name or "").strip()[:200] or "Referred prospect"
+    party = party_service.create_party(
+        db,
+        party_type=PartyType.person,
+        display_name=display_name,
+        metadata={"created_by": "referrals.program"},
     )
-    db.add(prospect)
-    db.flush()
-    return prospect
+    party_service.quarantine_party(
+        db,
+        party_id=party.id,
+        reason="Public referral contact is unverified pending identity review",
+    )
+    normalized_email, normalized_phone = _normalized_contact(db, email, phone)
+    for channel_type, normalized_value, display_value in (
+        (PartyContactPointType.email, normalized_email, email),
+        (PartyContactPointType.phone, normalized_phone, phone),
+    ):
+        if normalized_value is None:
+            continue
+        party_service.add_contact_point(
+            db,
+            party_id=party.id,
+            channel_type=channel_type,
+            normalized_value=normalized_value,
+            display_value=display_value,
+            is_primary=True,
+            metadata={"observed_by": "referrals.program"},
+        )
+    return party
 
 
 def _referred_display_name(referral: Referral) -> str | None:
+    if referral.referred_party is not None:
+        return referral.referred_party.display_name
     name = _capture_meta(referral).get("name")
     if name:
         return str(name)
@@ -360,9 +375,12 @@ class Referrals:
         notes: str | None = None,
         source: str = "public",
     ) -> Referral:
-        """Record a referred prospect: resolve (or create) their subscriber
-        party row, an attributed lead, and a pending Referral. Idempotent per
-        referred prospect (unique guard + capture-contact fallback)."""
+        """Capture a quarantined Party, attributed Lead, and pending Referral.
+
+        Contact matching is used only to reject known self/existing-customer
+        captures and recognize an exact same-code retry. It never establishes
+        identity, creates an account, or attaches a Subscriber.
+        """
         cfg = _config(db)
         if not cfg["enabled"]:
             raise HTTPException(
@@ -381,57 +399,61 @@ class Referrals:
                 detail="An email or phone number is required to refer someone.",
             )
 
-        referred = _resolve_prospect_subscriber(db, email=email, phone=phone)
-        if referred is not None:
-            if referred.id == ref_code.subscriber_id:
+        for existing_subscriber in _resolved_subscribers_for_risk_guard(
+            db, email=email, phone=phone
+        ):
+            if existing_subscriber.id == ref_code.subscriber_id:
                 raise HTTPException(status_code=409, detail="You can't refer yourself.")
-            if referred.status == SubscriberStatus.active and referred.is_active:
+            if (
+                existing_subscriber.status == SubscriberStatus.active
+                and existing_subscriber.is_active
+            ):
                 raise HTTPException(
                     status_code=409, detail="That person is already an active customer."
                 )
-            existing = (
-                db.query(Referral)
-                .filter(Referral.referred_subscriber_id == referred.id)
-                .filter(Referral.is_active.is_(True))
-                .first()
-            )
-            if existing is not None:
-                return existing
-        else:
-            existing = _existing_referral_by_capture_contact(
-                db, email=email, phone=phone
-            )
-            if existing is not None:
-                return existing
-            referred = _create_prospect_subscriber(
-                db, name=name, email=email, phone=phone
-            )
+        existing = _existing_referral_by_capture_contact(
+            db,
+            referral_code_id=ref_code.id,
+            email=email,
+            phone=phone,
+        )
+        if existing is not None:
+            return existing
 
-        lead = Lead(
-            subscriber_id=referred.id,
-            title=f"Referral: {referred.display_name or email or phone}",
-            status=LeadStatus.new.value,
+        referred_party = _create_capture_party(db, name=name, email=email, phone=phone)
+        lead = lead_lifecycle.create_party_lead(
+            db,
+            party_id=referred_party.id,
+            title=f"Referral: {referred_party.display_name}",
             lead_source=_REFERRAL_LEAD_SOURCE,
+            binding_source="referrals.program",
+            binding_reason="Party created for this referral capture",
+            origin_capture={
+                "capture_method": "referral",
+                "source_platform": "referral",
+                "capture_source": source,
+                "capture_reason": "Prospect submitted through a referral code",
+            },
             region=region,
             address=address,
             notes=notes,
-            metadata_={
+            metadata={
                 "referral_code": ref_code.code,
                 "referrer_subscriber_id": str(ref_code.subscriber_id),
             },
         )
-        db.add(lead)
-        db.flush()
 
         referral = Referral(
             referrer_subscriber_id=ref_code.subscriber_id,
             referral_code_id=ref_code.id,
-            referred_subscriber_id=referred.id,
+            referred_party_id=referred_party.id,
+            party_bound_at=datetime.now(UTC),
+            party_binding_source="referrals.program",
+            party_binding_reason="Party created for this referral capture",
             referred_lead_id=lead.id,
             status=ReferralStatus.pending.value,
             reward_currency=cfg["currency"],
             source=source,
-            metadata_={"capture": {"name": name, "email": email, "phone": phone}},
         )
         db.add(referral)
         try:
@@ -440,7 +462,7 @@ class Referrals:
             db.rollback()
             existing = (
                 db.query(Referral)
-                .filter(Referral.referred_subscriber_id == referred.id)
+                .filter(Referral.referred_party_id == referred_party.id)
                 .filter(Referral.is_active.is_(True))
                 .first()
             )
@@ -452,7 +474,7 @@ class Referrals:
             "referral_captured referral_id=%s referrer=%s referred=%s code=%s",
             referral.id,
             ref_code.subscriber_id,
-            referred.id,
+            referred_party.id,
             ref_code.code,
         )
         return referral
@@ -477,25 +499,36 @@ class Referrals:
         if not cfg["enabled"]:
             return None
 
-        # Any active referral already pinned to this subscriber wins (the
-        # partial unique guard allows at most one).
+        # A legacy exact account link remains valid. New Party-first referrals
+        # attach only through exact reviewed Party equality, never by contact.
         referral = (
             db.query(Referral)
             .filter(Referral.referred_subscriber_id == subscriber.id)
             .filter(Referral.is_active.is_(True))
             .first()
         )
-        if referral is None:
-            # The signup flow may have created a fresh subscriber row instead
-            # of reusing the capture-time prospect row — bridge by identity
-            # (the CRM got this for free from person_identity.resolve_person).
-            referral = _existing_referral_by_capture_contact(
-                db, email=subscriber.email, phone=subscriber.phone
+        if referral is None and subscriber.party_id is not None:
+            referral = (
+                db.query(Referral)
+                .filter(Referral.referred_party_id == subscriber.party_id)
+                .filter(Referral.is_active.is_(True))
+                .first()
             )
-            if referral is not None and referral.status == ReferralStatus.pending.value:
-                if referral.referrer_subscriber_id == subscriber.id:
-                    return None  # self-referral via shared contact — never qualify
-                referral.referred_subscriber_id = subscriber.id
+        if (
+            referral is not None
+            and referral.referred_party_id is not None
+            and referral.status == ReferralStatus.pending.value
+        ):
+            try:
+                referral = Referrals.attach_subscriber(
+                    db,
+                    referral_id=str(referral.id),
+                    subscriber_id=str(subscriber.id),
+                    source="subscriber_activation",
+                    reason="Activated Subscriber has the referral's reviewed Party",
+                )
+            except HTTPException:
+                return None
         if referral is None or referral.status != ReferralStatus.pending.value:
             return None
 
@@ -529,6 +562,117 @@ class Referrals:
             referral.referrer_subscriber_id,
             referral.reward_amount,
         )
+        return referral
+
+    @staticmethod
+    def attach_subscriber(
+        db: Session,
+        *,
+        referral_id: str,
+        subscriber_id: str,
+        source: str,
+        reason: str,
+    ) -> Referral:
+        """Attach the exact reviewed Subscriber account to a Party referral.
+
+        This is the conversion boundary. It is idempotent for an exact retry,
+        refuses a different account or Party, and delegates the corresponding
+        Lead account link to ``sales.lead_lifecycle``. It never commits.
+        """
+
+        referral = db.get(Referral, coerce_uuid(str(referral_id)))
+        if referral is None:
+            raise HTTPException(status_code=404, detail="Referral not found")
+        if referral.referred_party_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Referral needs a reviewed Party binding before conversion.",
+            )
+        if not (
+            referral.party_bound_at is not None
+            and str(referral.party_binding_source or "").strip()
+            and str(referral.party_binding_reason or "").strip()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Referral has incomplete Party binding evidence.",
+            )
+        normalized_source = str(source or "").strip()
+        normalized_reason = str(reason or "").strip()
+        if not normalized_source or not normalized_reason:
+            raise HTTPException(
+                status_code=422,
+                detail="Subscriber attachment requires source and reason.",
+            )
+        subscriber = db.get(Subscriber, coerce_uuid(str(subscriber_id)))
+        if subscriber is None:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
+        if subscriber.id == referral.referrer_subscriber_id:
+            raise HTTPException(status_code=409, detail="A referrer cannot self-refer.")
+        if subscriber.party_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Subscriber needs a reviewed Party binding before conversion.",
+            )
+        if subscriber.party_id != referral.referred_party_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Subscriber Party does not match the referred Party.",
+            )
+        referrer = db.get(Subscriber, referral.referrer_subscriber_id)
+        if referrer is not None and referrer.party_id == subscriber.party_id:
+            raise HTTPException(status_code=409, detail="A referrer cannot self-refer.")
+        if (
+            referral.referred_subscriber_id is not None
+            and referral.referred_subscriber_id != subscriber.id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Referral is already attached to a different Subscriber.",
+            )
+        if referral.referred_lead_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Referral needs its attributed Lead before conversion.",
+            )
+        complete_link_evidence = bool(
+            referral.subscriber_linked_at is not None
+            and str(referral.subscriber_link_source or "").strip()
+            and str(referral.subscriber_link_reason or "").strip()
+        )
+        if (
+            referral.referred_subscriber_id == subscriber.id
+            and not complete_link_evidence
+            and any(
+                value is not None
+                for value in (
+                    referral.subscriber_linked_at,
+                    referral.subscriber_link_source,
+                    referral.subscriber_link_reason,
+                )
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Referral has incomplete Subscriber-link evidence.",
+            )
+        try:
+            lead_lifecycle.attach_lead_subscriber(
+                db,
+                lead_id=referral.referred_lead_id,
+                subscriber_id=subscriber.id,
+                source=normalized_source,
+                reason=normalized_reason,
+            )
+        except lead_lifecycle.LeadLifecycleError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if referral.referred_subscriber_id == subscriber.id and complete_link_evidence:
+            return referral
+        referral.referred_subscriber_id = subscriber.id
+        referral.subscriber_linked_at = datetime.now(UTC)
+        referral.subscriber_link_source = normalized_source
+        referral.subscriber_link_reason = normalized_reason
+        db.flush()
         return referral
 
     @staticmethod
@@ -611,7 +755,7 @@ class Referrals:
             referral.reward_amount,
             (referral.metadata_ or {}).get("reward_credit_id"),
         )
-        # Best-effort nudge (moved here from the mirror's webhook path, §2.1).
+        # Best-effort nudge (moved here from the mirror's webhook path, ).
         try:
             from app.services import push as push_service
 
@@ -648,6 +792,22 @@ class Referrals:
             raise HTTPException(
                 status_code=409,
                 detail=f"Cannot qualify a referral in status {referral.status}",
+            )
+        if referral.referred_party_id is not None:
+            if referral.referred_subscriber_id is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Attach the reviewed Subscriber account before qualifying "
+                        "this Party-first referral."
+                    ),
+                )
+            referral = Referrals.attach_subscriber(
+                db,
+                referral_id=str(referral.id),
+                subscriber_id=str(referral.referred_subscriber_id),
+                source="admin_qualification_review",
+                reason="Operator reviewed account conversion before override",
             )
         cfg = _config(db)
         referral.status = ReferralStatus.qualified.value
@@ -711,17 +871,16 @@ class Referrals:
     def get(db: Session, referral_id: str) -> Referral:
         return get_or_404(db, Referral, str(referral_id), "Referral not found")
 
-    # ── portal read/create (mirror-shape compatible, §2.5) ─────────────────
+    # ── native portal read/create (legacy response-shape compatible) ────────
 
     @staticmethod
     def read_for_subscriber(db: Session, subscriber_id: str) -> dict:
-        """Native Refer & Earn payload, shape-compatible with
-        ``referrals_mirror.read_for_subscriber`` (the §2.5 contract):
+        """Native Refer & Earn payload retaining the established portal shape:
         ``{code, share_url, program{…}, totals{…}, referrals[]}``.
 
         ``reward_status`` surfaces the native vocabulary (``issued`` — mobile
-        already tolerates it via reconcile) and ``expired`` rows appear (§1.7).
-        ``GET /me/referrals`` and the portal page use this owner after cutover.
+        already tolerates it via reconcile) and ``expired`` rows appear.
+        ``GET/POST /me/referrals`` and the portal page call this native owner.
         """
         sid = coerce_uuid(str(subscriber_id))
         code = Referrals.ensure_code(db, str(sid))
@@ -787,7 +946,7 @@ class Referrals:
         note: str | None = None,
     ) -> dict:
         """Native refer-a-friend, shape-compatible with the mirror's
-        write-through response (``{id, status, message}``). The ownership switch repoints
+        write-through response (``{id, status, message}``). PR8 repoints
         ``POST /me/referrals`` and the portal form here."""
         code = Referrals.ensure_code(db, subscriber_id)
         referral = Referrals.capture(

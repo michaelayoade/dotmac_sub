@@ -356,6 +356,19 @@ class InboxContactLink(Base):
             " OR (subscriber_id IS NULL AND reseller_id IS NOT NULL)",
             name="ck_inbox_contact_links_one_target",
         ),
+        CheckConstraint(
+            "(party_contact_point_id IS NULL AND "
+            "party_contact_point_bound_at IS NULL AND "
+            "party_contact_point_binding_source IS NULL AND "
+            "party_contact_point_binding_reason IS NULL) OR "
+            "(party_contact_point_id IS NOT NULL AND "
+            "party_contact_point_bound_at IS NOT NULL AND "
+            "party_contact_point_binding_source IS NOT NULL AND "
+            "party_contact_point_binding_reason IS NOT NULL AND "
+            "length(trim(party_contact_point_binding_source)) > 0 AND "
+            "length(trim(party_contact_point_binding_reason)) > 0)",
+            name="ck_inbox_contact_links_party_contact_point_evidence",
+        ),
         Index(
             "ix_inbox_contact_links_contact",
             "channel_type",
@@ -364,6 +377,11 @@ class InboxContactLink(Base):
         ),
         Index("ix_inbox_contact_links_subscriber", "subscriber_id", "is_active"),
         Index("ix_inbox_contact_links_reseller", "reseller_id", "is_active"),
+        Index(
+            "ix_inbox_contact_links_party_contact_point",
+            "party_contact_point_id",
+            "is_active",
+        ),
         Index(
             "uq_inbox_contact_links_active_contact",
             "channel_type",
@@ -379,6 +397,15 @@ class InboxContactLink(Base):
     )
     channel_type: Mapped[str] = mapped_column(String(40), nullable=False)
     normalized_contact: Mapped[str] = mapped_column(String(255), nullable=False)
+    party_contact_point_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("party_contact_points.id", ondelete="RESTRICT"),
+    )
+    party_contact_point_bound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    party_contact_point_binding_source: Mapped[str | None] = mapped_column(String(80))
+    party_contact_point_binding_reason: Mapped[str | None] = mapped_column(Text)
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
@@ -403,6 +430,7 @@ class InboxContactLink(Base):
 
     subscriber = relationship("Subscriber")
     reseller = relationship("Reseller")
+    party_contact_point = relationship("PartyContactPoint")
 
 
 class InboxConversationTeam(Base):

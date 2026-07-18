@@ -1,11 +1,4 @@
-"""Phase 3 §4.3 — refer-a-friend write surfaces behind ``referrals_native_write_enabled``.
-
-OFF (default) keeps the CRM write-through via ``referrals_mirror.refer_a_friend``
-(which 409s for subscribers without a CRM link); ON captures the referral in
-sub's native tables via ``Referrals.refer_a_friend`` — no CRM link required.
-Reward money is unaffected by the flip: ``financial.credit_notes`` owns
-crediting behind the shared ``referral:{id}`` idempotency namespace.
-"""
+"""Referral customer surfaces are permanently native after revision 356."""
 
 from __future__ import annotations
 
@@ -16,13 +9,17 @@ from app.models.domain_settings import DomainSetting, SettingDomain, SettingValu
 from app.models.referral_native import Referral
 from app.models.subscriber import Subscriber
 from app.schemas.portal import ReferAFriendRequest
-from app.services import referrals as referrals_service
+from app.services import control_registry, settings_spec
+from app.services.crm_client import CRMClient
+from app.tasks.referrals import (
+    reconcile_referral_mirror,
+    refresh_referral_mirror_for_subscriber,
+)
 
 
 def _program(db, *, enabled: bool = True, amount: str = "2500") -> None:
-    """Enable the Refer & Earn program (same knobs test_referrals_native uses)."""
     rows = {
-        "referral_program_enabled": ("true" if enabled else "false"),
+        "referral_program_enabled": "true" if enabled else "false",
         "referral_reward_amount": amount,
     }
     for key, text in rows.items():
@@ -41,93 +38,79 @@ def _program(db, *, enabled: bool = True, amount: str = "2500") -> None:
 
 
 def _subscriber(db) -> Subscriber:
-    sub = Subscriber(
-        first_name="C",
-        last_name="R",
-        email=f"c-{uuid.uuid4().hex[:8]}@example.com",
+    subscriber = Subscriber(
+        first_name="Native",
+        last_name="Referrer",
+        email=f"native-{uuid.uuid4().hex[:8]}@example.com",
     )
-    db.add(sub)
+    db.add(subscriber)
     db.commit()
-    db.refresh(sub)
-    return sub
+    db.refresh(subscriber)
+    return subscriber
 
 
-def test_native_write_flag_defaults_off(db_session):
-    # Spec default False — the CRM write-through stays the live path until
-    # the coordinated §4.3 write flip.
-    assert referrals_service.native_write_enabled(db_session) is False
+def test_referral_crm_controls_and_outbound_writer_are_retired():
+    controls = {control.key for control in control_registry.all_controls()}
+    setting_keys = {(spec.domain, spec.key) for spec in settings_spec.SETTINGS_SPECS}
+
+    assert "referrals.native_read" not in controls
+    assert "referrals.native_write" not in controls
+    assert (
+        SettingDomain.projects,
+        "referrals_native_read_enabled",
+    ) not in setting_keys
+    assert (
+        SettingDomain.projects,
+        "referrals_native_write_enabled",
+    ) not in setting_keys
+    assert not hasattr(CRMClient, "create_portal_referral")
 
 
-def test_me_referral_flag_off_writes_through_mirror(db_session, monkeypatch):
-    sub = _subscriber(db_session)
-    principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
-    monkeypatch.setattr(referrals_service, "native_write_enabled", lambda db: False)
-    captured = {}
-
-    def _mirror(db, sid, **kw):
-        captured["sid"] = sid
-        return {"id": "r-crm-1", "status": "pending", "message": "ok"}
-
-    monkeypatch.setattr(me_api.referrals_mirror, "refer_a_friend", _mirror)
-    out = me_api.my_refer_a_friend(
-        ReferAFriendRequest(name="Ada", phone="0803"),
-        db=db_session,
-        principal=principal,
-    )
-    assert out["id"] == "r-crm-1"
-    assert captured["sid"] == str(sub.id)
+def test_retired_referral_mirror_tasks_are_network_free_tombstones():
+    assert reconcile_referral_mirror.run() == {"reconciled": 0}
+    assert refresh_referral_mirror_for_subscriber.run("legacy-sub") == {
+        "refreshed": False
+    }
 
 
-def test_me_referral_flag_on_captures_natively(db_session, monkeypatch):
-    """Flag ON: the referral lands in sub's native table, keyed to the
-    referrer's code, with the mirror-compatible response shape."""
+def test_me_referral_capture_is_native_without_crm_link(db_session):
     _program(db_session)
-    sub = _subscriber(db_session)
-    principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
-    monkeypatch.setattr(referrals_service, "native_write_enabled", lambda db: True)
-    out = me_api.my_refer_a_friend(
+    subscriber = _subscriber(db_session)
+    assert subscriber.splynx_customer_id is None
+    principal = {
+        "principal_type": "subscriber",
+        "subscriber_id": str(subscriber.id),
+    }
+
+    result = me_api.my_refer_a_friend(
         ReferAFriendRequest(name="Ada Friend", phone="08031234567"),
         db=db_session,
         principal=principal,
     )
-    assert set(out) >= {"id", "status", "message"}
-    row = db_session.get(Referral, uuid.UUID(str(out["id"])))
-    assert row is not None
-    assert row.status == "pending"
+
+    referral = db_session.get(Referral, uuid.UUID(str(result["id"])))
+    assert referral is not None
+    assert referral.referred_party_id is not None
+    assert referral.referred_subscriber_id is None
+    assert result["status"] == "pending"
 
 
-def test_me_referral_native_needs_no_crm_link(db_session, monkeypatch):
-    """Rewards regression: a native-only subscriber (no CRM/splynx link) can
-    refer a friend on the native path — the mirror path structurally 409s
-    for them (resolve_crm_subscriber_id → None)."""
+def test_me_referral_capture_remains_duplicate_guarded(db_session):
     _program(db_session)
-    sub = _subscriber(db_session)
-    assert getattr(sub, "splynx_customer_id", None) in (None, "")
-    principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
-    monkeypatch.setattr(referrals_service, "native_write_enabled", lambda db: True)
-    out = me_api.my_refer_a_friend(
-        ReferAFriendRequest(name="Native Friend", phone="08099887766"),
-        db=db_session,
-        principal=principal,
-    )
-    assert out["status"] == "pending"
-
-
-def test_native_capture_is_duplicate_guarded(db_session, monkeypatch):
-    """The native unique-active-referred-person guard holds through the
-    route: referring the same friend twice does not create a second active
-    referral row."""
-    _program(db_session)
-    sub = _subscriber(db_session)
-    principal = {"principal_type": "subscriber", "subscriber_id": str(sub.id)}
-    monkeypatch.setattr(referrals_service, "native_write_enabled", lambda db: True)
+    subscriber = _subscriber(db_session)
+    principal = {
+        "principal_type": "subscriber",
+        "subscriber_id": str(subscriber.id),
+    }
     payload = ReferAFriendRequest(name="Same Friend", phone="08011112222")
+
     first = me_api.my_refer_a_friend(payload, db=db_session, principal=principal)
     second = me_api.my_refer_a_friend(payload, db=db_session, principal=principal)
-    assert str(first["id"]) == str(second["id"])
-    active = (
+
+    assert first["id"] == second["id"]
+    assert (
         db_session.query(Referral)
-        .filter(Referral.referrer_subscriber_id == sub.id)
+        .filter(Referral.referrer_subscriber_id == subscriber.id)
         .count()
+        == 1
     )
-    assert active == 1

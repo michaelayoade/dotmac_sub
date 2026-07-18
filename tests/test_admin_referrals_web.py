@@ -1,7 +1,7 @@
-"""Admin referrals web surface (Phase 3 §2.6, PR 12): route guards, the
+"""Admin referrals web surface: route guards, the
 ``web_referrals`` context builders, admin action flows through the native
 ``Referrals`` service (qualify override → issue reward → reject), and the
-RBAC seeding for the Phase 3 sales keys (``crm:quote:*``,
+RBAC seeding for the sales keys (``crm:quote:*``,
 ``crm:sales_order:*``)."""
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from fastapi.routing import APIRoute
 from app.models.billing import CreditNote
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.services import party as party_service
 from app.services import web_referrals
 from app.services.referrals import referrals
 from app.web.admin import crm_referrals as admin_referrals_web
@@ -74,6 +75,27 @@ def _captured_referral(db, referrer=None, **capture_kwargs):
     return referrals.capture(db, code=code.code, **capture_kwargs), referrer
 
 
+def _attach_referred_account(db, referral):
+    subscriber = _subscriber(db, status=SubscriberStatus.new)
+    party_service.bind_subscriber_account(
+        db,
+        subscriber_id=subscriber.id,
+        party_id=referral.referred_party_id,
+        source="admin_test_review",
+        reason="Admin test reviewed the referral identity",
+    )
+    referrals.attach_subscriber(
+        db,
+        referral_id=str(referral.id),
+        subscriber_id=str(subscriber.id),
+        source="admin_test_review",
+        reason="Admin test reviewed the referral identity",
+    )
+    db.commit()
+    db.refresh(referral)
+    return subscriber
+
+
 # ── route guards (crm:lead:*, same keys as the staff API) ────────────────────
 
 
@@ -118,6 +140,7 @@ def test_router_is_mounted_on_admin():
     assert "/admin/referrals/{referral_id}/qualify" in paths
     assert "/admin/referrals/{referral_id}/issue-reward" in paths
     assert "/admin/referrals/{referral_id}/reject" in paths
+    assert "/admin/referrals/{referral_id}/attach-subscriber" in paths
 
 
 def test_read_routes_require_crm_lead_read():
@@ -132,10 +155,17 @@ def test_action_routes_require_crm_lead_write():
         "/referrals/{referral_id}/qualify",
         "/referrals/{referral_id}/issue-reward",
         "/referrals/{referral_id}/reject",
+        "/referrals/{referral_id}/attach-subscriber",
     ):
         assert _route_has_permission(
             admin_referrals_web.router, path, "POST", "crm:lead:write"
         )
+    assert _route_has_permission(
+        admin_referrals_web.router,
+        "/referrals/{referral_id}/attach-subscriber",
+        "POST",
+        "customer:update",
+    )
 
 
 # ── list context ─────────────────────────────────────────────────────────────
@@ -154,12 +184,12 @@ def test_list_data_rows_stats_and_links(db_session):
 
     row = next(r for r in data["referrals"] if r["id"] == str(referral.id))
     assert row["referrer_href"] == f"/admin/customers/person/{referrer.id}"
-    assert row["referred_href"] == (
-        f"/admin/customers/person/{referral.referred_subscriber_id}"
-    )
+    assert row["referred"] == "Ada Prospect"
+    assert row["referred_href"] is None  # no account exists at capture time
     assert row["status"] == "pending"
     assert row["reward"] == "—"  # nothing earned yet
-    assert row["can_qualify"] is True
+    assert row["can_qualify"] is False  # account conversion is still pending
+    assert row["can_attach_account"] is True
     assert row["can_issue"] is False
     assert row["can_reject"] is True
 
@@ -168,6 +198,7 @@ def test_list_data_filters(db_session):
     _program(db_session)
     pending, _ = _captured_referral(db_session)
     qualified, _ = _captured_referral(db_session)
+    _attach_referred_account(db_session, qualified)
     referrals.qualify_override(db_session, str(qualified.id))
 
     only_qualified = web_referrals.list_data(db_session, status="qualified")
@@ -198,6 +229,10 @@ def test_detail_data_shape_and_missing(db_session):
     assert detail["capture"]["name"] == "Ada Prospect"
     assert detail["code"] is not None
     assert detail["lead_id"] == str(referral.referred_lead_id)
+    assert detail["conversion_context"] == {
+        "referred_party_id": str(referral.referred_party_id),
+        "referred_lead_id": str(referral.referred_lead_id),
+    }
     assert detail["reward_credit_id"] is None
 
     assert web_referrals.detail_data(db_session, referral_id=str(uuid.uuid4())) is None
@@ -210,6 +245,7 @@ def test_detail_data_shape_and_missing(db_session):
 def test_qualify_override_forces_pending_to_qualified(db_session):
     _program(db_session, amount="2500")
     referral, _ = _captured_referral(db_session)
+    _attach_referred_account(db_session, referral)
     # Referred prospect is NOT active — the automatic path would refuse.
     result = referrals.qualify_override(db_session, str(referral.id))
     assert result.status == "qualified"
@@ -221,6 +257,7 @@ def test_qualify_override_forces_pending_to_qualified(db_session):
 def test_qualify_override_auto_approve_and_expired_rescue(db_session):
     _program(db_session, auto_approve=True)
     referral, _ = _captured_referral(db_session)
+    _attach_referred_account(db_session, referral)
     referral.status = "expired"  # window lapsed before activation
     db_session.commit()
 
@@ -241,13 +278,20 @@ def test_qualify_override_guards(db_session):
         referrals.qualify_override(db_session, str(uuid.uuid4()))
     assert exc.value.status_code == 404
 
+    unconverted, _ = _captured_referral(db_session)
+    with pytest.raises(HTTPException) as exc:
+        referrals.qualify_override(db_session, str(unconverted.id))
+    assert exc.value.status_code == 409
+    assert "Attach the reviewed Subscriber" in exc.value.detail
+
 
 def test_admin_flow_qualify_override_then_issue_reward(db_session):
-    """The §2.6 happy path end-to-end: capture → qualify override → issue
+    """The happy path end-to-end: capture → qualify override → issue
     reward lands exactly one account credit with the CRM-era idempotency key,
     and the detail context flips its action gates at each step."""
     _program(db_session, amount="2500")
     referral, referrer = _captured_referral(db_session)
+    _attach_referred_account(db_session, referral)
 
     referrals.qualify_override(db_session, str(referral.id))
     detail = web_referrals.detail_data(db_session, referral_id=str(referral.id))
@@ -269,6 +313,7 @@ def test_admin_flow_qualify_override_then_issue_reward(db_session):
         detail["row"]["can_qualify"]
         or detail["row"]["can_issue"]
         or detail["row"]["can_reject"]
+        or detail["row"]["can_attach_account"]
     )
 
 
@@ -279,6 +324,7 @@ def test_post_handlers_drive_service_and_redirect(db_session):
 
     _program(db_session, amount="2500")
     referral, _ = _captured_referral(db_session)
+    _attach_referred_account(db_session, referral)
     rid = str(referral.id)
 
     response = admin_referrals_web.referral_qualify(
@@ -305,9 +351,42 @@ def test_post_handlers_drive_service_and_redirect(db_session):
     assert f"/admin/referrals/{rid}?error=" in response.headers["location"]
 
 
+def test_attach_handler_uses_exact_hidden_context_and_redirects(
+    db_session, monkeypatch
+):
+    from unittest.mock import MagicMock
+
+    _program(db_session)
+    referral, _ = _captured_referral(db_session)
+    subscriber = _subscriber(db_session, status=SubscriberStatus.new)
+    monkeypatch.setattr(
+        admin_referrals_web,
+        "_conversion_source",
+        lambda _request: "admin_referral_attach:test-actor",
+    )
+
+    response = admin_referrals_web.referral_attach_subscriber(
+        request=MagicMock(),
+        referral_id=str(referral.id),
+        subscriber_id=str(subscriber.id),
+        referred_party_id=str(referral.referred_party_id),
+        referred_lead_id=str(referral.referred_lead_id),
+        reason="Reviewed exact Party evidence",
+        db=db_session,
+    )
+
+    assert response.status_code == 303
+    assert "?message=" in response.headers["location"]
+    db_session.refresh(referral)
+    db_session.refresh(subscriber)
+    assert referral.referred_subscriber_id == subscriber.id
+    assert subscriber.party_id == referral.referred_party_id
+
+
 def test_service_list_reward_status_filter(db_session):
     _program(db_session)
     referral, _ = _captured_referral(db_session)
+    _attach_referred_account(db_session, referral)
     referrals.qualify_override(db_session, str(referral.id))
 
     items = referrals.list(db_session, reward_status="pending")
@@ -319,7 +398,7 @@ def test_service_list_reward_status_filter(db_session):
     assert exc.value.status_code == 400
 
 
-# ── RBAC seeding (§6 PR 12) ──────────────────────────────────────────────────
+# ── RBAC seeding ──────────────────────────────────────────────────
 
 SALES_KEYS = (
     "crm:quote:read",
@@ -345,7 +424,7 @@ def test_sales_permission_keys_are_seeded():
 
 
 def test_sales_permission_keys_admin_implicit_only():
-    """Deliberate decision (§6 PR 12): the sales keys ride admin's wildcard
+    """Deliberate decision: the sales keys ride admin's wildcard
     grant and are assigned to no seeded non-admin role — sub has no seeded
     sales role. They stay UI-assignable for a future one."""
     seed = _seed_rbac_module()
