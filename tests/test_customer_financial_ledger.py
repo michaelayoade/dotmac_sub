@@ -29,6 +29,7 @@ from app.services.customer_financial_position import (
 )
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
+    verified_prepaid_funding_balance,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
@@ -156,6 +157,7 @@ def test_reviewed_opening_position_replaces_older_native_projections(
                 currency="NGN",
                 memo="Old native projection",
                 effective_date=position_at - timedelta(days=1),
+                created_at=position_at - timedelta(days=1),
             ),
             LedgerEntry(
                 account_id=subscriber.id,
@@ -183,6 +185,62 @@ def test_reviewed_opening_position_replaces_older_native_projections(
         "Post-cutover service adjustment",
     ]
     assert calculate_customer_balance(db_session, subscriber.id) == Decimal("75.00")
+
+
+def test_reviewed_opening_position_keeps_late_recorded_backdated_money(
+    db_session, subscriber
+):
+    position_at = datetime(2026, 7, 1, tzinfo=UTC)
+    recorded_at = position_at + timedelta(days=1)
+    occurred_at = position_at - timedelta(days=1)
+    db_session.add_all(
+        [
+            Payment(
+                account_id=subscriber.id,
+                amount=Decimal("50.00"),
+                refunded_amount=Decimal("0.00"),
+                currency="NGN",
+                status=PaymentStatus.succeeded,
+                paid_at=occurred_at,
+                created_at=recorded_at,
+                memo="Late-entered backdated payment",
+            ),
+            LedgerEntry(
+                account_id=subscriber.id,
+                entry_type=LedgerEntryType.debit,
+                source=LedgerSource.adjustment,
+                amount=Decimal("25.00"),
+                currency="NGN",
+                memo="Late-entered backdated debit",
+                effective_date=occurred_at,
+                created_at=recorded_at,
+            ),
+        ]
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber.id,
+        Decimal("100.00"),
+        position_at=position_at,
+    )
+
+    events = list_customer_financial_events(db_session, subscriber.id)
+
+    assert {event.memo for event in events} == {
+        "Reviewed prepaid opening position",
+        "Late-entered backdated payment",
+        "Late-entered backdated debit",
+    }
+    assert calculate_customer_balance(db_session, subscriber.id) == Decimal("125.00")
+    assert customer_financial_balances_by_currency(
+        db_session,
+        [subscriber.id],
+        start=position_at,
+    ) == {subscriber.id: {"NGN": Decimal("25.00")}}
+    assert verified_prepaid_funding_balance(db_session, subscriber.id) == Decimal(
+        "125.00"
+    )
 
 
 def test_bulk_balance_matches_canonical_multi_currency_refund_rules(

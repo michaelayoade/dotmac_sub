@@ -9,7 +9,7 @@ No code was changed. Every finding below carries a `file:line`.
 
 ---
 
-## 0. Post-audit status overlay — through 2026-07-16
+## 0. Post-audit status overlay — through 2026-07-18
 
 This document preserves the 2026-07-12 static evidence and measured staging
 incidence. It is **not** a claim that every finding remains live on current
@@ -35,6 +35,60 @@ incidence. It is **not** a claim that every finding remains live on current
 Do not re-open those forward-fix workstreams from the historical prose below
 without a fresh regression. Their **historical repair** questions remain
 separate from their merged forward fixes.
+
+### 2026-07-18 prepaid authority and service-cycle correction
+
+An aggregate-only read on the explicitly approved `seabone` production host
+confirms that the earlier `PrepaidFundingBaselineMissingError` incident state is
+stale: production has **4,265 active baselines** and **one authority-cutover
+batch**. Splynx and `subscribers.deposit` remain retired from runtime balance
+resolution.
+
+A fresh logical audit copy captured at 2026-07-18 09:43:32 UTC selected 4,072
+current prepaid candidates. Correcting the replay's service-ownership boundary
+reduced the apparent service-cycle damage to **three positive-money periods on
+three accounts, ₦112,875 total**. Four additional due-cycle observations had a
+source charge of exactly zero; they require no debit or entitlement and are not
+financial damage. The content-addressed three-entry reconciliation plan is
+`b401456cb0d6b0bf1b23679d5eb4b008eeb2e7efd300fcec9730a5a007c20bc3`.
+Its live production preview was read-only and returned ready with zero blocked
+accounts and zero already-reconciled entries. No production repair was applied.
+
+Applying that plan only in the isolated audit database posted three exact
+owner-controlled debits and entitlements; a second application replayed all
+three and posted no duplicate money. The initial remaining blocker manifest
+contained 92 rows and matched the previously reviewed set exactly, but that
+proved only cohort identity—not the claim that the services had never been
+paid through. The resulting all-92 action packet and its apparent `ready=true`
+replay are **withdrawn and must not be used**.
+
+Independent verification then queried the exact 92 service IDs directly in the
+retained final Splynx source database. All 92 lack a normal category-1 Service
+charge, but seven have other service-linked period evidence: two category-2
+Discount debits totaling ₦313,586.96 with periods ending 2026-07-03 and
+2026-07-07, plus six zero-value category-5 Correction rows across five services.
+The remaining **85** have no service-linked transaction of any category. At the
+account level, 43 of the 92 have 526 Splynx payment receipts totaling
+₦37,976,204.53, so “these customers never paid” is false; those receipts remain
+in the opening position and do not by themselves prove a particular service
+period. Source-verification SQL SHA-256 is
+`a4c9fc17b83ffe71da7c55697eda8ce0a2232040d49ac7a9b197ae1b4cf19c3d`.
+
+The replay contract now carries non-category-1 transaction/period evidence and
+classifies those seven separately instead of silently calling them no-paid-
+through. Only the 85 evidence-clean services can retain the due-immediately
+disposition. The seven remain blocked pending an explicit interpretation of
+their Discount/Correction periods; no money or exemption is inferred.
+
+That final replay is a **mechanical proof, not a sealable production snapshot**:
+the audit copy was frozen at 09:43:32 UTC while the isolated proof timestamp was
+11:55:20 UTC, so intervening live native facts were absent. No signing key was
+supplied, no sealed artifact was written, no baseline was superseded, and no
+enforcement control was changed. Operational completion still requires the
+owner code to deploy, the exact three-entry plan to apply through that owner,
+a fresh temporally complete replay, exact source-backed adjudication of the
+85/7 split,
+and normal signed supersession/readiness gates before enforcement activation.
 
 The 2026-07-16 integration slice closes the remaining forward projection and
 prepaid-authority paths pending its integration PR: F20 invoice issuance emits

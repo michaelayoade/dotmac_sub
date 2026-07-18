@@ -12,10 +12,12 @@ consequence follows:
 * enforcement services apply profile, activation, shield, health, and lifecycle
   policy from config-owned inputs.
 
-The export is complete-or-error. If any candidate lacks a source baseline or
-has an incomplete replay, no sealed reconstruction file is written. An
-optional blocker manifest contains UUIDs and reason codes only—no customer
-identity, credentials, free text, or delivery coordinates.
+The export is complete-or-error. A reviewed action packet may resolve only the
+exact ``source_service_without_paid_through_period`` blocker set as "never
+paid; due immediately". The packet hash is bound into the signed source label,
+opening funding remains unchanged, and every other blocker still prevents an
+artifact. An optional blocker manifest contains UUIDs and reason codes only—no
+customer identity, credentials, free text, or delivery coordinates.
 
 Safety: this command has no apply mode, sets its PostgreSQL transaction read
 only, requires an explicitly approved primary override for an ephemeral restore,
@@ -28,7 +30,7 @@ import argparse
 import json
 import os
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -47,11 +49,38 @@ from app.services.prepaid_funding_attestation import (
     sign_prepaid_funding_manifest,
 )
 from app.services.secrets import is_openbao_ref, resolve_secret
+from scripts.one_off.adjudicate_prepaid_funding_gaps import (
+    ACTION_PLAN_SCHEMA,
+    NO_PAID_THROUGH_DUE_IMMEDIATELY,
+    NO_PAID_THROUGH_REASON,
+)
 from scripts.one_off.billing_alignment_audit import (
     LEGACY_FINANCIAL_REPLAY_AT,
     _batch_reconstructed_positions,
     _configure_read_only_session,
 )
+
+_ACTION_PLAN_FIELDS = {
+    "schema",
+    "blocker_manifest_sha256",
+    "candidate_cohort_sha256",
+    "review_id",
+    "reviewed_by",
+    "reviewed_at",
+    "status",
+    "action_count",
+    "disposition_counts",
+    "actions",
+}
+_NO_PAID_THROUGH_ACTION_FIELDS = {
+    "account_id",
+    "reason",
+    "disposition",
+    "evidence_ref",
+    "action_owner",
+    "next_action",
+}
+_READY_ACTION_STATUS = "reviewed_no_paid_through_decisions_ready_for_replay"
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -77,6 +106,8 @@ class FundingSnapshotExport:
     positions: dict[str, Decimal]
     incomplete: dict[str, tuple[str, ...]]
     missing_baseline: tuple[str, ...]
+    adjudication_sha256: str | None = None
+    service_cycle_gaps: tuple[Any, ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -166,6 +197,7 @@ class FundingSnapshotExport:
                 "missing_source_baseline": len(self.missing_baseline),
             },
             "incomplete_reason_counts": dict(sorted(reason_counts.items())),
+            "adjudication_sha256": self.adjudication_sha256,
             "blocker_manifest_sha256": _payload_sha256(blocker_manifest),
             "blocker_manifest": blocker_manifest,
             "blockers": {
@@ -220,6 +252,90 @@ def build_prepaid_funding_snapshot(
         positions=positions,
         incomplete=incomplete,
         missing_baseline=missing_baseline,
+        service_cycle_gaps=tuple(
+            gap for gap in replay.service_cycle_gaps if gap.account_id in candidate_set
+        ),
+    )
+
+
+def apply_reviewed_no_paid_through_actions(
+    export: FundingSnapshotExport,
+    action_plan: dict[str, Any],
+) -> FundingSnapshotExport:
+    """Resolve one exact reviewed no-payment blocker cohort without changing money."""
+    if set(action_plan) != _ACTION_PLAN_FIELDS:
+        raise ValueError("reviewed gap action plan fields are incomplete or unexpected")
+    if action_plan.get("schema") != ACTION_PLAN_SCHEMA:
+        raise ValueError("unsupported reviewed gap action plan schema")
+    if action_plan.get("status") != _READY_ACTION_STATUS:
+        raise ValueError("gap action plan is not ready for no-paid-through replay")
+
+    raw_blockers = export.blocker_manifest_payload()
+    if action_plan.get("blocker_manifest_sha256") != _payload_sha256(raw_blockers):
+        raise ValueError("gap action plan does not match the current blocker manifest")
+    if (
+        action_plan.get("candidate_cohort_sha256")
+        != raw_blockers["candidate_cohort_sha256"]
+    ):
+        raise ValueError("gap action plan does not match the current candidate cohort")
+
+    actions = action_plan.get("actions")
+    if not isinstance(actions, list) or not actions:
+        raise ValueError("gap action plan must contain reviewed actions")
+    if action_plan.get("action_count") != len(actions):
+        raise ValueError("gap action count does not match its actions")
+    if action_plan.get("disposition_counts") != {
+        NO_PAID_THROUGH_DUE_IMMEDIATELY: len(actions)
+    }:
+        raise ValueError("gap action plan contains another disposition")
+
+    expected = {
+        (str(item["account_id"]), str(item["reason"]))
+        for item in raw_blockers["blockers"]
+    }
+    reviewed: set[tuple[str, str]] = set()
+    for action in actions:
+        if (
+            not isinstance(action, dict)
+            or set(action) != _NO_PAID_THROUGH_ACTION_FIELDS
+        ):
+            raise ValueError("reviewed no-paid-through action fields are invalid")
+        if (
+            action.get("disposition") != NO_PAID_THROUGH_DUE_IMMEDIATELY
+            or action.get("reason") != NO_PAID_THROUGH_REASON
+            or action.get("action_owner") != "financial.prepaid_funding_reconstruction"
+            or action.get("next_action")
+            != "preserve_opening_funding_and_mark_service_due_immediately"
+        ):
+            raise ValueError("reviewed gap action is not a no-paid-through decision")
+        evidence_ref = str(action.get("evidence_ref") or "").strip()
+        if not evidence_ref or len(evidence_ref) > 200:
+            raise ValueError("reviewed gap action evidence_ref is invalid")
+        key = (str(action.get("account_id")), str(action.get("reason")))
+        if key in reviewed:
+            raise ValueError("reviewed gap action is duplicated")
+        reviewed.add(key)
+    if reviewed != expected:
+        raise ValueError("reviewed gap actions must cover the exact blocker set")
+
+    action_hash = _payload_sha256(action_plan)
+    source = f"{export.source};gap-actions-sha256={action_hash}"
+    if len(source) > 240:
+        raise ValueError("adjudicated reconstruction source exceeds 240 characters")
+    incomplete = {
+        account_id: tuple(
+            reason for reason in reasons if reason != NO_PAID_THROUGH_REASON
+        )
+        for account_id, reasons in export.incomplete.items()
+    }
+    incomplete = {
+        account_id: reasons for account_id, reasons in incomplete.items() if reasons
+    }
+    return replace(
+        export,
+        source=source,
+        incomplete=incomplete,
+        adjudication_sha256=action_hash,
     )
 
 
@@ -233,6 +349,13 @@ def _write_json(path: Path, payload: dict[str, Any], *, overwrite: bool) -> None
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON root must be an object: {path}")
+    return payload
 
 
 def _require_ephemeral_postgres(db: Session) -> None:
@@ -272,6 +395,14 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--blockers-out", type=Path)
     parser.add_argument(
+        "--gap-actions",
+        type=Path,
+        help=(
+            "hash-bound action plan resolving only the exact never-paid / "
+            "due-immediately blocker cohort"
+        ),
+    )
+    parser.add_argument(
         "--signing-key-ref",
         help="OpenBao reference to the Ed25519 private signing key",
     )
@@ -304,6 +435,11 @@ def main() -> int:
             snapshot_at=args.snapshot_at,
             source=args.source,
         )
+        if args.gap_actions is not None:
+            export = apply_reviewed_no_paid_through_actions(
+                export,
+                _read_json(args.gap_actions),
+            )
         diagnostics = export.diagnostics_payload()
         print(
             json.dumps(

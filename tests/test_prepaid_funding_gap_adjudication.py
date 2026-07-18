@@ -11,12 +11,16 @@ import pytest
 from scripts.one_off.adjudicate_prepaid_funding_gaps import (
     CANONICAL_PAYMENT_REQUIRED,
     DECISION_SCHEMA,
+    NO_PAID_THROUGH_DUE_IMMEDIATELY,
     QUARANTINE,
     SOURCE_EVIDENCE_REQUIRED,
     GapAdjudicationError,
     build_gap_action_plan,
 )
-from scripts.one_off.export_prepaid_funding_snapshot import FundingSnapshotExport
+from scripts.one_off.export_prepaid_funding_snapshot import (
+    FundingSnapshotExport,
+    apply_reviewed_no_paid_through_actions,
+)
 
 
 def _blockers() -> tuple[dict, str, str]:
@@ -60,6 +64,15 @@ def _quarantine_decision(account_id: str) -> dict:
         "reason": "missing_source_baseline",
         "disposition": QUARANTINE,
         "evidence_ref": "finance-case:missing-baseline-test",
+    }
+
+
+def _never_paid_decision(account_id: str) -> dict:
+    return {
+        "account_id": account_id,
+        "reason": "source_service_without_paid_through_period",
+        "disposition": NO_PAID_THROUGH_DUE_IMMEDIATELY,
+        "evidence_ref": "operator-review:never-paid-due-at-cutover",
     }
 
 
@@ -143,6 +156,65 @@ def test_bank_amount_and_date_without_attribution_cannot_authorize_payment():
         [_source_decision(service_account), pre_handoff],
     )
     with pytest.raises(GapAdjudicationError, match="reviewed source baseline"):
+        build_gap_action_plan(
+            blockers,
+            packet,
+            now=datetime(2026, 7, 14, tzinfo=UTC),
+        )
+
+
+def test_reviewed_never_paid_decision_preserves_money_and_clears_exact_blocker():
+    account_id = str(uuid4())
+    export = FundingSnapshotExport(
+        captured_at=datetime(2026, 7, 12, tzinfo=UTC),
+        source="splynx-final-plus-native-events:reviewed-test",
+        currency="NGN",
+        candidate_ids=(account_id,),
+        positions={account_id: Decimal("800000.00")},
+        incomplete={account_id: ("source_service_without_paid_through_period",)},
+        missing_baseline=(),
+    )
+    blockers = export.diagnostics_payload()
+    packet = _decision_packet(blockers, [_never_paid_decision(account_id)])
+    plan = build_gap_action_plan(
+        blockers,
+        packet,
+        now=datetime(2026, 7, 14, tzinfo=UTC),
+    )
+
+    assert plan["status"] == ("reviewed_no_paid_through_decisions_ready_for_replay")
+    adjudicated = apply_reviewed_no_paid_through_actions(export, plan)
+
+    assert adjudicated.ready is True
+    assert adjudicated.positions == {account_id: Decimal("800000.00")}
+    assert adjudicated.adjudication_sha256
+    assert "gap-actions-sha256=" in adjudicated.source
+    assert adjudicated.funding_payload()["accounts"] == [
+        {"account_id": account_id, "available_balance": "800000.00"}
+    ]
+
+
+def test_never_paid_disposition_cannot_clear_another_blocker_reason():
+    blockers, _service_account, baseline_account = _blockers()
+    decision = {
+        **_never_paid_decision(baseline_account),
+        "reason": "missing_source_baseline",
+    }
+    packet = _decision_packet(
+        blockers,
+        [
+            _source_decision(
+                next(
+                    row["account_id"]
+                    for row in blockers["blocker_manifest"]["blockers"]
+                    if row["reason"] == "source_service_without_paid_through_period"
+                )
+            ),
+            decision,
+        ],
+    )
+
+    with pytest.raises(GapAdjudicationError, match="valid only"):
         build_gap_action_plan(
             blockers,
             packet,

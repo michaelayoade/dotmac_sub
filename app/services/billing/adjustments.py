@@ -44,7 +44,12 @@ from app.services.billing.ledger import LedgerEntries
 from app.services.common import coerce_uuid, round_money
 from app.services.customer_financial_position import get_customer_financial_position
 
-_ORIGINS = {"manual", "addon_purchase", "prepaid_plan_change"}
+_ORIGINS = {
+    "manual",
+    "addon_purchase",
+    "prepaid_plan_change",
+    "prepaid_service_renewal",
+}
 
 
 def _fingerprint(kind: str, **values: object) -> str:
@@ -219,8 +224,14 @@ class AccountAdjustments:
         normalized_ref = (origin_ref or "").strip() or None
 
         position = get_customer_financial_position(db, account_id)
+        # A service renewal spends the canonical prepaid position (reviewed
+        # opening balance plus later native facts), not the narrower pool of
+        # unallocated payment-ledger credit. The other adjustment origins keep
+        # their established account-credit contract until their own cutover.
         funding_before = round_money(
-            get_account_credit_balance(db, str(account_id), currency=currency)
+            position.prepaid_available_balance
+            if origin == "prepaid_service_renewal"
+            else get_account_credit_balance(db, str(account_id), currency=currency)
         )
         shortfall = round_money(max(Decimal("0.00"), amount - funding_before))
         funding_after = round_money(funding_before - amount)
@@ -275,6 +286,7 @@ class AccountAdjustments:
         actor_type: AuditActorType = AuditActorType.system,
         actor_id: str | None = None,
         commit: bool = True,
+        ledger_effective_date: datetime | None = None,
     ) -> AccountAdjustmentResult:
         origin = _validate_origin(origin)
         existing = _existing_for_key(
@@ -348,6 +360,7 @@ class AccountAdjustments:
                     amount=preview.amount,
                     currency=preview.currency,
                     memo=preview.memo,
+                    effective_date=ledger_effective_date,
                 ),
                 commit=False,
             )
@@ -434,11 +447,12 @@ class AccountAdjustments:
         origin_ref: str | None,
         idempotency_key: str,
         commit: bool = False,
+        ledger_effective_date: datetime | None = None,
     ) -> AccountAdjustmentResult:
         preview = AccountAdjustments.preview(
             db, payload, origin=origin, origin_ref=origin_ref
         )
-        return AccountAdjustments.confirm(
+        result = AccountAdjustments.confirm(
             db,
             AccountAdjustmentConfirm(
                 **payload.model_dump(),
@@ -448,7 +462,21 @@ class AccountAdjustments:
             origin=origin,
             origin_ref=origin_ref,
             commit=commit,
+            ledger_effective_date=ledger_effective_date,
         )
+        if ledger_effective_date is not None:
+            expected = ledger_effective_date
+            actual = result.ledger_entry.effective_date
+            if actual is None or (
+                actual.replace(tzinfo=UTC) if actual.tzinfo is None else actual
+            ) != (
+                expected.replace(tzinfo=UTC) if expected.tzinfo is None else expected
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency key belongs to another effective date",
+                )
+        return result
 
     @staticmethod
     def preview_reversal(

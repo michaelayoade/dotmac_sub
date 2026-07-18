@@ -33,11 +33,15 @@ ACTION_PLAN_SCHEMA = "dotmac.prepaid_funding_gap_actions.v1"
 SOURCE_EVIDENCE_REQUIRED = "source_evidence_required"
 CANONICAL_PAYMENT_REQUIRED = "canonical_payment_required"
 QUARANTINE = "quarantine"
+NO_PAID_THROUGH_DUE_IMMEDIATELY = "no_paid_through_due_immediately"
 DISPOSITIONS = {
     SOURCE_EVIDENCE_REQUIRED,
     CANONICAL_PAYMENT_REQUIRED,
     QUARANTINE,
+    NO_PAID_THROUGH_DUE_IMMEDIATELY,
 }
+
+NO_PAID_THROUGH_REASON = "source_service_without_paid_through_period"
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _REASON_RE = re.compile(r"^[a-z0-9_]+$")
@@ -363,6 +367,20 @@ def build_gap_action_plan(
                 )
             payment_evidence_owners[idempotency_key] = key
             action.update(payment_action)
+        elif disposition == NO_PAID_THROUGH_DUE_IMMEDIATELY:
+            if key[1] != NO_PAID_THROUGH_REASON:
+                raise GapAdjudicationError(
+                    "no-paid-through disposition is valid only for the "
+                    "source_service_without_paid_through_period blocker"
+                )
+            action.update(
+                {
+                    "action_owner": "financial.prepaid_funding_reconstruction",
+                    "next_action": (
+                        "preserve_opening_funding_and_mark_service_due_immediately"
+                    ),
+                }
+            )
         elif disposition == SOURCE_EVIDENCE_REQUIRED:
             action.update(
                 {
@@ -388,9 +406,17 @@ def build_gap_action_plan(
         "reviewed_by": reviewed_by,
         "reviewed_at": reviewed_at.isoformat().replace("+00:00", "Z"),
         "status": (
-            "blocked_pending_owner_actions_and_independent_replay"
+            "reviewed_no_paid_through_decisions_ready_for_replay"
             if actions
-            else "independent_replay_has_no_blockers"
+            and all(
+                action["disposition"] == NO_PAID_THROUGH_DUE_IMMEDIATELY
+                for action in actions
+            )
+            else (
+                "blocked_pending_owner_actions_and_independent_replay"
+                if actions
+                else "independent_replay_has_no_blockers"
+            )
         ),
         "action_count": len(actions),
         "disposition_counts": dict(sorted(disposition_counts.items())),

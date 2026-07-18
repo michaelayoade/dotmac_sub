@@ -92,6 +92,20 @@ def _event_date(value: datetime | None) -> datetime:
     return value
 
 
+def _recorded_at(event: CustomerFinancialEvent) -> datetime:
+    """Return when Sub learned the fact, distinct from economic occurrence."""
+    recorded = getattr(event.raw, "created_at", None)
+    return _event_date(recorded or event.occurred_at)
+
+
+def _crosses_position_boundary(
+    event: CustomerFinancialEvent, *, position_at: datetime
+) -> bool:
+    """Include facts occurring OR first recorded after an opening position."""
+    boundary = _event_date(position_at)
+    return event.occurred_at > boundary or _recorded_at(event) > boundary
+
+
 def _in_window(
     occurred_at: datetime, *, start: datetime | None, end: datetime | None
 ) -> bool:
@@ -230,9 +244,11 @@ def list_customer_financial_events(
 ) -> list[CustomerFinancialEvent]:
     """List reviewed opening positions plus canonical native events.
 
-    An active prepaid opening position replaces older projections in the same
-    currency. It is not a fallback: the position is a signed, materialized Sub
-    fact, and only events strictly after its timestamp can change it.
+    An active prepaid opening position replaces facts both economically occurred
+    and recorded by Sub through its timestamp. It is not a fallback: the
+    position is a signed, materialized Sub fact. A late-recorded, backdated fact
+    still changes it because ``created_at`` crossed the authority boundary even
+    when the business occurrence timestamp did not.
     """
     account_uuid = coerce_uuid(account_id)
     baseline_query = db.query(PrepaidFundingBaseline).filter(
@@ -401,8 +417,10 @@ def list_customer_financial_events(
         for event in events
         if (
             event.currency not in baseline_by_currency
-            or event.occurred_at
-            > _event_date(baseline_by_currency[event.currency].position_at)
+            or _crosses_position_boundary(
+                event,
+                position_at=baseline_by_currency[event.currency].position_at,
+            )
         )
     ]
     events.extend(_baseline_event(baseline) for baseline in baselines)
@@ -466,7 +484,10 @@ def customer_financial_balances_by_currency(
     )
     if start is not None:
         payment_query = payment_query.filter(
-            func.coalesce(Payment.paid_at, Payment.created_at) > start
+            or_(
+                Payment.created_at > start,
+                func.coalesce(Payment.paid_at, Payment.created_at) > start,
+            )
         )
     add(payment_query.group_by(Payment.account_id, payment_currency).all())
 
@@ -532,7 +553,10 @@ def customer_financial_balances_by_currency(
     )
     if start is not None:
         invoice_query = invoice_query.filter(
-            func.coalesce(Invoice.issued_at, Invoice.created_at) > start
+            or_(
+                Invoice.created_at > start,
+                func.coalesce(Invoice.issued_at, Invoice.created_at) > start,
+            )
         )
     add(invoice_query.group_by(Invoice.account_id, invoice_currency).all())
 
@@ -613,7 +637,11 @@ def customer_financial_balances_by_currency(
     )
     if start is not None:
         ledger_query = ledger_query.filter(
-            func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at) > start
+            or_(
+                LedgerEntry.created_at > start,
+                func.coalesce(LedgerEntry.effective_date, LedgerEntry.created_at)
+                > start,
+            )
         )
     add(ledger_query.group_by(LedgerEntry.account_id, ledger_currency).all())
 
@@ -626,10 +654,12 @@ def native_customer_financial_balances_by_currency(
     *,
     after: datetime,
 ) -> dict[UUID, dict[str, Decimal]]:
-    """Aggregate native events strictly after a reviewed opening position.
+    """Aggregate native events crossing a reviewed opening-position boundary.
 
     This explicit post-baseline reader never queries the archived Splynx mirror
-    and never activates legacy cut-off heuristics because mirror rows exist.
+    and never activates legacy cut-off heuristics because mirror rows exist. A
+    fact crosses the boundary when its economic occurrence OR its Sub
+    ``created_at`` is later, so late-entered backdated money cannot disappear.
     """
     return customer_financial_balances_by_currency(
         db,

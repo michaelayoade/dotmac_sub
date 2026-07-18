@@ -26,6 +26,7 @@ from app.services.billing_automation import (
     generate_prorated_invoice,
     subscription_invoice_eligible,
 )
+from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
 
 def _add_recurring_price(db_session, offer_id, amount="100.00"):
@@ -103,6 +104,54 @@ def test_invoice_cycle_prepaid_skipped_excludes_enabled_monthly_prepaid(
 
     assert summary["invoices_created"] == 1
     assert summary["prepaid_skipped"] == 0
+
+
+def test_renewal_owner_suppresses_legacy_prepaid_invoice_path_even_in_dry_run(
+    db_session, subscription, subscriber_account, catalog_offer
+):
+    from app.models.domain_settings import DomainSetting, SettingDomain
+
+    now_naive = _activate(
+        db_session, subscription, subscriber_account, BillingMode.prepaid
+    )
+    catalog_offer.billing_cycle = BillingCycle.monthly
+    _add_recurring_price(db_session, subscription.offer_id)
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.modules,
+                key="billing_prepaid_monthly_invoicing",
+                value_text="true",
+                value_json=True,
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.modules,
+                key="billing_prepaid_service_renewals",
+                value_text="true",
+                value_json=True,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+    materialize_test_prepaid_opening_balance(
+        db_session,
+        subscriber_account.id,
+        Decimal("200.00"),
+        position_at=now_naive.replace(tzinfo=UTC) - timedelta(days=2),
+    )
+
+    summary = billing_automation.run_invoice_cycle(
+        db_session,
+        run_at=now_naive,
+        dry_run=True,
+    )
+
+    assert summary["prepaid_renewals_funded"] == 1
+    assert summary["prepaid_invoice_path_suppressed"] is True
+    assert summary["invoices_created"] == 0
+    assert db_session.query(Invoice).count() == 0
 
 
 def test_invoice_cycle_keeps_prepaid_and_postpaid_invoices_separate(

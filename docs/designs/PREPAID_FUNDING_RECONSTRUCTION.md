@@ -9,7 +9,8 @@ the runtime funding projection. A runtime balance is:
 
 ```text
 reviewed position at cutover timestamp
-+ canonical native financial events strictly after that timestamp
++ canonical native financial facts whose occurrence or Sub-recorded time is
+  strictly after that timestamp
 ```
 
 Splynx transactions, subscriber deposit fields, audit tables, exports, and bank
@@ -26,6 +27,14 @@ an already-recorded semantic manifest all fail closed.
 
 The configured `billing.default_currency` supplies the currency unit. Amounts
 from different currencies are never minimized, summed, or compared.
+
+Financial facts have two temporal coordinates. Their economic timestamp
+(`paid_at`, `issued_at`, or `effective_date`) controls statement ordering and
+service chronology; `created_at` records when Sub first knew the fact. A
+snapshot includes a fact only when both coordinates are no later than the
+snapshot. After materialization, a fact crosses the opening-position boundary
+when either coordinate is later. This prevents a late-entered, backdated
+payment or adjustment from disappearing behind an already sealed baseline.
 
 ## Ownership
 
@@ -66,11 +75,16 @@ live config-owned enforcement decisions; they are not copied into this signed
 financial fact set.
 
 If replay reports a missing source baseline, paid-through period, payment,
-adjustment provenance, service schedule, or plan decision, operations must
-trace the source fact before materialization. Bank statements may prove receipt
-of funds, but amount/date coincidence is not customer attribution. A statement
-credit must be linked by reviewed reference or other definitive evidence and
-posted through the canonical payment owner. Rerun reconstruction afterward.
+adjustment provenance, service schedule, funded entitlement, or plan decision,
+operations must trace the source fact before materialization. Once an authority
+opening position exists, every later affordable service-cycle debit must be
+owned by an active canonical entitlement for the same subscription and period,
+linked to either a paid invoice line or an exact customer-position wallet debit;
+reconstruction may detect a missing charge but may not silently replace its
+funding evidence. Bank statements may prove receipt of funds, but amount/date
+coincidence is not customer attribution. A statement credit must be linked by
+reviewed reference or other definitive evidence and posted through the
+canonical payment owner. Rerun reconstruction afterward.
 
 Raw bank rows, narrations, customer identity text, account credentials, and
 statement files are never stored in the baseline tables. The batch stores only
@@ -88,10 +102,22 @@ The exporter writes a canonical blocker manifest and SHA-256 into
 - `canonical_payment_required`: route a definitively attributed, post-handoff
   missing receipt through `financial.payments` preview and confirmation; or
 - `quarantine`: keep the account outside materialization.
+- `no_paid_through_due_immediately`: only for the exact
+  `source_service_without_paid_through_period` blocker, after an authorized
+  reviewer confirms against the final source transaction history that the
+  service has no charge or any other service-linked period transaction. Exact
+  equality with an older reviewed cohort is not proof. Account-level receipts
+  do not prove service coverage, and Discount/Correction period rows remain
+  separately blocked until their meaning is resolved. The reconstruction
+  preserves the source opening balance unchanged and records that the service
+  is due immediately; live enforcement still compares that balance with the
+  canonical configured requirement.
 
-There is deliberately no `resolved` disposition. The action plan remains
-blocked until the owning source is corrected and a new independent replay no
-longer emits the blocker.
+There is deliberately no generic `resolved` disposition. A no-paid-through
+decision must cover the exact hash-bound blocker manifest, may clear no other
+reason, and is itself SHA-256-bound into the signed reconstruction source. All
+other action plans remain blocked until the owning source is corrected and a
+new independent replay no longer emits the blocker.
 
 ```json
 {
@@ -119,6 +145,39 @@ python scripts/one_off/adjudicate_prepaid_funding_gaps.py \
   --decisions /approved/prepaid-funding-gap-decisions.json \
   --out /approved/prepaid-funding-gap-actions.json
 ```
+
+When every action is the reviewed no-paid-through disposition, pass the
+sanitized action packet back to the exporter:
+
+```bash
+python scripts/one_off/export_prepaid_funding_snapshot.py \
+  --snapshot-at REVIEWED_TIMESTAMP \
+  --source REVIEWED_SOURCE_LABEL \
+  --gap-actions /approved/prepaid-funding-gap-actions.json \
+  --out /approved/prepaid-funding-sealed.json \
+  --blockers-out /approved/prepaid-funding-blockers.json \
+  --signing-key-ref bao://secret/audit/prepaid-reconstruction-signer#private_key_pem
+```
+
+The exporter rejects mixed dispositions, stale cohort/blocker hashes, missing
+or extra actions, and every unresolved reason. It changes no reconstructed
+amount.
+
+## Native prepaid service-cycle renewal
+
+After cutover, `financial.prepaid_service_renewals` owns a due monthly prepaid
+period that is funded from the reviewed opening position or later native facts
+but is not triggered by a new payment. It locks the account, re-resolves the
+canonical customer position, posts one idempotent adjustment debit, links one
+active entitlement to that exact debit, and advances the subscription anchor
+in the same transaction. An anchor more than two days late is held for reviewed
+reconciliation; the scheduled owner never invents historical catch-up charges.
+
+`billing.prepaid_service_renewals` is default-off. When enabled, it suppresses
+the older `billing.prepaid_monthly_invoicing` draft-invoice path, including in
+dry-run. The two paths are alternative owners for the same service period and
+must never run in parallel. Payment-triggered renewals continue through the
+payment owner and the same canonical price resolver.
 
 For `canonical_payment_required`, the reviewed row also supplies amount,
 currency, timezone-aware `occurred_at`, and
