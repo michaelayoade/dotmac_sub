@@ -25,7 +25,9 @@
                 </h1>
                 <p class="text-base text-rose-200/80 max-w-lg">
                     Your internet service has been {{ account_status_presentation.label|lower or 'restricted' }}.
-                    {% if outstanding_balance > 0 %}
+                    {% if balance_unavailable %}
+                    We cannot confirm your current balance right now. Please contact support for help restoring service.
+                    {% elif outstanding_balance > 0 %}
                     You have an outstanding balance of <strong class="text-white">{{ outstanding_balance | currency_amount }} NGN</strong>.
                     Settle your outstanding balance to restore service.
                     {% else %}
@@ -34,7 +36,7 @@
                 </p>
             </div>
             <div class="flex flex-col gap-3">
-                {% if outstanding_balance > 0 %}
+                {% if not balance_unavailable and outstanding_balance > 0 %}
                 <a href="/portal/billing/topup?amount={{ outstanding_balance | int }}"
                    class="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-rose-900 shadow-lg transition hover:bg-rose-50">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -108,11 +110,19 @@
                 </div>
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Outstanding Balance</h3>
             </div>
+            {% if balance_unavailable %}
+            <p class="text-xl font-bold text-slate-900 dark:text-white">
+                Balance temporarily unavailable
+            </p>
+            {% else %}
             <p class="text-3xl font-bold text-slate-900 dark:text-white tabular-nums">
                 {{ outstanding_balance | currency_amount }} NGN
             </p>
+            {% endif %}
             <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                {% if outstanding_balance > 0 %}
+                {% if balance_unavailable %}
+                Contact support before making a payment
+                {% elif outstanding_balance > 0 %}
                 Payment required to restore service
                 {% else %}
                 No outstanding balance
@@ -144,7 +154,7 @@
                 Contact our support team to resolve your account status or make a payment arrangement.
             </p>
             <div class="space-y-3">
-                {% if outstanding_balance > 0 %}
+                {% if not balance_unavailable and outstanding_balance > 0 %}
                 <a href="/portal/billing/topup?amount={{ outstanding_balance | int }}"
                    class="flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 dark:hover:bg-emerald-900/50">
                     Pay Now

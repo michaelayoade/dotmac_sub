@@ -455,10 +455,15 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("financial.payment_provider_events") == (
         "financial.payments",
+        "financial.provider_payment_settlements",
     )
+    assert sot_relationships.dependencies_for(
+        "financial.provider_payment_settlements"
+    ) == ("financial.payments", "financial.invoices")
     assert sot_relationships.dependencies_for("financial.payment_reconciliation") == (
         "financial.ledger",
         "financial.payment_provider_events",
+        "financial.provider_payment_settlements",
     )
     assert sot_relationships.dependencies_for("customer.service_status") == (
         "financial.access_resolution",

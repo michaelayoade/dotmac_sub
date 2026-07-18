@@ -380,6 +380,9 @@ detailed security and delivery boundary is
    when reviewed funding already exists as a monthly period becomes due, it
    previews against the verified position, posts one idempotent service debit,
    links one active entitlement, and advances the exact subscription period.
+   It requires the positive contracted `Subscription.unit_price` and fails
+   closed when that evidence is absent; current catalog price is not authority
+   for an already-contracted prepaid service.
    The daily adapter is control-gated and refuses anchors more than two days
    stale; historical cycles require a reviewed hash-bound reconciliation plan.
 10. `financial.billing_reporting` (`app/services/billing/reporting.py`) owns
@@ -666,17 +669,44 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   non-success webhook remains an observation. A verified invoice hint becomes
   pending intent before settlement or uses the confirmed allocation-transfer
   owner after settlement; the provider adapter never constructs financial rows.
+- Cash-first provider boundary: a signature-verified webhook or successful
+  provider verification commits the payment document, gross charge, provider
+  fee, net `PaymentSettlement`, and exact net unallocated-credit ledger link
+  before invoice allocation is attempted. Invoice eligibility, prepaid funding
+  projection, or other downstream consequence failures cannot roll back that
+  confirmed cash evidence.
+- Allocation-exception boundary: applying the net unallocated credit to the
+  checkout invoice remains owned by the normal preview/fingerprint-bound
+  allocation service. Failure leaves the net credit untouched and writes one
+  idempotent `PaymentAllocationReconciliationException` linking the payment,
+  intended invoice, checkout intent/reference, and error. A successful replay
+  resolves that exception; retries cannot duplicate money or exception rows.
+- Invoice-lifecycle boundary: invoice-payment checkout cannot persist an intent
+  for a draft. The checkout adapter first requests the canonical invoice
+  lifecycle owner to transition the document from draft to issued, then creates
+  the provider intent from the issued document.
 - Historical boundary: old succeeded payments are not automatically trusted or
   linked by amount/memo similarity. Inspection lists candidates; reconciliation
   requires an operator-selected exact ledger row for every active allocation,
   remainder, and prepaid debit, verifies the complete payment partition, links
   evidence, records audit, and posts no new money.
+- Legacy prepaid-cycle repair is a preview-confirm exception owned by
+  `financial.payments`, not a generic allocation shortcut. It requires explicit
+  payment, allocation, invoice, debit, subscription, and replacement-payment
+  identifiers; retires only an unevidenced legacy allocation; reconstructs the
+  missing payment credit, settlement, and entitlement; and records the exact
+  credit-to-debit use in `PaymentPrepaidApplication`. A settled payment consumed
+  after its cash confirmation keeps its immutable `PaymentSettlement` snapshot;
+  the application row is the later-use evidence. The invoice owner alone voids
+  an unpaid superseded draft. Access reconciliation runs only after the financial
+  transaction commits, and an unavailable prepaid baseline is recorded as a
+  deferred recheck instead of rolling back money or granting access.
 - Cutover gate: pending/no-money tests, stale-preview rejection, idempotent
   creation/settlement/allocation replay, exact settlement/allocation/prepaid
-  links, provider replay, explicit historical reconciliation, owner-writer
-  architecture tests, and admin/API preview-confirm boundaries must remain
-  green. Generic succeeded status edits and direct settled-allocation commands
-  remain gated.
+  links, provider replay, explicit historical reconciliation, legacy-cycle
+  repair replay and stale-preview tests, owner-writer architecture tests, and
+  admin/API preview-confirm boundaries must remain green. Generic succeeded
+  status edits and direct settled-allocation commands remain gated.
 
 Consolidated payment settlement has a separate scoped owner contract:
 

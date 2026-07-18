@@ -351,6 +351,9 @@ def _assert_services_target(target: psycopg.Connection) -> None:
                 noncharge_period_rows integer NOT NULL,
                 last_noncharge_transaction_id bigint NULL,
                 last_noncharge_type text NULL,
+                last_noncharge_source text NULL,
+                last_noncharge_to_invoice boolean NULL,
+                last_noncharge_comment_empty boolean NULL,
                 last_noncharge_category_id bigint NULL,
                 last_noncharge_total numeric(19, 4) NULL,
                 last_noncharge_period_from date NULL,
@@ -563,8 +566,9 @@ def _copy_final_services(
               AND category = 1
               AND service_id IS NOT NULL
         ), noncharge_ranked AS (
-            SELECT id, customer_id, service_id, type, category, total,
-                   period_from, period_to,
+            SELECT id, customer_id, service_id, type, source, to_invoice,
+                   COALESCE(CHAR_LENGTH(TRIM(comment)), 0) = 0 AS comment_empty,
+                   category, total, period_from, period_to,
                    COUNT(*) OVER (PARTITION BY service_id) AS transaction_rows,
                    SUM(period_from IS NOT NULL OR period_to IS NOT NULL)
                        OVER (PARTITION BY service_id) AS period_rows,
@@ -590,6 +594,9 @@ def _copy_final_services(
                    AS noncharge_period_rows,
                noncharge_ranked.id AS last_noncharge_transaction_id,
                noncharge_ranked.type AS last_noncharge_type,
+               noncharge_ranked.source AS last_noncharge_source,
+               noncharge_ranked.to_invoice AS last_noncharge_to_invoice,
+               noncharge_ranked.comment_empty AS last_noncharge_comment_empty,
                noncharge_ranked.category AS last_noncharge_category_id,
                noncharge_ranked.total AS last_noncharge_total,
                noncharge_ranked.period_from AS last_noncharge_period_from,
@@ -608,7 +615,9 @@ def _copy_final_services(
             last_transaction_id, last_charge_total, last_period_from,
             last_period_to, noncharge_transaction_rows,
             noncharge_period_rows, last_noncharge_transaction_id,
-            last_noncharge_type, last_noncharge_category_id,
+            last_noncharge_type, last_noncharge_source,
+            last_noncharge_to_invoice, last_noncharge_comment_empty,
+            last_noncharge_category_id,
             last_noncharge_total, last_noncharge_period_from,
             last_noncharge_period_to, subscriber_id, subscription_id
         ) FROM STDIN
@@ -660,6 +669,17 @@ def _copy_final_services(
                             int(row["noncharge_period_rows"] or 0),
                             _integer(row["last_noncharge_transaction_id"]),
                             _text(row["last_noncharge_type"]),
+                            _text(row["last_noncharge_source"]),
+                            (
+                                _deleted(row["last_noncharge_to_invoice"])
+                                if row["last_noncharge_to_invoice"] is not None
+                                else None
+                            ),
+                            (
+                                bool(row["last_noncharge_comment_empty"])
+                                if row["last_noncharge_comment_empty"] is not None
+                                else None
+                            ),
                             _integer(row["last_noncharge_category_id"]),
                             (
                                 Decimal(str(row["last_noncharge_total"]))
