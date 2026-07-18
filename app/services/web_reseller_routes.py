@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -19,9 +18,32 @@ from app.services import (
     reseller_portal,
     work_orders_mirror,
 )
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    PageMeta,
+)
 from app.web.reseller.branding import get_reseller_templates
 
 logger = logging.getLogger(__name__)
+
+# The reseller accounts list's declared capabilities. Sortable keys mirror the
+# reseller_portal.list_accounts order_by whitelist; per_page keeps the reseller
+# portal's 20 default.
+RESELLER_ACCOUNT_LIST_DEFINITION = ListDefinition(
+    key="reseller_accounts",
+    fields=(
+        ListFieldDefinition("name", "Customer", searchable=True, sortable=True),
+        ListFieldDefinition("status_filter", "Status", filterable=True),
+        ListFieldDefinition("balance", "Balance", sortable=True),
+        ListFieldDefinition("overdue", "Overdue", sortable=True),
+        ListFieldDefinition("created_at", "Joined", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+    per_page_options=(10, 20, 50, 100),
+    default_per_page=20,
+)
 
 templates = get_reseller_templates()
 
@@ -169,27 +191,46 @@ def reseller_accounts(
     per_page: int,
     search: str | None = None,
     status_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
 ):
     context = _require_reseller_context(request, db)
     if not context:
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
+    definition = RESELLER_ACCOUNT_LIST_DEFINITION
+    safe_sort = (
+        sort_by if sort_by in definition.sortable_keys else definition.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page if per_page in definition.per_page_options else definition.default_per_page
+    )
+    list_query = definition.build_query(
+        search=search,
+        filters={"status_filter": status_filter},
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+    reseller_id = str(context["reseller"].id)
     total = reseller_portal.count_accounts(
         db,
-        reseller_id=str(context["reseller"].id),
+        reseller_id=reseller_id,
         search=search,
         status_filter=status_filter,
     )
-    total_pages = max(1, math.ceil(total / per_page)) if per_page else 1
-    page = min(page, total_pages)
-    offset = (page - 1) * per_page
+    page_meta = PageMeta.from_query(list_query, total)
     accounts = reseller_portal.list_accounts(
         db,
-        reseller_id=str(context["reseller"].id),
-        limit=per_page,
-        offset=offset,
+        reseller_id=reseller_id,
+        limit=list_query.per_page,
+        offset=(page_meta.page - 1) * list_query.per_page,
         search=search,
         status_filter=status_filter,
+        order_by=list_query.sort_by,
+        order_dir=list_query.sort_dir,
     )
     return templates.TemplateResponse(
         "reseller/accounts/index.html",
@@ -199,15 +240,17 @@ def reseller_accounts(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "accounts": accounts,
-            "page": page,
-            "per_page": per_page,
+            "list_query": list_query,
+            "page_meta": page_meta,
+            "page": page_meta.page,
+            "per_page": page_meta.per_page,
             "search": search or "",
             "status_filter": status_filter or "",
             "status_options": reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS,
             "total": total,
-            "total_pages": total_pages,
-            "has_prev": page > 1,
-            "has_next": page < total_pages,
+            "total_pages": page_meta.total_pages,
+            "has_prev": page_meta.has_previous,
+            "has_next": page_meta.has_next,
         },
     )
 

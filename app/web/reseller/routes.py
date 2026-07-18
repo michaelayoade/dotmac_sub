@@ -112,6 +112,8 @@ def reseller_accounts(
     per_page: int = Query(20, ge=5, le=100),
     search: str = Query(""),
     status_filter: str = Query(""),
+    sort_by: str | None = Query(None, alias="sort"),
+    sort_dir: str | None = Query(None, alias="dir"),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_accounts(
@@ -121,6 +123,8 @@ def reseller_accounts(
         per_page,
         search=search or None,
         status_filter=status_filter or None,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
 
