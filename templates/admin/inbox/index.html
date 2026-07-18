@@ -34,17 +34,24 @@
 
     <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {% for metric in [
-            {"label": "Open", "value": queue_metrics.total_open},
-            {"label": "Needs response", "value": queue_metrics.needs_response},
+            {"label": "Open", "value": queue_metrics.total_open, "href": "/admin/inbox"},
+            {"label": "Needs response", "value": queue_metrics.needs_response, "href": "/admin/inbox?needs_response=true"},
             {"label": "Unassigned", "value": queue_metrics.unassigned_open},
             {"label": "Send failed", "value": queue_metrics.failed_outbound},
-            {"label": "Snoozed", "value": queue_metrics.snoozed_open},
-            {"label": "Muted", "value": queue_metrics.muted_open}
+            {"label": "Snoozed", "value": queue_metrics.snoozed_open, "href": "/admin/inbox?snoozed=true"},
+            {"label": "Muted", "value": queue_metrics.muted_open, "href": "/admin/inbox?muted=true"}
         ] %}
+        {% if metric.href %}
+        <a href="{{ metric.href }}" class="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-indigo-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-indigo-600/50">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
+            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ metric.value }}</p>
+        </a>
+        {% else %}
         <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
             <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ metric.value }}</p>
         </div>
+        {% endif %}
         {% endfor %}
     </div>
 
