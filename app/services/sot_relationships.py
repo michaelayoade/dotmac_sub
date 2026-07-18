@@ -495,6 +495,44 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.account_credit_applications",
+                module="app.services.billing.account_credit",
+                owns=(
+                    "eligible invoice selection for evidenced account credit",
+                    "deterministic payment-credit source selection",
+                    "oldest-payable-debt application orchestration",
+                    "invoice-void release of exact account-credit allocations",
+                    "account-credit application invariant monitoring",
+                ),
+                depends_on=("financial.payments", "financial.invoices"),
+                notes=(
+                    "Account credit is derived from exact unconsumed settlement "
+                    "evidence, never a wallet counter. This owner composes the "
+                    "payment-allocation owner and does not write money directly."
+                ),
+            ),
+            SOTService(
+                name="financial.account_credit_deposits",
+                module="app.services.account_credit_deposits",
+                owns=(
+                    "Deposit Account Credit eligibility and preview",
+                    "typed deposit intent lifecycle and provider correlation",
+                    "atomic deposit settlement composition",
+                    "deposit-to-payment evidence link",
+                    "deposit settlement outbox event",
+                ),
+                depends_on=(
+                    "financial.payments",
+                    "financial.account_credit_applications",
+                    "financial.access_resolution",
+                ),
+                notes=(
+                    "A deposit first records the whole confirmed receipt as "
+                    "unallocated account credit, grants no service duration, and "
+                    "then asks the canonical applicator to settle eligible debt."
+                ),
+            ),
+            SOTService(
                 name="financial.payments",
                 module="app.services.billing.payments",
                 owns=(
@@ -808,11 +846,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "billing health snapshot",
                     "billing anomaly classification",
                     "bounded billing health observations",
+                    "account-credit invariant observation publication",
                 ),
                 depends_on=(
                     "customer.financial_position",
                     "financial.access_resolution",
                     "financial.billing_profile",
+                    "financial.account_credit_applications",
                 ),
                 notes=(
                     "Billing health is monitoring evidence, never a financial "

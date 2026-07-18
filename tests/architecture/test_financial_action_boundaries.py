@@ -389,6 +389,33 @@ def test_native_credit_reconciliation_composes_the_payment_allocation_owner() ->
     assert "LedgerEntry(" not in reconciliation
 
 
+def test_deposit_adapters_compose_named_credit_owners() -> None:
+    deposit_owner = _source("app/services/account_credit_deposits.py")
+    application_owner = _source("app/services/billing/account_credit.py")
+    portal = _source("app/services/customer_portal_flow_payments.py")
+    webhook = _source("app/services/api_billing_webhooks.py")
+    proofs = _source("app/services/payment_proofs.py")
+    invoice_owner = _source("app/services/billing/invoices.py")
+
+    assert "Payments.create_account_credit_deposit(" in deposit_owner
+    assert "AccountCreditApplications.apply(" in deposit_owner
+    assert "PaymentAllocation(" not in deposit_owner
+    assert "LedgerEntry(" not in deposit_owner
+    assert "PaymentAllocations.preview(" in application_owner
+    assert "PaymentAllocations.confirm(" in application_owner
+    assert "PaymentAllocation(" not in application_owner
+    assert "LedgerEntry(" not in application_owner
+    assert "AccountCreditDeposits.create_intent(" in portal
+    assert "AccountCreditDeposits.settle_verified(" in portal
+    assert "AccountCreditDeposits.settle_verified(" in webhook
+    assert "AccountCreditDeposits.settle_verified(" in proofs
+    assert "AccountCreditApplications.apply(" in invoice_owner
+    assert "AccountCreditApplications.release_for_invoice_void(" in invoice_owner
+    assert "def release_for_invoice_void(" in application_owner
+    assert "restore_account_services(" not in deposit_owner
+    assert "if intent.purpose is None:" in portal
+
+
 def test_invoice_void_and_writeoff_use_owner_preview_and_exact_evidence() -> None:
     route = _source("app/web/admin/billing_invoice_actions.py")
     bulk_route = _source("app/web/admin/billing_invoice_bulk.py")

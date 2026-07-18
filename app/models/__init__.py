@@ -22,6 +22,7 @@ from app.models.auth import (  # noqa: F401
 from app.models.bandwidth import BandwidthSample, QueueMapping  # noqa: F401
 from app.models.billing import (  # noqa: F401
     AccountAdjustment,
+    AccountCreditApplicationPolicy,
     BankAccount,
     BankAccountType,
     BankReconciliationItem,
@@ -67,7 +68,9 @@ from app.models.billing import (  # noqa: F401
     ServiceEntitlementStatus,
     TaxApplication,
     TaxRate,
+    TopupAllocationPolicy,
     TopupIntent,
+    TopupIntentPurpose,
 )
 from app.models.branding import BrandProfile  # noqa: F401
 from app.models.catalog import (  # noqa: F401

@@ -1,6 +1,6 @@
 """Bank-transfer proof flow: submit -> verify/reject -> credit + notify."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -12,10 +12,12 @@ from app.models.billing import (
     Payment,
     PaymentAllocation,
     PaymentStatus,
+    TopupIntent,
 )
 from app.models.notification import Notification
 from app.models.subscriber import SubscriberStatus
 from app.services import payment_proofs as svc
+from app.services.account_credit_deposits import AccountCreditDeposits
 
 
 def _account(db_session):
@@ -251,6 +253,48 @@ def test_verify_without_auto_allocate_keeps_money_as_credit(db_session):
     assert invoice.status == InvoiceStatus.issued
     assert Decimal(str(invoice.balance_due)) == Decimal("3000.00")
     assert get_account_credit_balance(db_session, str(sub.id)) == Decimal("5000.00")
+
+
+def test_deposit_proof_review_uses_typed_account_credit_owner(db_session):
+    sub = _account(db_session)
+    intent, _preview, _replayed = AccountCreditDeposits.create_intent(
+        db_session,
+        account_id=sub.id,
+        amount="5000.00",
+        currency="NGN",
+        minimum="1000.00",
+        maximum="500000.00",
+        reference="TRF-TYPED-DEPOSIT",
+        provider_type="direct_bank_transfer",
+        provider_id=None,
+        expires_at=datetime.now(UTC) + timedelta(days=7),
+        idempotency_key="typed-deposit-proof-intent",
+        channel="customer_selfcare",
+        created_by=str(sub.id),
+    )
+    invoice = _open_invoice(db_session, sub, amount="3000.00")
+    proof = _submit(
+        db_session,
+        sub,
+        amount="5000.00",
+        reference=intent.reference,
+        file_path="typed-deposit.png",
+    )
+
+    result = svc.verify_proof(
+        db_session,
+        proof["id"],
+        verified_by="admin-1",
+    )
+
+    payment = db_session.get(Payment, result["payment_id"])
+    typed_intent = db_session.get(TopupIntent, intent.id)
+    db_session.refresh(invoice)
+    assert typed_intent.completed_payment_id == payment.id
+    assert payment.settlement is not None
+    assert payment.settlement.prepaid_amount == Decimal("0.00")
+    assert invoice.status == InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
 
 
 def test_verify_with_auto_allocate_pays_open_invoice(db_session):

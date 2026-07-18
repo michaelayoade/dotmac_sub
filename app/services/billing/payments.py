@@ -1476,6 +1476,7 @@ def _payment_creation_fingerprint(
     effects: tuple[PaymentCreationAllocationEffect, ...],
     unallocated_amount: Decimal,
     prepaid_service_effect: PaymentPrepaidServiceEffect | None,
+    include_prepaid_service_effect: bool,
 ) -> str:
     encoded = json.dumps(
         {
@@ -1500,6 +1501,7 @@ def _payment_creation_fingerprint(
             "memo": payload.memo,
             "paid_at": payload.paid_at.isoformat() if payload.paid_at else None,
             "auto_allocate": auto_allocate,
+            "include_prepaid_service_effect": include_prepaid_service_effect,
             "prepaid_funding_before": f"{funding_before:.2f}",
             "account_credit_before": f"{account_credit_before:.2f}",
             "unallocated_amount": f"{unallocated_amount:.2f}",
@@ -1535,6 +1537,7 @@ def _build_payment_creation_preview(
     payload: PaymentCreate,
     *,
     auto_allocate: bool,
+    include_prepaid_service_effect: bool = True,
 ) -> PaymentCreationPreview:
     if payload.account_id is None:
         raise HTTPException(
@@ -1587,6 +1590,7 @@ def _build_payment_creation_preview(
             effects=(),
             unallocated_amount=Decimal("0.00"),
             prepaid_service_effect=None,
+            include_prepaid_service_effect=include_prepaid_service_effect,
         )
         return PaymentCreationPreview(
             account_id=payload.account_id,
@@ -1673,11 +1677,15 @@ def _build_payment_creation_preview(
         remaining = round_money(remaining - allocation_amount)
 
     effect_tuple = tuple(effects)
-    prepaid_service_effect = _preview_prepaid_service_effect(
-        db,
-        payload=payload,
-        effects=effect_tuple,
-        account_credit_available=round_money(account_credit_before + remaining),
+    prepaid_service_effect = (
+        _preview_prepaid_service_effect(
+            db,
+            payload=payload,
+            effects=effect_tuple,
+            account_credit_available=round_money(account_credit_before + remaining),
+        )
+        if include_prepaid_service_effect
+        else None
     )
     prepaid_charge = (
         prepaid_service_effect.charge_amount
@@ -1692,6 +1700,7 @@ def _build_payment_creation_preview(
         effects=effect_tuple,
         unallocated_amount=remaining,
         prepaid_service_effect=prepaid_service_effect,
+        include_prepaid_service_effect=include_prepaid_service_effect,
     )
     return PaymentCreationPreview(
         account_id=payload.account_id,
@@ -2463,6 +2472,87 @@ class Payments(ListResponseMixin):
                 return replay
             raise HTTPException(
                 status_code=409, detail="Payment is already being recorded"
+            ) from exc
+        except Exception:
+            db.rollback()
+            raise
+
+    @staticmethod
+    def create_account_credit_deposit(
+        db: Session,
+        payload: PaymentCreate,
+        *,
+        idempotency_key: str,
+        origin: PaymentSettlementOrigin = PaymentSettlementOrigin.provider_event,
+        commit: bool = True,
+    ) -> PaymentCreationResult:
+        """Record confirmed deposit cash as credit without granting service.
+
+        This is an internal, server-owned settlement command for the Deposit
+        Account Credit owner. It deliberately exposes neither allocation nor
+        prepaid-renewal controls to routes or clients: the entire receipt first
+        becomes evidenced unallocated credit, after which the separate account-
+        credit applicator may consume it for eligible invoices.
+        """
+        if payload.account_id is None or payload.billing_account_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Account credit deposits require one subscriber account",
+            )
+        if payload.status != PaymentStatus.succeeded or payload.allocations:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Account credit deposits require a confirmed payment with no "
+                    "client-selected allocations"
+                ),
+            )
+        key = _normalize_payment_creation_key(idempotency_key)
+        lock_account(db, str(payload.account_id))
+        preview = _build_payment_creation_preview(
+            db,
+            payload,
+            auto_allocate=False,
+            include_prepaid_service_effect=False,
+        )
+        replay = Payments._creation_replay(db, key=key, fingerprint=preview.fingerprint)
+        if replay:
+            return replay
+        reservation = IdempotencyKey(
+            scope=_PAYMENT_CREATION_IDEMPOTENCY_SCOPE,
+            key=key,
+            account_id=payload.account_id,
+        )
+        db.add(reservation)
+        try:
+            db.flush()
+            result = _create_account_payment_from_preview(
+                db,
+                payload,
+                preview,
+                auto_allocate=False,
+                origin=origin,
+                idempotency_key=key,
+                commit=False,
+            )
+            reservation.ref_id = str(result.payment.id)
+            db.flush()
+            if commit:
+                db.commit()
+                db.refresh(result.payment)
+                if result.settlement:
+                    db.refresh(result.settlement)
+            return result
+        except IntegrityError as exc:
+            db.rollback()
+            replay = Payments._creation_replay(
+                db, key=key, fingerprint=preview.fingerprint
+            )
+            if replay:
+                return replay
+            raise HTTPException(
+                status_code=409,
+                detail="Account credit deposit is already being recorded",
             ) from exc
         except Exception:
             db.rollback()
@@ -3316,6 +3406,8 @@ class Payments(ListResponseMixin):
             selectinload(
                 Payment.allocations.and_(PaymentAllocation.is_active.is_(True))
             ),
+            selectinload(Payment.settlement),
+            selectinload(Payment.topup_intents),
             selectinload(Payment.withholding_tax_record),
         )
         if account_id:
@@ -4239,6 +4331,10 @@ class PaymentAllocations(ListResponseMixin):
             db.flush()
             allocation.ledger_entry_id = invoice_entry.id
             allocation.consumption_ledger_entry_id = consumption_entry.id
+            # ERP's incremental payment projection is payment-watermarked. An
+            # allocation is new accounting evidence for that payment, so touch
+            # the parent to ensure the next sync page includes it.
+            payment.updated_at = datetime.now(UTC)
             reservation.ref_id = str(allocation.id)
             _finalize_invoice_payment_effects(db, invoice)
             AuditEvents.stage(

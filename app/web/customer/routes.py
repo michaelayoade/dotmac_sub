@@ -2127,7 +2127,7 @@ def customer_billing_topup(
     amount: int | None = Query(None, ge=0),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Show add-funds page for a customer account."""
+    """Show Deposit Account Credit for a customer account."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
@@ -2166,7 +2166,7 @@ def customer_create_topup_intent(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
-    """Create a server-owned top-up intent for checkout."""
+    """Create a server-owned account-credit deposit intent for checkout."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
@@ -2195,7 +2195,7 @@ def customer_create_topup_intent(
         return JSONResponse({"detail": str(exc)}, status_code=400)
     except Exception:
         logger.warning(
-            "Unable to start customer top-up intent",
+            "Unable to start customer account-credit deposit intent",
             extra={"account_id": optional_customer_account_id(db, customer)},
             exc_info=True,
         )
@@ -2319,7 +2319,7 @@ def customer_verify_topup(
     save_card: bool = Query(False),
     db: Session = Depends(get_db),
 ) -> Response:
-    """Verify a top-up payment and show allocation results."""
+    """Verify an account-credit deposit and show allocation results."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
