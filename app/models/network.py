@@ -1994,7 +1994,7 @@ class OntUnit(Base):
         DateTime(timezone=True)
     )
 
-    # Async verification tracking (Phase 2)
+    # Async verification tracking
     last_applied_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         doc="When provisioning commands were last applied to OLT",
@@ -3850,7 +3850,7 @@ class SignalThresholdOverride(Base):
 
 
 # =============================================================================
-# Phase 1: Service-Port Allocator Models
+# Service-port allocator models
 # =============================================================================
 
 
@@ -4020,7 +4020,7 @@ class OltServicePort(Base):
 
 
 # =============================================================================
-# Phase 2: Verification Status for Async Drift Detection
+# Verification status for asynchronous drift detection
 # =============================================================================
 
 

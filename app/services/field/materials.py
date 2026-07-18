@@ -21,7 +21,7 @@ def serialize_material(material: FieldWorkOrderMaterial) -> dict:
     item = material.item
     return {
         "id": material.id,
-        "crm_work_order_id": material.crm_work_order_id,
+        "crm_work_order_id": material.work_order_mirror.public_id,
         "crm_material_id": material.crm_material_id,
         "item_id": material.item_id,
         "sku": item.sku if item else None,

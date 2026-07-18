@@ -1,4 +1,4 @@
-"""Native infrastructure polling sweep (Zabbix runtime cutover, Phase 1).
+"""Native infrastructure polling sweep for the Zabbix runtime cutover.
 
 Periodically runs the same ping + SNMP / vendor-API reachability checks the
 admin core-device pages run on demand (``web_network_core_runtime``), so

@@ -13,7 +13,7 @@ Design rules (from the original architecture discussion):
   ONT, the sweeper does a ~100ms mgmt-IP ping. If the ONT is unreachable
   the sweeper increments ``consecutive_sweep_unreachable`` on the row and
   skips the detailed reconcile. After N consecutive unreachable sweeps
-  the operator gets an alert (Phase 2 — alert escalation isn't wired in
+  the operator gets an alert. Alert escalation is not wired in
   this commit, just the counter).
 * **Process, not Celery.** Single instance, deterministic, no per-task
   queue depth to debug. Deploys as a systemd-managed process alongside

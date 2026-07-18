@@ -1,9 +1,9 @@
-"""Sales kanban API — CRM port (Phase 3 §2.4, ``/leads/kanban…``).
+"""Native sales kanban API ported from CRM (``/leads/kanban…``).
 
 Ported from ``dotmac_crm/app/api/sales.py``. Only the kanban endpoints move
-in this PR: the reporting endpoints (pipeline-summary / forecast /
-agent-performance) depend on ``services/crm/reports.py`` and the Phase 4
-agent model, so they ride with the admin-web/leads PR of the Phase 3 series.
+in this capability: the reporting endpoints (pipeline-summary / forecast /
+agent-performance) depend on ``services/crm/reports.py`` and the future
+native agent model, so they remain outside this API's ownership boundary.
 """
 
 from fastapi import APIRouter, Depends, Query

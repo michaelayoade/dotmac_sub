@@ -641,7 +641,7 @@ def build_service_port_command(
         )
 
     if port_index is not None:
-        # Use pre-allocated index from DB allocator (Phase 1)
+        # Use the pre-allocated index from the database allocator.
         return (
             f"service-port {port_index} vlan {vlan_id} gpon {fsp} "
             f"ont {ont_id} gemport {gem_index} "

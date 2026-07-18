@@ -1,8 +1,8 @@
-"""Native projects engine tests (Phase 3 PR 6).
+"""Native project-domain service tests.
 
 Covers the ported CRM semantics: fiber-stage seeding + SLA due computation,
 template instantiation (dependencies + date calculation), the task state
-machine, project lifecycle transitions, and the Phase 2 work-order guard.
+machine, project lifecycle transitions, and the work-order identity guard.
 """
 
 import uuid
@@ -241,8 +241,8 @@ class TestTaskStateMachine:
     def test_work_order_id_validated_against_phase2_mirror(
         self, db_session, subscriber
     ):
-        """§1.10/risk #5: WO ids stay plain UUIDs validated against
-        work_order_mirror.crm_work_order_id until the Phase 2 flip."""
+        """Imported work-order UUIDs remain plain values validated against
+        authoritative ``work_order.public_id``."""
         project = _create_fiber_project(db_session, subscriber)
         wo_id = uuid.uuid4()
 

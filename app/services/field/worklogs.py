@@ -114,7 +114,6 @@ class FieldWorkLogs:
             _check_overlap(db, profile.person_id, start_at, end_at)
             log = FieldWorkLog(
                 work_order_mirror_id=row.id,
-                crm_work_order_id=row.public_id,
                 author_technician_id=profile.id,
                 person_id=profile.person_id,
                 system_user_id=profile.system_user_id,

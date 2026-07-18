@@ -91,7 +91,7 @@ def test_list_page_counts_filters_and_options(db_session):
 
     assert page["total"] == 1
     assert page["counts"]["scheduled"] >= 1
-    assert page["items"][0]["work_order"].crm_work_order_id == "sub-web-wo-1"
+    assert page["items"][0]["work_order"].public_id == "sub-web-wo-1"
     assert page["items"][0]["subscriber_label"]
     assert page["status_filter"] == "scheduled"
     assert page["subscriber_options"]

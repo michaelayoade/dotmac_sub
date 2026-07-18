@@ -1,7 +1,7 @@
-"""Sales orders — CRM port (Phase 3 §1.5 / §2.1 / §2.3).
+"""Native sales orders ported from CRM.
 
 Faithful port of ``dotmac_crm/app/services/sales_orders.py`` onto sub's
-native models, with the Phase 3 deltas applied:
+native models, with Sub ownership deltas applied:
 
 * Customer party: CRM ``person_id`` becomes ``subscriber_id`` — the CRM's
   person-mediated SO → sub identity chain (SO → project → person →
@@ -27,8 +27,8 @@ native models, with the Phase 3 deltas applied:
 
   Every ``external_ref`` idempotency key is byte-identical to the HTTP era,
   so re-runs and historical rows stay deduped (risk #12 analogue).
-* ``_accrue_reseller_commission`` is a stub — ``reseller_commission.py``
-  ports with the referrals PR of the Phase 3 series (§2.3 module map).
+* ``_accrue_reseller_commission`` is a stub until the native referral and
+  reseller-commission capability owns that side effect.
 * Install-project creation for manual (quote-less) sales orders is deferred
   to the projects service port (see ``_ensure_project_for_manual_sales_order``).
 * Statuses are stored as plain strings (sub convention, §1.7).
@@ -982,25 +982,26 @@ def _ensure_fulfillment(db: Session, sales_order: SalesOrder) -> None:
 
 
 def _accrue_reseller_commission(db: Session, sales_order: SalesOrder | None) -> None:
-    """Stub — ``reseller_commission.py`` ports with the referrals PR of the
-    Phase 3 series (§2.3 module map: COPY with referrals). The call sites are
-    kept so the referrals PR only has to fill this in; a commission hiccup
+    """Stub until the native referral capability owns reseller commissions.
+
+    The call sites remain so the owner can implement the side effect without
+    changing sales-order orchestration; a commission hiccup
     must never break sales-order processing either way.
     """
     logger.debug(
-        "reseller_commission_accrual_deferred sales_order_id=%s (referrals PR pending)",
+        "reseller_commission_accrual_deferred sales_order_id=%s",
         getattr(sales_order, "id", None),
     )
     return None
 
 
 def _ensure_project_for_manual_sales_order(db: Session, sales_order: SalesOrder):
-    """Deferred to the projects service port (Phase 3 PR 6).
+    """Compatibility hook for native project creation from a manual order.
 
     The CRM creates an install project for manual (quote-less) sales orders
     (idempotent on ``Project.metadata_["sales_order_id"]``, template by
     ``metadata.project_type``). Sub's projects service has not been ported
-    yet — the projects PR rewires this hook onto it.
+    yet — the native projects owner must replace this placeholder.
     """
     if sales_order.quote_id:
         # Quote-driven flow already creates projects on quote acceptance.

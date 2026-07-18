@@ -58,7 +58,7 @@ def find_authoritative_project_creation_rule(
     db: Session, project: Project
 ) -> TicketAssignmentRule | None:
     """Return the first creation rule that owns initial assignment for a
-    project (Phase 3 §2.1 — CRM engine parity). Accepts a transient Project
+    native project. Accepts a transient Project
     probe (Projects.create builds one before INSERT)."""
     ctx = build_project_context(project)
     for rule in list_active_rules(db):
@@ -177,7 +177,7 @@ def _apply_direct_project_assignment(
             project.project_manager_person_id = assignee_uuid
             changed = True
     elif target == "site_coordinator":
-        # assistant_manager ≡ "Site Project Coordinator" (Phase 3 §1.2).
+        # assistant_manager is the "Site Project Coordinator" compatibility role.
         if not project.assistant_manager_person_id:
             project.assistant_manager_person_id = assignee_uuid
             changed = True

@@ -58,9 +58,18 @@ but equivalent state and actions resolve through the same backend owners.
 23. `geospatial`
 24. `sales_referrals`
 
-Rule: each PR should finish one domain slice: define the owner service, migrate
-the highest-risk callers, and add focused tests. Avoid broad mechanical rewrites
-that obscure business behavior.
+Rule: each change should finish one coherent domain boundary: define the owner
+service, migrate the highest-risk callers, and add focused tests. Avoid broad
+mechanical rewrites that obscure business behavior.
+
+Collaboration-quality documentation is part of the source-of-truth contract.
+Current architecture documents, migration descriptions, code comments, and
+operator guidance must name the owner, affected capability, compatibility
+boundary, verification gate, and current state in terms another team can act
+on. Do not rely on unexplained internal sequence labels, pull-request numbers,
+or shorthand such as “phase N” or “slice N” as the explanation. Historical
+plans may preserve chronology, but any rule or contract promoted from them must
+be restated in durable domain language here or in the owning design document.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
@@ -864,7 +873,7 @@ Tax-accounting migration record:
   writers use the shared lifecycle adapter, and cancellation credits preserve the
   source invoice, rate, and inclusive/exclusive/exempt line treatment.
 - Fallback retirement: the false `total_tax`/`invoices` model contract and
-  `tax_amount`/`total_amount` template fields are removed in this slice.
+  `tax_amount`/`total_amount` template fields are removed by this change.
 - Feed contract: invoice and credit-note sync lines expose `tax_rate_id` and
   `tax_application`; the tax-rate feed exposes code/rate; payment sync exposes
   gross cash settlement, net bank cash, WHT amount/rate/status/record/certificate,
@@ -905,6 +914,23 @@ network summary composition.
    cumulative signups. The derived-cancelled rule (explicit `canceled`, or NULL
    status on an inactive row) lives here; report pages compose it and never
    re-derive lifecycle in Python.
+8. `customer.data_completeness`
+   (`app/services/subscriber_data_completeness.py`) owns the purpose-specific
+   requirements, derived completeness/revalidation state, capture backlog, and
+   filing-readiness counts. It is read-only: it identifies the gap and never
+   fills it.
+9. `customer.location_verification`
+   (`app/services/geocode_reconciler.py`) is the only writer of subscriber
+   location verification-ledger facts and owns reconciliation of a captured GPS
+   pin against claimed location. It writes only facts that agree; disagreement
+   is flagged for a human and never auto-applied.
+10. `customer.location_capture` (`app/services/location_capture.py`) owns the
+    default-off rollout controls, source authorization, prompt eligibility and
+    snooze lifecycle, and orchestration of field-arrival, portal, and agent
+    capture. Those adapters call this owner, which delegates adjudication and
+    ledger writes to `customer.location_verification`. Neither owner writes
+    `Subscriber` columns; projecting a verified fact onto the profile remains
+    the subscriber profile owner's job.
 
 Rule: admin, portal, support, and reporting views should consume context
 services instead of rebuilding customer joins. Admin routes submit explicit
@@ -1300,11 +1326,11 @@ Migration record:
 - New meaning owner: `app.services.status_presentation`, transported through
   `app.schemas.status_presentation.StatusPresentation`. New concrete-color
   owner: `app.services.brand_profiles` and the generated brand theme tokens.
-- Compatibility phase: legacy Tailwind palette names resolve to branding-owned
+- Compatibility boundary: legacy Tailwind palette names resolve to branding-owned
   scales at runtime; new or touched code uses primary, accent, semantic, or
   categorical data tokens directly. Literal chart, map, and mobile palettes are
-  retired from migrated slices.
-- Verification phase: exhaustive enum coverage, API serialization, projection,
+  retired from migrated domains.
+- Verification: exhaustive enum coverage, API serialization, projection,
   template architecture, and Flutter parsing/rendering tests.
 - Cutover gate: no customer account/subscription, invoice, payment, outage-incident,
   device operational, customer connection-health, support-ticket, or field
@@ -1588,7 +1614,7 @@ Dependency order:
 22. `network.ont_assignment_constraint_authorization`: owns immutable requests
    and independent approve/decline attestations for a future assignment
    constraint cutover. Each request binds an explicitly named target, expiry,
-   complete clean coverage payload, Phase 14 coverage hash, and Phase 11 audit
+   complete clean coverage payload, current coverage hash, and independent audit
    hash. Approval fails closed on expiry or current evidence drift. Current,
    stale, expired, declined, and invalid state is derived rather than maintained
    as a second mutable lifecycle. Even current approval is only evidence for a
@@ -1803,11 +1829,13 @@ Dependency order:
 4. `operations.work_orders`: exposes work-order read models and customer links.
    The `work_order` table is Sub's authoritative work-order storage
    (WORK_ORDER_IDENTITY_SOT): identity is the Sub-generated `public_id`;
-   `crm_work_order_id` is a nullable provenance reference written only by CRM
-   import/webhook ingest, resolved to native identity once at that boundary and
-   never used as a join key. Field-evidence tables join through the
-   `work_order.id` FK; their denormalized string columns are dual-written for
-   compatibility until the slice-5 retirement drops them.
+   `crm_work_order_id` is a nullable provenance reference on the `work_order`
+   root only — NULL for native rows and written only by CRM import/webhook
+   ingest, resolved to native identity once at that boundary, and never used as
+   a join key. The eleven field-evidence tables carry no CRM string; they join
+   solely through the `work_order.id` FK. The still-live
+   `reconcile_work_order_mirror` job keeps its persisted name because it is a
+   CRM sync job, not the name of authoritative storage, and retires with CRM.
 
    Unresolved writer boundary: native work-order creation, assignment, and
    assignment-queue mutation still run through dispatch CRUD, but no named SOT
@@ -1870,9 +1898,10 @@ fabrication removed from the NCC return (unresolved state was filed as
 one layer up. A suggester must also use a signal the presence check does not
 already exhaust, or it is dead code by construction.
 
-Not yet declared in `sot_relationships`: the registry requires every declared
-owner to have a real application caller, and nothing wires this module yet.
-The slice that adds the cleanup surface adds the `SOTService` entry with it.
+The registry declares this read-only policy as `customer.data_completeness`.
+The portal prompt consumes it through `customer.location_capture`; filing
+readiness consumes it directly. Neither caller may turn a derived gap or
+suggestion into a stored fact.
 
 ## AI Control Plane
 
@@ -1894,6 +1923,11 @@ state (`docs/designs/AI_SOT.md`).
 4. `ai.intake` (`AiIntakeConfig`) owns the per-scope, per-channel decision to
    run AI at all: enablement, confidence threshold, clarification limits,
    and escalation timing. This is AI's only decision.
+5. `ai.generation` (`app.services.ai.engine`) owns the bounded on-demand report
+   advisory path: advisor lookup, prompt assembly, and token budget. It accepts
+   a caller-owned report projection, does not query domain models, and persists
+   only by delegating to `ai.insights`. The default-off `ai.generation` control
+   gates the admin report surface.
 
 Rule: an insight never mutates domain state. Acting on a recommendation means
 calling the domain's declared owner (`support.tickets`,
@@ -1968,8 +2002,8 @@ usage/FUP emission gates, CRM/native transition flags, and GIS/network worker
 toggles. Numeric intervals, thresholds, profile IDs, account lists, and other
 tuning values remain in `settings_spec`.
 
-Decision-input migrations are domain slices, not global literal replacement.
-Each slice names the old source and new resolver, proves precedence and
+Decision-input migrations are domain-scoped, not global literal replacement.
+Each migration names the old source and new resolver, proves precedence and
 provenance, migrates the highest-risk callers, and removes or gates the old
 path. External projections follow the separate authority-MOVE procedure with
 shadow verification before cutover.
@@ -2122,8 +2156,8 @@ Rule: sales order, self-serve quote/signup, sales service, and Refer & Earn
 referral logic resolve through these owners. `web_sales`/`web_referrals` adapters
 and API/task callers request an outcome; the referral mirror is the sole DB and
 CRM data-access path for Refer & Earn, treated as a cache of CRM data, never a
-parallel authority. Quote-request and deposit surfaces branch on the Phase 3
-`quotes_native_write_enabled` flag: the native branch is owned by
+parallel authority. Quote-request and deposit surfaces branch on the explicit
+`quotes_native_write_enabled` cutover control: the native branch is owned by
 `sales.selfserve`, and its deposit "already paid" decision belongs to the paid
 deposit Invoice in the billing ledger — never to a mirror flag the CRM could
 stale-sync.

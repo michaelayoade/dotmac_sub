@@ -471,6 +471,54 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=True,
     ),
+    # Weekly NCC complaints digest email — default OFF. Sends a summary + a
+    # link to the filing workbook (Monday 08:00 in the celery timezone).
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_enabled",
+        env_var="NCC_REPORT_EMAIL_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=False,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_to",
+        env_var="NCC_REPORT_EMAIL_TO",
+        value_type=SettingValueType.string,
+        default="",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_subject",
+        env_var="NCC_REPORT_EMAIL_SUBJECT",
+        value_type=SettingValueType.string,
+        default="Weekly NCC Report",
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_lookback_days",
+        env_var="NCC_REPORT_EMAIL_LOOKBACK_DAYS",
+        value_type=SettingValueType.integer,
+        default=7,
+        min_value=1,
+    ),
+    SettingSpec(
+        domain=SettingDomain.notification,
+        key="ncc_report_email_timezone",
+        env_var="NCC_REPORT_EMAIL_TIMEZONE",
+        value_type=SettingValueType.string,
+        default="Africa/Lagos",
+    ),
+    SettingSpec(
+        # Service-owned idempotency cursor. This must be registered because
+        # resolve_value deliberately ignores unregistered database keys.
+        domain=SettingDomain.notification,
+        key="ncc_report_email_last_sent_local_date",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="NCC report email last sent date (managed)",
+    ),
     SettingSpec(
         # Hard gate: suppress customer notifications to terminal accounts
         # (canceled/disabled get nothing) and non-actionable mail to walled
@@ -1322,7 +1370,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="CRM Ticket Pull Interval (minutes)",
     ),
     SettingSpec(
-        # Phase 2 flip lever: gates the CRM work-order webhook branch, the
+        # Native work-order authority lever: gates the CRM webhook branch, the
         # work_order_mirror_reconcile beat, and the lazy mirror refresh
         # (crm.work_order_pull in the control registry). Default ON — inert
         # until the work-order SoT flip deliberately turns it off.
@@ -2457,7 +2505,17 @@ SETTINGS_SPECS: list[SettingSpec] = [
         allowed={"HIGH", "MEDIUM"},
         label="Sensitive Automation Minimum Identity Confidence",
     ),
-    # Referral program (Phase 3 §1.6 — migrated from the CRM subscriber
+    # How long "remind me later" hides the location-confirmation prompt
+    # (docs/designs/LOYALTY_AND_CAPTURE.md). Payment re-prompts regardless.
+    SettingSpec(
+        domain=SettingDomain.subscriber,
+        key="loyalty_capture_prompt_snooze_days",
+        env_var="LOYALTY_CAPTURE_PROMPT_SNOOZE_DAYS",
+        value_type=SettingValueType.integer,
+        default=30,
+        label="Location prompt snooze (days)",
+    ),
+    # Referral program ownership migrated from the CRM subscriber
     # domain; there is no program table, these five keys ARE the program).
     SettingSpec(
         domain=SettingDomain.subscriber,
@@ -3905,10 +3963,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=10,
         max_value=600,
     ),
-    # ── Self-serve installation quotes (Phase 3 §2.2, projects domain) ──
+    # ── Self-serve installation quotes (native projects ownership) ──
     # The nine CRM ``selfserve_quote_*`` keys migrated as-is, except the
     # price-book SKU keys which are re-keyed to sub catalog offers
-    # (``*_offer_id`` — inventory is Phase 5). Placeholder defaults carried
+    # (``*_offer_id`` — inventory is not native yet). Placeholder defaults carried
     # from the CRM — tune per market. Estimate = base_fee + max(0,
     # distance_to_nearest_FAP - free_radius) * fee_per_km; deposit =
     # estimate * deposit_percent. Feasibility radius bounds "covered".
@@ -3993,10 +4051,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
         ),
         min_value=0,
     ),
-    # Phase 3 write-flip flag (§4.2/§4.3 flag family, quotes vertical):
+    # Native quote-write ownership flag:
     # OFF = quote acceptance write-through to the CRM (mirror path); ON =
     # native accept (sales/selfserve.accept_with_deposit → native sales
-    # order pipeline). Default OFF until the coordinated Phase 3 write
+    # order pipeline). Default OFF until the coordinated native write
     # window; flipping back is the cheap rollback.
     SettingSpec(
         domain=SettingDomain.projects,
@@ -4004,9 +4062,9 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="QUOTES_NATIVE_WRITE_ENABLED",
         value_type=SettingValueType.boolean,
         default=False,
-        label="Quotes: native write path (Phase 3 flip flag)",
+        label="Quotes: native write path",
     ),
-    # Phase 3 sync-window flag (§4.2 step 4, PR 9): while CRM remains the
+    # CRM-to-native sync-window flag: while CRM remains the
     # writer for projects/quotes/referrals (backfill done, write flip not
     # yet), ON makes CRM webhooks ALSO apply thin status deltas to the
     # NATIVE tables and enables the crm_phase3_native_delta beat (the
@@ -4014,16 +4072,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     # DB), so the flip-day delta stays minutes. One flag for all verticals
     # because the delta importer is cross-vertical by FK order (§3.5) — a
     # per-vertical flag would misrepresent what actually runs. Default
-    # OFF; deleted with the whole adapter at the Phase 3 contract (PR 15).
+    # OFF; delete it when the CRM compatibility adapter is retired.
     SettingSpec(
         domain=SettingDomain.projects,
         key="crm_phase3_native_sync_enabled",
         env_var="CRM_PHASE3_NATIVE_SYNC_ENABLED",
         value_type=SettingValueType.boolean,
         default=False,
-        label="Phase 3: sync CRM changes into native tables (sync window)",
+        label="CRM compatibility: sync changes into native tables",
     ),
-    # Phase 3 read-flip flags (§4.2 flag family, one per vertical): OFF =
+    # Native read-ownership flags, one per vertical: OFF =
     # the read surfaces (/me/*, web customer portal, reseller views) keep
     # serving the CRM mirrors; ON = they serve the native services
     # (projects.portal_read_for_subscriber, sales.selfserve read,
@@ -4037,7 +4095,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="PROJECTS_NATIVE_READ_ENABLED",
         value_type=SettingValueType.boolean,
         default=False,
-        label="Projects: native read path (Phase 3 read-flip flag)",
+        label="Projects: native read path",
     ),
     SettingSpec(
         domain=SettingDomain.projects,
@@ -4045,7 +4103,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="QUOTES_NATIVE_READ_ENABLED",
         value_type=SettingValueType.boolean,
         default=False,
-        label="Quotes: native read path (Phase 3 read-flip flag)",
+        label="Quotes: native read path",
     ),
     SettingSpec(
         domain=SettingDomain.projects,
@@ -4053,7 +4111,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="REFERRALS_NATIVE_READ_ENABLED",
         value_type=SettingValueType.boolean,
         default=False,
-        label="Referrals: native read path (Phase 3 read-flip flag)",
+        label="Referrals: native read path",
     ),
     # §4.3 write flip, referrals vertical: OFF keeps POST /me/referrals and
     # the portal refer-a-friend form writing through the CRM mirror; ON
@@ -4066,7 +4124,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var="REFERRALS_NATIVE_WRITE_ENABLED",
         value_type=SettingValueType.boolean,
         default=False,
-        label="Referrals: native write path (Phase 3 flip flag)",
+        label="Referrals: native write path",
     ),
     # --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) ----------
     # Every value defaults OFF/empty: the transport is inert until an operator

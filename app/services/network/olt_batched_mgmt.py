@@ -164,7 +164,7 @@ def build_management_command_batch(
     ip_priority = _validate_priority(spec.ip_priority)
     frame, slot, port = fsp.split("/")
 
-    # Phase 1: Service-port (global config mode)
+    # Service-port stage (global config mode)
     if spec.has_service_port:
         if spec.mgmt_gem_index is None:
             raise ValueError(
@@ -189,7 +189,7 @@ def build_management_command_batch(
     else:
         mgmt_vlan_tag = None
 
-    # Phase 2: ONT configuration (interface mode)
+    # ONT-configuration stage (interface mode)
     interface_commands: list[tuple[str, str]] = []
 
     # IPHOST configuration

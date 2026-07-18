@@ -1,4 +1,4 @@
-"""Native projects API — Phase 3 §2.1/§2.4 port of CRM ``api/projects.py``.
+"""Native projects API ported from CRM ``api/projects.py``.
 
 Same paths and payloads as the CRM router; sub conventions applied:
 
@@ -6,8 +6,8 @@ Same paths and payloads as the CRM router; sub conventions applied:
   ``project:task:{read,write}`` (already seeded in sub RBAC).
 * The `filters` JSON param goes through sub's whitelisted dynamic-filter
   engine (`project_filters`) instead of CRM's `filter_engine`.
-* ``GET /projects/{id}/cost-summary`` is **not** ported — deferred to Phase 5
-  with timecost (§1.10: work_logs stay in CRM).
+* ``GET /projects/{id}/cost-summary`` is **not** ported; it depends on the
+  future native time-cost capability while work logs remain CRM-owned.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status

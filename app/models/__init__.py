@@ -333,6 +333,9 @@ from app.models.lifecycle import (  # noqa: F401
     LifecycleEventType,
     SubscriptionLifecycleEvent,
 )
+from app.models.location_capture_prompt import (  # noqa: F401
+    LocationCapturePromptState,
+)
 from app.models.mrr_snapshot import MrrSnapshot  # noqa: F401
 from app.models.network import (  # noqa: F401
     AuthorizationPreset,

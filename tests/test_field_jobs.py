@@ -136,7 +136,6 @@ def test_field_jobs_scope_by_crm_person_and_assignment_queue(db_session):
     db_session.add(
         WorkOrderAssignmentQueue(
             work_order_mirror_id=assigned_by_queue.id,
-            crm_work_order_id=assigned_by_queue.crm_work_order_id,
             assigned_technician_id=profile.id,
         )
     )

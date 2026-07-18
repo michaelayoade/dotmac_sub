@@ -1,22 +1,24 @@
 """Admin reporting web routes."""
 
 import csv
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from html import escape
 from io import StringIO
 from urllib.parse import quote_plus
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.catalog import SubscriptionStatus
 from app.models.team_inbox import InboxConversation, InboxConversationStatus
+from app.services import ncc_complaints_report as ncc_complaints_service
+from app.services import ncc_regulatory_pack as ncc_pack_service
 from app.services import ncc_subscriber_report as ncc_report_service
-from app.services import team_inbox_assignment, team_inbox_outbound
+from app.services import ncc_workbook, team_inbox_assignment, team_inbox_outbound
 from app.services import team_inbox_metrics as team_inbox_metrics_service
 from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_reports as web_reports_service
@@ -163,6 +165,16 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "url": "/admin/reports/ncc-subscribers",
                 "description": "Active subscriptions by type, connection, speed, State & region",
             },
+            {
+                "name": "NCC Complaints (Quarterly)",
+                "url": "/admin/reports/ncc-complaints",
+                "description": "Complaint records, categories, SLA and the filing workbook",
+            },
+            {
+                "name": "NCC Regulatory Pack",
+                "url": "/admin/reports/ncc-pack",
+                "description": "All three NCC returns assembled into one filing view",
+            },
         ],
     },
 ]
@@ -192,7 +204,7 @@ def _parse_date_start(value: str | None) -> datetime | None:
         return None
     try:
         return datetime.combine(datetime.fromisoformat(value).date(), time.min, UTC)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 
@@ -201,7 +213,7 @@ def _parse_date_end(value: str | None) -> datetime | None:
         return None
     try:
         return datetime.combine(datetime.fromisoformat(value).date(), time.max, UTC)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 
@@ -1416,4 +1428,348 @@ def reports_ncc_subscribers_export(
         headers={
             "Content-Disposition": f"attachment; filename=ncc-subscribers-{stamp}.csv"
         },
+    )
+
+
+# ── NCC quarterly Complaints return (①) ──────────────────────────────────────
+def _ncc_complaints_window(
+    date_from: str | None, date_to: str | None
+) -> tuple[datetime, datetime]:
+    """Bound the complaints window. Defaults to the trailing 90 days — the
+    quarterly cadence the return is filed on — anchored on ``created_at``."""
+    end = _parse_date_end(date_to) or datetime.now(UTC)
+    start = _parse_date_start(date_from) or (end - timedelta(days=90))
+    if end < start:
+        start, end = end, start
+    return start, end
+
+
+@router.get(
+    "/ncc-complaints",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_complaints(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    start, end = _ncc_complaints_window(date_from, date_to)
+    report = ncc_complaints_service.build_report(db, start=start, end=end)
+    # Surface, per row, whether it is filable — the workbook's own validator
+    # is the authority, so the officer sees exactly what CRM's export would.
+    rows = []
+    for record in ncc_workbook.export_rows(report["records"]):
+        status = ncc_workbook.validation_status(record)
+        rows.append(
+            {"record": record, "validation": status, "ok": status.startswith("[OK]")}
+        )
+    not_filable = sum(1 for row in rows if not row["ok"])
+    context = {
+        "request": request,
+        "active_page": "reports-ncc-complaints",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "report": report,
+        "columns": report["columns"],
+        "rows": rows,
+        "not_filable": not_filable,
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+    }
+    return templates.TemplateResponse("admin/reports/ncc_complaints.html", context)
+
+
+@router.get(
+    "/ncc-complaints/export",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_complaints_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    start, end = _ncc_complaints_window(date_from, date_to)
+    report = ncc_complaints_service.build_report(db, start=start, end=end)
+    rows = ncc_workbook.export_rows(report["records"])
+    content = ncc_workbook.build_workbook(rows, report["columns"])
+    filename = ncc_workbook.export_filename(end)
+    return Response(
+        content,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+# ── NCC Regulatory Pack (① + ② + ③) ──────────────────────────────────────────
+def _ncc_pack_window(
+    date_from: str | None, date_to: str | None
+) -> tuple[datetime, datetime]:
+    return _ncc_complaints_window(date_from, date_to)
+
+
+@router.get(
+    "/ncc-regulatory-pack",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_regulatory_pack(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    as_of: str | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """The full pack as JSON. Sections degrade to ``available: false`` when an
+    upstream (sub/erp) is unreachable — the pack never fabricates a section."""
+    start, end = _ncc_pack_window(date_from, date_to)
+    pack = ncc_pack_service.build_regulatory_pack(
+        db, start_dt=start, end_dt=end, as_of=as_of, year=year
+    )
+    return JSONResponse(pack)
+
+
+@router.get(
+    "/ncc-pack",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_pack_page(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    as_of: str | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    start, end = _ncc_pack_window(date_from, date_to)
+    pack = ncc_pack_service.build_regulatory_pack(
+        db, start_dt=start, end_dt=end, as_of=as_of, year=year
+    )
+    context = {
+        "request": request,
+        "active_page": "reports-ncc-pack",
+        "active_menu": "reports",
+        "current_user": get_current_user(request),
+        "sidebar_stats": get_sidebar_stats(db),
+        "pack": pack,
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+        "as_of": as_of or "",
+        "year": year or "",
+    }
+    return templates.TemplateResponse("admin/reports/ncc_pack.html", context)
+
+
+@router.get(
+    "/ncc-regulatory-pack.pdf",
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_ncc_regulatory_pack_pdf(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    as_of: str | None = None,
+    year: int | None = None,
+    db: Session = Depends(get_db),
+):
+    start, end = _ncc_pack_window(date_from, date_to)
+    pack = ncc_pack_service.build_regulatory_pack(
+        db, start_dt=start, end_dt=end, as_of=as_of, year=year
+    )
+    html_content = _render_ncc_pack_html(pack, start, end)
+    try:
+        from app.services.billing_invoice_pdf import _ensure_weasyprint_pydyf_compat
+
+        _ensure_weasyprint_pydyf_compat()
+        from weasyprint import HTML
+
+        pdf_bytes = HTML(string=html_content).write_pdf()
+        content_type = "application/pdf"
+        extension = "pdf"
+        content: bytes = pdf_bytes
+    except Exception:
+        # No silent fabrication: if PDF rendering is unavailable, hand back the
+        # same content as HTML rather than an empty or fake document.
+        content = html_content.encode("utf-8")
+        content_type = "text/html; charset=utf-8"
+        extension = "html"
+    filename = ncc_workbook.regulatory_pack_filename(start, end, extension)
+    return Response(
+        content,
+        media_type=content_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _render_ncc_pack_html(pack: dict, start: datetime, end: datetime) -> str:
+    meta = pack.get("meta", {})
+    sources = meta.get("sources", {})
+
+    def _section_row(label: str, section: dict) -> str:
+        available = section.get("available", False)
+        status = "available" if available else "unavailable"
+        detail = "" if available else escape(str(section.get("error") or ""))
+        return f"<tr><td>{escape(label)}</td><td>{status}</td><td>{detail}</td></tr>"
+
+    complete = "COMPLETE" if meta.get("complete") else "INCOMPLETE — see sections below"
+    rows = "".join(
+        [
+            _section_row("① Quarterly complaints", pack.get("complaints", {})),
+            _section_row("② Quarterly subscribers", pack.get("subscribers", {})),
+            _section_row("③ Annual financials", pack.get("financials", {})),
+            _section_row("③ Annual staff", pack.get("staff", {})),
+        ]
+    )
+    return (
+        "<html><head><meta charset='utf-8'>"
+        "<style>body{font-family:sans-serif}table{border-collapse:collapse}"
+        "td,th{border:1px solid #999;padding:6px 10px;text-align:left}</style>"
+        "</head><body>"
+        "<h1>NCC Regulatory Pack</h1>"
+        f"<p>Reporting window: {start:%Y-%m-%d} — {end:%Y-%m-%d}</p>"
+        f"<p>Status: <strong>{complete}</strong></p>"
+        f"<p>Sources reachable: {escape(str(sources))}</p>"
+        "<table><tr><th>Section</th><th>Status</th><th>Detail</th></tr>"
+        f"{rows}</table>"
+        "</body></html>"
+    )
+
+
+@router.post(
+    "/ncc-email-settings",
+    dependencies=[Depends(require_permission("notification:write"))],
+)
+def reports_ncc_email_settings(
+    request: Request,
+    enabled: bool = Form(default=False),
+    recipient: str = Form(default=""),
+    subject: str = Form(default=""),
+    lookback_days: int = Form(default=7),
+    db: Session = Depends(get_db),
+):
+    """Save the weekly NCC digest email settings (notification domain)."""
+    from app.schemas.settings import DomainSettingUpdate
+    from app.services.domain_settings import notification_settings
+
+    def _save_text(key: str, value: str) -> None:
+        notification_settings.upsert_by_key(
+            db, key, DomainSettingUpdate(value_text=value)
+        )
+
+    notification_settings.upsert_by_key(
+        db,
+        "ncc_report_email_enabled",
+        DomainSettingUpdate(value_json=bool(enabled)),
+    )
+    _save_text("ncc_report_email_to", recipient.strip())
+    _save_text("ncc_report_email_subject", subject.strip() or "Weekly NCC Report")
+    notification_settings.upsert_by_key(
+        db,
+        "ncc_report_email_lookback_days",
+        DomainSettingUpdate(value_json=max(int(lookback_days), 1)),
+    )
+    return RedirectResponse(
+        url="/admin/reports/ncc-complaints?saved=1", status_code=303
+    )
+
+
+# ── AI: on-demand insight for an owned report projection ─────────────────────
+# User-driven: an operator clicks "Get AI insight" on a report page and the
+# advisor for that report set runs against the OWNER's projection. The engine
+# never queries a domain model — the route fetches the projection and hands it
+# in — so the source-of-truth boundary holds by construction.
+_REPORT_ADVISORS: dict[str, str] = {
+    # advisor_key -> the report page it advises on
+    "ticket_sla_advisor": "ticket-sla",
+}
+
+
+def _fetch_report_for_advisor(
+    db: Session, advisor_key: str, date_from: str | None, date_to: str | None
+) -> tuple[dict, str, str | None]:
+    """Fetch the owned projection an advisor reads. Returns
+    (report, entity_type, entity_id)."""
+    if advisor_key == "ticket_sla_advisor":
+        start_at = _parse_date_start(date_from)
+        end_at = _parse_date_end(date_to)
+        report = ticket_sla_reports_service.summary(db, start_at, end_at)
+        return report, "report:ticket_sla", None
+    raise KeyError(advisor_key)
+
+
+@router.post(
+    "/insight/{advisor_key}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
+def reports_generate_insight(
+    request: Request,
+    advisor_key: str,
+    date_from: str | None = Form(default=None),
+    date_to: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    """Generate an AI insight for the given report advisor, on demand.
+
+    Renders the insight partial. When AI generation is disabled or the advisor
+    is off, renders a graceful message — never a 500."""
+    from app.services.ai.engine import AIEngineError, intelligence_engine
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    # get_current_user returns a dict; be tolerant of an object too, and never
+    # let a non-UUID actor id 500 the route — an insight with no recorded
+    # actor is fine, a crash is not.
+    _raw_actor = (
+        current_user.get("id")
+        if isinstance(current_user, dict)
+        else getattr(current_user, "id", None)
+    )
+    actor_id: str | None = None
+    if _raw_actor:
+        try:
+            actor_id = str(UUID(str(_raw_actor)))
+        except (ValueError, TypeError):
+            actor_id = None
+
+    try:
+        report, entity_type, entity_id = _fetch_report_for_advisor(
+            db, advisor_key, date_from, date_to
+        )
+    except KeyError:
+        return templates.TemplateResponse(
+            request,
+            "admin/reports/_insight.html",
+            {"error": "No advisor for this report."},
+            status_code=404,
+        )
+
+    try:
+        insight = intelligence_engine.advise(
+            db,
+            advisor_key=advisor_key,
+            report=report,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            trigger="manual",
+            triggered_by_system_user_id=actor_id,
+        )
+    except AIEngineError as exc:
+        return templates.TemplateResponse(
+            request,
+            "admin/reports/_insight.html",
+            {"error": str(exc), "disabled": True},
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/reports/_insight.html",
+        {"insight": insight},
     )

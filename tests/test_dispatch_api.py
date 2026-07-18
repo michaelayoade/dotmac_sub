@@ -158,7 +158,8 @@ def test_dispatch_api_native_work_order_header_crud(db_session):
         },
     )
     assert created.status_code == 201
-    assert created.json()["crm_work_order_id"] == "sub-wo-api-1"
+    assert created.json()["public_id"] == "sub-wo-api-1"
+    assert created.json()["crm_work_order_id"] is None
     assert created.json()["metadata"]["native_source"] == "sub"
 
     patched = client.patch(
@@ -173,9 +174,7 @@ def test_dispatch_api_native_work_order_header_crud(db_session):
         f"/api/v1/dispatch/work-orders?subscriber_id={sub.id}&status=dispatched"
     )
     assert listed.status_code == 200
-    assert [item["crm_work_order_id"] for item in listed.json()["items"]] == [
-        "sub-wo-api-1"
-    ]
+    assert [item["public_id"] for item in listed.json()["items"]] == ["sub-wo-api-1"]
 
     technician = client.post(
         "/api/v1/dispatch/technicians",

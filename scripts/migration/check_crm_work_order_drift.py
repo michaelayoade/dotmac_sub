@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Phase 2 work-order drift checker — flip gate (12-phase2-completion.md §C2).
+"""CRM work-order drift checker for the post-native Sub work-order table.
 
-Read-only comparison of CRM ``work_orders`` against sub ``work_order_mirror``
-joined on ``work_order_mirror.crm_work_order_id`` (03-drift-report /
+Read-only comparison of CRM ``work_orders`` against Sub ``work_order`` joined
+on the root-only provenance reference ``work_order.crm_work_order_id`` (03-drift-report /
 check_crm_ticket_drift mold):
 
   * ``crm_missing_in_sub`` — active, OPEN (non-terminal) CRM work orders with
     no mirror row. Completed/canceled CRM work orders are archive posture
     (never required in the mirror) and don't gate.
-  * ``sub_orphan_mirror_rows`` — CRM-origin mirror rows (id not
-    ``sub-``-prefixed) whose work order no longer exists in CRM at all.
-    Native rows (``sub-`` ids) are sub-born and never checked against CRM.
+  * ``sub_orphan_mirror_rows`` — CRM-origin rows whose work order no longer
+    exists in CRM at all. The report key is retained for compatibility. Native
+    rows have NULL CRM provenance and are never checked against CRM.
   * ``field_drift`` — per-work-order status + subscriber-link diffs.
     **Native-write tolerance**: rows the sub field services own
     (``metadata.native_field_source == 'sub'``) keep sub's status by design —
@@ -66,11 +66,10 @@ DEFAULT_UPDATED_WITHIN_MINUTES = 30
 # Shared 1:1 vocabulary (CRM WorkOrderStatus == mirror status strings).
 TERMINAL_STATUSES = frozenset({"completed", "canceled"})
 
-NATIVE_PREFIX = "sub-"
-
 
 def is_native_row(crm_work_order_id: str | None) -> bool:
-    return str(crm_work_order_id or "").startswith(NATIVE_PREFIX)
+    """Native authority is the absence of a CRM provenance reference."""
+    return crm_work_order_id is None
 
 
 def is_open_status(status: str | None) -> bool:
@@ -114,17 +113,18 @@ def _crm_work_orders(crm: Connection) -> list[dict[str, Any]]:
     )
 
 
-def _sub_mirror_rows(sub: Connection) -> list[dict[str, Any]]:
+def _sub_work_order_rows(sub: Connection) -> list[dict[str, Any]]:
     return _rows(
         sub,
         """
-        SELECT crm_work_order_id,
+        SELECT public_id,
+               crm_work_order_id,
                subscriber_id::text AS subscriber_id,
                status,
                is_active,
                metadata->>'native_field_source' AS native_field_source,
                updated_at
-        FROM work_order_mirror
+        FROM work_order
         """,
     )
 
@@ -140,10 +140,14 @@ def run_drift_check(
     now = now or datetime.now(UTC)
 
     crm_work_orders = _crm_work_orders(crm)
-    mirror_rows = _sub_mirror_rows(sub)
+    work_order_rows = _sub_work_order_rows(sub)
     subscriber_map = _load_subscriber_map(sub)
 
-    mirror_by_crm_id = {str(r["crm_work_order_id"]): r for r in mirror_rows}
+    work_order_by_crm_id = {
+        str(row["crm_work_order_id"]): row
+        for row in work_order_rows
+        if row.get("crm_work_order_id") is not None
+    }
     crm_ids = {str(wo["id"]) for wo in crm_work_orders}
 
     classes: dict[str, list[dict[str, Any]]] = {
@@ -168,7 +172,7 @@ def run_drift_check(
         in_window = in_live_window(
             crm_updated_at, now=now, window_minutes=window_minutes
         )
-        mirror = mirror_by_crm_id.get(crm_wo_id)
+        mirror = work_order_by_crm_id.get(crm_wo_id)
 
         crm_subscriber_id = _uuid_or_none(wo.get("subscriber_id"))
         mapped_subscriber = (
@@ -248,8 +252,8 @@ def run_drift_check(
                         "field:subscriber_id"
                     )
 
-    for crm_wo_id, mirror in mirror_by_crm_id.items():
-        if is_native_row(crm_wo_id) or crm_wo_id in crm_ids:
+    for crm_wo_id, mirror in work_order_by_crm_id.items():
+        if crm_wo_id in crm_ids:
             continue
         classes["sub_orphan_mirror_rows"].append(
             {
@@ -276,14 +280,16 @@ def run_drift_check(
             1 for row in classes["field_drift"] if not row["in_live_window"]
         ),
     }
-    native_rows = sum(1 for r in mirror_by_crm_id if is_native_row(r))
+    native_rows = sum(
+        1 for row in work_order_rows if is_native_row(row.get("crm_work_order_id"))
+    )
     summary = {
         "checked_at": _format_datetime(now),
         "updated_within_minutes": window_minutes,
         "totals": {
             "crm_work_orders": len(crm_work_orders),
             "crm_open_active": len(open_active_crm),
-            "sub_mirror_rows": len(mirror_rows),
+            "sub_work_order_rows": len(work_order_rows),
             "sub_native_rows": native_rows,
         },
         "classes": {

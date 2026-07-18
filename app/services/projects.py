@@ -1,37 +1,37 @@
-"""Native projects engine — Phase 3 §2.1 port of CRM ``services/projects.py``.
+"""Native project-domain service adapted from CRM's project contract.
 
-COPY-with-edits per the design doc (unification/20-phase3-projects-sales.md):
+Compatibility and ownership decisions:
 
-* Operates on sub's native ``app/models/project.py`` family. Statuses,
-  priorities and project types are **String columns + app enums** (Phase 1
-  convention) — comparisons and writes use ``Enum.value`` strings.
-* FK-clash rules (§1.8): customer party is ``subscribers.id``; staff person
+* Operates on Sub's native ``app/models/project.py`` family. Statuses,
+  priorities and project types are string columns plus application enums;
+  comparisons and writes use ``Enum.value`` strings.
+* Customer party is ``subscribers.id``; staff person
   ids are plain UUIDs carried verbatim (CRM legacy ids stay valid; new
   assignments use sub principals = ``SystemUser`` ids, which is also how
   display/emails resolve — a legacy id that doesn't resolve simply skips the
   notification).
-* Task↔ticket linkage is the real ``support_tickets`` FK (Phase 1 result);
-  ``project_tasks.work_order_id`` stays a plain UUID validated against
-  ``work_order_mirror.crm_work_order_id`` until the Phase 2 work-order flip
-  (§1.10, risk #5). The ``work_links`` WO-origin row is deferred with it.
-* **Kept verbatim**: the fiber-stage engine (``FIBER_INSTALLATION_STAGE_ORDER``,
+* Task-to-ticket linkage is the real ``support_tickets`` foreign key.
+  Imported ``project_tasks.work_order_id`` remains a plain UUID validated
+  against ``work_order.public_id``; native ``sub-`` links require a later
+  project-task contract migration. The `work_links` work-order origin remains
+  deferred with that contract.
+* The fiber-stage engine (``FIBER_INSTALLATION_STAGE_ORDER``,
   ``_compute_fiber_stage_due_at``, ``_seed_fiber_installation_tasks``),
   template instantiation (``replace_project_tasks`` + ``_calculate_task_dates``)
-  and ``build_portal_project_payload`` (§2.5 read contract).
-* **Deleted**: ``_emit_project_to_sub`` / ``_project_subscriber_id`` (the CRM→sub
-  mirror glue). The mirror's "Installation complete" push side-effect moves
-  into ``Projects.update`` on completion (§2.1).
+  and ``build_portal_project_payload`` retain the established read contract.
+* Retired CRM-to-Sub mirror emitters are absent. The "Installation complete"
+  consequence is owned by ``Projects.update``.
 * Events: sub has no ``project.*`` ``EventType`` members — lifecycle events are
   emitted as ``EventType.custom`` with ``payload["name"]`` set to the CRM event
   name (``project.created|updated|completed|canceled``,
   ``project_task.completed|updated``), the same pattern the support service
-  uses. These names are the Phase 4 automation contract (risk #13).
+  uses. These stable names are the automation contract.
 * Settings: projects-domain keys keep their CRM names
   (``default_project_status/priority``, ``default_task_status/priority``,
   ``region_pm_assignments``); numbering keys (``project_number_*``,
   ``project_task_number_*``) live under ``SettingDomain.projects`` (sub has no
   ``numbering`` domain). The auto-assignment gate keeps its shared name
-  ``ticket_auto_assignment_enabled`` in ``SettingDomain.workflow`` (§2.1).
+  ``ticket_auto_assignment_enabled`` in ``SettingDomain.workflow``.
 """
 
 from __future__ import annotations
@@ -142,7 +142,7 @@ _PROJECT_TERMINAL_STATUSES = {
 def _model_data(data: dict[str, Any]) -> dict[str, Any]:
     """Coerce enum members from pydantic dumps to their string values.
 
-    Sub stores CRM's PG enums as String columns (Phase 1 convention) while the
+    Sub stores CRM's PostgreSQL enums as string columns while the
     API schemas keep the enum types — this is the seam between the two.
     """
     return {
@@ -238,9 +238,7 @@ def _lead_subscriber(db: Session, project: Project) -> Subscriber | None:
 
 
 def _resolve_customer_email(db: Session, project: Project) -> str | None:
-    """CRM resolved person emails via subscriber/lead persons; sub's customer
-    party is the Subscriber itself (§1.8) so the cascade collapses to
-    subscriber → lead.subscriber."""
+    """Resolve the customer party from Subscriber, then lead subscriber."""
     email = _subscriber_email(project.subscriber)
     if email:
         return email
@@ -337,7 +335,7 @@ def _compute_fiber_stage_due_at(
     return (task.created_at or baseline) + timedelta(hours=24)
 
 
-# ── SLA clocks (Phase 1 tables; entity types project / project_task) ─────────
+# ── SLA clocks (entity types project / project_task) ─────────────────────────
 
 
 def _ensure_project_task_sla_policy(db: Session) -> SlaPolicy:
@@ -696,10 +694,11 @@ def _notify_customer_project_completed(db: Session, project: Project) -> None:
 
 
 def _push_installation_complete(db: Session, project: Project) -> None:
-    """Customer push on completion — moved here from the mirror's webhook
-    side-effect (projects_mirror.apply_webhook, §2.1). ``data.project_id``
-    stays the same UUID the mirror served (§3.4), so mobile deep links keep
-    resolving. Best-effort: a push failure never breaks the update."""
+    """Project-owned customer push on completion.
+
+    ``data.project_id`` retains the established UUID contract so mobile deep
+    links keep resolving. A push failure never breaks the project update.
+    """
     if not project.subscriber_id:
         return
     try:
@@ -885,8 +884,7 @@ def _notify_project_roles_created_in_app(db: Session, project: Project) -> None:
 
 
 def _ensure_staff_uuid(person_id: str) -> None:
-    """Staff person ids are plain UUIDs with no FK (§1.8): CRM legacy ids and
-    sub principals are both valid values, so only the format is enforced."""
+    """Validate an unfederated staff UUID carried from CRM or Sub identity."""
     try:
         coerce_uuid(str(person_id))
     except (ValueError, TypeError) as exc:
@@ -926,10 +924,9 @@ def _ensure_work_order(db: Session, work_order_id) -> None:
 
 
 def _link_work_order_origin(db: Session, task: ProjectTask) -> None:
-    """Deferred: the CRM recorded a ``work_links`` row (contract
-    ``project_task.linked_work_order``) for task↔WO links. WO-typed work_links
-    rows wait for the Phase 2 work-order flip (§1.10/§3.5 step 7) — until then
-    ``project_tasks.work_order_id`` itself carries the association."""
+    """Deferred owner boundary for the ``project_task.linked_work_order``
+    contract. Until the shared work-link schema supports native work-order
+    identity, ``project_tasks.work_order_id`` carries the imported association."""
     del db, task
 
 
@@ -1147,8 +1144,8 @@ def _notify_project_task_assigned(
 def _maybe_auto_assign_project(db: Session, project: Project):
     """Apply workflow rule-based project assignments when enabled.
 
-    Gate keeps its shared CRM name (`ticket_auto_assignment_enabled`,
-    SettingDomain.workflow, §2.1)."""
+    The shared workflow control keeps its established external key
+    ``ticket_auto_assignment_enabled``."""
     enabled = _read_bool_setting(
         db, SettingDomain.workflow, "ticket_auto_assignment_enabled", False
     )
@@ -1192,7 +1189,7 @@ def _maybe_auto_assign_project(db: Session, project: Project):
     return results
 
 
-# ── lifecycle events (risk #13: native event rows from day one) ──────────────
+# ── lifecycle events ─────────────────────────────────────────────────────────
 
 
 def _emit_project_event(
@@ -1205,8 +1202,8 @@ def _emit_project_event(
 
     Sub's EventType has no project members — like the support service, the
     CRM event name (``project.created`` …) travels in ``payload["name"]``
-    (the project's display name is ``payload["project_name"]``). Documented
-    Phase 4 automation contract (risk #13)."""
+    (the project's display name is ``payload["project_name"]``). These stable
+    event names form the automation contract."""
     emit_event(
         db,
         EventType.custom,
@@ -1215,7 +1212,7 @@ def _emit_project_event(
     )
 
 
-# ── customer installation tracker (read contract, §2.5) ──────────────────────
+# ── customer installation tracker read contract ──────────────────────────────
 
 
 def _portal_stage_status(task_status: str | None) -> str:
@@ -1232,10 +1229,10 @@ def _portal_stage_status(task_status: str | None) -> str:
 def build_portal_project_payload(project: Project) -> dict:
     """Customer-facing project view: stage timeline + progress %.
 
-    Ported verbatim (§2.1/§2.5): this is the exact shape the CRM served and
-    the ``project_mirror`` cached — item keys, ``progress_pct`` int, stage
+    This retains the established CRM and ``project_mirror`` response shape:
+    item keys, integer ``progress_pct``, stage
     ``status ∈ pending|in_progress|done`` and ``id`` = project UUID (the same
-    value the mirror exposed as ``crm_project_id``, §3.4). Fiber installs use
+    value the mirror exposed as ``crm_project_id``). Fiber installs use
     the canonical 6-stage order; other project types fall back to a generic
     per-task timeline.
     """
@@ -1318,21 +1315,22 @@ _PORTAL_INACTIVE_STATUSES = ("completed", "canceled")
 
 
 def native_read_enabled(db: Session) -> bool:
-    """Phase 3 read-flip flag (§4.2): native project reads vs the CRM mirror.
+    """Explicit native-project read control.
 
     OFF (default) — ``/me/projects``, the web tracker and the reseller views
     keep serving ``projects_mirror``; ON — they serve the native ``projects``
-    table via ``portal_read_for_subscriber`` / ``Projects.portal_list``.
+    table via ``portal_read_for_subscriber`` / ``Projects.portal_list``. The
+    cutover requires verified parity and an approved authority decision.
     """
     return control_registry.is_enabled(db, "projects.native_read")
 
 
 def portal_read_for_subscriber(db: Session, subscriber_id: str) -> dict:
     """Native ``GET /me/projects`` / web-tracker payload — the exact response
-    shell ``projects_mirror.read_for_subscriber`` served (§2.5):
+    shell ``projects_mirror.read_for_subscriber`` served:
     ``{projects[], total, active}`` with ``build_portal_project_payload``
-    items. PR8 repoints the customer read surfaces here behind
-    ``projects_native_read_enabled``."""
+    items. Customer reads use this owner only when the explicit native-read
+    control is enabled."""
     items = Projects.portal_list(db, subscriber_id)
     active = sum(1 for i in items if i["status"] not in _PORTAL_INACTIVE_STATUSES)
     return {"projects": items, "total": len(items), "active": active}
@@ -1357,8 +1355,8 @@ class Projects(ListResponseMixin):
     def _get_region_pm_assignments(
         db: Session, region: str | None
     ) -> tuple[str | None, str | None]:
-        """Look up the PM person_id for the given region from settings
-        (projects-domain ``region_pm_assignments``, §2.1).
+        """Look up the PM person_id for the given region from the
+        projects-domain ``region_pm_assignments`` setting.
 
         Project SPC assignment is intentionally disabled in the project flow.
         """
@@ -1403,8 +1401,8 @@ class Projects(ListResponseMixin):
     def portal_list(db: Session, subscriber_ids: list[str] | str) -> list[dict]:
         """Customer-facing project list (stage timeline + progress %) for the
         installation tracker. Scoped to one subscriber, or to a set of
-        subscribers (a reseller's customer subtree). PR8 repoints the
-        ``/me/projects`` + reseller read surfaces onto this."""
+        subscribers in a reseller's customer subtree. Native customer and
+        reseller reads consume this projection after the approved cutover."""
         if isinstance(subscriber_ids, str):
             subscriber_ids = [subscriber_ids]
         uuids = [coerce_uuid(str(s)) for s in subscriber_ids]
@@ -1859,7 +1857,7 @@ class Projects(ListResponseMixin):
                 },
             )
             _notify_customer_project_completed(db, project)
-            # Mirror push side-effect relocated here (§2.1).
+            # Completion consequences are owned by the project lifecycle.
             _push_installation_complete(db, project)
         elif (
             new_status == ProjectStatus.canceled.value

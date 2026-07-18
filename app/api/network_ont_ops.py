@@ -57,7 +57,7 @@ def _action_response(result: ActionResult) -> OntActionResponse:
     )
 
 
-# ── Phase 1: ONT Remote Actions ───────────────────────────────────────
+# ── ONT remote actions ────────────────────────────────────────────────
 
 
 @router.post(
@@ -213,7 +213,7 @@ def firmware_upgrade(
     return _action_response(result)
 
 
-# ── Phase 4: ONT Enriched Reads ───────────────────────────────────────
+# ── ONT enriched reads ────────────────────────────────────────────────
 
 
 @router.get(
@@ -285,7 +285,7 @@ def get_ont_vlan_chain(ont_id: str, db: Session = Depends(get_db)) -> dict[str, 
     return ont_read.get_vlan_chain_status(db, ont_id)
 
 
-# ── Phase 5: ONT Write Operations ─────────────────────────────────────
+# ── ONT write operations ──────────────────────────────────────────────
 
 
 @router.put(
@@ -379,7 +379,7 @@ def update_ont_external_id(
     return _action_response(result)
 
 
-# ── Phase 6: ONT Feature Toggles ──────────────────────────────────────
+# ── ONT feature toggles ───────────────────────────────────────────────
 
 
 @router.post(
@@ -524,7 +524,7 @@ def update_ont_web_credentials(
     return _action_response(result)
 
 
-# ── Phase 7: Bulk Operations ──────────────────────────────────────────
+# ── Bulk ONT operations ───────────────────────────────────────────────
 
 
 ALLOWED_BULK_ACTIONS = {

@@ -1,14 +1,14 @@
-"""B2B organization party model ported from the CRM (Phase 3, doc 02 §3.3).
+"""B2B organization party model ported from CRM.
 
 CRM shape carried verbatim (``dotmac_crm/app/models/subscriber.py`` Organization
 + ``organization_membership.py``) with the sub conventions applied:
 
-* PG enums become String columns + app-level enums (Phase 1 convention).
+* PG enums become String columns plus app-level enums, matching Sub convention.
 * CRM ``people.id`` FKs (``primary_contact_id``, ``owner_id``,
   ``organization_memberships.person_id``) become plain UUIDs — sub has no
-  ``people`` table. Customer-party persons resolve through the Phase 3 party
+  ``people`` table. Customer-party persons resolve through the party-identity
   backfill map (``subscribers.metadata->>'crm_person_id'``); staff persons
-  resolve for display via the Phase 1 staff map.
+  resolve for display via the CRM-to-Sub staff identity map.
 * ``parent_id`` stays a real self-FK (hierarchy for enterprise accounts).
 """
 
@@ -106,7 +106,7 @@ class Organization(Base):
     primary_contact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     # Account owner (sales rep/account manager). Staff person UUID carried
-    # verbatim; display resolves via the Phase 1 staff map.
+    # verbatim; display resolves via the CRM-to-Sub staff identity map.
     owner_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     # B2B CRM fields
@@ -166,7 +166,7 @@ class Organization(Base):
 class OrganizationMembership(Base):
     """Explicit access link between a person and an Organization.
 
-    Ported verbatim from CRM (Phase 3 §1.9). ``person_id`` is the CRM person
+    Ported verbatim from CRM. ``person_id`` is the CRM person
     UUID carried as a plain UUID — it resolves to a sub subscriber through the
     party backfill map. Enables one person (one login) to manage multiple
     Organizations (e.g. a reseller managing many child customer orgs).

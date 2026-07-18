@@ -156,7 +156,7 @@ def warm_topology_status(
             # Bridge the transition into an uptime Alert interval so the SLA
             # report has real downtime to merge (flag-gated, additive — never
             # alters live_status). Skip devices with no monitoring path: their
-            # "down" is a blind spot, not real downtime (Phase 3). See
+            # "down" is a blind spot, not real downtime. See
             # availability_log / monitoring_coverage / INFRASTRUCTURE_SLA.
             if sla_logging and (
                 coverage is None or coverage.covers(getattr(n, "mgmt_ip", None))

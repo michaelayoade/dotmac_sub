@@ -3,10 +3,10 @@
 Ported from ``dotmac_crm/app/services/dotmac_erp/client.py`` for the ERP re-home:
 sub becomes an ``X-API-Key`` client of ERP's neutral ``/sync/sub/*`` API.
 
-PR 1 ships the reusable substrate only: a generic ``post``/``get`` surface plus
+This module owns the reusable substrate: a generic ``post``/``get`` surface plus
 the ``DotMacERPTransientError`` / permanent-error split the outbox keys its
 retry-vs-dead-letter decision off. Flow-specific methods (expense claims, etc.)
-land with their own PRs. Config (base URL, token, timeout, retries) is resolved
+belong to their owning flow modules. Config (base URL, token, timeout, retries) is resolved
 from the ``integration`` settings domain via ``build_erp_client``.
 """
 
@@ -254,7 +254,7 @@ class DotMacERPClient:
             handler_kwargs={"expected_status_codes": expected_status_codes},
         )
 
-    # ============ Generic surface (PR 1) ============
+    # ============ Generic transport surface ============
 
     def post(
         self,
@@ -293,7 +293,7 @@ class DotMacERPClient:
         )
         return result if isinstance(result, dict) else {}
 
-    # ============ Expense claim surface (PR 2) ============
+    # ============ Expense claim surface ============
     #
     # Thin flow-specific wrappers over the generic post/get, mirroring the paths
     # and shapes of ``dotmac_crm/app/services/dotmac_erp/client.py`` verbatim so
@@ -341,7 +341,7 @@ class DotMacERPClient:
         items = result.get("items")
         return items if isinstance(items, list) else []
 
-    # ============ Material request surface (PR 3) ============
+    # ============ Material request surface ============
     #
     # Thin flow-specific wrappers over the generic post/get, mirroring the paths
     # and shapes of ``dotmac_crm/app/services/dotmac_erp/client.py`` verbatim so

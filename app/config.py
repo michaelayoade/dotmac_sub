@@ -240,7 +240,7 @@ class Settings:
     # availability transitions as uptime Alert intervals (down->open,
     # recovered->resolve). This is what populates the SLA/uptime report —
     # without it, no uptime alerts exist in prod and every uptime % reads 100%
-    # (see INFRASTRUCTURE_SLA_PERFORMANCE.md Phase 0 / R1). Default OFF: the
+    # (see INFRASTRUCTURE_SLA_PERFORMANCE.md availability-log contract). Default OFF: the
     # warmer is a hot deployed task, so the bridge is inert until a deploy flips
     # this on deliberately. Additive-only — never changes live_status behaviour.
     sla_availability_log_enabled: bool = os.getenv(

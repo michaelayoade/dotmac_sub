@@ -1,10 +1,10 @@
 """Customer portal Refer & Earn page (RFC #73).
 
-Server-rendered. The page read runs behind the Phase 3
-``referrals_native_read_enabled`` read-flip flag (§4.2): OFF reads the local
+Server-rendered. The page read runs behind the
+``referrals_native_read_enabled`` ownership flag: OFF reads the local
 referral mirror (fast, resilient to a CRM outage), ON reads the native
-referral tables — same payload shape (§2.5). The refer-a-friend POST stays a
-mirror write-through until the Phase 3 write flip (§4.3, PR 14). Individual
+referral tables with the same payload shape. The refer-a-friend POST stays a
+mirror write-through until native referral write ownership is enabled. Individual
 subscribers only (the customer portal is subscriber-scoped; reseller float
 wallets are never involved).
 """

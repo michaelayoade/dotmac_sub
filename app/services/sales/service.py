@@ -1,14 +1,14 @@
-"""Leads / pipeline / quotes services — CRM port (Phase 3 §2.1).
+"""Native lead, pipeline, and quote services ported from CRM.
 
 Faithful port of ``dotmac_crm/app/services/crm/sales/service.py`` onto sub's
-native models (``app/models/sales.py``), with the Phase 3 deltas applied:
+native models (``app/models/sales.py``), with Sub ownership deltas applied:
 
 * Customer party: CRM ``person_id`` (people) becomes ``subscriber_id``
-  (sub ``subscribers``); party-status upgrades write the Phase 3
+  (Sub ``subscribers``); party-status upgrades write the native
   ``subscribers.party_status`` lifecycle column (§1.3/§1.8).
 * Staff references (``quotes.owner_person_id``) are plain UUIDs — no FK and
-  no existence check; display resolves via the Phase 1 staff map.
-* Phase 4 stubs (risk #8): owner-agent auto-assignment from the CRM inbox
+  no existence check; display resolves via the CRM-to-Sub staff identity map.
+* Agent/inbox compatibility stubs: owner-agent auto-assignment from the CRM inbox
   (ConversationAssignment / last agent-authored message) and lead-source
   inference from messages / person channels degrade to None. Attribution
   metadata inference is kept — it never touched inbox models.
@@ -19,9 +19,9 @@ native models (``app/models/sales.py``), with the Phase 3 deltas applied:
 * Statuses are stored as plain strings (sub convention: String column +
   app-level enum); helpers normalise enum members to their values.
 * ``quote_line_items.inventory_item_id`` is carried verbatim without an
-  existence check — inventory is Phase 5 (§1.4).
-* Install-project creation from accepted quotes is deferred to the projects
-  service port (next in the Phase 3 series) — see
+  existence check while inventory remains externally owned.
+* Install-project creation from accepted quotes remains behind the native
+  projects-owner hook — see
   ``_ensure_project_from_quote``.
 * Native services emit sub events from day one (risk #13):
   ``lead.created`` / ``quote.accepted``.
@@ -61,7 +61,7 @@ from app.services.response import ListResponseMixin
 
 _logger = logging.getLogger(__name__)
 
-# Normalized lead-source vocabulary. ``Portal`` is the Phase 3 addition — the
+# Normalized lead-source vocabulary. ``Portal`` supports the native
 # self-serve (map-pin) quote request tags its leads with it (§1.3, risk #7).
 LEAD_SOURCE_OPTIONS = (
     "Facebook",
@@ -127,7 +127,7 @@ _CLOSED_LEAD_STATUSES = (LeadStatus.won.value, LeadStatus.lost.value)
 def _enum_str(value, enum_cls, label: str) -> str | None:
     """Validate ``value`` against ``enum_cls`` and return its string value.
 
-    Sub stores CRM's PG-enum columns as plain strings (Phase 3 §1.7), so
+    Sub stores CRM's PG-enum columns as plain strings, so
     every write path normalises enum members / raw strings to ``.value``.
     """
     member = validate_enum(value, enum_cls, label)
@@ -135,12 +135,12 @@ def _enum_str(value, enum_cls, label: str) -> str | None:
 
 
 def _resolve_owner_agent_id(db: Session, subscriber_id) -> uuid.UUID | None:
-    """Phase 4 stub (risk #8).
+    """Compatibility stub until the native inbox owns agent assignment.
 
     The CRM resolved a lead's owner agent from the inbox: the active
     ConversationAssignment for the person, falling back to the author of the
     last agent-authored message. Those models (``crm_agents``,
-    conversations) arrive with the Phase 4 inbox port — until then leads
+    conversations) are not native yet, so leads
     land unowned (visible as "unassigned" in the kanban).
     """
     return None
@@ -245,7 +245,7 @@ def _infer_lead_source(
     """Best-effort lead-source inference.
 
     Kept: attribution blobs on the lead metadata / subscriber metadata (pure
-    dict inspection). Dropped until Phase 4 (risk #8): inference from recent
+    dict inspection). Deferred until the native inbox exists: inference from recent
     inbound inbox messages and person channels — those models live with the
     CRM inbox and have not been ported.
     """
@@ -369,10 +369,10 @@ def _datetime_from_metadata(metadata: dict | None, key: str) -> datetime | None:
 
 
 def _quote_owner_from_lead(db: Session, lead_id) -> uuid.UUID | None:
-    """Phase 4 stub (risk #8).
+    """Compatibility stub until the native inbox owns quote assignment.
 
     The CRM derived a quote's owner from the lead's owning agent
-    (``CrmAgent.person_id``). Agents arrive with the Phase 4 inbox port;
+    (``CrmAgent.person_id``). Agents are not native yet;
     until then only an explicit ``owner_person_id`` (payload or metadata)
     sets quote ownership.
     """
@@ -495,13 +495,13 @@ def _upgrade_party_status_to_customer(subscriber: Subscriber | None) -> None:
 
 
 def _ensure_project_from_quote(db: Session, quote: Quote, sales_order_id: str | None):
-    """Deferred to the projects service port (Phase 3 PR 6).
+    """Compatibility hook for native project creation from an accepted quote.
 
     The CRM pipeline creates an install project when a quote is accepted
     (template by ``metadata.project_type``, status active, idempotent on
     ``Project.metadata_["quote_id"]``). Sub's projects *service* (template
-    instantiation, fiber-stage engine) has not been ported yet — the projects
-    PR rewires this hook onto it. Until then accepted quotes create only the
+    instantiation, fiber-stage engine) must replace this placeholder. Until
+    then accepted quotes create only the
     sales order.
     """
     _logger.info(
@@ -550,8 +550,11 @@ def _emit_quote_accepted(db: Session, quote: Quote, sales_order_id) -> None:
 
 
 def _handle_quote_accepted(db: Session, quote: Quote) -> None:
-    """The unchanged sales-service pipeline (§2.2 step 4): accepted quote →
-    sales order (idempotent on quote_id) → install project (PR 6 stub)."""
+    """Sales-service pipeline: accepted quote → sales order → install project.
+
+    Sales-order creation is idempotent on ``quote_id``; project creation uses
+    the explicit compatibility hook above.
+    """
     from app.services import sales_orders as sales_order_service
 
     _upgrade_party_status_to_customer(quote.subscriber)
@@ -1225,7 +1228,7 @@ class QuoteLineItems(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Quote not found")
         data = payload.model_dump()
         # ``inventory_item_id`` is a CRM inventory UUID carried verbatim —
-        # inventory is Phase 5, so there is nothing to validate against (§1.4).
+        # Inventory is externally owned, so there is nothing native to validate.
         # Always derive amount server-side (net of any line discount).
         data["amount"] = _line_amount(
             data.get("quantity"), data.get("unit_price"), data.get("discount_percent")

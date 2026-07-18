@@ -1,9 +1,9 @@
 """Customer portal Installation Progress page (project tracker).
 
 Server-rendered: shows the install lifecycle — stage timeline + progress %.
-Behind the Phase 3 ``projects_native_read_enabled`` read-flip flag (§4.2):
+Behind the ``projects_native_read_enabled`` ownership flag:
 OFF reads the local project mirror (fast, resilient to a CRM outage), ON
-reads the native ``projects`` table — same payload shape (§2.5). Distinct
+reads the native ``projects`` table with the same payload shape. Distinct
 from /portal/installations (which lists scheduled appointments). Thin wrapper.
 """
 

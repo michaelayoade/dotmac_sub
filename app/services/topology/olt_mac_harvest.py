@@ -370,12 +370,12 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
         )
     ).all()
 
-    # Phase 1 — read: materialize every OLT's port context plus a plain-data
+    # Read stage: materialize every OLT's port context plus a plain-data
     # SSH snapshot, then END the transaction. The SSH walk below takes seconds
     # per port; holding a transaction across it left this connection idle in
     # transaction for minutes, tripping the PostgreSQL health check
     # (idle_in_transaction_over_60s) on every run. The snapshot carries the
-    # only fields the SSH layer reads, so phase 2 never touches the session
+    # only fields the SSH layer reads, so collection never touches the session
     # (an expired ORM attribute access would silently begin a new
     # transaction and reintroduce the bug).
     contexts: dict[uuid.UUID, dict[str, _PortContext]] = {}
@@ -398,7 +398,7 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
         )
     db.commit()
 
-    # Phase 2 — collect: SSH walks with NO transaction open. Raw outputs only;
+    # Collection stage: SSH walks with no transaction open. Raw outputs only;
     # per-OLT failures are isolated so one bad OLT can't sink the run.
     # Iterate the plain snapshots, never the ORM rows: post-commit, even
     # ``olt.id`` is an expired attribute whose refresh would silently begin a
@@ -431,7 +431,7 @@ def harvest_olt_mac_tables(db: Session) -> dict[str, int]:
             continue
         collected.append((olt_id, walked))
 
-    # Phase 3 — write: parse + upsert + drift in per-OLT SAVEPOINTs on a fresh
+    # Write stage: parse, upsert, and detect drift in per-OLT savepoints on a fresh
     # transaction (begun implicitly by the first query). The caller owns the
     # outer commit, as before.
     for olt_id, walked in collected:

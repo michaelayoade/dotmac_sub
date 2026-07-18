@@ -29,7 +29,6 @@ class FieldJobEvent(Base):
         Index(
             "ix_field_job_events_mirror_occurred", "work_order_mirror_id", "occurred_at"
         ),
-        Index("ix_field_job_events_crm_work_order_id", "crm_work_order_id"),
         Index(
             "ix_field_job_events_author_occurred", "author_technician_id", "occurred_at"
         ),
@@ -49,7 +48,6 @@ class FieldJobEvent(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     author_technician_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
     )

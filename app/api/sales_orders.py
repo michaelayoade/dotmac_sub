@@ -1,12 +1,11 @@
-"""Sales-orders API — CRM port (Phase 3 §2.4).
+"""Native sales-orders API ported from CRM.
 
 Ported from ``dotmac_crm/app/api/sales_orders.py`` with the crm#233 fix:
 the legacy ``account_id`` query parameter — which the CRM passed
 positionally into the service's ``quote_id`` slot — is gone, and the list
 call passes every filter by keyword. Permission tightening per §2.4: the
 CRM left sales orders auth-only; sub gates them on
-``crm:sales_order:{read,write}`` (seeded by the RBAC PR of the Phase 3
-series, §6 PR 12).
+``crm:sales_order:{read,write}``, which are part of the native sales RBAC contract.
 """
 
 from fastapi import APIRouter, Depends, Query, status

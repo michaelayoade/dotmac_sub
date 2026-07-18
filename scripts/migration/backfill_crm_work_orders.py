@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Phase 2 work-order backfill — flip prep (12-phase2-completion.md §A5).
+"""One-time CRM work-order and note backfill for the native ownership cutover.
 
 One-shot, READ ONLY on the CRM:
 
 1. **Reconcile-all** — pull work orders for EVERY CRM-linked subscriber into
-   the local mirror through the existing reconcile machinery
+   authoritative local store through the existing reconcile machinery
    (``work_orders_mirror.reconcile_subscriber``), regardless of sync-state
-   staleness, so the mirror is complete before the ``crm.work_order_pull``
-   flip.
+   staleness, so the local store is complete before CRM pull is disabled.
 2. **Notes** — import OPEN (non-terminal) CRM-origin work orders'
    ``work_order_notes`` into ``field_work_order_notes`` for tech continuity.
    Each imported note carries provenance metadata
@@ -15,9 +14,9 @@ One-shot, READ ONLY on the CRM:
    the dedupe key, so re-runs are idempotent. Completed/canceled work orders'
    notes stay frozen in the CRM (archive posture — never mirrored).
 
-Dry-run by default: NO sub writes at all. Reconcile is skipped (it writes the
-mirror) and notes are only counted, so the dry-run note counts cover work
-orders already mirrored. Run --live once, re-run safely as needed.
+Dry-run by default: no Sub writes. Reconcile is skipped because it writes the
+authoritative store, and notes are only counted. Run ``--live`` once and rerun
+safely if verification requires it.
 
 Uses the app's own DB session + CRM client — run on a host with app config.
 
@@ -175,7 +174,6 @@ def _import_notes_for_row(
             FieldWorkOrderNote(
                 id=uuid.uuid4(),
                 work_order_mirror_id=row.id,
-                crm_work_order_id=row.crm_work_order_id,
                 author_technician_id=profile.id,
                 author_person_id=profile.person_id,
                 author_name=(profile.metadata_ or {}).get("name"),

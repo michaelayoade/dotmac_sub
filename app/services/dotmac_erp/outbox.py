@@ -1,4 +1,4 @@
-"""Delivery substrate for the ``field_erp_sync_events`` outbox (ERP re-home, PR 1).
+"""Delivery substrate for the ``field_erp_sync_events`` outbox.
 
 Field-service money-path actions ``enqueue`` an intent here with a stable
 idempotency key; ``deliver_pending`` posts each pending row to ERP's existing
@@ -15,8 +15,8 @@ Two invariants make this safe on the money path:
    as the ``Idempotency-Key`` header, so re-posting a row ERP already saw is a
    no-op on the ERP side.
 
-PR 1 wires no real flow (every flow is still owned by CRM); PR 2 flips
-``expense_claim`` to sub and enqueues real rows.
+The substrate is inert while each flow remains CRM-owned. A flow begins
+delivery only after its explicit single-writer cutover assigns ownership to Sub.
 """
 
 from __future__ import annotations

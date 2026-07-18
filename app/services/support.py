@@ -884,10 +884,9 @@ class Tickets:
     def _ensure_field_visit_work_order(db: Session, ticket: Ticket) -> None:
         """Create the native dispatch work order backing a ``field_visit`` ticket.
 
-        Phase 2 (sub = work-order system-of-record): a field-visit ticket
-        births a real work-order header through
+        A field-visit ticket creates a real work-order header through
         ``dispatch_service.work_order_headers.create`` so the job is visible
-        to dispatch, the assignment queue, and technicians in field_mobile.
+        to dispatch, the assignment queue, and field technicians.
         Historically this created a bare provisioning ``ServiceOrder`` stub
         that no field surface could see; pre-existing tickets that already
         carry a ServiceOrder-backed ``metadata.work_order_id`` are honored for
@@ -915,8 +914,8 @@ class Tickets:
                 return
             legacy_uuid = _coerce_uuid(existing_order_id)
             if legacy_uuid is not None and db.get(ServiceOrder, legacy_uuid):
-                # Legacy ServiceOrder-stub linkage from before the Phase 2
-                # cutover — don't double-create.
+                # Retained ServiceOrder-stub linkage from the retired workflow;
+                # do not create a duplicate native work order.
                 return
 
         # Belt-and-braces dedupe on the ticket linkage itself (e.g. the ticket
@@ -955,7 +954,7 @@ class Tickets:
                 },
             ),
         )
-        metadata["work_order_id"] = order.crm_work_order_id
+        metadata["work_order_id"] = order.public_id
         ticket.metadata_ = metadata
 
     @staticmethod
@@ -1206,8 +1205,8 @@ class Tickets:
         support_automation.apply_rules(db, ticket, AutomationTrigger.ticket_created)
 
         # After automation: an add_tag rule stamping "field_visit" births the
-        # native work order too (automation→WO hook, Phase 2 — there is no
-        # dedicated WO-creation automation action, the tag IS the trigger).
+        # native work order too. There is no separate work-order creation
+        # automation action; the tag is the declared trigger.
         Tickets._ensure_field_visit_work_order(db, ticket)
 
         Tickets._queue_notifications_for_assignments(db, ticket, actor_id)

@@ -1,7 +1,7 @@
 """Admin sales routes — leads (list/board/detail), pipeline settings,
 quotes (list/detail), sales orders (list/detail).
 
-Phase 3 §2.6 admin-web port (PR 11): the CRM's ``web/admin/crm_leads.py`` /
+Native admin-sales port: CRM's ``web/admin/crm_leads.py`` /
 ``crm_sales.py`` / ``crm_quotes.py`` + the sales-order pages of
 ``operations.py``, restyled onto sub's thin-route + context-builder idiom
 (see ``support_tickets.py``). All business logic lives in
@@ -13,7 +13,7 @@ endpoints ``GET /api/v1/leads/kanban`` / ``POST /api/v1/leads/kanban/move``
 
 RBAC: ``crm:lead:*`` guards leads *and* pipeline settings (pipelines ride
 lead permissions, matching the API port); quotes and sales orders use
-``crm:quote:read`` / ``crm:sales_order:read``. Key seeding lands with PR 12
+``crm:quote:read`` / ``crm:sales_order:read``. The native sales RBAC owner seeds the keys
 — the guards are in place regardless.
 """
 

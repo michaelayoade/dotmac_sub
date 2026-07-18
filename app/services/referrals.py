@@ -1,16 +1,16 @@
-"""Native referral program (Phase 3 §2.1) — the CRM's ``services/crm/referrals.py``
+"""Native referral program ported from CRM ``services/crm/referrals.py``
 merged onto sub identity and billing.
 
 Closed loop: an active subscriber gets a code → a prospect captures via that code
 (creating an attributed lead) → the referral qualifies when the prospect becomes
 an active subscriber → the referrer earns a configurable account credit.
 
-Deltas from the CRM source (Phase 3 §1.6/§2.1):
+Native ownership deltas from the CRM source:
 
 * ``person_identity.resolve_person`` → sub's ``customer_identity_resolution``
   cascade (doc 02 §3.2). A captured prospect that matches no subscriber gets a
   prospect subscriber row (``status='new'``, ``party_status='lead'``) — the
-  party model the Phase 3 backfill also produces.
+  party model produced by the party-identity backfill.
 * ``qualify_for_subscriber`` re-hooks from the CRM's customer-sync path onto
   sub's subscriber-activation lifecycle event
   (``app/services/events/handlers/referral.py``). It only flushes — event
@@ -120,7 +120,7 @@ def _generate_code(db: Session) -> str:
 
 
 def native_read_enabled(db: Session) -> bool:
-    """Phase 3 read-flip flag (§4.2): native referral reads vs the CRM mirror.
+    """Select native referral reads or the CRM mirror.
 
     OFF (default) — ``GET /me/referrals`` and the web Refer & Earn page keep
     serving ``referrals_mirror``; ON — they serve the native tables via
@@ -133,7 +133,7 @@ def native_read_enabled(db: Session) -> bool:
 
 
 def native_write_enabled(db: Session) -> bool:
-    """Phase 3 write-flip flag (§4.3): native refer-a-friend capture vs the
+    """Select native refer-a-friend capture or the
     CRM write-through. OFF (default) — ``POST /me/referrals`` and the portal
     form write through ``referrals_mirror`` (409 for subscribers without a
     CRM link); ON — ``Referrals.refer_a_friend`` captures natively (no CRM
@@ -630,7 +630,7 @@ class Referrals:
 
     @staticmethod
     def qualify_override(db: Session, referral_id: str) -> Referral:
-        """Admin override (Phase 3 §2.6): force-qualify a referral without
+        """Admin override: force-qualify a referral without
         waiting for the referred subscriber's activation event.
 
         Deliberately bypasses the program-enabled, subscriber-active and
@@ -721,7 +721,7 @@ class Referrals:
 
         ``reward_status`` surfaces the native vocabulary (``issued`` — mobile
         already tolerates it via reconcile) and ``expired`` rows appear (§1.7).
-        PR8 repoints ``GET /me/referrals`` and the portal page here.
+        ``GET /me/referrals`` and the portal page use this owner after cutover.
         """
         sid = coerce_uuid(str(subscriber_id))
         code = Referrals.ensure_code(db, str(sid))
@@ -787,7 +787,7 @@ class Referrals:
         note: str | None = None,
     ) -> dict:
         """Native refer-a-friend, shape-compatible with the mirror's
-        write-through response (``{id, status, message}``). PR8 repoints
+        write-through response (``{id, status, message}``). The ownership switch repoints
         ``POST /me/referrals`` and the portal form here."""
         code = Referrals.ensure_code(db, subscriber_id)
         referral = Referrals.capture(

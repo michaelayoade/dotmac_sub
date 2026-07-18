@@ -447,35 +447,6 @@ def test_webhook_does_not_clobber_or_notify_on_native_row(db_session):
     assert row.status == "completed"
 
 
-def test_upsert_protects_sub_prefixed_rows_without_marker(db_session):
-    """Native rows are recognizable by their ``sub-`` public id alone (born via
-    dispatch.work_order_headers.create) even without the metadata marker."""
-    sub = _subscriber(db_session)
-    db_session.add(
-        WorkOrder(
-            subscriber_id=sub.id,
-            crm_work_order_id="sub-abc123",
-            title="Native",
-            status="in_progress",
-        )
-    )
-    db_session.commit()
-
-    with patch("app.services.push.send_push"):
-        work_orders_mirror.apply_webhook(
-            db_session,
-            "work_order.canceled",
-            {
-                "subscriber_id": str(sub.id),
-                "work_order_id": "sub-abc123",
-                "status": "canceled",
-            },
-        )
-
-    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="sub-abc123").one()
-    assert row.status == "in_progress"
-
-
 def test_technician_location_uses_native_presence_for_owned_work_order(db_session):
     sub = _subscriber(db_session)
     profile = TechnicianProfile(
@@ -534,7 +505,6 @@ def test_technician_location_uses_native_dispatch_assignment(db_session):
         [
             WorkOrderAssignmentQueue(
                 work_order_mirror_id=row.id,
-                crm_work_order_id=row.crm_work_order_id,
                 status="assigned",
                 assigned_technician_id=profile.id,
             ),

@@ -1,8 +1,8 @@
-"""Leads / pipeline / quotes schemas — CRM port (Phase 3 §1.3–§1.4).
+"""Native leads, pipeline, and quotes schemas ported from CRM.
 
-Ported from ``dotmac_crm/app/schemas/crm/sales.py`` with the Phase 3 deltas:
+Ported from ``dotmac_crm/app/schemas/crm/sales.py`` with native ownership deltas:
 the customer party is ``subscriber_id`` (sub ``subscribers``) instead of the
-CRM ``person_id``, and staff / Phase 4 references (``owner_person_id``,
+CRM ``person_id``, and not-yet-native agent references (``owner_person_id``,
 ``owner_agent_id``, campaign columns) are plain UUIDs.
 """
 
@@ -76,7 +76,7 @@ class LeadBase(BaseModel):
     subscriber_id: UUID  # Required — links to Subscriber
     pipeline_id: UUID | None = None
     stage_id: UUID | None = None
-    # CrmAgent UUID carried verbatim — Phase 4 inbox model (§1.8).
+    # CRM agent UUID carried verbatim until the native inbox model owns it.
     owner_agent_id: UUID | None = None
     title: str | None = Field(default=None, max_length=200)
     status: LeadStatus = LeadStatus.new
@@ -181,7 +181,7 @@ class QuoteRead(QuoteBase):
 
 class QuoteLineItemBase(BaseModel):
     quote_id: UUID
-    # CRM inventory UUID carried verbatim — inventory is Phase 5 (§1.4).
+    # CRM inventory UUID carried verbatim while inventory remains external.
     inventory_item_id: UUID | None = None
     description: str = Field(min_length=1, max_length=255)
     quantity: Decimal = Field(default=Decimal("1.000"), gt=0)

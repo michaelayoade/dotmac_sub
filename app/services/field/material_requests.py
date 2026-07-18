@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 def serialize_material_request(request: FieldMaterialRequest) -> dict:
     return {
         "id": request.id,
-        "crm_work_order_id": request.crm_work_order_id,
+        "crm_work_order_id": request.work_order_mirror.public_id,
         "crm_material_request_id": request.crm_material_request_id,
         "requested_by_person_id": request.requested_by_person_id,
         "requested_by_system_user_id": request.requested_by_system_user_id,
@@ -130,7 +130,6 @@ class FieldMaterialRequests:
         planned_items = _validate_items(db, items)
         request = FieldMaterialRequest(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.public_id,
             requested_by_technician_id=profile.id,
             requested_by_person_id=profile.person_id,
             requested_by_system_user_id=profile.system_user_id,
@@ -349,7 +348,6 @@ def _sync_work_order_materials(
         if row is None:
             row = FieldWorkOrderMaterial(
                 work_order_mirror_id=request.work_order_mirror_id,
-                crm_work_order_id=request.crm_work_order_id,
                 item_id=requested_item.item_id,
                 allocated_quantity=requested_item.quantity,
                 consumed_quantity=0,

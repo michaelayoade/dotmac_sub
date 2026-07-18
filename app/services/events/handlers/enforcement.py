@@ -187,7 +187,7 @@ class EnforcementHandler:
                     exc,
                 )
 
-        # Phase 3 shadow write — mirror the derived state to radusergroup.
+        # Compatibility shadow write: mirror the derived state to radusergroup.
         # No-op unless the enforcement event policy enables group routing.
         self._shadow_write_access_state(db, str(subscription_id))
 
@@ -294,7 +294,7 @@ class EnforcementHandler:
                     exc,
                 )
 
-        # Phase 3 shadow write — mirror the restored state to radusergroup.
+        # Compatibility shadow write: mirror the restored state to radusergroup.
         # No-op unless the enforcement event policy enables group routing.
         self._shadow_write_access_state(db, str(subscription_id))
 

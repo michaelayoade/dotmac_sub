@@ -1,4 +1,4 @@
-"""Referral-qualification hook on subscriber activation (Phase 3 §2.1).
+"""Referral-qualification hook on subscriber activation.
 
 The CRM qualified referrals from its customer-sync path (every sub→CRM
 subscriber sync re-checked qualification). Natively the trigger is sub's own

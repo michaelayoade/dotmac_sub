@@ -95,8 +95,8 @@ def test_work_order_lifecycle_native(db_session):
     sub = _subscriber(db_session)
     _disable_completion_gate(db_session)
 
-    # 1. Create — native identity minted (sub-<uuid>), CRM column dual-written
-    # for the compat window (WORK_ORDER_IDENTITY_SOT slice 1).
+    # 1. Create — native identity minted (sub-<uuid>); the CRM provenance
+    # reference remains NULL by the authoritative identity contract.
     row = dispatch_service.work_order_headers.create(
         db_session,
         WorkOrderHeaderCreate(
@@ -108,11 +108,11 @@ def test_work_order_lifecycle_native(db_session):
         ),
     )
     assert row.public_id.startswith("sub-")
-    assert row.crm_work_order_id == row.public_id
+    assert row.crm_work_order_id is None
     assert is_sub_authoritative(row)
 
-    # 2. Assign — the queue row resolves the header by public_id and carries
-    # both the FK and the (compat-window) string key.
+    # 2. Assign — the queue row resolves the header by public_id and stores
+    # only the native FK. Its old string-shaped response is a derived projection.
     queue = dispatch_service.assignment_queue.create(
         db_session,
         WorkOrderAssignmentQueueCreate(
@@ -140,10 +140,9 @@ def test_work_order_lifecycle_native(db_session):
         .filter(FieldJobEvent.event == "start")
         .one()
     )
-    assert event.crm_work_order_id == row.public_id
+    assert event.work_order_mirror_id == row.id
 
-    # 4. Evidence — worklog + note join through the FK and dual-write the
-    # string key (dropped at slice 5).
+    # 4. Evidence — worklog + note join only through the native FK.
     start_at = datetime.now(UTC) - timedelta(hours=1)
     submitted = field_worklogs.submit(
         db_session,
@@ -156,7 +155,7 @@ def test_work_order_lifecycle_native(db_session):
     # submitted entry by its own id rather than .one() over the FK.
     worklog = db_session.get(FieldWorkLog, submitted[0]["worklog"]["id"])
     assert worklog is not None
-    assert worklog.crm_work_order_id == row.public_id
+    assert worklog.work_order_mirror_id == row.id
 
     field_notes.create(
         db_session, _auth(user), row.public_id, body="Splice completed at FDH."
@@ -166,7 +165,7 @@ def test_work_order_lifecycle_native(db_session):
         .filter(FieldWorkOrderNote.work_order_mirror_id == row.id)
         .one()
     )
-    assert note.crm_work_order_id == row.public_id
+    assert note.work_order_mirror_id == row.id
 
     # 5. Complete (evidence gate configured off — the gated path is
     # unit-covered) — status lands terminal with a timestamp and the native

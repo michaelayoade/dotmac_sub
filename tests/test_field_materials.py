@@ -105,7 +105,6 @@ def _material(
 ) -> FieldWorkOrderMaterial:
     material = FieldWorkOrderMaterial(
         work_order_mirror_id=work_order.id,
-        crm_work_order_id=work_order.crm_work_order_id,
         item_id=item.id,
         allocated_quantity=overrides.pop("allocated_quantity", 50),
         consumed_quantity=overrides.pop("consumed_quantity", 0),

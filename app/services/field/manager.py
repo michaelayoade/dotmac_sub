@@ -1,9 +1,9 @@
 """Manager-mode reads and dispatch writes over the native field domain.
 
-Ported from CRM's field manager API onto sub's Phase 2 primitives: technician
-profiles + presence for the live technician board, work-order mirrors (with
-the assignment queue) for the jobs board, and native field expense requests
-for approvals. All writes are sub-authoritative and stay local to sub.
+The CRM field-manager contract is implemented through Sub-owned technician
+profiles and presence for the live technician board, authoritative work orders
+and their assignment queue for the jobs board, and native expense requests for
+approvals. All writes remain inside their declared Sub owners.
 """
 
 from __future__ import annotations
@@ -300,7 +300,6 @@ class FieldManager:
         if entry is None:
             entry = WorkOrderAssignmentQueue(
                 work_order_mirror_id=row.id,
-                crm_work_order_id=row.public_id,
                 reason="manager_assign",
             )
             db.add(entry)

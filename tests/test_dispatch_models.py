@@ -135,7 +135,6 @@ def test_shift_availability_and_assignment_queue_reference_mirror(db_session):
     )
     queued = WorkOrderAssignmentQueue(
         work_order_mirror_id=work_order.id,
-        crm_work_order_id=work_order.crm_work_order_id,
         dispatch_rule_id=rule.id,
         assigned_technician_id=technician.id,
     )

@@ -209,7 +209,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         SWEEP,
         IDEMP,
         HEALTH,
-        "Phase 3 sync window (PR 9, dies at PR 15): watermarked importer "
+        "CRM compatibility sync window: watermarked importer "
         "pass, all upserts ON CONFLICT on CRM UUIDs; the next beat run "
         "re-covers anything a failed run missed.",
     ),
@@ -287,6 +287,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Beat-rerun drains committed outbox rows; per-event row state gates "
         "delivery and records item-level failures.",
+    ),
+    "app.tasks.reports.send_scheduled_ncc_report": _c(
+        "reporting",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Weekly single-flight digest; the persisted local send-date prevents "
+        "duplicate delivery and the next beat run repairs a failed attempt.",
     ),
     "app.tasks.events.mark_stale_processing_events": _c("events", SWEEP, IDEMP, STATUS),
     "app.tasks.events.retry_failed_events": _c("events", STATE, STATEFUL, STATUS),

@@ -37,7 +37,7 @@ _ASSET_TO_DESTINATION = {
 def serialize_movement(movement: FieldWorkOrderMovement) -> dict:
     return {
         "id": movement.id,
-        "crm_work_order_id": movement.crm_work_order_id,
+        "crm_work_order_id": movement.work_order_mirror.public_id,
         "destination_type": movement.destination_type,
         "destination_id": movement.destination_id,
         "destination_label": movement.destination_label,
@@ -113,7 +113,6 @@ def start_movement(
         return existing
     movement = FieldWorkOrderMovement(
         work_order_mirror_id=row.id,
-        crm_work_order_id=row.public_id,
         actor_technician_id=profile.id,
         actor_person_id=profile.person_id,
         actor_system_user_id=profile.system_user_id,
@@ -159,7 +158,6 @@ def arrive_movement(
     if movement is None:
         movement = FieldWorkOrderMovement(
             work_order_mirror_id=row.id,
-            crm_work_order_id=row.public_id,
             actor_technician_id=profile.id,
             actor_person_id=profile.person_id,
             actor_system_user_id=profile.system_user_id,
@@ -178,6 +176,24 @@ def arrive_movement(
     movement.arrival_longitude = longitude
     movement.status = "arrived"
     movement.client_ref = client_ref
+
+    # A technician arriving at a customer premises is standing at the service
+    # address: the pin is the strongest location evidence we ever get, and it
+    # costs the customer nothing. Capture it (best-effort — a capture failure
+    # must never break the arrival). Only for customer destinations: arriving
+    # at a cabinet or POP tells us nothing about where the customer lives.
+    if movement.destination_type == _CUSTOMER_DESTINATION and row.subscriber_id:
+        from app.services import location_capture
+
+        location_capture.capture_from_field_arrival(
+            db,
+            subscriber_id=str(row.subscriber_id),
+            lat=latitude,
+            lng=longitude,
+            accuracy_m=_as_float((payload or {}).get("accuracy_m")),
+            technician_actor_id=str(profile.id) if profile.id else None,
+            technician_name=getattr(profile, "title", None),
+        )
     return movement
 
 

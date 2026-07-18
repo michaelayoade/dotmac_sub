@@ -734,7 +734,6 @@ def test_native_dispatch_assignment_is_the_work_order_scope_fallback(
     db_session.add(
         WorkOrderAssignmentQueue(
             work_order_mirror_id=work_order.id,
-            crm_work_order_id=work_order.crm_work_order_id,
             assigned_technician_id=profile.id,
         )
     )

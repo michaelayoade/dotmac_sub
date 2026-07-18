@@ -1,5 +1,4 @@
-"""Purchase-order (PO) origination flow for the sub → DotMac ERP outbox (ERP
-re-home, PR 4).
+"""Purchase-order origination flow for the Sub → DotMac ERP outbox.
 
 The vendor-facing money flow. Re-homes PO **origination** from CRM into sub and,
 per the locked accounting decision (design doc 32 §0/§A), **re-anchors the PO on
@@ -19,8 +18,8 @@ Three responsibilities live here, structurally identical to ``material_sync`` /
   ``sync_flow_ownership``.
 * **write-back** — ``apply_erp_response`` runs on the outbox's accepted path and
   writes ERP's ``purchase_order_id`` back onto
-  ``installation_projects.erp_purchase_order_id`` (the AP back-reference PR 5's
-  vendor-invoice ordering guard hard-requires — design doc 32 §D). A dropped
+  ``installation_projects.erp_purchase_order_id`` (the AP vendor-invoice
+  ordering guard requires it). A dropped
   write-back silently loses the AP link, so it must be repairable (see below).
 * **reconcile / repair** — ``repair_purchase_order_writebacks`` re-applies the PO
   id from a *delivered* outbox row whose write-back never landed on the
@@ -41,8 +40,9 @@ ANCHOR = INSTALLATION PROJECT (design doc 32 §D):
 
 A *re-quote* (a new accepted quote superseding the old for the same install)
 would ride a future ``purchase_order_variation`` flow (design doc 32 §D
-"Variations", §F.3) so the AP ``superseded_po_id`` audit chain is preserved. PR 4
-leaves that slot noted but does NOT implement it — see ``VARIATION_FLOW_SLOT``.
+"Variations", §F.3) so the AP ``superseded_po_id`` audit chain is preserved.
+The current purchase-order owner leaves that slot explicit but unimplemented;
+see ``VARIATION_FLOW_SLOT``.
 
 VENDOR IDENTITY (design doc 32 §C): sourced from the **native ``Vendor``**
 reachable via ``approved_quote.vendor`` — which already carries ``erp_id``
@@ -86,7 +86,7 @@ ENTITY_TYPE = "installation_project"
 # The future scope-change flow (design doc 32 §D "Variations" / §F.3): a re-quote
 # supersedes the baseline PO via ERP's ``/sync/sub/purchase-orders/variations``,
 # keyed ``variation_id``, preserving the AP ``superseded_po_id`` chain. Left as a
-# noted slot — NOT implemented in PR 4.
+# noted slot; not implemented by the current purchase-order owner.
 VARIATION_FLOW_SLOT = "purchase_order_variation"
 
 
@@ -316,7 +316,7 @@ def apply_purchase_order_response(
     """Write ERP's ``purchase_order_id`` back onto the installation project.
 
     Records the AP back-reference (``erp_purchase_order_id``, ``String(100)``) that
-    PR 5's vendor-invoice ordering guard hard-requires. Idempotent and
+    the AP vendor-invoice ordering guard requires. Idempotent and
     write-once: an already-populated back-reference is left untouched (the PO id is
     stable, and re-writing would mask a mismatch). Returns True when it set the
     field, else False.

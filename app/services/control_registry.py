@@ -217,6 +217,26 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Prepaid balance/expiry suspension sweep.",
     ),
     Control(
+        # Master gate for the loyalty + data-capture programme
+        # (docs/designs/LOYALTY_AND_CAPTURE.md). DEFAULT OFF: off means no
+        # milestone review, no sends, and no field-arrival location capture.
+        key="loyalty.campaigns",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        description="Loyalty + data-capture programme master switch.",
+    ),
+    Control(
+        # The customer/agent confirm-your-location prompt. DEFAULT OFF, and
+        # independently flippable from the master so ops can capture without
+        # running loyalty.
+        key="loyalty.capture_prompt",
+        layer=Layer.feature,
+        default=False,
+        on_missing=False,
+        description="Portal/agent location confirm-or-correct prompt.",
+    ),
+    Control(
         key="billing.prepaid_monthly_invoicing",
         layer=Layer.feature,
         owner_module="billing",
@@ -577,7 +597,7 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         description="Pull tickets from CRM.",
     ),
     Control(
-        # Phase 2 flip lever (work-order SoT): gates the CRM work-order webhook
+        # Native work-order authority lever: gates the CRM work-order webhook
         # branch, the work_order_mirror_reconcile beat entry, and the lazy CRM
         # refresh in work_orders_mirror.read_for_subscriber. Fail-OPEN so the
         # switch is inert (mirror keeps pulling) until deliberately flipped off
@@ -607,7 +627,7 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
                 "CRM_PHASE3_NATIVE_SYNC_ENABLED",
             ),
         ),
-        description="Sync CRM Phase 3 deltas into native project/sales tables.",
+        description="Sync CRM compatibility deltas into native project and sales tables.",
     ),
     Control(
         key="projects.native_read",

@@ -256,7 +256,7 @@ def enforce_subscription_reject_ip(
     # payment portal (incident: cust 100025880 pinned to 10.11.112.38).
     # The restore branch above stays live so any previously swapped
     # subscription still recovers its original IP on reactivation.
-    # Re-enable deliberately at Phase 5 if pool-based captive is built out.
+    # Re-enable only if the pool-based captive capability is built out.
     return {"ok": True, "changed": False, "mode": "noop_block_swap_disabled"}
 
     reject_key = normalize_reject_reason(reject_reason)

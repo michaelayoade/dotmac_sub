@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,7 +14,6 @@ class FieldWorkLog(Base):
     __tablename__ = "field_worklogs"
     __table_args__ = (
         Index("ix_field_worklogs_mirror_start", "work_order_mirror_id", "start_at"),
-        Index("ix_field_worklogs_crm_work_order_id", "crm_work_order_id"),
         Index("ix_field_worklogs_author_start", "author_technician_id", "start_at"),
         Index("ix_field_worklogs_client_ref", "client_ref", unique=True),
     )
@@ -27,7 +26,6 @@ class FieldWorkLog(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     author_technician_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
     )

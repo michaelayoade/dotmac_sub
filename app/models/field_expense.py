@@ -35,7 +35,6 @@ class FieldExpenseRequest(Base):
     __tablename__ = "field_expense_requests"
     __table_args__ = (
         Index("ix_field_expense_requests_mirror", "work_order_mirror_id", "created_at"),
-        Index("ix_field_expense_requests_crm_work_order_id", "crm_work_order_id"),
         Index("ix_field_expense_requests_requested_by", "requested_by_technician_id"),
         Index("ix_field_expense_requests_status", "status"),
         Index("ix_field_expense_requests_client_ref", "client_ref", unique=True),
@@ -53,7 +52,6 @@ class FieldExpenseRequest(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     crm_expense_request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     requested_by_technician_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False

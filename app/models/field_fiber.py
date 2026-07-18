@@ -33,7 +33,6 @@ class FieldFiberTestResult(Base):
         Index(
             "ix_field_fiber_tests_mirror_created", "work_order_mirror_id", "created_at"
         ),
-        Index("ix_field_fiber_tests_crm_work_order_id", "crm_work_order_id"),
         Index("ix_field_fiber_tests_asset", "asset_type", "asset_id"),
         Index("ix_field_fiber_tests_client_ref", "client_ref", unique=True),
         CheckConstraint(
@@ -50,7 +49,6 @@ class FieldFiberTestResult(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    crm_work_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
     asset_type: Mapped[str] = mapped_column(String(80), nullable=False)
     asset_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     test_type: Mapped[str] = mapped_column(String(40), nullable=False)

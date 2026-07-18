@@ -1,4 +1,4 @@
-"""LLDP neighbor poller -> directed NetworkTopologyLink (Phase 2).
+"""LLDP neighbor poller → directed ``NetworkTopologyLink`` records.
 
 Reads each MikroTik router's ``/ip/neighbor`` (LLDP/CDP/MNDP discovery, enabled
 fleet-wide via the ``lldp-infra`` setting) and builds the device-level directed
@@ -9,15 +9,15 @@ touches manual/other links.
 Fetch mechanism: the neighbor tables are read over the RouterOS **binary API**
 (port 8728, the ``routeros_api`` library) — the exact transport the bandwidth
 poller (``app/poller/mikrotik_poller.py``) already uses against these routers.
-REST is enabled on MOST of the fleet but binary works on more of it, so binary
+REST is enabled on most of the fleet but binary works on more of it, so binary
 is tried first. We iterate the ``routers`` table directly (each row carries the
 same user account for API and REST) and map each router to its
 ``network_device_id``.
 
-REST (443) fallback: the fleet is MIXED — a few core routers (Garki Core,
+REST (443) fallback: the fleet is mixed — a few core routers (Garki Core,
 Abuja Medallion; both CCR1072) have 8728 FILTERED and answer only on HTTPS/REST
-(443). #840 moved the poller from REST to binary because binary reached most
-routers, but that orphaned those REST-only cores. So a binary read that fails
+(443). The binary transport reaches most routers but not those REST-only
+cores. Therefore a binary read that fails
 with a CONNECTION-class error (timeout / refused / no route /
 ``RouterOsApiConnectionError``) falls back to ``GET /rest/ip/neighbor`` over 443
 (:func:`_read_neighbors_via_rest`, the pre-#840 REST path restored). An AUTH
@@ -77,8 +77,8 @@ BINARY_API_PORT = 8728
 # counted, not fatal.
 ROUTER_SOCKET_TIMEOUT = 15.0
 
-# Discovery-grade REST (443) fallback tunables — the pre-#840 REST path (PR #786)
-# restored for REST-only cores (Garki Core / Abuja Medallion: 8728 filtered,
+# Discovery-grade REST fallback tunables for REST-only cores (Garki Core /
+# Abuja Medallion: 8728 filtered,
 # HTTPS answers). One attempt, tight timeouts (~12s read bound), same "skip this
 # router this hour, retry next" philosophy as the binary socket timeout above.
 ROUTER_REST_CONNECT_TIMEOUT = 5.0
@@ -346,8 +346,8 @@ def _read_neighbors_via_binary_api(router: Router, pool_factory=None) -> list[di
     CONNECTION HYGIENE: the pool opens a session on the router, so it is ALWAYS
     disconnected in ``finally`` — including when ``get_api()`` or the read fails
     after the pool was constructed — otherwise the session lingers for days and
-    the fleet accrues an 8728 leak (see PR #819 / the bandwidth poller's
-    ``_release_pool``). ``pool_factory`` is injectable for tests.
+    the fleet accrues an 8728 leak. This follows the bandwidth poller's
+    ``_release_pool`` contract. ``pool_factory`` is injectable for tests.
     """
     pool_factory = pool_factory or routeros_api.RouterOsApiPool
     username = decrypt_credential(router.rest_api_username) or router.rest_api_username
@@ -395,7 +395,7 @@ def _read_neighbors_via_rest(router: Router) -> list[dict]:
 
     Fallback transport for the REST-only cores (Garki Core, Abuja Medallion)
     whose 8728 is filtered but whose HTTPS/REST answers. This restores the
-    pre-#840 REST path (removed by #840; originally added in PR #786): it reuses
+    established REST transport: it reuses
     :class:`RouterConnectionService` — the exact connection layer config
     snapshots use — with discovery-grade tunables (one attempt, tight timeouts)
     so a dead router costs seconds, not the snapshot retry budget. The service
@@ -407,7 +407,7 @@ def _read_neighbors_via_rest(router: Router) -> list[dict]:
     the router row's ``verify_tls`` column (``RouterConnectionService.get_client``
     passes ``verify=router.verify_tls``) — a per-router, settings/DB-driven flag,
     NOT a hand-rolled ``verify=False``. This is the established project pattern,
-    consistent with the pre-#840 REST poller and every other config-snapshot
+    consistent with the prior REST poller and every other config-snapshot
     call; no new insecure default is introduced here.
 
     REST returns ``/ip/neighbor`` as a JSON array whose objects already carry the

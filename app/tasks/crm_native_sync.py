@@ -1,9 +1,9 @@
-"""Celery task: Phase 3 sync-window delta pull (CRM DB → native tables).
+"""Celery task for CRM-to-native project and sales delta pulls.
 
-Transitional glue for the coexistence window (20-phase3-projects-sales.md
-§4.2 step 4, PR 9); deleted at the Phase 3 contract (PR 15) with the rest of
-the adapter. The webhook side (``app.services.crm_native_sync``) applies thin
-status deltas; this beat is the full-shape source: the native tables need
+This is the transitional projects-and-sales compatibility adapter. Retire it
+once native ownership is verified. The webhook side
+(``app.services.crm_native_sync``) applies narrow status deltas; this scheduled
+reconciler is the full-shape source because the native tables need
 whole CRM rows (line items, tasks, totals, …) that the portal API does not
 serve, so — instead of new sync logic — it runs the backfill importer's
 watermark mode (``scripts/migration/import_crm_phase3.run_import``) in
@@ -20,7 +20,8 @@ mean the party map drifted and need operator attention, not a silent skip.
 
 Importing script code into an app task is deliberate here: the importer is
 the tested implementation of the CRM→native mapping and this beat dies with
-it in PR 15 — a shared-module refactor would outlive its only second caller.
+it when compatibility sync retires — a shared-module refactor would outlive
+its only second caller.
 The import is lazy so web/worker startup never pays for it.
 """
 
@@ -78,7 +79,7 @@ def _run_delta(crm_dsn: str, state_file: str, overlap_seconds: int) -> dict:
                     state_file=state_file,
                     overlap_seconds=overlap_seconds,
                     # No CSV artifacts in-process: the party map comes from the
-                    # links already stamped in sub (PR 1's backfill wrote them);
+                    # links already stamped in Sub by the party-identity backfill;
                     # the staff map only feeds an informational CSV, so empty.
                     party_map=merge_party_maps({}, _load_party_map_from_sub(sub)),
                     subscriber_map=_load_subscriber_map(sub),
@@ -117,7 +118,7 @@ def _run_delta(crm_dsn: str, state_file: str, overlap_seconds: int) -> dict:
 
 @celery_app.task(name="app.tasks.crm_native_sync.pull_crm_phase3_native_delta")
 def pull_crm_phase3_native_delta() -> dict:
-    """Pull CRM changes since the last watermark into the native Phase 3 tables.
+    """Pull CRM changes since the last watermark into native project/sales tables.
 
     Gated by ``crm_phase3_native_sync_enabled`` (same flag as the webhook
     adapter and the beat entry itself — this in-task check is the belt to the

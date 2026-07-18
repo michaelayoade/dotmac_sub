@@ -1,9 +1,9 @@
 """Customer portal Sales/Quotes page (self-serve installation quotes).
 
 Server-rendered: shows each quote's feasibility, estimate, deposit, and
-status. Behind the Phase 3 ``quotes_native_read_enabled`` read-flip flag
-(§4.2): OFF reads the local quote mirror (fast, resilient to a CRM outage),
-ON reads sub's native ``quotes`` table — same payload shape (§2.5).
+status. Behind the ``quotes_native_read_enabled`` ownership flag: OFF reads
+the local quote mirror (fast and resilient to a CRM outage), while ON reads
+Sub's native ``quotes`` table with the same payload shape.
 Read-only — the interactive map-pin request + deposit payment live in the
 mobile app. Thin wrapper over the service.
 """

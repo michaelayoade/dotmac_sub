@@ -1,13 +1,13 @@
-"""Topology-gaps report + match-rate (Phase 1, Task 8).
+"""Topology-gaps report and customer-path match rate.
 
 Surfaces what the reconcile could not resolve so it can be fixed instead of
 silently lost:
 - Reconciled nodes with no confident provisioning-device match (unmatched or
-  ambiguous both land as matched_device_id IS NULL in Phase 1).
+  ambiguous both land as ``matched_device_id IS NULL``).
 - Active subscriptions whose resolve_customer_path returns a gap.
 
 The match-rate (% of active subscriptions resolving to a complete
-ONT -> device -> basestation path) is the Phase 1 exit metric, and doubles as
+ONT → device → basestation path) is the reconciliation cutover metric and doubles as
 the empirical answer to "how many customers have no resolvable path" (open
 decision C re: wireless).
 """

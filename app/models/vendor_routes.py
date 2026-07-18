@@ -1,8 +1,8 @@
-"""Native vendor route domain ported from the CRM (Phase 5 / maps §A).
+"""Native vendor route domain ported from the CRM maps capability.
 
 Ports ``dotmac_crm/app/models/vendor.py`` — the vendor installation-project /
 quote / as-built domain that carries the fiber ``route_geom`` map geometry —
-natively into sub, so the PR13 vendor project-stub relay can be retired once
+natively into Sub, so the temporary vendor project-stub relay can be retired once
 the tables are backfilled.
 
 Sub conventions applied (same house idiom as ``app/models/project.py``):
@@ -12,7 +12,7 @@ Sub conventions applied (same house idiom as ``app/models/project.py``):
 * CRM PG enums become **String columns + app-level enums** (exact CRM
   vocabularies preserved).
 * ``installation_projects.project_id`` is a **real FK to sub's now-native
-  ``projects.id``** (Phase 3). ``buildout_project_id`` → ``buildout_projects.id``
+  ``projects.id``**. ``buildout_project_id`` → ``buildout_projects.id``
   and the route ``fiber_segment_id`` columns → ``fiber_segments.id`` are real
   FKs too (all native in sub).
 * **Customer-party** columns re-point at sub ``subscribers.id``
@@ -25,7 +25,7 @@ Sub conventions applied (same house idiom as ``app/models/project.py``):
 * ``route_geom`` uses ``geoalchemy2.Geometry('LINESTRING', srid=4326)`` exactly
   like ``network.py``'s ``FiberSegment``.
 
-Reconciliation with the pre-existing Phase-2 vendor support
+Reconciliation with the pre-existing vendor-authentication support
 (``app/models/field_vendor.py``): those ``field_vendors`` / ``field_vendor_users``
 / ``field_vendor_device_tokens`` tables are the vendor **auth mirror** (mobile
 login + device tokens, keyed to ``system_users`` with a ``crm_vendor_id`` string
@@ -207,7 +207,7 @@ class InstallationProject(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    # Real FK to sub's now-native projects table (Phase 3).
+    # Real FK to Sub's native projects table.
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
     )

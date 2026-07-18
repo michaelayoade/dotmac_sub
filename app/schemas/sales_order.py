@@ -1,6 +1,6 @@
-"""Sales-order schemas — CRM port (Phase 3 §1.5).
+"""Native sales-order schemas ported from CRM.
 
-Ported from ``dotmac_crm/app/schemas/sales_order.py`` with the Phase 3
+Ported from ``dotmac_crm/app/schemas/sales_order.py`` with native ownership
 deltas: ``person_id`` becomes ``subscriber_id``, and the legacy
 ``account_id``/``invoice_id`` fields (removed from the CRM model long ago,
 and the source of the crm#233 positional mis-plumb in the list API) are
@@ -21,7 +21,7 @@ from app.models.sales import SalesOrderPaymentStatus, SalesOrderStatus
 class SalesOrderBase(BaseModel):
     subscriber_id: UUID
     quote_id: UUID | None = None
-    # CrmAgent UUID carried verbatim — Phase 4 inbox model (§1.8).
+    # CRM agent UUID carried verbatim until the native agent model owns it.
     owner_agent_id: UUID | None = None
     source: str | None = Field(default=None, max_length=80)
     order_number: str | None = Field(default=None, max_length=80)
@@ -95,7 +95,7 @@ class SalesOrderRead(SalesOrderBase):
 class SalesOrderLineBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     sales_order_id: UUID
-    # CRM inventory UUID carried verbatim — inventory is Phase 5 (§1.5).
+    # CRM inventory UUID carried verbatim while inventory remains external.
     inventory_item_id: UUID | None = None
     description: str = Field(min_length=1, max_length=255)
     quantity: Decimal = Field(default=Decimal("1.000"), gt=0)

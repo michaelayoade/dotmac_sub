@@ -1,30 +1,32 @@
-"""Native projects vertical ported from the CRM (Phase 3 §1.1/§1.2).
+"""Native project-domain persistence adapted from the CRM contract.
 
 CRM shapes (``dotmac_crm/app/models/projects.py``) carried verbatim with the
 sub conventions applied:
 
-* PG enums become String columns + app-level enums (Phase 1 convention). The
+* PostgreSQL enums become string columns plus application enums. The
   CRM enum classes ``TaskStatus``/``TaskPriority``/``TaskDependencyType`` are
   exported here as ``ProjectTaskStatus``/``ProjectTaskPriority``/
   ``ProjectTaskDependencyType`` to avoid clashing with sub's provisioning
-  ``TaskStatus`` — the *values* are identical to CRM (§1.7).
-* Staff ``people.id`` FKs are dropped and carried as plain UUIDs (§1.8):
+  ``TaskStatus``; the values remain identical to CRM.
+* Staff ``people.id`` foreign keys are carried as plain UUIDs:
   the five ``projects.*_person_id`` roles, ``project_tasks.{assigned_to,
   created_by}_person_id``, both comment tables' ``author_person_id``, and
   ``project_task_assignees.person_id`` (still half of the composite PK).
-  Display resolves via the Phase 1 staff map.
+  Display resolves through the shared staff identity map.
 * ``projects.subscriber_id`` re-points at sub ``subscribers.id`` (link key 1),
   ``projects.lead_id`` is a real FK to the native ``leads`` table, and
-  ``project_tasks.ticket_id`` points at sub ``support_tickets.id`` (Phase 1
-  result; the backfill applies the Phase 1 re-key map).
-* ``project_tasks.work_order_id`` stays a plain UUID until the Phase 2
-  work-order flip adds the FK (§1.2 — CRM work-order UUIDs are the join key
-  either way via ``work_order_mirror.crm_work_order_id``).
+  ``project_tasks.ticket_id`` points at Sub ``support_tickets.id``; import
+  translates legacy ticket identifiers at the boundary.
+* ``project_tasks.work_order_id`` remains a plain UUID carrying the imported
+  CRM task link. The service validates it against authoritative
+  ``work_order.public_id``; native ``sub-`` work-order links need a later
+  project-task contract migration before this column can become a real FK.
 * Both comment tables gain a ``metadata`` JSON column for import provenance
-  (Phase 1 §1.4 pattern) — CRM has no metadata column there.
+  because CRM has no metadata column there.
 
-CRM UUID PKs are kept verbatim by the import (§3.4). This module coexists
-with the ``project_mirror`` tables until the Phase 3 contract PR (§3.3).
+CRM UUID primary keys are retained by the import. This module coexists with
+the read-only ``project_mirror`` projection until the project authority
+contract completes its explicit read cutover.
 """
 
 import enum
@@ -160,7 +162,7 @@ class Project(Base):
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     code: Mapped[str | None] = mapped_column(String(80))
-    # Kept non-unique per §1.2 (CRM shape).
+    # Retains CRM's non-unique number contract.
     number: Mapped[str | None] = mapped_column(String(40))
     erpnext_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text)
@@ -175,15 +177,15 @@ class Project(Base):
     priority: Mapped[str] = mapped_column(
         String(40), default=ProjectPriority.normal.value, nullable=False
     )
-    # Customer party — sub subscriber (re-pointed via link key 1, §1.2).
+    # Customer party is the Sub subscriber.
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     lead_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("leads.id")
     )
-    # Staff person UUIDs carried verbatim, no FK (§1.8; staff map for display).
-    # assistant_manager_person_id ≡ "Site Project Coordinator" (§1.2).
+    # Staff UUIDs have no local FK; the staff map owns display resolution.
+    # assistant_manager_person_id is the Site Project Coordinator.
     created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     owner_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     manager_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -193,7 +195,7 @@ class Project(Base):
     assistant_manager_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True)
     )
-    # Real FK — service_teams ported in Phase 1 (§1.2).
+    # Real FK to the shared service-team owner.
     service_team_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("service_teams.id")
     )
@@ -249,16 +251,16 @@ class ProjectTask(Base):
     priority: Mapped[str] = mapped_column(
         String(40), default=ProjectTaskPriority.normal.value, nullable=False
     )
-    # Staff person UUIDs — no FK (§1.8).
+    # Staff person UUIDs have no local FK.
     assigned_to_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_by_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    # Phase 1 native tickets table (backfill applies the Phase 1 re-key map).
+    # Native ticket link; import resolves legacy ticket identifiers first.
     ticket_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("support_tickets.id")
     )
-    # CRM work-order UUID carried verbatim; becomes a real FK at the Phase 2
-    # work-order flip (§1.2). Joins via work_order_mirror.crm_work_order_id
-    # until then.
+    # Imported CRM work-order UUID carried verbatim and validated against
+    # work_order.public_id. A native ``sub-`` id cannot fit this UUID field;
+    # migrate the project-task link contract before adding a real FK.
     work_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -266,7 +268,7 @@ class ProjectTask(Base):
     effort_hours: Mapped[int | None] = mapped_column(Integer)
     tags: Mapped[list | None] = mapped_column(JSON)
     # Preserves the CRM fiber-stage keys: fiber_stage_key, fiber_stage_title,
-    # fiber_sla_managed, sla_breached, sla_breached_at (§1.2).
+    # fiber_sla_managed, sla_breached, sla_breached_at.
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )
@@ -304,9 +306,9 @@ class ProjectTask(Base):
 class ProjectTaskAssignee(Base):
     """Task↔staff assignment fact.
 
-    ``person_id`` is a CRM staff-person UUID and half of the composite PK
-    (§1.8 "the nasty one") — the FK is dropped but the UUID stays PK material.
-    Names resolve via the Phase 1 staff map; post-flip assignments use sub
+    ``person_id`` is a CRM staff-person UUID and half of the composite primary
+    key. It has no local FK but remains identity material.
+    Names resolve through the shared staff map; native assignments use Sub
     principals.
     """
 
@@ -356,7 +358,7 @@ class ProjectTemplateTask(Base):
 
 
 class ProjectTemplateTaskDependency(Base):
-    # Table name is singular in CRM — kept verbatim (§1.1).
+    # Retain the established singular table name for schema compatibility.
     __tablename__ = "project_template_task_dependency"
     __table_args__ = (
         UniqueConstraint(
@@ -439,11 +441,11 @@ class ProjectTaskComment(Base):
     task_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("project_tasks.id"), nullable=False
     )
-    # Staff person UUID — no FK (§1.8).
+    # Staff person UUID with no local FK.
     author_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     body: Mapped[str] = mapped_column(Text, nullable=False)
     attachments: Mapped[list | None] = mapped_column(JSON)
-    # Not in CRM — added for import provenance (§1.2, Phase 1 §1.4 pattern).
+    # Not in CRM; retained as import provenance.
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )
@@ -463,11 +465,11 @@ class ProjectComment(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False
     )
-    # Staff person UUID — no FK (§1.8).
+    # Staff person UUID with no local FK.
     author_person_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     body: Mapped[str] = mapped_column(Text, nullable=False)
     attachments: Mapped[list | None] = mapped_column(JSON)
-    # Not in CRM — added for import provenance (§1.2, Phase 1 §1.4 pattern).
+    # Not in CRM; retained as import provenance.
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())
     )

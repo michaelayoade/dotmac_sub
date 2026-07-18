@@ -120,6 +120,59 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="customer.data_completeness",
+                module="app.services.subscriber_data_completeness",
+                owns=(
+                    "purpose-specific subscriber data requirements",
+                    "derived completeness and revalidation state",
+                    "subscriber capture backlog and filing-readiness counts",
+                ),
+                depends_on=("customer.identity_scope",),
+                notes=(
+                    "Read-only policy owner. It reports absent, inferred, "
+                    "captured, and stale state; it never fills a field or "
+                    "writes a capture fact."
+                ),
+            ),
+            SOTService(
+                name="customer.location_verification",
+                module="app.services.geocode_reconciler",
+                owns=(
+                    "subscriber location verification ledger writes",
+                    "reconciliation of a captured pin against claimed location",
+                ),
+                depends_on=("customer.identity_scope",),
+                notes=(
+                    "Captured location facts flow through this owner. The "
+                    "reconciler adjudicates a GPS pin against what was claimed "
+                    "and writes ledger rows only for what agrees; a "
+                    "disagreement is flagged for a human, never auto-applied. "
+                    "It never writes Subscriber columns — projecting a captured "
+                    "fact onto the profile stays the subscriber owner's job. "
+                    "Only the location-capture owner invokes this writer."
+                ),
+            ),
+            SOTService(
+                name="customer.location_capture",
+                module="app.services.location_capture",
+                owns=(
+                    "location-capture rollout and source authorization",
+                    "location prompt eligibility and snooze lifecycle",
+                    "field, portal, and agent capture orchestration",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "customer.data_completeness",
+                    "customer.location_verification",
+                ),
+                notes=(
+                    "The field-arrival, portal, and agent adapters call this "
+                    "owner. It enforces the default-off controls before "
+                    "delegating adjudication and ledger writes to location "
+                    "verification; it never writes Subscriber columns."
+                ),
+            ),
+            SOTService(
                 name="customer.branding",
                 module="app.services.brand_profiles",
                 owns=(
@@ -2034,10 +2087,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "owner. See docs/designs/AI_SOT.md."
                 ),
             ),
+            SOTService(
+                name="ai.generation",
+                module="app.services.ai.engine",
+                owns=(
+                    "the report-advisory generation path",
+                    "advisor lookup, token budget, and prompt assembly",
+                ),
+                depends_on=("ai.insights",),
+                notes=(
+                    "advise() takes the CALLER's owned report projection and "
+                    "never queries a domain model, so the AI boundary holds by "
+                    "construction. It persists only through ai.insights (the "
+                    "single AIInsight writer). Behind the default-OFF "
+                    "ai.generation control. Called on demand from the admin "
+                    "report surface (app.web.admin.reports)."
+                ),
+            ),
         ),
         entrypoints=(
             "app.api.ai_operations",
             "app.tasks.ai_operations",
+            "app.web.admin.reports",
         ),
         rule=(
             "AI observes, derives, and recommends; it never decides domain "

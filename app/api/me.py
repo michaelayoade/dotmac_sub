@@ -873,7 +873,7 @@ def my_referrals(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's Refer & Earn summary — code, share link, program terms, and
-    history. Behind the Phase 3 ``referrals_native_read_enabled`` read-flip
+    history. Behind the ``referrals_native_read_enabled`` ownership
     flag (§4.2): OFF serves the local CRM mirror (refreshed lazily), ON serves
     the native referral tables — same shape either way (§2.5)."""
     subscriber_id = _subscriber_id(principal)
@@ -888,7 +888,7 @@ def my_projects(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's installations/projects — stage timeline + progress %.
-    Behind the Phase 3 ``projects_native_read_enabled`` read-flip flag (§4.2):
+    Behind the ``projects_native_read_enabled`` ownership flag:
     OFF serves the local CRM mirror (refreshed lazily), ON serves the native
     ``projects`` table — same shape and ids either way (§2.5)."""
     subscriber_id = _subscriber_id(principal)
@@ -960,7 +960,7 @@ def my_quotes(
     principal: dict = Depends(require_user_auth),
 ):
     """The caller's self-serve installation quotes — feasibility, estimate,
-    deposit, status. Behind the Phase 3 ``quotes_native_read_enabled``
+    deposit, status. Behind the ``quotes_native_read_enabled`` ownership
     read-flip flag (§4.2): OFF serves the local CRM mirror (refreshed lazily),
     ON serves sub's native ``quotes`` table — same shape either way (§2.5)."""
     subscriber_id = _subscriber_id(principal)
@@ -977,7 +977,7 @@ def my_quote_request(
 ):
     """Request a map-pinned installation quote. The dropped pin drives the
     feasibility check (proximity to fiber) + estimate + deposit. Behind the
-    Phase 3 ``quotes_native_write_enabled`` write-flip flag: OFF writes through
+    ``quotes_native_write_enabled`` ownership flag: OFF writes through
     to the CRM and returns the mirrored item; ON creates the quote in sub's
     native ``quotes`` table (no CRM link required, so native-only subscribers
     can quote too) — same §2.5 payload shape either way."""
@@ -1056,7 +1056,7 @@ def my_refer_a_friend(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
 ):
-    """Refer a friend. Behind the Phase 3 ``referrals_native_write_enabled``
+    """Refer a friend. Behind the ``referrals_native_write_enabled``
     write-flip flag: OFF captures in the CRM (write-through, mirrored
     locally); ON captures in sub's native referral tables — no CRM link
     required, so native-only subscribers can refer too. Same response shape

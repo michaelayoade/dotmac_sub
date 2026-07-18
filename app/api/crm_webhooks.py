@@ -10,9 +10,9 @@ tickets appear locally in seconds instead of waiting for the 5-minute pull.
 Updates/comments have no CRM webhook events and remain covered by the pull.
 The ticket branch is gated by the same crm.ticket_pull control as the pull
 beat entries (legacy key crm_ticket_pull_enabled) — with it off, ticket
-events are acked as 200 noops (Phase 1 flip kill switch). The work-order
+events are acknowledged as no-op successes when native ticket authority is active. The work-order
 branch is gated the same way by crm.work_order_pull (legacy key
-crm_work_order_pull_enabled — Phase 2 flip kill switch).
+``crm_work_order_pull_enabled`` native-authority switch).
 
 Mounted with no router-level auth (see main.py) — authentication is the HMAC
 signature, fail-closed: unconfigured secret → 503,
@@ -334,7 +334,7 @@ async def receive_crm_referral_event(
         return {"status": "ignored", "reason": "duplicate", "event": event_type}
 
     result = referrals_mirror.apply_webhook(db, event_type, body)
-    # Phase 3 sync window (§4.2 step 4): ALSO apply the thin delta to the
+    # CRM compatibility sync window: also apply the thin delta to the
     # native referrals table (flag-gated inside; best-effort, never raises).
     crm_native_sync.apply_webhook_delta(db, "referral", event_type, body)
     return result
@@ -379,7 +379,7 @@ async def receive_crm_project_event(
     body = inner if isinstance(inner, dict) else payload
 
     result = projects_mirror.apply_webhook(db, event_type, body)
-    # Phase 3 sync window (§4.2 step 4): ALSO apply the thin delta to the
+    # CRM compatibility sync window: also apply the thin delta to the
     # native projects table (flag-gated inside; best-effort, never raises).
     crm_native_sync.apply_webhook_delta(db, "project", event_type, body)
     return result
@@ -402,7 +402,7 @@ async def receive_crm_work_order_event(
     if event_type and event_type not in WORK_ORDER_EVENTS:
         return {"status": "ignored", "event": event_type}
 
-    # Flip kill switch (Phase 2, ticket-pattern #1111): the same
+    # Native work-order authority switch: the same
     # crm.work_order_pull control (legacy scheduler key
     # crm_work_order_pull_enabled) that gates the work_order_mirror_reconcile
     # beat entry also gates this branch — once sub is the work-order
@@ -480,7 +480,7 @@ async def receive_crm_quote_event(
     body = inner if isinstance(inner, dict) else payload
 
     result = quotes_mirror.apply_webhook(db, event_type, body)
-    # Phase 3 sync window (§4.2 step 4): ALSO apply the thin delta to the
+    # CRM compatibility sync window: also apply the thin delta to the
     # native quotes table (flag-gated inside; best-effort, never raises).
     crm_native_sync.apply_webhook_delta(db, "quote", event_type, body)
     return result

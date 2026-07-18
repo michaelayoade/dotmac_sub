@@ -1,4 +1,4 @@
-"""Context builders for the admin referrals web pages (Phase 3 §2.6).
+"""Context builders for native admin referral pages.
 
 Ported from the CRM's ``app/web/admin/crm_referrals.py`` onto sub identity:
 referrer/referred are subscribers (not CRM people), rows link to the existing
