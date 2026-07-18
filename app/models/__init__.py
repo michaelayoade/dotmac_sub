@@ -59,6 +59,7 @@ from app.models.billing import (  # noqa: F401
     PaymentAllocationReconciliationException,
     PaymentMethod,
     PaymentMethodType,
+    PaymentPrepaidApplication,
     PaymentProvider,
     PaymentProviderEvent,
     PaymentProviderEventStatus,

@@ -690,12 +690,23 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   requires an operator-selected exact ledger row for every active allocation,
   remainder, and prepaid debit, verifies the complete payment partition, links
   evidence, records audit, and posts no new money.
+- Legacy prepaid-cycle repair is a preview-confirm exception owned by
+  `financial.payments`, not a generic allocation shortcut. It requires explicit
+  payment, allocation, invoice, debit, subscription, and replacement-payment
+  identifiers; retires only an unevidenced legacy allocation; reconstructs the
+  missing payment credit, settlement, and entitlement; and records the exact
+  credit-to-debit use in `PaymentPrepaidApplication`. A settled payment consumed
+  after its cash confirmation keeps its immutable `PaymentSettlement` snapshot;
+  the application row is the later-use evidence. The invoice owner alone voids
+  an unpaid superseded draft. Access reconciliation runs only after the financial
+  transaction commits, and an unavailable prepaid baseline is recorded as a
+  deferred recheck instead of rolling back money or granting access.
 - Cutover gate: pending/no-money tests, stale-preview rejection, idempotent
   creation/settlement/allocation replay, exact settlement/allocation/prepaid
-  links, provider replay, explicit historical reconciliation, owner-writer
-  architecture tests, and admin/API preview-confirm boundaries must remain
-  green. Generic succeeded status edits and direct settled-allocation commands
-  remain gated.
+  links, provider replay, explicit historical reconciliation, legacy-cycle
+  repair replay and stale-preview tests, owner-writer architecture tests, and
+  admin/API preview-confirm boundaries must remain green. Generic succeeded
+  status edits and direct settled-allocation commands remain gated.
 
 Consolidated payment settlement has a separate scoped owner contract:
 
