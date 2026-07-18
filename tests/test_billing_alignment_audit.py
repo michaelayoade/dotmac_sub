@@ -720,9 +720,7 @@ def test_replay_accepts_strict_auto_misclassified_first_service_charge(
     assert replay.positions[str(subscriber.id)] == Decimal("100.00")
 
 
-def test_replay_rejects_unproven_category_two_service_activity(
-    db_session, subscriber
-):
+def test_replay_rejects_unproven_category_two_service_activity(db_session, subscriber):
     subscription = _source_mapped_subscription(db_session, subscriber)
     metadata = _replay_tables(db_session, subscriber.id, subscription.id)
     final_services = metadata.tables["audit_splynx_final_services"]

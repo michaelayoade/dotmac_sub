@@ -90,7 +90,10 @@ def _collect_observation(db: Session, plan: ServiceCyclePlan) -> AcceptanceObser
     policy = resolve_prepaid_enforcement_policy(db)
     preview = preview_reconciliation(db, plan)
     alembic_heads = tuple(
-        sorted(str(value) for value in db.scalars(text("SELECT version_num FROM alembic_version")))
+        sorted(
+            str(value)
+            for value in db.scalars(text("SELECT version_num FROM alembic_version"))
+        )
     )
     return AcceptanceObservation(
         git_sha=_runtime_git_sha(),
@@ -124,7 +127,9 @@ def _collect_observation(db: Session, plan: ServiceCyclePlan) -> AcceptanceObser
             db, "billing.prepaid_service_renewals"
         ),
         activation_at=(
-            policy.activation_at.isoformat() if policy.activation_at is not None else None
+            policy.activation_at.isoformat()
+            if policy.activation_at is not None
+            else None
         ),
         activation_error=policy.activation_error,
         readiness_block_reason=prepaid_enforcement_readiness_block_reason(db),
@@ -144,8 +149,7 @@ def evaluate_acceptance(
 ) -> dict[str, Any]:
     checks = {
         "git_sha": observation.git_sha == expectation.git_sha,
-        "single_alembic_head": observation.alembic_heads
-        == (expectation.alembic_head,),
+        "single_alembic_head": observation.alembic_heads == (expectation.alembic_head,),
         "minimum_active_baselines": (
             observation.active_baselines >= expectation.minimum_active_baselines
         ),
@@ -153,8 +157,7 @@ def evaluate_acceptance(
         "single_active_readiness": observation.active_readiness_records == 1,
         "enforcement_enabled": observation.enforcement_enabled,
         "renewal_control_state": (
-            observation.renewal_control_enabled
-            == expectation.renewal_control_enabled
+            observation.renewal_control_enabled == expectation.renewal_control_enabled
         ),
         "activation_valid": (
             observation.activation_at is not None
@@ -162,9 +165,7 @@ def evaluate_acceptance(
         ),
         "readiness_unblocked": observation.readiness_block_reason is None,
         "plan_sha256": observation.plan_sha256 == expectation.plan_sha256,
-        "plan_entry_count": (
-            observation.plan_entries == expectation.plan_entry_count
-        ),
+        "plan_entry_count": (observation.plan_entries == expectation.plan_entry_count),
         "plan_total_amount": (
             _money(observation.plan_total_amount)
             == _money(expectation.plan_total_amount)
@@ -173,8 +174,7 @@ def evaluate_acceptance(
             observation.plan_ready and observation.plan_blocked_accounts == 0
         ),
         "plan_reconciliation_state": (
-            observation.plan_already_reconciled
-            == expectation.plan_already_reconciled
+            observation.plan_already_reconciled == expectation.plan_already_reconciled
         ),
     }
     return {
@@ -191,9 +191,7 @@ def _expectation(args: argparse.Namespace) -> AcceptanceExpectation:
     if args.expected_entry_count < 1:
         raise ValueError("expected entry count must be positive")
     if not 0 <= args.expected_already_reconciled <= args.expected_entry_count:
-        raise ValueError(
-            "expected already-reconciled count must be within the plan"
-        )
+        raise ValueError("expected already-reconciled count must be within the plan")
     if len(args.expected_plan_sha256) != 64:
         raise ValueError("expected plan SHA-256 must contain 64 characters")
     return AcceptanceExpectation(

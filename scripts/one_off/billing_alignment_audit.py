@@ -996,10 +996,8 @@ def _batch_reconstructed_positions(
                 and noncanonical_total is not None
                 and noncanonical_total > ZERO
                 and source_unit_price is not None
-                and noncanonical_total
-                == _money(source_unit_price * Decimal(quantity))
-                and service_row.start_date
-                == service_row.last_noncharge_period_from
+                and noncanonical_total == _money(source_unit_price * Decimal(quantity))
+                and service_row.start_date == service_row.last_noncharge_period_from
                 and service_row.last_noncharge_period_from is not None
                 and service_row.last_noncharge_period_to is not None
             )
@@ -1016,9 +1014,7 @@ def _batch_reconstructed_positions(
                 incomplete[account_id].add(reason)
                 continue
             else:
-                incomplete[account_id].add(
-                    "source_service_without_paid_through_period"
-                )
+                incomplete[account_id].add("source_service_without_paid_through_period")
                 continue
         if period_from is None or period_to is None:
             # Kept explicit for type narrowing and fail-closed safety if the
