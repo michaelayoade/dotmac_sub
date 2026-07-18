@@ -126,6 +126,27 @@ QUOTE_LIST_DEFINITION = ListDefinition(
     default_sort_dir="desc",
 )
 
+# The sales-orders list is sorted directly on the SalesOrder query, so any of
+# these columns is sortable; filters are status/payment/source.
+SALES_ORDER_LIST_DEFINITION = ListDefinition(
+    key="sales_orders",
+    fields=(
+        ListFieldDefinition("order_number", "Order", searchable=True, sortable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("payment_status", "Payment", filterable=True),
+        ListFieldDefinition("source_type", "Source", filterable=True),
+        ListFieldDefinition("total", "Total", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+_SALES_ORDER_SORT_COLUMNS = {
+    "created_at": SalesOrder.created_at,
+    "order_number": SalesOrder.order_number,
+    "total": SalesOrder.total,
+}
+
 
 def quote_status_values() -> list[str]:
     return [status.value for status in QuoteStatus]
@@ -1172,6 +1193,8 @@ def build_sales_orders_list_context(
     payment_status: str | None,
     source_type: str | None,
     search: str | None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
@@ -1180,20 +1203,35 @@ def build_sales_orders_list_context(
     if source_type not in {"quote", "manual"}:
         source_type = None
 
+    safe_sort = (
+        sort_by
+        if sort_by in SALES_ORDER_LIST_DEFINITION.sortable_keys
+        else SALES_ORDER_LIST_DEFINITION.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in SALES_ORDER_LIST_DEFINITION.per_page_options
+        else SALES_ORDER_LIST_DEFINITION.default_per_page
+    )
+    list_query = SALES_ORDER_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "status": status,
+            "payment_status": payment_status,
+            "source_type": source_type,
+        },
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
     filters = {
         "status": status,
         "payment_status": payment_status,
         "source_type": source_type,
         "search": search or None,
     }
-    offset = (page - 1) * per_page
-    orders = (
-        _sales_orders_query(db, **filters)
-        .order_by(SalesOrder.created_at.desc())
-        .limit(per_page)
-        .offset(offset)
-        .all()
-    )
 
     totals = (
         _sales_orders_query(db, **filters)
@@ -1239,6 +1277,19 @@ def build_sales_orders_list_context(
         .one()
     )
     total = int(totals.total or 0)
+    page_meta = PageMeta.from_query(list_query, total)
+    sort_column = _SALES_ORDER_SORT_COLUMNS[list_query.sort_by]
+    ordered = (
+        sort_column.desc() if list_query.sort_dir == "desc" else sort_column.asc()
+    )
+    orders = (
+        _sales_orders_query(db, **filters)
+        # Unique tie-breaker keeps ordering deterministic across pages.
+        .order_by(ordered, SalesOrder.id.asc())
+        .limit(list_query.per_page)
+        .offset((page_meta.page - 1) * list_query.per_page)
+        .all()
+    )
     paid = int(totals.paid or 0)
     stats = {
         "total": total,
@@ -1258,10 +1309,12 @@ def build_sales_orders_list_context(
     return {
         "orders": orders,
         "stats": stats,
-        "page": page,
-        "per_page": per_page,
+        "list_query": list_query,
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
         "total": total,
-        "total_pages": _total_pages(total, per_page),
+        "total_pages": page_meta.total_pages,
         "status": status or "",
         "payment_status": payment_status or "",
         "source_type": source_type or "",
