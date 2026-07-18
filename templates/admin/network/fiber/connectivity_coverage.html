@@ -1,0 +1,69 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Fiber Connectivity Coverage - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+            <a href="/admin/network/fiber-plant" class="hover:text-indigo-600">Fiber plant</a><span>/</span><span>Connectivity coverage</span>
+        </nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Fiber connectivity coverage evidence</h1>
+        <p class="mt-1 max-w-4xl text-sm text-slate-500 dark:text-slate-400">One exhaustive read-only snapshot reconciles every latest staged path to exact batch, review, execution, pending mutation, and canonical source-provenance evidence. Geometry is evidence only. This page cannot infer endpoints, advance decisions, approve change requests, mutate topology, or authorize production cutover.</p>
+    </div>
+
+    <section class="rounded-xl border {{ 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30' if coverage.ready_for_connectivity_cutover_review else 'border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/30' }} p-4">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+                <p class="font-semibold {{ 'text-emerald-900 dark:text-emerald-200' if coverage.ready_for_connectivity_cutover_review else 'text-rose-900 dark:text-rose-200' }}">Connectivity cutover evidence {{ 'ready for separate review' if coverage.ready_for_connectivity_cutover_review else 'blocked' }}</p>
+                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ coverage.staged_path_count }} latest staged path(s) from {{ coverage.source_batch_count }} source batch(es), {{ coverage.lineages | length }} decision lineage row(s), and {{ coverage.batch_evidence_blockers | length }} evidence blocker(s).</p>
+            </div>
+            <div class="font-mono text-xs text-slate-500" title="Coverage report SHA-256">{{ coverage.coverage_report_sha256 }}</div>
+        </div>
+        <div class="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {% for gate in coverage.gates %}
+            <div class="rounded-lg border border-white/70 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-900/40">
+                <div class="flex items-start justify-between gap-3"><span class="text-xs font-semibold text-slate-800 dark:text-slate-200">{{ gate.code | replace('_', ' ') | title }}</span><span class="rounded-full px-2 py-0.5 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200' if gate.ready else 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-200' }}">{{ 'Ready' if gate.ready else 'Blocked' }}</span></div>
+                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">{{ gate.detail }}</p>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="grid gap-3 lg:grid-cols-4">
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800"><h2 class="text-sm font-semibold text-slate-900 dark:text-white">Coverage</h2><dl class="mt-3 space-y-2 text-xs">{% for state, count in coverage.coverage_counts.items() %}<div class="flex justify-between gap-3"><dt class="text-slate-500">{{ state | replace('_', ' ') | title }}</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ count }}</dd></div>{% endfor %}</dl></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800"><h2 class="text-sm font-semibold text-slate-900 dark:text-white">Lifecycle</h2><dl class="mt-3 space-y-2 text-xs">{% for state, count in coverage.lifecycle_counts.items() %}<div class="flex justify-between gap-3"><dt class="text-slate-500">{{ state | replace('_', ' ') | title }}</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ count }}</dd></div>{% endfor %}</dl></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800"><h2 class="text-sm font-semibold text-slate-900 dark:text-white">Selected decisions</h2><dl class="mt-3 space-y-2 text-xs">{% for state, count in coverage.decision_counts.items() %}<div class="flex justify-between gap-3"><dt class="text-slate-500">{{ state | replace('_', ' ') | title }}</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ count }}</dd></div>{% endfor %}</dl></div>
+        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800"><h2 class="text-sm font-semibold text-slate-900 dark:text-white">Field observations</h2><dl class="mt-3 space-y-2 text-xs">{% for state, count in coverage.field_verification_counts.items() %}<div class="flex justify-between gap-3"><dt class="text-slate-500">{{ state | replace('_', ' ') | title }}</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ count }}</dd></div>{% endfor %}</dl><p class="mt-3 text-xs text-slate-500">Observation states are evidence only and are not cutover gates until field-threshold policy is approved.</p></div>
+    </section>
+
+    {% if coverage.batch_evidence_blockers %}
+    <section class="rounded-xl border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-950/30">
+        <h2 class="font-semibold text-rose-900 dark:text-rose-200">Evidence blockers</h2>
+        <ul class="mt-3 space-y-2 text-xs text-rose-800 dark:text-rose-300">{% for blocker in coverage.batch_evidence_blockers %}<li><span class="font-mono">{{ blocker.batch_id }}</span> · {{ blocker.code | replace('_', ' ') }} · {{ blocker.message }}</li>{% endfor %}</ul>
+    </section>
+    {% endif %}
+
+    <section class="space-y-3">
+        <div><h2 class="text-lg font-semibold text-slate-900 dark:text-white">Latest staged paths</h2><p class="text-sm text-slate-500 dark:text-slate-400">Coverage and lifecycle remain separate. The gates always use the complete cohort; this table displays at most 250 rows. Use the read-only CLI for complete JSON evidence.</p></div>
+        <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <table class="min-w-full text-sm">
+                <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50"><tr><th class="px-4 py-3">Source path</th><th class="px-4 py-3">Coverage</th><th class="px-4 py-3">Lifecycle</th><th class="px-4 py-3">Decision</th><th class="px-4 py-3">Canonical evidence</th></tr></thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for row in coverage.paths[:250] %}
+                    <tr class="align-top">
+                        <td class="px-4 py-4 text-xs"><div class="font-semibold text-slate-900 dark:text-white">{{ row.display_name or row.external_id }}</div><div class="mt-1 font-mono text-slate-500">{{ row.source_system }} · {{ row.external_id }}</div><div class="mt-1 text-slate-500">{{ row.profile }} · {{ row.content_sha256[:16] }}…</div></td>
+                        <td class="px-4 py-4"><span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ row.coverage_state | replace('_', ' ') | title }}</span></td>
+                        <td class="px-4 py-4"><span class="rounded-full px-2 py-1 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if row.lifecycle_state in ['applied_current', 'rejected_current'] else 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200' }}">{{ row.lifecycle_state | replace('_', ' ') | title }}</span></td>
+                        <td class="px-4 py-4 text-xs">{% if row.selected_decision %}<div class="font-mono">{{ row.selected_decision.decision_id }}</div><div class="mt-1 text-slate-500">{{ row.selected_decision.action }} · {{ row.selected_decision.status }}</div>{% else %}<span class="text-slate-400">No selected decision</span>{% endif %}</td>
+                        <td class="px-4 py-4 text-xs text-slate-500"><div>Field {{ row.field_verification.state | replace('_', ' ') }}</div>{% if row.provenance_evidence %}<div>Source link {{ 'current' if row.provenance_evidence.source_link_valid else 'drift' }}</div><div>Segment {{ 'current' if row.provenance_evidence.segment_current else 'drift' }}</div>{% elif row.mutation_evidence and row.mutation_evidence.segment_change_request_id %}<div>Segment request {{ row.mutation_evidence.segment_change_request_status }}</div>{% elif row.mutation_evidence and row.mutation_evidence.start_resolution %}<div>Endpoint requests pending/reconciling</div>{% endif %}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="px-4 py-10 text-center text-slate-500">No staged fiber paths exist. The non-empty cohort gate remains blocked.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+{% endblock %}

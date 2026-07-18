@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.schemas.common import ListResponse
 from app.schemas.field import (
+    FieldFiberSourceObservationCreate,
+    FieldFiberSourceObservationRead,
     FieldFiberTestCreate,
     FieldFiberTestRead,
     FieldSpliceCreate,
@@ -75,4 +77,68 @@ def list_field_fiber_tests(
     db: Session = Depends(get_db),
 ):
     items = field_fiber.list_tests(db, auth, crm_work_order_id=crm_work_order_id)
+    return {"items": items, "count": len(items), "limit": len(items), "offset": 0}
+
+
+@router.post(
+    "/source-observations",
+    response_model=FieldFiberSourceObservationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def record_field_fiber_source_observation(
+    payload: FieldFiberSourceObservationCreate,
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return field_fiber.record_source_observation(
+        db,
+        auth,
+        work_order_public_id=payload.work_order_id,
+        staged_feature_id=str(payload.staged_feature_id),
+        expected_feature_content_sha256=payload.expected_feature_content_sha256,
+        verification_scope=payload.verification_scope,
+        outcome=payload.outcome,
+        observed_at=payload.observed_at,
+        client_ref=str(payload.client_ref),
+        observed_external_label=payload.observed_external_label,
+        observed_asset_type=payload.observed_asset_type,
+        observed_asset_id=(
+            str(payload.observed_asset_id) if payload.observed_asset_id else None
+        ),
+        start_endpoint_type=payload.start_endpoint_type,
+        start_endpoint_ref_id=(
+            str(payload.start_endpoint_ref_id)
+            if payload.start_endpoint_ref_id
+            else None
+        ),
+        end_endpoint_type=payload.end_endpoint_type,
+        end_endpoint_ref_id=(
+            str(payload.end_endpoint_ref_id) if payload.end_endpoint_ref_id else None
+        ),
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        accuracy_m=payload.accuracy_m,
+        instrument=payload.instrument,
+        measurement_payload=payload.measurement_payload,
+        attachment_ids=[str(value) for value in payload.attachment_ids],
+        notes=payload.notes,
+    )
+
+
+@router.get(
+    "/source-observations",
+    response_model=ListResponse[FieldFiberSourceObservationRead],
+)
+def list_field_fiber_source_observations(
+    work_order_id: str = Query(min_length=1, max_length=64),
+    staged_feature_id: str | None = Query(default=None),
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    items = field_fiber.list_source_observations(
+        db,
+        auth,
+        work_order_public_id=work_order_id,
+        staged_feature_id=staged_feature_id,
+    )
     return {"items": items, "count": len(items), "limit": len(items), "offset": 0}

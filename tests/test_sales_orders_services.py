@@ -367,8 +367,7 @@ def test_closed_sales_line_stages_one_bound_provisioning_order(
     }
 
     from app.models.catalog import AccessCredential
-    from app.models.network import OntSyncStatus, OntUnit
-    from app.schemas.network import OntAssignmentCreate
+    from app.models.network import OLTDevice, OntSyncStatus, OntUnit, PonPort
     from app.services import network as network_service
     from app.services.network.ont_desired_config import desired_config
 
@@ -377,17 +376,24 @@ def test_closed_sales_line_stages_one_bound_provisioning_order(
         .filter(AccessCredential.subscription_id == subscription.id)
         .one()
     )
-    ont = OntUnit(serial_number="ORDER-STAGED-ONT", is_active=True)
-    db_session.add(ont)
+    olt = OLTDevice(name="Order staged OLT", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+    pon = PonPort(olt_id=olt.id, name="0/1/1", is_active=True)
+    ont = OntUnit(
+        serial_number="ORDER-STAGED-ONT",
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    db_session.add_all([pon, ont])
     db_session.commit()
-    network_service.ont_assignments.create(
+    network_service.ont_assignment_commands.assign(
         db_session,
-        OntAssignmentCreate(
-            ont_unit_id=ont.id,
-            subscriber_id=subscriber.id,
-            subscription_id=subscription.id,
-            active=True,
-        ),
+        ont_unit_id=ont.id,
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        pon_port_id=pon.id,
+        source="test",
     )
 
     db_session.refresh(ont)

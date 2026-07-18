@@ -1,0 +1,213 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}ONT Identity Review - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <a href="/admin/network/fiber-plant" class="hover:text-indigo-600">Fiber plant</a>
+                <span>/</span>
+                <span>ONT identity review</span>
+            </nav>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">ONT identity review</h1>
+            <p class="mt-1 max-w-3xl text-sm text-slate-500 dark:text-slate-400">Detected disagreements are observations only. A repair requires exact assignment, subscription, and PON identifiers, a preview, and an independent reviewer.</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <a href="/admin/network/ont-assignment-cutover-coverage" class="inline-flex items-center justify-center rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800">Coverage evidence</a>
+            <a href="/admin/network/ont-identity-reviews/new" class="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">Create exact proposal</a>
+        </div>
+    </div>
+
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+        <p class="font-semibold">No inferred customer identity</p>
+        <p class="mt-1">Names, addresses, geometry, proximity, and imported registration values can help an operator investigate, but they cannot select or authorize a repair. The target OLT is derived only from the exact modeled PON selected in the proposal.</p>
+    </div>
+
+    <section class="rounded-xl border {{ 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30' if cutover_audit.ready_for_constraints else 'border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/30' }} p-4">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+                <p class="text-sm font-semibold {{ 'text-emerald-900 dark:text-emerald-200' if cutover_audit.ready_for_constraints else 'text-rose-900 dark:text-rose-200' }}">Assignment constraint cutover {{ 'ready' if cutover_audit.ready_for_constraints else 'blocked' }}</p>
+                <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ cutover_audit.blocker_assignment_count }} of {{ cutover_audit.active_assignment_count }} active assignments have {{ cutover_audit.blocker_reason_count }} exact blocker(s). No new or strengthened constraint is authorized until every gate is clean and the cutover is explicitly approved.</p>
+            </div>
+            <div class="font-mono text-xs text-slate-500" title="Stable audit report SHA-256">{{ cutover_audit.report_sha256 }}</div>
+        </div>
+        <div class="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {% for gate in cutover_audit.gates %}
+            <div class="rounded-lg border border-white/70 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-900/40">
+                <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-slate-800 dark:text-slate-200">{{ gate.name | replace('_', ' ') | title }}</span><span class="rounded-full px-2 py-0.5 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200' if gate.ready else 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-200' }}">{{ 'Ready' if gate.ready else (gate.blocking_assignment_ids | length) ~ ' blocked' }}</span></div>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="space-y-3">
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Reviewed cleanup batches</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Immutable audit-bound manifests. Approval changes only the delegated decision states; each repair is still executed and revalidated individually.</p>
+            </div>
+            <span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200">{{ cutover_batches | length }} shown</span>
+        </div>
+        <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
+                        <tr><th class="px-4 py-3">Batch</th><th class="px-4 py-3">Audit evidence</th><th class="px-4 py-3">Delegated decisions</th><th class="px-4 py-3">Review</th><th class="px-4 py-3">Latest verification</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for row in cutover_batches %}
+                        <tr class="align-top">
+                            <td class="px-4 py-4"><div class="font-mono text-xs text-slate-700 dark:text-slate-200">{{ row.batch.id }}</div><div class="mt-1 text-xs text-slate-500">{{ row.batch.item_count }} item(s) · {{ row.batch.source_name }} · {{ row.batch.proposed_by }}</div><div class="mt-1 text-xs text-slate-500">{{ row.batch.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</div></td>
+                            <td class="px-4 py-4 text-xs"><div title="Complete cutover report SHA-256"><span class="font-semibold">Report</span> <span class="font-mono">{{ row.batch.report_sha256[:16] }}…</span></div><div class="mt-1" title="Immutable manifest SHA-256"><span class="font-semibold">Manifest</span> <span class="font-mono">{{ row.batch.manifest_sha256[:16] }}…</span></div></td>
+                            <td class="px-4 py-4 text-xs"><ul class="space-y-1">{% for decision in row.decisions %}<li><a href="/admin/network/ont-identity-reviews/{{ decision.id }}" class="font-mono text-indigo-700 hover:underline dark:text-indigo-300">#{{ decision.proposal_batch_row_number }} {{ decision.primary_assignment_id }}</a> <span class="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ decision.status }}</span></li>{% endfor %}</ul></td>
+                            <td class="px-4 py-4 text-xs"><span class="rounded-full px-2 py-1 font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if row.status == 'approve' else ('bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200' if row.status == 'decline' else 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200') }}">{{ row.status | replace('_', ' ') | title }}</span>{% if row.review %}<p class="mt-2 text-slate-500">{{ row.review.reviewed_by }} · {{ row.review.reviewed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</p>{% endif %}</td>
+                            <td class="px-4 py-4 text-xs">{% if row.latest_verification %}<span class="rounded-full px-2 py-1 font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if row.latest_verification.outcome == 'applied_clean_scope' else 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200' }}">{{ row.latest_verification.outcome | replace('_', ' ') | title }}</span><p class="mt-2 text-slate-500">{{ row.latest_verification.batch_scope_residual_count }} scope residual · {{ row.latest_verification.global_blocker_assignment_count }} global blocker(s)</p><p class="mt-1 text-slate-500">{{ row.latest_verification.verified_by }} · {{ row.latest_verification.verified_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</p>{% else %}<span class="text-slate-500">Not attested</span>{% endif %}</td>
+                        </tr>
+                        {% else %}<tr><td colspan="5" class="px-4 py-10 text-center text-slate-500 dark:text-slate-400">No immutable cleanup batches match this search.</td></tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <form method="get" class="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 md:grid-cols-[minmax(0,1fr)_12rem_auto]">
+        <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search exact IDs or ONT serial</span>
+            <input type="search" name="q" value="{{ query }}" placeholder="Assignment, ONT, subscription, PON, OLT, serial" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+        </label>
+        <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Decision status</span>
+            <select name="status" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                {% for status in statuses %}
+                <option value="{{ status }}" {{ 'selected' if selected_status == status else '' }}>{{ status | replace('_', ' ') | title }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button type="submit" class="self-end rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Filter</button>
+    </form>
+
+    <section class="space-y-3">
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Network observations needing validation</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Durable collector evidence that is incomplete or disagrees with canonical topology. It cannot mutate an existing identity edge.</p>
+            </div>
+            <span class="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-800 dark:bg-rose-900/40 dark:text-rose-200">{{ observation_reviews | length }} shown</span>
+        </div>
+        <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
+                        <tr><th class="px-4 py-3">Observation</th><th class="px-4 py-3">Observed edge</th><th class="px-4 py-3">Canonical edge</th><th class="px-4 py-3">Reason</th><th class="px-4 py-3 text-right">Action</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for row in observation_reviews %}
+                        {% set evidence = row.evidence %}
+                        <tr class="align-top">
+                            <td class="px-4 py-4"><div class="font-semibold text-slate-900 dark:text-white">{{ row.ont_serial_number }}</div><div class="mt-1 text-xs text-slate-500">{{ evidence.source | upper }} · {{ evidence.evidence_key }}</div><div class="mt-1 font-mono text-xs text-slate-500">{{ evidence.id }}</div></td>
+                            <td class="px-4 py-4 text-xs text-slate-600 dark:text-slate-300"><div><span class="font-semibold">OLT:</span> <span class="font-mono">{{ evidence.observed_olt_id }}</span></div><div class="mt-1"><span class="font-semibold">PON:</span> <span class="font-mono">{{ evidence.observed_pon_port_id or 'incomplete' }}</span></div><div class="mt-1">{{ evidence.observed_port_label or '-' }}{% if evidence.observed_port_number is not none %} · port {{ evidence.observed_port_number }}{% endif %}</div></td>
+                            <td class="px-4 py-4 text-xs text-slate-600 dark:text-slate-300"><div><span class="font-semibold">OLT:</span> <span class="font-mono">{{ evidence.canonical_olt_id or 'missing' }}</span></div><div class="mt-1"><span class="font-semibold">PON:</span> <span class="font-mono">{{ evidence.canonical_pon_port_id or 'missing' }}</span></div><div class="mt-2">{{ evidence.assignment_conflict_ids | length }} assignment conflict(s)</div></td>
+                            <td class="px-4 py-4 text-xs"><span class="rounded-full bg-rose-100 px-2 py-1 font-semibold text-rose-800 dark:bg-rose-900/40 dark:text-rose-200">{{ evidence.latest_outcome | replace('_', ' ') | title }}</span><p class="mt-2 max-w-sm text-slate-600 dark:text-slate-300">{{ evidence.latest_reason or 'Manual validation required' }}</p><p class="mt-2 text-slate-500">Seen {{ evidence.seen_count }} time(s), last {{ evidence.last_seen_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</p></td>
+                            <td class="px-4 py-4 text-right">
+                                {% if row.proposal_assignment_id %}<a href="/admin/network/ont-identity-reviews/new?primary_assignment_id={{ row.proposal_assignment_id }}" class="inline-flex rounded-lg border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-800 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-200">Validate exact repair</a>{% else %}<span class="text-xs text-slate-500">Resolve inventory first</span>{% endif %}
+                            </td>
+                        </tr>
+                        {% else %}<tr><td colspan="5" class="px-4 py-10 text-center text-slate-500 dark:text-slate-400">No unresolved observations match this search.</td></tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="space-y-3">
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Detected disagreements</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Read-only detection. Nothing in this table is an approved correction.</p>
+            </div>
+            <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">{{ candidates | length }} shown</span>
+        </div>
+        <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
+                        <tr>
+                            <th class="px-4 py-3">ONT / assignment</th>
+                            <th class="px-4 py-3">Recorded edges</th>
+                            <th class="px-4 py-3">Why review</th>
+                            <th class="px-4 py-3 text-right">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for candidate in candidates %}
+                        <tr class="align-top">
+                            <td class="px-4 py-4">
+                                <div class="font-semibold text-slate-900 dark:text-white">{{ candidate.ont_serial_number }}</div>
+                                <div class="mt-1 font-mono text-xs text-slate-500">Assignment {{ candidate.assignment_id }}</div>
+                                <div class="font-mono text-xs text-slate-500">ONT {{ candidate.ont_unit_id }}</div>
+                                <div class="mt-1 font-mono text-xs text-slate-400">Evidence {{ candidate.finding_sha256[:12] }}</div>
+                            </td>
+                            <td class="px-4 py-4 text-xs text-slate-600 dark:text-slate-300">
+                                <dl class="space-y-1">
+                                    <div><dt class="inline font-semibold">Subscription:</dt> <dd class="inline font-mono">{{ candidate.subscription_id or 'missing' }}</dd></div>
+                                    <div><dt class="inline font-semibold">Assignment PON:</dt> <dd class="inline font-mono">{{ candidate.assignment_pon_port_id or 'missing' }}</dd></div>
+                                    <div><dt class="inline font-semibold">ONT PON:</dt> <dd class="inline font-mono">{{ candidate.ont_pon_port_id or 'missing' }}</dd></div>
+                                    <div><dt class="inline font-semibold">ONT OLT:</dt> <dd class="inline font-mono">{{ candidate.ont_olt_id or 'missing' }}</dd></div>
+                                </dl>
+                            </td>
+                            <td class="px-4 py-4">
+                                <ul class="space-y-1 text-xs text-amber-800 dark:text-amber-200">
+                                    {% for reason in candidate.reason_labels %}<li>{{ reason }}</li>{% endfor %}
+                                </ul>
+                                {% if candidate.related_assignment_ids %}<p class="mt-2 text-xs text-slate-500">{{ candidate.related_assignment_ids | length }} exact related assignment(s)</p>{% endif %}
+                            </td>
+                            <td class="px-4 py-4 text-right">
+                                {% if candidate.active_decision_id %}
+                                <a href="/admin/network/ont-identity-reviews/{{ candidate.active_decision_id }}" class="inline-flex rounded-lg border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300">Open decision</a>
+                                {% else %}
+                                <a href="{{ candidate.review_path }}" class="inline-flex rounded-lg border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200">Investigate</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="px-4 py-10 text-center text-slate-500 dark:text-slate-400">No detected disagreements match this search.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="space-y-3">
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Reviewed repair decisions</h2>
+            <p class="text-sm text-slate-500 dark:text-slate-400">Proposed {{ status_counts.proposed or 0 }} · Approved {{ status_counts.approved or 0 }} · Applied {{ status_counts.applied or 0 }} · Closed {{ status_counts.closed or 0 }}</p>
+        </div>
+        <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full text-sm">
+                    <thead class="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-400">
+                        <tr><th class="px-4 py-3">Decision</th><th class="px-4 py-3">ONT</th><th class="px-4 py-3">Action / target</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Proposed</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% for row in decisions %}
+                        {% set decision = row.decision %}
+                        <tr>
+                            <td class="px-4 py-4"><a href="/admin/network/ont-identity-reviews/{{ decision.id }}" class="font-mono text-xs font-semibold text-indigo-600 hover:underline dark:text-indigo-400">{{ decision.id }}</a></td>
+                            <td class="px-4 py-4"><div class="font-medium text-slate-900 dark:text-white">{{ row.ont_serial_number }}</div><div class="font-mono text-xs text-slate-500">{{ decision.ont_unit_id }}</div></td>
+                            <td class="px-4 py-4 text-xs"><div class="font-semibold text-slate-700 dark:text-slate-200">{{ decision.action | title }}</div><div class="mt-1 font-mono text-slate-500">{{ decision.target_subscription_id or 'No replacement target' }}</div></td>
+                            <td class="px-4 py-4"><span class="rounded-full px-2 py-1 text-xs font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if decision.status == 'applied' else 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200' if decision.status in ['proposed', 'approved'] else 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-200' }}">{{ decision.status | title }}</span></td>
+                            <td class="px-4 py-4 text-xs text-slate-500">{{ decision.proposed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}<div class="mt-1">{{ decision.proposed_by }}</div></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="px-4 py-10 text-center text-slate-500 dark:text-slate-400">No decisions match this filter.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

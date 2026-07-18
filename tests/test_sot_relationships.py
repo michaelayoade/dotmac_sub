@@ -59,6 +59,29 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("network.fiber_identity_review") == (
         "network.fiber_identity_decisions",
     )
+    assert sot_relationships.dependencies_for("network.fiber_field_observations") == (
+        "network.fiber_source_staging",
+        "operations.work_orders",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.fiber_field_verification_worklist"
+    ) == (
+        "network.fiber_source_staging",
+        "network.fiber_field_observations",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.fiber_field_verification_map"
+    ) == (
+        "network.fiber_source_staging",
+        "network.fiber_field_verification_worklist",
+    )
+    assert sot_relationships.dependencies_for("network.fiber_identity_coverage") == (
+        "network.fiber_source_staging",
+        "network.fiber_asset_changes",
+        "network.fiber_field_observations",
+        "network.fiber_identity_decisions",
+        "network.fiber_identity_review",
+    )
     assert sot_relationships.dependencies_for(
         "network.fiber_connectivity_decisions"
     ) == (
@@ -66,13 +89,74 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.fiber_asset_changes",
         "network.fiber_identity_decisions",
     )
+    assert sot_relationships.dependencies_for("network.fiber_connectivity_review") == (
+        "network.fiber_connectivity_decisions",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.fiber_connectivity_coverage"
+    ) == (
+        "network.fiber_source_staging",
+        "network.fiber_asset_changes",
+        "network.fiber_field_observations",
+        "network.fiber_connectivity_decisions",
+        "network.fiber_connectivity_review",
+    )
     assert sot_relationships.dependencies_for("network.fiber_access_attachments") == (
         "network.fiber_topology",
         "network.fiber_connectivity_decisions",
+        "network.ont_assignment_commands",
+        "network.ont_assignment_identity",
+    )
+    assert sot_relationships.dependencies_for("network.ont_topology_observations") == (
+        "network.fiber_topology",
+    )
+    assert sot_relationships.dependencies_for("network.ont_assignment_identity") == (
+        "network.fiber_topology",
+        "network.ont_topology_observations",
+        "network.ont_assignment_commands",
+    )
+    assert sot_relationships.dependencies_for("network.ont_assignment_commands") == (
+        "network.identity",
+        "network.ont_topology_observations",
+    )
+    assert sot_relationships.dependencies_for("network.ont_assignment_cutover") == (
+        "network.ont_assignment_commands",
+        "network.ont_assignment_identity",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.ont_assignment_cutover_batches"
+    ) == (
+        "network.ont_assignment_cutover",
+        "network.ont_assignment_identity",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.ont_assignment_cutover_verification"
+    ) == (
+        "network.ont_assignment_cutover",
+        "network.ont_assignment_cutover_batches",
+        "network.ont_assignment_identity",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.ont_assignment_cutover_coverage"
+    ) == (
+        "network.ont_assignment_cutover",
+        "network.ont_assignment_cutover_batches",
+        "network.ont_assignment_cutover_verification",
+        "network.ont_assignment_identity",
+    )
+    assert sot_relationships.dependencies_for(
+        "network.ont_assignment_constraint_authorization"
+    ) == ("network.ont_assignment_cutover_coverage",)
+    assert sot_relationships.dependencies_for("network.ont_inventory_release") == (
+        "network.ont_assignment_commands",
+        "network.ont_assignment_identity",
+        "network.ont_topology_observations",
     )
     assert sot_relationships.dependencies_for("network.access_path") == (
         "network.identity",
         "network.fiber_topology",
+        "network.ont_assignment_commands",
+        "network.ont_assignment_identity",
         "network.fiber_access_attachments",
     )
     assert sot_relationships.dependencies_for("network.outage_lifecycle") == (

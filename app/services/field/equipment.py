@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
 from app.models.work_order import WorkOrder
+from app.services.common import coerce_uuid
 from app.services.field.jobs import _profile_from_principal, _scoped_query
 from app.services.field.source import (
     mark_sub_authoritative as _mark_source_authoritative,
 )
+from app.services.network.ont_assignment_commands import OntAssignmentCommandError
 
 
 def serialize_equipment(assignment: OntAssignment) -> dict:
@@ -43,6 +45,8 @@ class FieldEquipment:
         crm_work_order_id: str,
         *,
         serial_number: str,
+        subscription_id: str,
+        pon_port_id: str,
         vendor: str | None = None,
         model: str | None = None,
         notes: str | None = None,
@@ -58,12 +62,15 @@ class FieldEquipment:
             raise HTTPException(status_code=404, detail="Job not found")
         serial = _normalize_serial(serial_number)
         unit = _get_or_create_unit(db, serial, vendor=vendor, model=model)
-        now = datetime.now(UTC)
+        from app.services import network as network_service
+
+        normalized_subscription_id = coerce_uuid(subscription_id)
+        normalized_pon_port_id = coerce_uuid(pon_port_id)
         prior = (
             db.query(OntAssignment)
             .filter(
                 or_(
-                    OntAssignment.subscriber_id == row.subscriber_id,
+                    OntAssignment.subscription_id == normalized_subscription_id,
                     OntAssignment.ont_unit_id == unit.id,
                 )
             )
@@ -71,24 +78,46 @@ class FieldEquipment:
             .with_for_update()
             .all()
         )
-        for assignment in prior:
-            assignment.active = False
-            assignment.released_at = assignment.released_at or now
-            assignment.release_reason = assignment.release_reason or "field_replaced"
-        db.flush()
-
-        assignment = OntAssignment(
-            ont_unit_id=unit.id,
-            subscriber_id=row.subscriber_id,
-            work_order_mirror_id=row.id,
-            assigned_at=now,
-            active=True,
-            notes=(notes or "").strip() or None,
+        exact = next(
+            (
+                assignment
+                for assignment in prior
+                if str(assignment.ont_unit_id) == str(unit.id)
+                and assignment.subscription_id == normalized_subscription_id
+                and assignment.pon_port_id == normalized_pon_port_id
+            ),
+            None,
         )
-        _mark_sub_authoritative(row, serial)
-        db.add(assignment)
-        db.commit()
-        db.refresh(assignment)
+        try:
+            if exact is None:
+                for assignment in prior:
+                    network_service.ont_assignment_commands.release(
+                        db,
+                        assignment_id=assignment.id,
+                        reason="field_replaced",
+                        actor_id=str(profile.system_user_id or profile.person_id),
+                        source="field_equipment_capture",
+                        commit=False,
+                    )
+            result = network_service.ont_assignment_commands.assign(
+                db,
+                ont_unit_id=unit.id,
+                subscription_id=subscription_id,
+                pon_port_id=pon_port_id,
+                subscriber_id=row.subscriber_id,
+                work_order_mirror_id=row.id,
+                notes=notes,
+                actor_id=str(profile.system_user_id or profile.person_id),
+                source="field_equipment_capture",
+                commit=False,
+            )
+            _mark_sub_authoritative(row, serial)
+            db.commit()
+            assignment = result.assignment
+            db.refresh(assignment)
+        except OntAssignmentCommandError as exc:
+            db.rollback()
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         return serialize_equipment(assignment)
 
     @staticmethod
@@ -100,7 +129,7 @@ class FieldEquipment:
         row = _scoped_work_order(db, principal, crm_work_order_id)
         assignment = (
             db.query(OntAssignment)
-            .filter(OntAssignment.subscriber_id == row.subscriber_id)
+            .filter(OntAssignment.work_order_mirror_id == row.id)
             .filter(OntAssignment.active.is_(True))
             .order_by(OntAssignment.assigned_at.desc().nullslast())
             .first()

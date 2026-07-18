@@ -31,6 +31,8 @@ def record_job_equipment(
         auth,
         crm_work_order_id,
         serial_number=payload.serial_number,
+        subscription_id=str(payload.subscription_id),
+        pon_port_id=str(payload.pon_port_id),
         vendor=payload.vendor,
         model=payload.model,
         notes=payload.notes,

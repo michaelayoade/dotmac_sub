@@ -873,9 +873,8 @@ class TestMoveOnt:
         assert result.success is False
         assert "not found" in result.message.lower()
 
-    @patch("app.services.network.ont_write._emit_ont_event")
     @patch("app.services.network.ont_write.get_ont_or_error")
-    def test_move_updates_ont_olt_device_id(self, mock_get, mock_emit):
+    def test_db_only_move_is_retired(self, mock_get):
         ont = MagicMock()
         ont.id = "ont-1"
         ont.olt_device_id = "old-olt"
@@ -895,11 +894,17 @@ class TestMoveOnt:
         db.get.return_value = target_port
         db.scalars.return_value = scalar_result
 
-        result = OntWriteService.move_ont(db, "ont-1", target_pon_port_id=FAKE_UUID)
+        result = OntWriteService.move_ont(
+            db,
+            "ont-1",
+            target_pon_port_id=FAKE_UUID,
+            skip_device_ops=True,
+        )
 
-        assert result.success is True
-        assert ont.olt_device_id == "new-olt"
-        db.commit.assert_called_once()
+        assert result.success is False
+        assert "DB-only ONT moves are retired" in result.message
+        assert ont.olt_device_id == "old-olt"
+        db.commit.assert_not_called()
 
     @patch("app.services.network.olt_protocol_adapters.get_protocol_adapter")
     @patch(

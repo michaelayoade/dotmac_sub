@@ -1,9 +1,9 @@
-"""UFiber router-mode ONU -> subscriber link reconciler.
+"""UFiber router-mode ONU -> subscription candidate audit.
 
 Covers the auth-safe MAC match (ONU own-MAC == active subscription MAC),
 ambiguity/no-match skips, the already-linked and Huawei (non-UISP) exclusions,
-idempotency, duplicate-subscription ambiguity, and — critically — that the
-pass NEVER writes ``subscriptions.mac_address``.
+repeatable preview, duplicate-subscription ambiguity, and — critically — that
+the pass writes neither assignments nor ``subscriptions.mac_address``.
 """
 
 from __future__ import annotations
@@ -13,10 +13,7 @@ import uuid
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import OLTDevice, OntAssignment, OntUnit
 from app.models.subscriber import Subscriber
-from app.services.topology.ufiber_onu_link import (
-    PROVENANCE,
-    link_ufiber_onus_to_subscribers,
-)
+from app.services.topology.ufiber_onu_link import link_ufiber_onus_to_subscribers
 
 # UISP reports MACs colon-separated and uppercase; the sub row stores whatever
 # RADIUS/import left. Deliberately different casing/separators to exercise
@@ -88,7 +85,7 @@ def _active_assignments(db_session, ont_unit_id):
     )
 
 
-def test_router_mode_mac_match_creates_assignment(
+def test_router_mode_mac_match_reports_candidate_without_assignment(
     db_session, subscriber, catalog_offer
 ):
     olt = _olt(db_session)
@@ -99,25 +96,19 @@ def test_router_mode_mac_match_creates_assignment(
     result = link_ufiber_onus_to_subscribers(db_session)
 
     assert result["candidates"] == 1
-    assert result["matched_linked"] == 1
+    assert result["matched_candidate"] == 1
+    assert result["matched_linked"] == 0
     assert result["ambiguous"] == 0
     assert result["no_match"] == 0
 
-    assignments = _active_assignments(db_session, onu.id)
-    assert len(assignments) == 1
-    assignment = assignments[0]
-    assert assignment.subscriber_id == subscriber.id
-    assert assignment.subscription_id == sub.id
-    assert assignment.service_address_id == sub.service_address_id
-    assert assignment.notes == PROVENANCE
-    assert assignment.active is True
+    assert _active_assignments(db_session, onu.id) == []
 
     # AUTH-SAFETY: the subscription MAC (RADIUS calling-station-id) is untouched.
     db_session.refresh(sub)
     assert sub.mac_address == ROUTER_MAC_SUB
 
 
-def test_pon_port_id_copied_from_onu_when_present(
+def test_pon_port_id_is_reported_without_creating_assignment(
     db_session, subscriber, catalog_offer
 ):
     from app.models.network import PonPort
@@ -131,10 +122,10 @@ def test_pon_port_id_copied_from_onu_when_present(
     _active_subscription(db_session, subscriber, catalog_offer, ROUTER_MAC_SUB)
     db_session.commit()
 
-    link_ufiber_onus_to_subscribers(db_session)
+    result = link_ufiber_onus_to_subscribers(db_session)
 
-    assignment = _active_assignments(db_session, onu.id)[0]
-    assert assignment.pon_port_id == pon.id
+    assert result["matched_candidate"] == 1
+    assert _active_assignments(db_session, onu.id) == []
 
 
 def test_ambiguous_mac_two_subscribers_creates_nothing(
@@ -172,15 +163,13 @@ def test_ambiguous_mac_resolved_by_name_tiebreak(db_session, subscriber, catalog
 
     assert result["candidates"] == 1
     assert result["ambiguous"] == 0
-    assert result["matched_by_name_tiebreak"] == 1
+    assert result["matched_by_name_candidate"] == 1
+    assert result["matched_by_name_tiebreak"] == 0
     assert result["matched_linked"] == 0
     # The losing duplicate subscription is flagged for ops (never modified).
     assert result["duplicate_active_mac"] == 1
 
-    assignments = _active_assignments(db_session, onu.id)
-    assert len(assignments) == 1
-    assert assignments[0].subscriber_id == subscriber.id
-    assert "name tiebreak" in assignments[0].notes
+    assert _active_assignments(db_session, onu.id) == []
 
 
 def test_two_similar_names_stays_ambiguous(db_session, subscriber, catalog_offer):
@@ -291,7 +280,7 @@ def test_inactive_subscription_mac_does_not_match(
     assert result["matched_linked"] == 0
 
 
-def test_idempotent_rerun_creates_no_duplicate(db_session, subscriber, catalog_offer):
+def test_preview_rerun_remains_non_mutating(db_session, subscriber, catalog_offer):
     olt = _olt(db_session)
     onu = _onu(db_session, olt, mac=ROUTER_MAC_UISP)
     _active_subscription(db_session, subscriber, catalog_offer, ROUTER_MAC_SUB)
@@ -302,9 +291,9 @@ def test_idempotent_rerun_creates_no_duplicate(db_session, subscriber, catalog_o
     second = link_ufiber_onus_to_subscribers(db_session)
     db_session.commit()
 
-    assert first["matched_linked"] == 1
-    # Second pass: the ONU now has an active assignment, so it is no longer a
-    # candidate -> nothing created.
-    assert second["candidates"] == 0
+    assert first["matched_candidate"] == 1
+    assert first["matched_linked"] == 0
+    assert second["candidates"] == 1
+    assert second["matched_candidate"] == 1
     assert second["matched_linked"] == 0
-    assert len(_active_assignments(db_session, onu.id)) == 1
+    assert _active_assignments(db_session, onu.id) == []

@@ -1,17 +1,29 @@
+import uuid
+
 from fastapi import HTTPException
 
 from app.models.network import OntAuthorizationStatus, OntUnit
+from app.models.subscriber import Subscriber
+from app.schemas.catalog import SubscriptionCreate
 from app.schemas.network import (
     OltCardCreate,
     OLTDeviceCreate,
     OltShelfCreate,
-    OntAssignmentCreate,
     OntUnitCreate,
     PonPortCreate,
 )
+from app.services import catalog as catalog_service
 from app.services import network as network_service
+from app.services.network.ont_assignment_commands import OntAssignmentCommandError
 from app.services.network.ont_serials import looks_synthetic_ont_serial
 from app.services.network.ont_status import set_authorization_status
+
+
+def _activate_test_olt(db_session, olt):
+    """Bypass configuration activation policy only for assignment test setup."""
+
+    olt.is_active = True
+    db_session.commit()
 
 
 def test_manual_pon_port_create_rejects_card_from_other_olt(db_session):
@@ -75,7 +87,7 @@ def test_ont_serial_can_be_reused_on_different_olts(db_session):
     assert ont_a.serial_number == ont_b.serial_number
 
 
-def test_inventory_ont_can_receive_active_assignment(db_session):
+def test_inventory_ont_can_receive_active_assignment(db_session, subscription):
     olt = network_service.olt_devices.create(
         db_session,
         OLTDeviceCreate(
@@ -83,6 +95,7 @@ def test_inventory_ont_can_receive_active_assignment(db_session):
             hostname="inventory-assign.local",
         ),
     )
+    _activate_test_olt(db_session, olt)
     pon = network_service.pon_ports.create(
         db_session,
         PonPortCreate(olt_id=olt.id, name="0/1/1"),
@@ -96,10 +109,13 @@ def test_inventory_ont_can_receive_active_assignment(db_session):
         ),
     )
 
-    assignment = network_service.ont_assignments.create(
+    assignment = network_service.ont_assignment_commands.assign(
         db_session,
-        OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=pon.id, active=True),
-    )
+        ont_unit_id=ont.id,
+        subscription_id=subscription.id,
+        pon_port_id=pon.id,
+        source="test",
+    ).assignment
 
     assert assignment.active is True
     db_session.refresh(ont)
@@ -125,11 +141,14 @@ def test_olt_delete_rejects_active_onts(db_session):
         raise AssertionError("Expected OLT delete to be blocked")
 
 
-def test_pon_port_capacity_blocks_extra_active_assignment(db_session):
+def test_pon_port_capacity_blocks_extra_active_assignment(
+    db_session, subscription, catalog_offer
+):
     olt = network_service.olt_devices.create(
         db_session,
         OLTDeviceCreate(name="Capacity OLT", hostname="capacity.local"),
     )
+    _activate_test_olt(db_session, olt)
     pon = network_service.pon_ports.create(
         db_session,
         PonPortCreate(olt_id=olt.id, name="0/1/2", max_ont_capacity=1),
@@ -142,19 +161,39 @@ def test_pon_port_capacity_blocks_extra_active_assignment(db_session):
         db_session,
         OntUnitCreate(serial_number="HWTC-CAPACITY-2", olt_device_id=olt.id),
     )
-    network_service.ont_assignments.create(
+    second_subscriber = Subscriber(
+        first_name="Capacity",
+        last_name="Two",
+        email=f"capacity-{uuid.uuid4().hex}@example.com",
+    )
+    db_session.add(second_subscriber)
+    db_session.commit()
+    second_subscription = catalog_service.subscriptions.create(
         db_session,
-        OntAssignmentCreate(ont_unit_id=first.id, pon_port_id=pon.id, active=True),
+        SubscriptionCreate(
+            account_id=second_subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    network_service.ont_assignment_commands.assign(
+        db_session,
+        ont_unit_id=first.id,
+        subscription_id=subscription.id,
+        pon_port_id=pon.id,
+        source="test",
     )
 
     try:
-        network_service.ont_assignments.create(
+        network_service.ont_assignment_commands.assign(
             db_session,
-            OntAssignmentCreate(ont_unit_id=second.id, pon_port_id=pon.id, active=True),
+            ont_unit_id=second.id,
+            subscription_id=second_subscription.id,
+            pon_port_id=pon.id,
+            source="test",
         )
-    except HTTPException as exc:
+    except OntAssignmentCommandError as exc:
         assert exc.status_code == 409
-        assert "capacity" in exc.detail
+        assert "capacity" in str(exc)
     else:
         raise AssertionError("Expected PON port capacity conflict")
 

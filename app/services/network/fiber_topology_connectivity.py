@@ -67,6 +67,17 @@ class FiberTopologyConnectivityError(ValueError):
 
 
 @dataclass(frozen=True)
+class FiberConnectivityDecisionPreview:
+    """Validated, write-free evidence for one proposed connectivity decision."""
+
+    item: dict
+    existing_decision_id: uuid.UUID | None = None
+
+    def to_manifest_dict(self, *, row_number: int) -> dict:
+        return {**self.item, "row_number": row_number}
+
+
+@dataclass(frozen=True)
 class FiberConnectivityReconcileResult:
     scanned: int
     applied: int
@@ -255,7 +266,7 @@ def _decision_digest(payload: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def propose_connectivity_decision(
+def preview_connectivity_decision(
     db: Session,
     staged_feature_id: str | uuid.UUID,
     action: str,
@@ -271,13 +282,33 @@ def propose_connectivity_decision(
     fiber_count: int | None = None,
     length_m: float | None = None,
     target_segment_id: str | uuid.UUID | None = None,
-) -> FiberTopologyConnectivityDecision:
+    expected_feature_content_sha256: str | None = None,
+    require_new: bool = False,
+) -> FiberConnectivityDecisionPreview:
+    """Validate explicit endpoints and exact source content without writing."""
+
     actor = _required_text(proposed_by, "proposed_by", limit=160)
     normalized_reason = _required_text(reason, "reason", limit=4000)
     normalized_action = str(action or "").strip().lower()
     if normalized_action not in {"create", "link_existing", "reject"}:
         raise FiberTopologyConnectivityError("unsupported connectivity action")
     feature = _assert_source_current(db, _load_feature(db, staged_feature_id))
+    if expected_feature_content_sha256 is not None:
+        expected_content = _required_text(
+            expected_feature_content_sha256,
+            "expected_feature_content_sha256",
+            limit=64,
+        )
+        if len(expected_content) != 64 or any(
+            character not in "0123456789abcdef" for character in expected_content
+        ):
+            raise FiberTopologyConnectivityError(
+                "expected_feature_content_sha256 must be a lowercase SHA-256 digest"
+            )
+        if feature.content_sha256 != expected_content:
+            raise FiberTopologyConnectivityError(
+                "expected feature content does not match the staged path"
+            )
 
     start_type: str | None = None
     start_ref: uuid.UUID | None = None
@@ -379,8 +410,21 @@ def propose_connectivity_decision(
         )
     )
     if existing:
+        if existing.decision_sha256 == decision_sha256 and not require_new:
+            return FiberConnectivityDecisionPreview(
+                item={
+                    **digest_payload,
+                    "decision_sha256": decision_sha256,
+                    "source_asset_type": feature.asset_type,
+                    "source_external_id": feature.external_id,
+                    "source_system": feature.batch.source_system,
+                },
+                existing_decision_id=existing.id,
+            )
         if existing.decision_sha256 == decision_sha256:
-            return existing
+            raise FiberTopologyConnectivityError(
+                "this source path already has an active connectivity decision"
+            )
         raise FiberTopologyConnectivityError(
             "this source path already has a different active connectivity decision"
         )
@@ -392,30 +436,100 @@ def propose_connectivity_decision(
         raise FiberTopologyConnectivityError(
             "this exact connectivity decision is already terminal"
         )
+    return FiberConnectivityDecisionPreview(
+        item={
+            **digest_payload,
+            "decision_sha256": decision_sha256,
+            "source_asset_type": feature.asset_type,
+            "source_external_id": feature.external_id,
+            "source_system": feature.batch.source_system,
+        }
+    )
+
+
+def propose_connectivity_decision(
+    db: Session,
+    staged_feature_id: str | uuid.UUID,
+    action: str,
+    *,
+    proposed_by: str,
+    reason: str,
+    start_endpoint_type: str | None = None,
+    start_endpoint_ref_id: str | uuid.UUID | None = None,
+    end_endpoint_type: str | None = None,
+    end_endpoint_ref_id: str | uuid.UUID | None = None,
+    segment_type: str = "distribution",
+    cable_type: str | None = None,
+    fiber_count: int | None = None,
+    length_m: float | None = None,
+    target_segment_id: str | uuid.UUID | None = None,
+    expected_feature_content_sha256: str | None = None,
+    proposal_batch_id: uuid.UUID | None = None,
+    proposal_batch_row_number: int | None = None,
+    commit: bool = True,
+) -> FiberTopologyConnectivityDecision:
+    preview = preview_connectivity_decision(
+        db,
+        staged_feature_id,
+        action,
+        proposed_by=proposed_by,
+        reason=reason,
+        start_endpoint_type=start_endpoint_type,
+        start_endpoint_ref_id=start_endpoint_ref_id,
+        end_endpoint_type=end_endpoint_type,
+        end_endpoint_ref_id=end_endpoint_ref_id,
+        segment_type=segment_type,
+        cable_type=cable_type,
+        fiber_count=fiber_count,
+        length_m=length_m,
+        target_segment_id=target_segment_id,
+        expected_feature_content_sha256=expected_feature_content_sha256,
+        require_new=proposal_batch_id is not None,
+    )
+    if preview.existing_decision_id:
+        return _load_decision(db, preview.existing_decision_id)
+    item = preview.item
     decision = FiberTopologyConnectivityDecision(
-        staged_feature_id=feature.id,
-        source_system=feature.batch.source_system,
-        source_asset_type=feature.asset_type,
-        source_external_id=feature.external_id,
-        feature_content_sha256=feature.content_sha256,
-        action=normalized_action,
+        staged_feature_id=uuid.UUID(str(item["staged_feature_id"])),
+        source_system=item["source_system"],
+        source_asset_type=item["source_asset_type"],
+        source_external_id=item["source_external_id"],
+        feature_content_sha256=item["feature_content_sha256"],
+        action=item["action"],
         status="proposed",
-        start_endpoint_type=start_type,
-        start_endpoint_ref_id=start_ref,
-        end_endpoint_type=end_type,
-        end_endpoint_ref_id=end_ref,
-        segment_type=normalized_segment_type,
-        cable_type=normalized_cable_type,
-        fiber_count=normalized_fiber_count,
-        length_m=normalized_length,
-        target_segment_id=target_id,
-        reason=normalized_reason,
-        decision_sha256=decision_sha256,
-        proposed_by=actor,
+        start_endpoint_type=item["start_endpoint_type"],
+        start_endpoint_ref_id=(
+            _coerce_uuid(item["start_endpoint_ref_id"], "start_endpoint_ref_id")
+            if item["start_endpoint_ref_id"]
+            else None
+        ),
+        end_endpoint_type=item["end_endpoint_type"],
+        end_endpoint_ref_id=(
+            _coerce_uuid(item["end_endpoint_ref_id"], "end_endpoint_ref_id")
+            if item["end_endpoint_ref_id"]
+            else None
+        ),
+        segment_type=item["segment_type"],
+        cable_type=item["cable_type"],
+        fiber_count=item["fiber_count"],
+        length_m=item["length_m"],
+        target_segment_id=(
+            _coerce_uuid(item["target_segment_id"], "target_segment_id")
+            if item["target_segment_id"]
+            else None
+        ),
+        reason=item["reason"],
+        decision_sha256=item["decision_sha256"],
+        proposed_by=item["proposed_by"],
+        proposal_batch_id=proposal_batch_id,
+        proposal_batch_row_number=proposal_batch_row_number,
     )
     db.add(decision)
-    db.commit()
-    db.refresh(decision)
+    if commit:
+        db.commit()
+        db.refresh(decision)
+    else:
+        db.flush()
     return decision
 
 
@@ -456,12 +570,25 @@ def _validate_decision(
         raise FiberTopologyConnectivityError("staged path geometry evidence changed")
 
 
+def validate_connectivity_decision_for_review(
+    db: Session, decision_id: str | uuid.UUID
+) -> FiberTopologyConnectivityDecision:
+    """Revalidate exact source and endpoints without changing decision state."""
+
+    decision = _load_decision(db, decision_id)
+    if decision.status != "proposed":
+        raise FiberTopologyConnectivityError("connectivity decision is not proposed")
+    _validate_decision(db, decision)
+    return decision
+
+
 def approve_connectivity_decision(
     db: Session,
     decision_id: str | uuid.UUID,
     *,
     reviewed_by: str,
     review_notes: str,
+    commit: bool = True,
 ) -> FiberTopologyConnectivityDecision:
     actor = _required_text(reviewed_by, "reviewed_by", limit=160)
     notes = _required_text(review_notes, "review_notes", limit=4000)
@@ -483,8 +610,11 @@ def approve_connectivity_decision(
     decision.reviewed_by = actor
     decision.review_notes = notes
     decision.reviewed_at = datetime.now(UTC)
-    db.commit()
-    db.refresh(decision)
+    if commit:
+        db.commit()
+        db.refresh(decision)
+    else:
+        db.flush()
     return decision
 
 
@@ -494,6 +624,7 @@ def decline_connectivity_decision(
     *,
     reviewed_by: str,
     review_notes: str,
+    commit: bool = True,
 ) -> FiberTopologyConnectivityDecision:
     actor = _required_text(reviewed_by, "reviewed_by", limit=160)
     notes = _required_text(review_notes, "review_notes", limit=4000)
@@ -515,8 +646,11 @@ def decline_connectivity_decision(
     decision.review_notes = notes
     decision.reviewed_at = datetime.now(UTC)
     decision.closed_reason = "connectivity_decision_declined"
-    db.commit()
-    db.refresh(decision)
+    if commit:
+        db.commit()
+        db.refresh(decision)
+    else:
+        db.flush()
     return decision
 
 
@@ -749,6 +883,7 @@ def execute_connectivity_decision(
     decision_id: str | uuid.UUID,
     *,
     executed_by: str,
+    commit: bool = True,
 ) -> FiberTopologyConnectivityDecision:
     actor = _required_text(executed_by, "executed_by", limit=160)
     decision = _load_decision(db, decision_id, for_update=True)
@@ -767,8 +902,11 @@ def execute_connectivity_decision(
         decision.executed_by = actor
         decision.executed_at = datetime.now(UTC)
         _close_decision(decision, actor, "source_or_endpoint_changed_before_execution")
-        db.commit()
-        db.refresh(decision)
+        if commit:
+            db.commit()
+            db.refresh(decision)
+        else:
+            db.flush()
         return decision
 
     now = datetime.now(UTC)
@@ -819,8 +957,11 @@ def execute_connectivity_decision(
             decision.status = "endpoint_change_requested"
     decision.executed_by = actor
     decision.executed_at = now
-    db.commit()
-    db.refresh(decision)
+    if commit:
+        db.commit()
+        db.refresh(decision)
+    else:
+        db.flush()
     return decision
 
 
@@ -872,6 +1013,7 @@ def finalize_connectivity_decision(
     decision_id: str | uuid.UUID,
     *,
     finalized_by: str,
+    commit: bool = True,
 ) -> FiberTopologyConnectivityDecision:
     actor = _required_text(finalized_by, "finalized_by", limit=160)
     decision = _load_decision(db, decision_id, for_update=True)
@@ -904,8 +1046,11 @@ def finalize_connectivity_decision(
                 _close_decision(
                     decision, actor, "source_changed_before_segment_request"
                 )
-        db.commit()
-        db.refresh(decision)
+        if commit:
+            db.commit()
+            db.refresh(decision)
+        else:
+            db.flush()
         return decision
 
     if decision.segment_change_request_id is None:
@@ -939,8 +1084,11 @@ def finalize_connectivity_decision(
         decision.status = "applied"
         decision.finalized_by = actor
         decision.finalized_at = datetime.now(UTC)
-    db.commit()
-    db.refresh(decision)
+    if commit:
+        db.commit()
+        db.refresh(decision)
+    else:
+        db.flush()
     return decision
 
 

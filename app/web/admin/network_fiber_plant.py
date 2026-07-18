@@ -1,5 +1,7 @@
 """Admin network fiber plant web routes."""
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -13,7 +15,39 @@ from app.services import web_network_fiber_plant as web_network_fiber_plant_serv
 from app.services import (
     web_network_fiber_plant_actions as web_network_fiber_plant_actions_service,
 )
+from app.services import (
+    web_network_ont_identity_reviews as ont_identity_review_service,
+)
+from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
+from app.services.network.fiber_topology_connectivity_coverage import (
+    reconcile_fiber_connectivity_coverage,
+)
+from app.services.network.fiber_topology_connectivity_review import (
+    FiberTopologyConnectivityReviewError,
+    inspect_connectivity_batch,
+)
+from app.services.network.fiber_topology_field_map import (
+    project_fiber_field_verification_map,
+)
+from app.services.network.fiber_topology_field_worklist import (
+    reconcile_fiber_field_worklist,
+)
+from app.services.network.fiber_topology_identity_coverage import (
+    reconcile_fiber_identity_coverage,
+)
+from app.services.network.ont_assignment_constraint_authorization import (
+    inspect_ont_assignment_constraint_authorizations,
+)
+from app.services.network.ont_assignment_cutover_coverage import (
+    reconcile_ont_assignment_cutover_coverage,
+)
+from app.services.network.ont_assignment_identity import (
+    OntAssignmentIdentityError,
+    approve_assignment_identity_repair,
+    decline_assignment_identity_repair,
+    execute_assignment_identity_repair,
+)
 from app.web.request_parsing import parse_form_data_sync, parse_json_body_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -32,6 +66,78 @@ def _base_context(
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+def _identity_actor(request: Request) -> str:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    principal_type = str(current_user.get("principal_type") or "user").strip()
+    principal_id = str(
+        current_user.get("principal_id") or current_user.get("id") or ""
+    ).strip()
+    if not principal_id:
+        raise OntAssignmentIdentityError("authenticated actor identity is required")
+    return f"{principal_type}:{principal_id}"
+
+
+def _identity_audit(
+    request: Request,
+    db: Session,
+    *,
+    action: str,
+    decision_id: object,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="ont_assignment_identity_decision",
+        entity_id=str(decision_id),
+        actor_id=str(current_user.get("principal_id") or "") or None,
+        metadata=metadata,
+    )
+
+
+def _identity_proposal_response(
+    request: Request,
+    db: Session,
+    *,
+    values: dict[str, str],
+    preview=None,
+    error: str | None = None,
+    status_code: int = 200,
+):
+    context = _base_context(
+        request, db, active_page="ont-identity-reviews", active_menu="fiber"
+    )
+    primary_id = values.get("primary_assignment_id", "")
+    context.update(
+        {
+            "candidate": next(
+                iter(
+                    ont_identity_review_service.list_assignment_identity_candidates(
+                        db, query=primary_id, limit=25
+                    )
+                ),
+                None,
+            )
+            if primary_id
+            else None,
+            "error": error,
+            "preview": preview,
+            "values": values,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/network/fiber/ont_identity_proposal.html",
+        context,
+        status_code=status_code,
+    )
 
 
 @router.get(
@@ -62,6 +168,104 @@ def fiber_plant_map(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="fiber-map", active_menu="fiber")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/fiber/map.html", context)
+
+
+@router.get(
+    "/fiber-connectivity-batches/{batch_id}",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def fiber_connectivity_batch_evidence(batch_id: str, db: Session = Depends(get_db)):
+    """Read-only projection of an exact connectivity batch and its evidence."""
+
+    try:
+        return JSONResponse(inspect_connectivity_batch(db, batch_id))
+    except FiberTopologyConnectivityReviewError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+
+
+@router.get(
+    "/fiber-connectivity-coverage",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def fiber_connectivity_coverage(request: Request, db: Session = Depends(get_db)):
+    """Show exhaustive read-only staged-path connectivity coverage evidence."""
+
+    coverage = reconcile_fiber_connectivity_coverage(db)
+    context = _base_context(
+        request,
+        db,
+        active_page="fiber-connectivity-coverage",
+        active_menu="fiber",
+    )
+    context["coverage"] = coverage
+    return templates.TemplateResponse(
+        "admin/network/fiber/connectivity_coverage.html", context
+    )
+
+
+@router.get(
+    "/fiber-identity-coverage",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def fiber_identity_coverage(request: Request, db: Session = Depends(get_db)):
+    """Show exhaustive read-only staged point-identity coverage evidence."""
+
+    coverage = reconcile_fiber_identity_coverage(db)
+    context = _base_context(
+        request,
+        db,
+        active_page="fiber-identity-coverage",
+        active_menu="fiber",
+    )
+    context["coverage"] = coverage
+    return templates.TemplateResponse(
+        "admin/network/fiber/identity_coverage.html", context
+    )
+
+
+@router.get(
+    "/fiber-field-verification",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def fiber_field_verification_worklist(request: Request, db: Session = Depends(get_db)):
+    """Show the complete read-only staged-source field-evidence worklist."""
+
+    worklist = reconcile_fiber_field_worklist(db)
+    context = _base_context(
+        request,
+        db,
+        active_page="fiber-field-verification",
+        active_menu="fiber",
+    )
+    context["worklist"] = worklist
+    return templates.TemplateResponse(
+        "admin/network/fiber/field_verification_worklist.html", context
+    )
+
+
+@router.get(
+    "/fiber-field-verification-map",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def fiber_field_verification_map(request: Request, db: Session = Depends(get_db)):
+    """Show the complete worklist over exact staged source GeoJSON."""
+
+    field_map = project_fiber_field_verification_map(db)
+    context = _base_context(
+        request,
+        db,
+        active_page="fiber-field-verification-map",
+        active_menu="fiber",
+    )
+    context["field_map"] = field_map
+    return templates.TemplateResponse(
+        "admin/network/fiber/field_verification_map.html", context
+    )
 
 
 @router.get(
@@ -99,6 +303,316 @@ def fiber_subscription_trace(
         except ValueError as exc:
             context["trace_error"] = str(exc)
     return templates.TemplateResponse("admin/network/fiber/trace.html", context)
+
+
+@router.get(
+    "/ont-assignment-constraint-authorizations",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def ont_assignment_constraint_authorizations(
+    request: Request,
+    target_environment: str | None = Query(default=None, max_length=255),
+    db: Session = Depends(get_db),
+):
+    """Show current applicability of immutable cutover authorization evidence."""
+
+    evidence = inspect_ont_assignment_constraint_authorizations(
+        db, target_environment=target_environment
+    )
+    context = _base_context(
+        request,
+        db,
+        active_page="ont-assignment-constraint-authorizations",
+        active_menu="fiber",
+    )
+    context["authorization_evidence"] = evidence
+    return templates.TemplateResponse(
+        "admin/network/fiber/ont_assignment_constraint_authorizations.html",
+        context,
+    )
+
+
+@router.get(
+    "/ont-assignment-cutover-coverage",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def ont_assignment_cutover_coverage(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Show read-only current finding coverage and verification drift."""
+
+    coverage = reconcile_ont_assignment_cutover_coverage(db)
+    context = _base_context(
+        request,
+        db,
+        active_page="ont-assignment-cutover-coverage",
+        active_menu="fiber",
+    )
+    context["coverage"] = coverage
+    return templates.TemplateResponse(
+        "admin/network/fiber/ont_assignment_cutover_coverage.html", context
+    )
+
+
+@router.get(
+    "/ont-identity-reviews",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def ont_identity_reviews(
+    request: Request,
+    status_filter: str | None = Query(default="active", alias="status"),
+    q: str | None = Query(default=None, max_length=160),
+    db: Session = Depends(get_db),
+):
+    """Show detected disagreements separately from reviewed repair decisions."""
+    context = _base_context(
+        request, db, active_page="ont-identity-reviews", active_menu="fiber"
+    )
+    context.update(
+        ont_identity_review_service.decisions_page_data(
+            db, status=status_filter, query=q
+        )
+    )
+    return templates.TemplateResponse(
+        "admin/network/fiber/ont_identity_reviews.html", context
+    )
+
+
+@router.get(
+    "/ont-identity-reviews/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:write"))],
+)
+def ont_identity_review_new(
+    request: Request,
+    primary_assignment_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return _identity_proposal_response(
+        request,
+        db,
+        values={
+            "action": "canonicalize",
+            "primary_assignment_id": str(primary_assignment_id or "").strip(),
+            "target_subscription_id": "",
+            "target_pon_port_id": "",
+            "reason": "",
+        },
+    )
+
+
+@router.post(
+    "/ont-identity-reviews/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:write"))],
+)
+def ont_identity_review_preview(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    values = {
+        key: str(form.get(key) or "").strip()
+        for key in (
+            "action",
+            "primary_assignment_id",
+            "target_subscription_id",
+            "target_pon_port_id",
+            "reason",
+        )
+    }
+    try:
+        preview = ont_identity_review_service.preview_from_explicit_form(
+            db,
+            action=values["action"],
+            primary_assignment_id=values["primary_assignment_id"],
+            target_subscription_id=values["target_subscription_id"] or None,
+            target_pon_port_id=values["target_pon_port_id"] or None,
+        )
+    except OntAssignmentIdentityError as exc:
+        return _identity_proposal_response(
+            request,
+            db,
+            values=values,
+            error=str(exc),
+            status_code=400,
+        )
+    return _identity_proposal_response(request, db, values=values, preview=preview)
+
+
+@router.post(
+    "/ont-identity-reviews/propose",
+    dependencies=[Depends(require_permission("network:fiber:write"))],
+)
+def ont_identity_review_propose(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    values = {
+        key: str(form.get(key) or "").strip()
+        for key in (
+            "action",
+            "primary_assignment_id",
+            "target_subscription_id",
+            "target_pon_port_id",
+            "reason",
+        )
+    }
+    expected_input_sha256 = str(form.get("expected_input_sha256") or "").strip()
+    try:
+        decision = ont_identity_review_service.propose_from_explicit_preview(
+            db,
+            action=values["action"],
+            primary_assignment_id=values["primary_assignment_id"],
+            target_subscription_id=values["target_subscription_id"] or None,
+            target_pon_port_id=values["target_pon_port_id"] or None,
+            expected_input_sha256=expected_input_sha256,
+            proposed_by=_identity_actor(request),
+            reason=values["reason"],
+        )
+    except OntAssignmentIdentityError as exc:
+        try:
+            preview = ont_identity_review_service.preview_from_explicit_form(
+                db,
+                action=values["action"],
+                primary_assignment_id=values["primary_assignment_id"],
+                target_subscription_id=values["target_subscription_id"] or None,
+                target_pon_port_id=values["target_pon_port_id"] or None,
+            )
+        except OntAssignmentIdentityError:
+            preview = None
+        return _identity_proposal_response(
+            request,
+            db,
+            values=values,
+            preview=preview,
+            error=str(exc),
+            status_code=400,
+        )
+    _identity_audit(
+        request,
+        db,
+        action="propose",
+        decision_id=decision.id,
+        metadata={"input_sha256": decision.input_sha256},
+    )
+    return RedirectResponse(
+        f"/admin/network/ont-identity-reviews/{decision.id}", status_code=303
+    )
+
+
+@router.get(
+    "/ont-identity-reviews/{decision_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def ont_identity_review_detail(
+    request: Request, decision_id: str, db: Session = Depends(get_db)
+):
+    try:
+        page_data = ont_identity_review_service.decision_detail_page_data(
+            db, decision_id
+        )
+    except OntAssignmentIdentityError as exc:
+        return HTMLResponse(str(exc), status_code=404)
+    context = _base_context(
+        request, db, active_page="ont-identity-reviews", active_menu="fiber"
+    )
+    context.update(page_data)
+    context["error"] = request.query_params.get("error")
+    return templates.TemplateResponse(
+        "admin/network/fiber/ont_identity_review_detail.html", context
+    )
+
+
+def _identity_transition_redirect(decision_id: str, error: str | None = None):
+    target = f"/admin/network/ont-identity-reviews/{decision_id}"
+    if error:
+        target = f"{target}?error={quote(error, safe='')}"
+    return RedirectResponse(target, status_code=303)
+
+
+@router.post(
+    "/ont-identity-reviews/{decision_id}/approve",
+    dependencies=[Depends(require_permission("network:fiber:write"))],
+)
+def ont_identity_review_approve(
+    request: Request, decision_id: str, db: Session = Depends(get_db)
+):
+    notes = str(parse_form_data_sync(request).get("review_notes") or "").strip()
+    try:
+        decision = approve_assignment_identity_repair(
+            db,
+            decision_id,
+            reviewed_by=_identity_actor(request),
+            review_notes=notes,
+        )
+    except OntAssignmentIdentityError as exc:
+        return _identity_transition_redirect(decision_id, str(exc))
+    _identity_audit(
+        request,
+        db,
+        action="approve",
+        decision_id=decision.id,
+        metadata={"review_notes": notes},
+    )
+    return _identity_transition_redirect(decision_id)
+
+
+@router.post(
+    "/ont-identity-reviews/{decision_id}/decline",
+    dependencies=[Depends(require_permission("network:fiber:write"))],
+)
+def ont_identity_review_decline(
+    request: Request, decision_id: str, db: Session = Depends(get_db)
+):
+    notes = str(parse_form_data_sync(request).get("review_notes") or "").strip()
+    try:
+        decision = decline_assignment_identity_repair(
+            db,
+            decision_id,
+            reviewed_by=_identity_actor(request),
+            review_notes=notes,
+        )
+    except OntAssignmentIdentityError as exc:
+        return _identity_transition_redirect(decision_id, str(exc))
+    _identity_audit(
+        request,
+        db,
+        action="decline",
+        decision_id=decision.id,
+        metadata={"review_notes": notes},
+    )
+    return _identity_transition_redirect(decision_id)
+
+
+@router.post(
+    "/ont-identity-reviews/{decision_id}/execute",
+    dependencies=[Depends(require_permission("network:fiber:write"))],
+)
+def ont_identity_review_execute(
+    request: Request, decision_id: str, db: Session = Depends(get_db)
+):
+    try:
+        decision = execute_assignment_identity_repair(
+            db, decision_id, executed_by=_identity_actor(request)
+        )
+    except OntAssignmentIdentityError as exc:
+        return _identity_transition_redirect(decision_id, str(exc))
+    _identity_audit(
+        request,
+        db,
+        action="execute",
+        decision_id=decision.id,
+        metadata={
+            "outcome": (
+                decision.result_payload.get("outcome")
+                if decision.result_payload
+                else decision.status
+            ),
+            "result_sha256": decision.result_sha256,
+        },
+    )
+    return _identity_transition_redirect(decision_id)
 
 
 @router.get(

@@ -1,4 +1,4 @@
-"""Reconcile ONT topology pointers from imported OLT registrations."""
+"""Report ONT topology discrepancies observed in imported registrations."""
 
 from __future__ import annotations
 
@@ -14,6 +14,10 @@ from app.models.network import (
     PonPort,
 )
 from app.services.network.serial_utils import canonical as canonical_serial
+
+
+class OntTopologyRepairReviewRequired(ValueError):
+    """Raised when a caller attempts the retired observation-driven repair."""
 
 
 @dataclass(frozen=True)
@@ -79,12 +83,11 @@ def _active_assignments(db: Session, ont: OntUnit) -> list[OntAssignment]:
     )
 
 
-def _get_or_create_pon_port(
+def _find_pon_port(
     db: Session,
     *,
     olt_id: object,
     fsp: str,
-    apply: bool,
 ) -> tuple[PonPort | None, bool]:
     existing = db.scalars(
         select(PonPort)
@@ -94,20 +97,7 @@ def _get_or_create_pon_port(
     ).first()
     if existing is not None:
         return existing, False
-    if not apply:
-        return None, True
-    parsed = _parse_fsp(fsp)
-    port_number = int(parsed[2]) if parsed and parsed[2].isdigit() else None
-    pon_port = PonPort(
-        olt_id=olt_id,
-        name=fsp,
-        port_number=port_number,
-        is_active=True,
-        notes="Created by ONT registration topology reconciliation.",
-    )
-    db.add(pon_port)
-    db.flush()
-    return pon_port, True
+    return None, True
 
 
 def reconcile_ont_pon_ports_from_registrations(
@@ -116,12 +106,17 @@ def reconcile_ont_pon_ports_from_registrations(
     olt_id: str | None = None,
     apply: bool = False,
 ) -> OntPonPortReconcileResult:
-    """Align ONT/PonPort topology with active imported OLT registrations.
+    """Compare modeled ONT/PON topology with active registration observations.
 
-    The imported registration FSP is treated as the source of truth. Dry-run is
-    the default: pass ``apply=True`` to update ``OntUnit.pon_port_id``, active
-    ``OntAssignment.pon_port_id``, and ``OntUnit.board/port``.
+    Registrations are observations, not an identity source of truth. The former
+    ``apply=True`` path is retired; discrepancies must enter the independently
+    reviewed ``network.ont_assignment_identity`` workflow with exact IDs.
     """
+    if apply:
+        raise OntTopologyRepairReviewRequired(
+            "registration-driven topology writes are retired; use the reviewed "
+            "network.ont_assignment_identity workflow"
+        )
     reg_stmt = select(OltOntRegistration).where(OltOntRegistration.is_active.is_(True))
     ont_stmt = select(OntUnit).where(OntUnit.is_active.is_(True))
     if olt_id:
@@ -145,8 +140,6 @@ def reconcile_ont_pon_ports_from_registrations(
     missing_from_db = 0
     already_correct = 0
     skipped = 0
-    updated = 0
-    created_pon_ports = 0
 
     for registration in registrations:
         serial = canonical_serial(registration.serial_number)
@@ -197,11 +190,10 @@ def reconcile_ont_pon_ports_from_registrations(
             )
             continue
 
-        target_pon_port, created = _get_or_create_pon_port(
+        target_pon_port, created = _find_pon_port(
             db,
             olt_id=registration.olt_id,
             fsp=registration_fsp,
-            apply=apply,
         )
         assignments = _active_assignments(db, ont)
         assignment_ids = [str(assignment.id) for assignment in assignments]
@@ -223,17 +215,6 @@ def reconcile_ont_pon_ports_from_registrations(
             already_correct += 1
             continue
 
-        if apply:
-            ont.board = board
-            ont.port = port
-            if target_pon_port is not None:
-                ont.pon_port_id = target_pon_port.id
-                for assignment in assignments:
-                    assignment.pon_port_id = target_pon_port.id
-            updated += 1
-            if created:
-                created_pon_ports += 1
-
         candidates.append(
             OntPonPortRepair(
                 serial_number=ont.serial_number,
@@ -245,7 +226,7 @@ def reconcile_ont_pon_ports_from_registrations(
                 ont_unit_id=str(ont.id),
                 assignment_ids=assignment_ids,
                 created_pon_port=created,
-                changed=apply,
+                changed=False,
             )
         )
 
@@ -253,14 +234,11 @@ def reconcile_ont_pon_ports_from_registrations(
         {key for key in ont_by_olt_serial if key not in registration_keys}
     )
 
-    if apply:
-        db.flush()
-
     return OntPonPortReconcileResult(
-        apply=apply,
+        apply=False,
         candidates=candidates,
-        updated=updated,
-        created_pon_ports=created_pon_ports,
+        updated=0,
+        created_pon_ports=0,
         already_correct=already_correct,
         missing_from_db=missing_from_db,
         missing_from_registration=missing_from_registration,

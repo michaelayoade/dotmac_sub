@@ -14,15 +14,18 @@ no-op / standalone path when one is not supplied.
 from __future__ import annotations
 
 import logging
+import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import Select
 
-from app.models.catalog import Subscription
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
@@ -33,7 +36,76 @@ from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DefaultSubscriberValidator", "default_subscriber_validator"]
+__all__ = [
+    "AssignmentSubscriptionSnapshot",
+    "DefaultSubscriberValidator",
+    "assignment_subscription_snapshot",
+    "assignment_subscription_snapshots",
+    "default_subscriber_validator",
+]
+
+
+_TERMINAL_ASSIGNMENT_STATUSES = frozenset(
+    {
+        SubscriptionStatus.archived,
+        SubscriptionStatus.canceled,
+        SubscriptionStatus.disabled,
+        SubscriptionStatus.expired,
+        SubscriptionStatus.hidden,
+    }
+)
+
+
+@dataclass(frozen=True)
+class AssignmentSubscriptionSnapshot:
+    """Subscription-owned identity projected for network assignment decisions."""
+
+    id: uuid.UUID
+    subscriber_id: uuid.UUID
+    offer_id: uuid.UUID
+    status: str
+    assignment_eligible: bool
+
+
+def _assignment_snapshot(row: Subscription) -> AssignmentSubscriptionSnapshot:
+    return AssignmentSubscriptionSnapshot(
+        id=row.id,
+        subscriber_id=row.subscriber_id,
+        offer_id=row.offer_id,
+        status=str(getattr(row.status, "value", row.status)),
+        assignment_eligible=row.status not in _TERMINAL_ASSIGNMENT_STATUSES,
+    )
+
+
+def assignment_subscription_snapshot(
+    db: Session,
+    subscription_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> AssignmentSubscriptionSnapshot | None:
+    """Project one subscription identity without exporting its ORM authority."""
+
+    statement = select(Subscription).where(Subscription.id == subscription_id)
+    if for_update:
+        statement = statement.with_for_update()
+    row = db.scalar(statement)
+    return _assignment_snapshot(row) if row is not None else None
+
+
+def assignment_subscription_snapshots(
+    db: Session,
+    subscription_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, AssignmentSubscriptionSnapshot]:
+    """Project exact subscription identities for a read-only assignment audit."""
+
+    if not subscription_ids:
+        return {}
+    rows = db.scalars(
+        select(Subscription)
+        .where(Subscription.id.in_(subscription_ids))
+        .order_by(Subscription.id)
+    ).all()
+    return {row.id: _assignment_snapshot(row) for row in rows}
 
 
 class DefaultSubscriberValidator:

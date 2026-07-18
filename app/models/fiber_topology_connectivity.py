@@ -48,6 +48,11 @@ class FiberTopologyConnectivityDecision(Base):
             "segment_change_request_id",
             name="uq_fiber_connectivity_segment_request",
         ),
+        UniqueConstraint(
+            "proposal_batch_id",
+            "proposal_batch_row_number",
+            name="uq_fiber_connectivity_decision_batch_row",
+        ),
         CheckConstraint(
             "action IN ('create', 'link_existing', 'reject')",
             name="ck_fiber_connectivity_action",
@@ -116,8 +121,14 @@ class FiberTopologyConnectivityDecision(Base):
             "length_m IS NULL OR length_m > 0",
             name="ck_fiber_connectivity_length",
         ),
+        CheckConstraint(
+            "(proposal_batch_id IS NULL AND proposal_batch_row_number IS NULL) OR "
+            "(proposal_batch_id IS NOT NULL AND proposal_batch_row_number > 0)",
+            name="ck_fiber_connectivity_decision_batch_evidence",
+        ),
         Index("ix_fiber_connectivity_status", "status"),
         Index("ix_fiber_connectivity_staged_feature", "staged_feature_id"),
+        Index("ix_fiber_connectivity_decision_batch", "proposal_batch_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -160,6 +171,13 @@ class FiberTopologyConnectivityDecision(Base):
     canonical_segment_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("fiber_segments.id", ondelete="RESTRICT")
     )
+    proposal_batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "fiber_topology_connectivity_proposal_batches.id", ondelete="RESTRICT"
+        ),
+    )
+    proposal_batch_row_number: Mapped[int | None] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     decision_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     proposed_by: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -189,6 +207,9 @@ class FiberTopologyConnectivityDecision(Base):
         foreign_keys=[end_resolution_id],
     )
     segment_change_request = relationship("FiberChangeRequest")
+    proposal_batch = relationship(
+        "FiberTopologyConnectivityProposalBatch", back_populates="decisions"
+    )
     source_link = relationship(
         "FiberTopologySegmentSourceLink", back_populates="decision", uselist=False
     )

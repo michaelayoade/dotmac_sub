@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -272,18 +272,18 @@ class DefaultSubscriberOntLinker:
     ) -> LinkResult:
         """Link a subscriber to an ONT.
 
-        Creates an OntAssignment and associated CPEDevice. If the ONT is already
+        Delegates exact assignment creation to the canonical command owner. If
+        the ONT is already
         assigned to this subscriber, returns success with already_linked status.
 
         Args:
             db: Database session.
             subscriber_id: UUID of the subscriber.
             ont_id: UUID of the ONT.
-            subscription_id: Optional subscription to associate (for future use).
+            subscription_id: Exact subscription to associate.
             service_address_id: Optional service address. If not provided,
                 resolves from subscriber's primary address.
-            pon_port_id: Optional PON port. If not provided, resolves from
-                ONT's discovered board/port or autofind candidate.
+            pon_port_id: Exact modeled PON port.
             notes: Optional notes for the assignment.
 
         Returns:
@@ -310,29 +310,13 @@ class DefaultSubscriberOntLinker:
                 subscriber_id=subscriber_id,
             )
 
-        resolved_subscription_id = None
-        if subscription_id is not None:
-            from fastapi import HTTPException
-
-            from app.services.network_subscriber_bridge import (
-                default_subscriber_validator,
+        if subscription_id is None or pon_port_id is None:
+            return LinkResult.fail(
+                LinkResultStatus.validation_error,
+                "Exact subscription_id and pon_port_id are required",
+                ont_id=ont_id,
+                subscriber_id=subscriber_id,
             )
-
-            try:
-                resolved_subscription_id, _ = (
-                    default_subscriber_validator.resolve_assignment_subscription(
-                        db,
-                        subscription_id=subscription_id,
-                        subscriber_id=subscriber.id,
-                    )
-                )
-            except HTTPException as exc:
-                return LinkResult.fail(
-                    LinkResultStatus.validation_error,
-                    str(exc.detail),
-                    ont_id=ont_id,
-                    subscriber_id=subscriber_id,
-                )
 
         # Check for existing active assignment on this ONT
         existing = db.scalars(
@@ -362,45 +346,37 @@ class DefaultSubscriberOntLinker:
                     subscriber_id=subscriber_id,
                 )
 
-        # Resolve service address if not provided
-        resolved_address_id = service_address_id
-        if not resolved_address_id:
-            resolved_address_id = self._resolve_service_address(db, subscriber_id)
-
-        # Resolve PON port if not provided
-        resolved_pon_port_id = pon_port_id
-        warnings: list[str] = []
-        if not resolved_pon_port_id:
-            resolved_pon_port_id, port_warning = self._resolve_pon_port(db, ont)
-            if port_warning:
-                warnings.append(port_warning)
-
-        # Create assignment
-        assignment = OntAssignment(
-            ont_unit_id=ont_id,
-            subscriber_id=subscriber_id,
-            subscription_id=resolved_subscription_id,
-            pon_port_id=resolved_pon_port_id,
-            service_address_id=resolved_address_id,
-            active=True,
-            assigned_at=datetime.now(UTC),
-            notes=notes,
+        from app.services import network as network_service
+        from app.services.network.ont_assignment_commands import (
+            OntAssignmentCommandError,
         )
-        db.add(assignment)
-        db.flush()
 
-        # Mark ONT as active
-        ont.is_active = True
-        db.flush()
-
-        # Create/update CPEDevice
-        cpe_device_id = self._ensure_cpe_device(
-            db,
-            ont=ont,
-            subscriber_id=subscriber_id,
-            service_address_id=resolved_address_id,
-            assigned_at=assignment.assigned_at,
-        )
+        try:
+            command = network_service.ont_assignment_commands.assign(
+                db,
+                ont_unit_id=ont_id,
+                subscription_id=subscription_id,
+                pon_port_id=pon_port_id,
+                subscriber_id=subscriber_id,
+                service_address_id=service_address_id,
+                notes=notes,
+                source="subscriber_ont_adapter",
+                commit=False,
+            )
+        except OntAssignmentCommandError as exc:
+            status = (
+                LinkResultStatus.ont_already_assigned
+                if exc.status_code == 409
+                else LinkResultStatus.validation_error
+            )
+            return LinkResult.fail(
+                status,
+                str(exc),
+                ont_id=ont_id,
+                subscriber_id=subscriber_id,
+            )
+        assignment = command.assignment
+        cpe_device_id = self._find_cpe_device_id(db, ont.serial_number)
 
         logger.info(
             "Linked subscriber %s to ONT %s (assignment=%s)",
@@ -415,7 +391,7 @@ class DefaultSubscriberOntLinker:
             ont_id=ont_id,
             subscriber_id=subscriber_id,
             cpe_device_id=cpe_device_id,
-            warnings=warnings,
+            warnings=[],
         )
 
     def unlink(
@@ -464,18 +440,33 @@ class DefaultSubscriberOntLinker:
             str(assignment.subscriber_id) if assignment.subscriber_id else None
         )
 
-        if keep_history:
-            # Deactivate assignment
-            assignment.active = False
-            db.flush()
-        else:
-            # Delete assignment
-            db.delete(assignment)
-            db.flush()
+        if not keep_history:
+            return LinkResult.fail(
+                LinkResultStatus.validation_error,
+                "ONT assignment deletion is retired; history must be retained",
+                ont_id=ont_id,
+                subscriber_id=subscriber_id,
+            )
+        from app.services import network as network_service
+        from app.services.network.ont_assignment_commands import (
+            OntAssignmentCommandError,
+        )
 
-        # Update ONT status
-        ont.is_active = False
-        db.flush()
+        try:
+            network_service.ont_assignment_commands.release(
+                db,
+                assignment_id=assignment.id,
+                reason="subscriber_unlinked",
+                source="subscriber_ont_adapter",
+                commit=False,
+            )
+        except OntAssignmentCommandError as exc:
+            return LinkResult.fail(
+                LinkResultStatus.validation_error,
+                str(exc),
+                ont_id=ont_id,
+                subscriber_id=subscriber_id,
+            )
 
         logger.info(
             "Unlinked ONT %s from subscriber %s (keep_history=%s)",
@@ -553,9 +544,37 @@ class DefaultSubscriberOntLinker:
         )
 
         # Unlink from current subscriber (if any)
+        if not new_subscription_id:
+            return LinkResult.fail(
+                LinkResultStatus.validation_error,
+                "Exact new_subscription_id is required",
+                ont_id=ont_id,
+                subscriber_id=new_subscriber_id,
+            )
+
+        savepoint = db.begin_nested()
         if current:
-            current.active = False
-            db.flush()
+            from app.services import network as network_service
+            from app.services.network.ont_assignment_commands import (
+                OntAssignmentCommandError,
+            )
+
+            try:
+                network_service.ont_assignment_commands.release(
+                    db,
+                    assignment_id=current.id,
+                    reason="subscriber_transferred",
+                    source="subscriber_ont_adapter",
+                    commit=False,
+                )
+            except OntAssignmentCommandError as exc:
+                savepoint.rollback()
+                return LinkResult.fail(
+                    LinkResultStatus.validation_error,
+                    str(exc),
+                    ont_id=ont_id,
+                    subscriber_id=new_subscriber_id,
+                )
 
         # Link to new subscriber
         result = self.link(
@@ -567,6 +586,11 @@ class DefaultSubscriberOntLinker:
             pon_port_id=pon_port_id,
             notes=notes or f"Transferred from subscriber {old_subscriber_id}",
         )
+
+        if result.success:
+            savepoint.commit()
+        else:
+            savepoint.rollback()
 
         if result.success:
             logger.info(

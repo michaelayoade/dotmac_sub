@@ -16,7 +16,6 @@ from app.models.network_monitoring import (
     NetworkDevice,
 )
 from app.services.common import coerce_uuid
-from app.services.network.olt_web_topology import ensure_canonical_pon_port
 
 _PON_TOKENS = ("pon", "gpon", "epon", "xgpon", "xgs")
 _ALIAS_PREFIX = "[[alias:"
@@ -352,24 +351,15 @@ def save_alias(
             )
         ).first()
     if port is None:
-        olt = db.get(OLTDevice, coerce_uuid(olt_id))
-        if not olt:
-            raise HTTPException(status_code=404, detail="OLT device not found")
-        fsp_hint = _extract_pon_hint(interface_name)
-        board = None
-        port_number = None
-        if fsp_hint:
-            board, port_number = fsp_hint.rsplit("/", 1)
-        port = ensure_canonical_pon_port(
-            db,
-            olt_id=olt.id,
-            fsp=fsp_hint or interface_name,
-            board=board,
-            port=port_number,
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "PON interface is not modeled as an active port; review the PON "
+                "inventory before editing metadata"
+            ),
         )
-        port.notes = merge_pon_port_notes(getattr(port, "notes", None), alias_text)
-    else:
-        port.notes = merge_pon_port_notes(getattr(port, "notes", None), alias_text)
+
+    port.notes = merge_pon_port_notes(getattr(port, "notes", None), alias_text)
 
     db.commit()
     db.refresh(port)
@@ -384,7 +374,7 @@ def save_description(
     description: str | None,
     pon_port_id: str | None = None,
 ) -> PonPort:
-    """Save description to a PON port, creating it if necessary."""
+    """Save description to an already-modeled active PON port."""
     description_text = (description or "").strip() or None
     interface_name = (interface_name or "").strip()
     if not interface_name:
@@ -417,20 +407,12 @@ def save_description(
             )
         ).first()
     if port is None:
-        olt = db.get(OLTDevice, coerce_uuid(olt_id))
-        if not olt:
-            raise HTTPException(status_code=404, detail="OLT device not found")
-        fsp_hint = _extract_pon_hint(interface_name)
-        board = None
-        port_number = None
-        if fsp_hint:
-            board, port_number = fsp_hint.rsplit("/", 1)
-        port = ensure_canonical_pon_port(
-            db,
-            olt_id=olt.id,
-            fsp=fsp_hint or interface_name,
-            board=board,
-            port=port_number,
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "PON interface is not modeled as an active port; review the PON "
+                "inventory before editing metadata"
+            ),
         )
 
     port.description = description_text

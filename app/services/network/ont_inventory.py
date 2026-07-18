@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import UTC, datetime
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -28,6 +27,9 @@ from app.services.network.huawei_cli_response import (
 )
 from app.services.network.ont_actions import ActionResult
 from app.services.network.ont_desired_config import clear_desired_config
+from app.services.network.ont_inventory_release import (
+    release_ont_electronic_identity,
+)
 from app.services.network.ont_status import (
     clear_authorization_status,
     reset_status_for_inventory,
@@ -620,13 +622,13 @@ def _release_wan_static_ip_for_inventory_return(
     return released
 
 
-def _clear_assignment_links_for_inventory_return(
+def _clear_assignment_service_config_for_inventory_return(
     db: Session,
     *,
     ont,
     assignments: list[OntAssignment],
 ) -> int:
-    """Detach subscriber, topology, and service config from returned ONT assignments."""
+    """Clear non-identity service configuration from returned ONT assignments."""
     all_assignments = list(
         db.scalars(
             select(OntAssignment).where(OntAssignment.ont_unit_id == ont.id)
@@ -638,9 +640,6 @@ def _clear_assignment_links_for_inventory_return(
     assignments_to_clear = list(by_id.values())
 
     for assignment in assignments_to_clear:
-        assignment.subscriber_id = None
-        assignment.service_address_id = None
-        assignment.pon_port_id = None
         assignment.wan_mode = None
         assignment.ip_mode = MgmtIpMode.inactive
         assignment.static_ip = None
@@ -671,6 +670,7 @@ def _assert_inventory_return_links_cleared(db: Session, *, ont) -> None:
         .where(
             or_(
                 OntAssignment.active.is_(True),
+                OntAssignment.subscription_id.is_not(None),
                 OntAssignment.subscriber_id.is_not(None),
                 OntAssignment.service_address_id.is_not(None),
                 OntAssignment.pon_port_id.is_not(None),
@@ -785,11 +785,6 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                     f"Return to inventory stopped before local cleanup: {details}."
                 )
 
-            for assignment in active_assignments:
-                assignment.active = False
-                assignment.released_at = datetime.now(UTC)
-                assignment.release_reason = "returned_to_inventory"
-
             released_management_ips = _release_management_ip_for_inventory_return(
                 db,
                 ont=ont,
@@ -800,17 +795,19 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
                 ont=ont,
                 assignments=list(active_assignments),
             )
-            cleared_assignment_links = _clear_assignment_links_for_inventory_return(
+            identity_release = release_ont_electronic_identity(
                 db,
-                ont=ont,
-                assignments=list(active_assignments),
+                ont_unit_id=ont.id,
+            )
+            released_assignment_count = len(identity_release.deactivated_assignment_ids)
+            cleared_assignment_links = (
+                _clear_assignment_service_config_for_inventory_return(
+                    db,
+                    ont=ont,
+                    assignments=list(active_assignments),
+                )
             )
             ont.is_active = True
-            ont.olt_device_id = None
-            ont.pon_port_id = None
-            ont.board = None
-            ont.port = None
-            ont.external_id = None
             reset_ont_service_state(db, ont)
 
             try:
@@ -888,8 +885,8 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
         active_assignment, "pon_port_id", None
     ):
         parts.append("OLT service state removed")
-    if active_assignments:
-        assignment_count = len(active_assignments)
+    if "released_assignment_count" in locals() and released_assignment_count:
+        assignment_count = released_assignment_count
         parts.append(
             "assignment closed"
             if assignment_count == 1

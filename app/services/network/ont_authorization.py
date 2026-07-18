@@ -20,7 +20,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.network import (
-    OntAssignment,
     OntAuthorizationStatus,
     OntProvisioningStatus,
     OntUnit,
@@ -156,13 +155,6 @@ def _serial_predicates(serial_number: str) -> list[str]:
         )
         if candidate
     ]
-
-
-def _get_or_create_active_assignment(db: Session, ont: OntUnit) -> OntAssignment:
-    """Get the active assignment for an ONT, creating one if none exists."""
-    from app.services import web_network_ont_assignments as assignments_service
-
-    return assignments_service.get_or_create_active_assignment(db, ont)
 
 
 def _commit_without_expiring(db: Session) -> None:
@@ -320,17 +312,12 @@ def create_or_find_ont_for_authorized_serial(
     ).first()
     if existing:
         try:
-            existing.olt_device_id = uuid.UUID(str(olt_id))
             existing.is_active = True
             set_authorization_status(
                 existing, OntAuthorizationStatus.authorized, strict=False
             )
             if ont_id_on_olt is not None:
                 existing.external_id = scoped_external_id or str(ont_id_on_olt)
-            parts = fsp.split("/")
-            if len(parts) == 3:
-                existing.board = f"{parts[0]}/{parts[1]}"
-                existing.port = parts[2]
             if observed_olt_status is not None:
                 existing.olt_status = observed_olt_status
                 existing.offline_reason = None
@@ -370,9 +357,6 @@ def create_or_find_ont_for_authorized_serial(
 
     display_serial = normalize_serial(serial_number)
     vendor = "Huawei" if display_serial.upper().startswith(("HWTC", "HWTT")) else None
-    parts = fsp.split("/")
-    board = f"{parts[0]}/{parts[1]}" if len(parts) == 3 else None
-    port = parts[2] if len(parts) == 3 else None
 
     new_ont = OntUnit(
         id=uuid.uuid4(),
@@ -381,9 +365,6 @@ def create_or_find_ont_for_authorized_serial(
         vendor=vendor,
         model=getattr(matched_candidate, "model", None),
         mac_address=normalize_mac_address(getattr(matched_candidate, "mac", None)),
-        olt_device_id=uuid.UUID(str(olt_id)),
-        board=board,
-        port=port,
         is_active=True,
         authorization_status=OntAuthorizationStatus.authorized,
         provisioning_status=OntProvisioningStatus.unprovisioned,
@@ -409,16 +390,16 @@ def create_or_find_ont_for_authorized_serial(
     return str(new_ont.id), f"Created ONT record for {display_serial}."
 
 
-def ensure_assignment_and_pon_port_for_authorized_ont(
+def record_topology_observation_for_authorized_ont(
     db: Session,
     *,
     ont_unit_id: str,
     olt_id: str,
     fsp: str,
 ) -> tuple[bool, str]:
-    """Ensure the authorized ONT is linked to an active assignment and PON port."""
+    """Record non-conflicting PON topology without inferring an assignment."""
     from app.services.network.ont_assignment_alignment import (
-        align_ont_assignment_to_authoritative_fsp,
+        project_ont_topology_from_fsp_observation,
     )
 
     ont = db.get(OntUnit, ont_unit_id)
@@ -426,16 +407,32 @@ def ensure_assignment_and_pon_port_for_authorized_ont(
         return False, "ONT record not found."
 
     try:
-        result = align_ont_assignment_to_authoritative_fsp(
+        result = project_ont_topology_from_fsp_observation(
             db,
             ont=ont,
             olt_id=olt_id,
             fsp=fsp,
         )
         if result is None:
-            return False, f"Invalid OLT F/S/P for assignment: {fsp}."
+            return False, f"Invalid OLT F/S/P: {fsp}."
+        if result.review_required:
+            if result.review_reason == (
+                "observed PON has no exact active modeled port"
+            ):
+                return True, (
+                    f"Recorded OLT observation {fsp} without a customer assignment; "
+                    "the PON is not yet modeled and remains an explicit topology gap."
+                )
+            return False, (
+                f"ONT topology needs reviewed identity repair: {result.review_reason}."
+            )
         db.flush()
-        return True, f"Linked ONT to PON port {result.pon_port.name}."
+        if result.pon_port is None:
+            return False, "ONT topology did not resolve to a modeled PON port."
+        return True, (
+            f"Recorded ONT PON port {result.pon_port.name}; customer assignment "
+            "requires explicit provisioning."
+        )
     except SQLAlchemyError as exc:
         db.rollback()
         logger.warning(
@@ -717,7 +714,7 @@ def authorize_autofind_ont(
             partial_success=True,
         )
 
-    assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
+    assignment_ok, assignment_msg = record_topology_observation_for_authorized_ont(
         db,
         ont_unit_id=ont_unit_id,
         olt_id=olt_id,
