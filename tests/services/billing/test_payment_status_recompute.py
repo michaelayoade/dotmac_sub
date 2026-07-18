@@ -452,6 +452,7 @@ def test_direct_prepaid_wallet_renewal_creates_entitlement(db_session):
         billing_cycle=BillingCycle.monthly,
         next_billing_at=paid_at.replace(hour=0, minute=0, second=0, microsecond=0),
     )
+    subscription.unit_price = Decimal("1000.00")
     db_session.add(
         OfferPrice(
             offer_id=subscription.offer_id,

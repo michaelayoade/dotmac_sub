@@ -79,6 +79,14 @@ def resolve_prepaid_monthly_charge(
         _resolve_tax_rate_id,
     )
 
+    # A recurring prepaid debit consumes the customer's money immediately, so
+    # the contracted price must be structural evidence on the subscription.
+    # Falling back to the current catalog price can turn an incomplete import
+    # into an overcharge (the retained source has negotiated prices far below
+    # today's offer price). Missing/zero terms are an operator blocker, not a
+    # pricing decision for the renewal owner.
+    if subscription.unit_price is None or subscription.unit_price <= 0:
+        return None
     amount, currency, cycle = _resolve_price(db, subscription)
     if amount is None:
         return None

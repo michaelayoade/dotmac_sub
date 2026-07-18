@@ -27,6 +27,7 @@ _EVIDENCE = {
 
 
 def test_principal_context_audit_reports_only_aggregate_convergence(db_session):
+    baseline = build_party_principal_context_audit(db_session)["system_user_principals"]
     private_name = "Private Principal Name"
     private_email = "private-principal@example.test"
     person = party_service.create_party(
@@ -148,11 +149,9 @@ def test_principal_context_audit_reports_only_aggregate_convergence(db_session):
 
     assert audit["status"] == "installed"
     assert audit["system_user_principals"] == {
-        "total": 1,
-        "bound": 1,
-        "unbound": 0,
-        "incomplete_evidence": 0,
-        "missing_or_non_person_party": 0,
+        **baseline,
+        "total": baseline["total"] + 1,
+        "bound": baseline["bound"] + 1,
     }
     assert audit["reseller_user_principals"]["aligned"] == 1
     assert audit["organization_membership_contexts"]["aligned"] == 1
@@ -175,6 +174,9 @@ def test_principal_context_audit_reports_only_aggregate_convergence(db_session):
 
 
 def test_principal_context_audit_reports_unbound_and_bridge_debt(db_session):
+    baseline_unbound = build_party_principal_context_audit(db_session)[
+        "system_user_principals"
+    ]["unbound"]
     system_user = SystemUser(
         first_name="Unbound",
         last_name="User",
@@ -194,7 +196,7 @@ def test_principal_context_audit_reports_unbound_and_bridge_debt(db_session):
 
     audit = build_party_principal_context_audit(db_session)
 
-    assert audit["system_user_principals"]["unbound"] == 1
+    assert audit["system_user_principals"]["unbound"] == baseline_unbound + 1
     assert audit["field_vendor_user_contexts"]["unbound"] == 1
     assert audit["field_vendor_user_contexts"]["invalid_vendor_profile_bridge"] == 1
 

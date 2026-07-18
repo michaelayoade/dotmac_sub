@@ -64,21 +64,40 @@ replay are **withdrawn and must not be used**.
 
 Independent verification then queried the exact 92 service IDs directly in the
 retained final Splynx source database. All 92 lack a normal category-1 Service
-charge, but seven have other service-linked period evidence: two category-2
-Discount debits totaling ₦313,586.96 with periods ending 2026-07-03 and
-2026-07-07, plus six zero-value category-5 Correction rows across five services.
-The remaining **85** have no service-linked transaction of any category. At the
-account level, 43 of the 92 have 526 Splynx payment receipts totaling
-₦37,976,204.53, so “these customers never paid” is false; those receipts remain
-in the opening position and do not by themselves prove a particular service
-period. Source-verification SQL SHA-256 is
+charge, but seven have other service-linked period evidence. Two are
+auto-generated category-2 debits totaling ₦313,586.96: each is marked for
+invoicing, has no operator comment, starts with the source service, and equals
+that service's quantity times unit price. Those are structurally proven
+first-cycle service charges misclassified under category 2, so replay may use
+their exact amount and paid-through period without treating category 2 as a
+general fallback. Six zero-value category-5 Correction rows cover the other
+five services; those periods remain ambiguous and confer neither a charge nor a
+future billing cadence. The remaining **85** have no service-linked transaction
+of any category. At the account level, 43 of the 92 have 526 Splynx payment
+receipts totaling ₦37,976,204.53, so “these customers never paid” is false;
+those receipts remain in the opening position and do not by themselves prove a
+particular service period. Source-verification SQL SHA-256 is
 `a4c9fc17b83ffe71da7c55697eda8ce0a2232040d49ac7a9b197ae1b4cf19c3d`.
 
-The replay contract now carries non-category-1 transaction/period evidence and
-classifies those seven separately instead of silently calling them no-paid-
-through. Only the 85 evidence-clean services can retain the due-immediately
-disposition. The seven remain blocked pending an explicit interpretation of
-their Discount/Correction periods; no money or exemption is inferred.
+The replay contract now carries the structural source fields and accepts only
+the exact two-row proof above. A manual category-2 row, an amount mismatch, a
+different start date, multiple rows, or any category-5 correction still fails
+closed. The **85** evidence-clean services retain the no-paid-through /
+due-immediately disposition; the **two** misclassified first cycles are
+reconstructed from their exact source periods; the **five** correction-only
+services remain blocked. No money or exemption is inferred from the five.
+
+A deployment-acceptance follow-up then checked those five against current Sub
+commercial terms without identifying customers. Four have positive contracted
+monthly prices but stale pre-authority anchors and no native invoice or
+entitlement; one has a source contract price of ₦250,000, a null Sub
+`unit_price`, and one active issued Sub invoice for ₦2.15m. The broader cohort
+contains **120 eligible prepaid services with missing/non-positive contract
+prices**, 100 already due; catalog substitution would expose ₦26,137,046.96.
+Recurring prepaid renewal therefore remains a separate default-off control.
+The owner now fails closed as `prepaid_renewals_missing_price` instead of using
+catalog price when contract evidence is absent. Access enforcement may remain
+enabled independently. See `PREPAID_DEPLOYMENT_ACCEPTANCE_2026-07-18.md`.
 
 That final replay is a **mechanical proof, not a sealable production snapshot**:
 the audit copy was frozen at 09:43:32 UTC while the isolated proof timestamp was
@@ -87,7 +106,7 @@ supplied, no sealed artifact was written, no baseline was superseded, and no
 enforcement control was changed. Operational completion still requires the
 owner code to deploy, the exact three-entry plan to apply through that owner,
 a fresh temporally complete replay, exact source-backed adjudication of the
-85/7 split,
+85/2/5 split,
 and normal signed supersession/readiness gates before enforcement activation.
 
 The 2026-07-16 integration slice closes the remaining forward projection and

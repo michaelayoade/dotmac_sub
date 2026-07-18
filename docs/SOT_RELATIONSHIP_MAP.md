@@ -380,6 +380,9 @@ detailed security and delivery boundary is
    when reviewed funding already exists as a monthly period becomes due, it
    previews against the verified position, posts one idempotent service debit,
    links one active entitlement, and advances the exact subscription period.
+   It requires the positive contracted `Subscription.unit_price` and fails
+   closed when that evidence is absent; current catalog price is not authority
+   for an already-contracted prepaid service.
    The daily adapter is control-gated and refuses anchors more than two days
    stale; historical cycles require a reviewed hash-bound reconciliation plan.
 10. `financial.billing_reporting` (`app/services/billing/reporting.py`) owns
