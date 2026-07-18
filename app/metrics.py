@@ -1081,3 +1081,60 @@ def set_ai_provider_circuit_open_duration(
         model=str(model or "unknown"),
         endpoint=str(endpoint or "unknown"),
     ).set(max(duration_seconds, 0.0))
+
+
+# --- Inbound channels & webhooks (docs/designs/CHANNEL_OBSERVABILITY.md) ------
+# Sub processes inbound webhooks inline in the web process, so these
+# process-local instruments are visible to the /metrics scrape without the
+# Redis-snapshot indirection. Per-channel freshness and Celery queue depth are
+# worker-produced and exported through _ObservabilityStateCollector instead;
+# they cannot live here because a gauge set in a worker never reaches this
+# process.
+SUB_WEBHOOK_EVENTS_TOTAL = Counter(
+    "sub_webhook_events_total",
+    "Inbound webhook events by provider, event, and outcome",
+    ["provider", "event", "outcome"],
+)
+# Inline processing means this latency is the deliver-or-drop margin: when it
+# rises past the provider's timeout the provider retries and eventually drops,
+# so the histogram predicts silent inbound loss before it happens.
+SUB_WEBHOOK_PROCESSING_SECONDS = Histogram(
+    "sub_webhook_processing_seconds",
+    "Inbound webhook end-to-end processing latency by provider and event",
+    ["provider", "event"],
+)
+# Redelivery is suppressed at write time by the inbound dedup unique index, so a
+# provider retry storm shows here as a rising suppression count rather than as
+# duplicate rows an agent would see. Near-zero is the healthy baseline. Only the
+# web-process receive paths (the webhook channels) increment this; the separate
+# SMTP intake process cannot reach this instrument, which is acceptable because
+# the retry-storm risk is the webhook channels.
+SUB_INBOUND_DEDUP_SUPPRESSED_TOTAL = Counter(
+    "sub_inbound_dedup_suppressed_total",
+    "Inbound messages suppressed as duplicates, by channel",
+    ["channel"],
+)
+
+
+def observe_webhook_event(
+    *,
+    provider: str | None,
+    event: str | None,
+    outcome: str,
+    duration_seconds: float | None = None,
+) -> None:
+    labels = {
+        "provider": str(provider or "unknown"),
+        "event": str(event or "unknown"),
+    }
+    SUB_WEBHOOK_EVENTS_TOTAL.labels(outcome=str(outcome), **labels).inc()
+    # Latency is only meaningful for events we actually processed; a rejected
+    # signature or malformed body never reached the owning service.
+    if duration_seconds is not None:
+        SUB_WEBHOOK_PROCESSING_SECONDS.labels(**labels).observe(
+            max(duration_seconds, 0.0)
+        )
+
+
+def record_inbound_dedup_suppressed(channel: str | None) -> None:
+    SUB_INBOUND_DEDUP_SUPPRESSED_TOTAL.labels(channel=str(channel or "unknown")).inc()

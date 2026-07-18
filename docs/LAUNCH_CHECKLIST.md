@@ -247,9 +247,13 @@ final gate.
       bind mount — a bad deploy or stray `rm` is unrecoverable without them)
 - [x] Alembic: single head, migrations run as explicit pre-deploy step
       (`make docker-migrate`), never on boot
-- [ ] Written deploy runbook: merge → pull on main → migrate → restart the
-      11 services that bind-mount `./app` (app, 7 celery workers,
-      celery-beat, bandwidth-poller, syslog-listener)
+- [ ] Written deploy runbook: merge → deploy the immutable image → migrate →
+      restart the app, Celery workers and beat, bandwidth poller, and syslog
+      listener. Where inbound email is enabled, also recreate the profile-gated
+      `team-inbox-smtp` service with `make prod-smtp-inbound-up` and require
+      `make prod-smtp-inbound-probe` to pass before declaring the intake ready.
+      Then enable the reviewed `network_monitoring.channel_health_contracts`
+      entry; its warning/critical consequence is immediate, with no shadow mode.
 - [ ] Uptime/error alerting for the portal itself (Zabbix watches network
       devices; who watches the app?)
 - [ ] Bulk onboarding path: import/create N subscribers + PPPoE creds, batch

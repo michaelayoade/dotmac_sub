@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
+from app.api.webhook_observation import webhook_observation
 from app.db import get_db
 from app.models.domain_settings import SettingDomain
 from app.services import team_inbox_channel_receive
@@ -199,47 +200,48 @@ async def receive_meta_whatsapp_webhook(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
-    raw_body = await request.body()
-    _verify_meta_signature(db, raw_body, request.headers.get(SIGNATURE_HEADER))
-    try:
-        payload = await request.json()
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid JSON payload.",
-        ) from None
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid JSON payload.",
-        )
+    with webhook_observation(provider="meta_cloud_api", event="whatsapp"):
+        raw_body = await request.body()
+        _verify_meta_signature(db, raw_body, request.headers.get(SIGNATURE_HEADER))
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON payload.",
+            ) from None
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON payload.",
+            )
 
-    inbound_payloads: list[dict[str, Any]] = []
-    status_items: list[dict[str, Any]] = []
-    for item in _iter_meta_whatsapp_messages(payload):
-        inbound_payloads.append(
-            {
-                "message": item["message"],
-                "contact_name": item.get("contact_name"),
-                "metadata": item.get("metadata"),
-                "attachments": item.get("attachments"),
-                "raw": item.get("raw_message"),
-            }
+        inbound_payloads: list[dict[str, Any]] = []
+        status_items: list[dict[str, Any]] = []
+        for item in _iter_meta_whatsapp_messages(payload):
+            inbound_payloads.append(
+                {
+                    "message": item["message"],
+                    "contact_name": item.get("contact_name"),
+                    "metadata": item.get("metadata"),
+                    "attachments": item.get("attachments"),
+                    "raw": item.get("raw_message"),
+                }
+            )
+        for item in _iter_meta_whatsapp_statuses(payload):
+            status_items.append(item)
+        results, status_results = (
+            team_inbox_channel_receive.receive_whatsapp_webhook_batch_committed(
+                db,
+                provider="meta_cloud_api",
+                payloads=inbound_payloads,
+                status_items=status_items,
+            )
         )
-    for item in _iter_meta_whatsapp_statuses(payload):
-        status_items.append(item)
-    results, status_results = (
-        team_inbox_channel_receive.receive_whatsapp_webhook_batch_committed(
-            db,
-            provider="meta_cloud_api",
-            payloads=inbound_payloads,
-            status_items=status_items,
-        )
-    )
-    return {
-        "status": "ok",
-        "processed": len(results),
-        "status_processed": len(status_results),
-        "items": results,
-        "status_items": status_results,
-    }
+        return {
+            "status": "ok",
+            "processed": len(results),
+            "status_processed": len(status_results),
+            "items": results,
+            "status_items": status_results,
+        }

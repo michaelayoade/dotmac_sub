@@ -1,4 +1,4 @@
-.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
+.PHONY: help test lint type-check format security check lint-file type-check-file check-file migrate dev docker-up docker-down docker-logs worker beat coverage clean prod-build prod-pin prod-deploy prod-up prod-down prod-logs prod-restart prod-smtp-inbound-up prod-smtp-inbound-probe prod-migrate prod-check bump-version prod-ghcr-pin prod-ghcr-deploy deploy
 
 # Production runs IMMUTABLE images: the base docker-compose.yml has no source
 # bind-mounts and pulls code only from the baked image (built by `prod-build`).
@@ -156,6 +156,12 @@ prod-logs: ## Tail production Docker logs
 
 prod-restart: ## Recreate prod app + worker services from the current image (APP_IMAGE)
 	$(PROD_COMPOSE) up -d app celery-worker celery-worker-bandwidth celery-worker-ingestion celery-worker-billing celery-worker-tr069 celery-beat bandwidth-poller syslog-listener
+
+prod-smtp-inbound-up: ## Start/recreate the opt-in, single-instance SMTP intake
+	$(PROD_COMPOSE) --profile smtp-inbound up -d --no-scale team-inbox-smtp
+
+prod-smtp-inbound-probe: ## Prove SMTP intake creates a marked team-inbox message
+	$(PROD_COMPOSE) --profile smtp-inbound exec -T team-inbox-smtp python -m app.team_inbox_smtp e2e-probe
 
 prod-migrate: ## Apply DB migrations in the prod stack (alembic baked in; retries on lock_timeout)
 	@n=0; until [ $$n -ge 4 ]; do \

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Coroutine
+from dataclasses import replace
 from textwrap import dedent
 from typing import Any
 
+from app.config import settings
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.team_inbox import InboxMessage, TeamInboxEmailRoute
 from app.services import team_inbox_smtp_inbound
@@ -14,6 +16,26 @@ class _Envelope:
         self.mail_from = mail_from
         self.rcpt_tos = rcpt_tos
         self.content = content
+
+
+def _configure_smtp(
+    monkeypatch,
+    *,
+    enabled: bool = True,
+    recipients: str = "support@dotmac.io",
+) -> None:
+    monkeypatch.setattr(
+        team_inbox_smtp_inbound,
+        "settings",
+        replace(
+            settings,
+            team_inbox_smtp_inbound_enabled=enabled,
+            team_inbox_smtp_inbound_recipients=recipients,
+            team_inbox_smtp_inbound_host="127.0.0.1",
+            team_inbox_smtp_inbound_port=2525,
+            team_inbox_smtp_fallback_service_team_id="",
+        ),
+    )
 
 
 def _run_immediate_coroutine(coroutine: Coroutine[Any, Any, str]) -> str:
@@ -136,3 +158,56 @@ def test_smtp_handler_returns_ok_for_accepted_message(db_session, monkeypatch):
 
     assert response == "250 OK"
     assert db_session.query(InboxMessage).count() == 1
+
+
+def test_smtp_runtime_configuration_is_normalized(monkeypatch):
+    _configure_smtp(
+        monkeypatch,
+        recipients=" Support@Dotmac.io,alerts@dotmac.io,support@dotmac.io ",
+    )
+
+    assert team_inbox_smtp_inbound.smtp_inbound_enabled() is True
+    assert team_inbox_smtp_inbound.smtp_inbound_allowed_recipients() == {
+        "support@dotmac.io",
+        "alerts@dotmac.io",
+    }
+
+
+def test_smtp_controller_start_is_idempotent_and_stoppable(monkeypatch):
+    calls: list[str] = []
+
+    class _Thread:
+        def is_alive(self) -> bool:
+            return True
+
+    class _Controller:
+        thread = _Thread()
+
+        def __init__(self, _handler, *, hostname: str, port: int):
+            calls.append(f"configured:{hostname}:{port}")
+
+        def start(self) -> None:
+            calls.append("started")
+
+        def stop(self) -> None:
+            calls.append("stopped")
+
+    _configure_smtp(monkeypatch)
+    monkeypatch.setattr(team_inbox_smtp_inbound, "SMTPController", _Controller)
+    monkeypatch.setattr(team_inbox_smtp_inbound, "_SMTP_CONTROLLER", None)
+
+    assert team_inbox_smtp_inbound.start_smtp_inbound_server() is True
+    assert team_inbox_smtp_inbound.start_smtp_inbound_server() is True
+    assert calls == ["configured:127.0.0.1:2525", "started"]
+
+    team_inbox_smtp_inbound.stop_smtp_inbound_server()
+
+    assert calls[-1] == "stopped"
+    assert team_inbox_smtp_inbound.smtp_inbound_server_running() is False
+
+
+def test_smtp_controller_refuses_an_empty_recipient_allowlist(monkeypatch):
+    _configure_smtp(monkeypatch, recipients="")
+    monkeypatch.setattr(team_inbox_smtp_inbound, "_SMTP_CONTROLLER", None)
+
+    assert team_inbox_smtp_inbound.start_smtp_inbound_server() is False

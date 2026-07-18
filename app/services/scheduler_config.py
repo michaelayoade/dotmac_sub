@@ -2692,6 +2692,36 @@ def build_beat_schedule() -> dict:
             interval_seconds=60,
         )
 
+        # Per-channel inbound freshness + Celery queue depth for the
+        # dead-man's-switch and queue alerts. Default-on: it is a read-only
+        # observer and the freshness signal is only useful if it runs
+        # continuously. Frequent by design so a stalled channel surfaces in
+        # minutes, not hours.
+        channel_health_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "channel_health_enabled",
+            "CHANNEL_HEALTH_ENABLED",
+            True,
+        )
+        channel_health_interval_seconds = max(
+            _effective_int(
+                session,
+                SettingDomain.network_monitoring,
+                "channel_health_interval_seconds",
+                "CHANNEL_HEALTH_INTERVAL_SECONDS",
+                60,
+            ),
+            30,
+        )
+        _sync_scheduled_task(
+            session,
+            name="channel_health_observer",
+            task_name="app.tasks.channel_health.observe_channel_health",
+            enabled=channel_health_enabled,
+            interval_seconds=channel_health_interval_seconds,
+        )
+
         tasks = (
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
         )

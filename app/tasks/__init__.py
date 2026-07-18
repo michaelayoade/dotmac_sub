@@ -31,6 +31,7 @@ from app.tasks.catalog import (
     apply_due_subscription_status_commands,
     expire_subscriptions,
 )
+from app.tasks.channel_health import observe_channel_health
 from app.tasks.collections import prepaid_balance_sweep
 from app.tasks.crm_native_sync import pull_crm_phase3_native_delta
 from app.tasks.crm_ticket_pull import (
@@ -296,6 +297,7 @@ __all__ = [
     "deliver_webhook",
     "retry_failed_deliveries",
     "deliver_notification_queue",
+    "observe_channel_health",
     "snapshot_mrr",
     "snapshot_ip_pool_utilization",
     "snapshot_infrastructure_availability",

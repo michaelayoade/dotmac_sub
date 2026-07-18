@@ -13,6 +13,7 @@ from app.api.inbox_webhooks import (
     _verify_meta_signature,
     _verify_token,
 )
+from app.api.webhook_observation import webhook_observation
 from app.db import get_db
 from app.models.team_inbox import InboxChannelType
 from app.services import team_inbox_channel_receive
@@ -141,39 +142,40 @@ async def receive_meta_inbox_webhook(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
-    raw_body = await request.body()
-    _verify_meta_signature(db, raw_body, request.headers.get(SIGNATURE_HEADER))
-    try:
-        payload = await request.json()
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid JSON payload.",
-        ) from None
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid JSON payload.",
-        )
+    with webhook_observation(provider="meta_cloud_api", event="social"):
+        raw_body = await request.body()
+        _verify_meta_signature(db, raw_body, request.headers.get(SIGNATURE_HEADER))
+        try:
+            payload = await request.json()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON payload.",
+            ) from None
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON payload.",
+            )
 
-    inbound_payloads: list[team_inbox_channel_receive.InboundChannelPayload] = []
-    for item in _iter_meta_social_messages(payload):
-        inbound_payloads.append(
-            team_inbox_channel_receive.InboundChannelPayload(
-                channel_type=str(item["channel_type"]),
-                contact_address=str(item["sender_id"]),
-                body=str(item["body"]),
-                external_message_id=item.get("external_message_id"),
-                received_at=item.get("received_at"),
-                metadata=item.get("metadata"),
-            ),
+        inbound_payloads: list[team_inbox_channel_receive.InboundChannelPayload] = []
+        for item in _iter_meta_social_messages(payload):
+            inbound_payloads.append(
+                team_inbox_channel_receive.InboundChannelPayload(
+                    channel_type=str(item["channel_type"]),
+                    contact_address=str(item["sender_id"]),
+                    body=str(item["body"]),
+                    external_message_id=item.get("external_message_id"),
+                    received_at=item.get("received_at"),
+                    metadata=item.get("metadata"),
+                ),
+            )
+        results = team_inbox_channel_receive.receive_inbound_channel_batch_committed(
+            db,
+            inbound_payloads,
         )
-    results = team_inbox_channel_receive.receive_inbound_channel_batch_committed(
-        db,
-        inbound_payloads,
-    )
-    return {
-        "status": "ok",
-        "processed": len(results),
-        "items": results,
-    }
+        return {
+            "status": "ok",
+            "processed": len(results),
+            "items": results,
+        }

@@ -150,6 +150,9 @@ def parse_rfc822_email(
         "reply_to": parse_address_headers(message.get_all("Reply-To", [])),
         "recipients": list(rcpt_to or []),
     }
+    smtp_probe = decode_header_value(message.get("X-Dotmac-Probe"))
+    if smtp_probe:
+        metadata["smtp_probe"] = smtp_probe
     if html_body:
         metadata["html_body"] = html_body
 

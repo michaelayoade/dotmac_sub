@@ -5,6 +5,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
+from app.api.webhook_observation import webhook_observation
 from app.db import finish_read_response, get_db
 from app.models.audit import AuditActorType
 from app.models.billing import PaymentSettlementOrigin, PaymentStatus
@@ -1412,13 +1413,14 @@ async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
     ``await request.body()`` is required to read the raw payload for
     HMAC signature verification before any JSON parsing occurs.
     """
-    body = await request.body()
-    signature = request.headers.get("X-Paystack-Signature", "")
-    return api_billing_webhooks_service.process_paystack_webhook(
-        db=db,
-        body=body,
-        signature=signature,
-    )
+    with webhook_observation(provider="paystack", event="payment"):
+        body = await request.body()
+        signature = request.headers.get("X-Paystack-Signature", "")
+        return api_billing_webhooks_service.process_paystack_webhook(
+            db=db,
+            body=body,
+            signature=signature,
+        )
 
 
 @webhook_router.post(
@@ -1432,13 +1434,14 @@ async def flutterwave_webhook(request: Request, db: Session = Depends(get_db)):
     ``await request.body()`` is required to read the raw payload for
     hash signature verification before any JSON parsing occurs.
     """
-    body = await request.body()
-    signature = request.headers.get("verif-hash", "")
-    return api_billing_webhooks_service.process_flutterwave_webhook(
-        db=db,
-        body=body,
-        signature=signature,
-    )
+    with webhook_observation(provider="flutterwave", event="payment"):
+        body = await request.body()
+        signature = request.headers.get("verif-hash", "")
+        return api_billing_webhooks_service.process_flutterwave_webhook(
+            db=db,
+            body=body,
+            signature=signature,
+        )
 
 
 # --- Bank Accounts ---

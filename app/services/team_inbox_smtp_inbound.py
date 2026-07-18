@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import importlib
 import logging
-import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import SessionLocal
 from app.services import team_inbox_rfc822, team_inbox_routing
 
 logger = logging.getLogger(__name__)
+
+SMTP_PROBE_HEADER_VALUE = "team_inbox_smtp_e2e"
+SMTP_PROBE_VERIFIED_KEY = "smtp_probe_verified"
 
 SMTPController: Any = None
 try:
@@ -88,6 +92,40 @@ def handle_smtp_message(
         return SmtpInboundResult(kind="failed", reason="processing_error")
 
 
+def verify_smtp_probe_delivery(
+    db: Session,
+    *,
+    external_message_id: str,
+) -> dict[str, str] | None:
+    """Verify and mark the exact synthetic message requested by the runtime.
+
+    A sender-controlled header alone is not trusted. The runtime supplies the
+    random Message-ID it generated, and this inbox owner marks that exact row as
+    a verified probe. Continuous health collection excludes only verified probe
+    rows from natural-traffic freshness.
+    """
+    from app.models.team_inbox import InboxMessage
+
+    row = (
+        db.query(InboxMessage)
+        .filter(InboxMessage.external_message_id == external_message_id)
+        .one_or_none()
+    )
+    metadata = dict(row.metadata_ or {}) if row is not None else {}
+    if row is None or metadata.get("smtp_probe") != SMTP_PROBE_HEADER_VALUE:
+        return None
+    if metadata.get(SMTP_PROBE_VERIFIED_KEY) is not True:
+        metadata[SMTP_PROBE_VERIFIED_KEY] = True
+        metadata["smtp_probe_verified_at"] = datetime.now(UTC).isoformat()
+        row.metadata_ = metadata
+        db.commit()
+    return {
+        "message_id": str(row.id),
+        "conversation_id": str(row.conversation_id),
+        "external_message_id": external_message_id,
+    }
+
+
 class TeamInboxSMTPHandler:
     def __init__(
         self,
@@ -128,30 +166,56 @@ class TeamInboxSMTPHandler:
 _SMTP_CONTROLLER: Any | None = None
 
 
-def start_smtp_inbound_server() -> None:
+def smtp_inbound_enabled() -> bool:
+    """Return whether the dedicated SMTP runtime is explicitly enabled."""
+    return settings.team_inbox_smtp_inbound_enabled
+
+
+def smtp_inbound_allowed_recipients() -> set[str]:
+    """Return the normalized envelope recipients this intake may accept."""
+    return (
+        normalize_recipient_set(
+            {
+                value.strip()
+                for value in settings.team_inbox_smtp_inbound_recipients.split(",")
+                if value.strip()
+            }
+        )
+        or set()
+    )
+
+
+def smtp_inbound_server_running() -> bool:
+    """Return whether the process-local SMTP controller is alive."""
+    controller = _SMTP_CONTROLLER
+    if controller is None:
+        return False
+    thread = getattr(controller, "thread", None)
+    return bool(thread is not None and thread.is_alive())
+
+
+def start_smtp_inbound_server() -> bool:
+    """Start the process-local controller once.
+
+    Process supervision belongs to ``app.team_inbox_smtp``. This owner only
+    manages the SMTP listener and inbox-ingestion callback.
+    """
     global _SMTP_CONTROLLER
+    if smtp_inbound_server_running():
+        return True
     if SMTPController is None:
         logger.warning("team_inbox_smtp_unavailable reason=missing_aiosmtpd")
-        return
-    enabled = os.getenv("TEAM_INBOX_SMTP_INBOUND_ENABLED", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if not enabled:
-        return
+        return False
+    if not smtp_inbound_enabled():
+        return False
 
-    host = os.getenv("TEAM_INBOX_SMTP_INBOUND_HOST", "127.0.0.1")
-    port = int(os.getenv("TEAM_INBOX_SMTP_INBOUND_PORT", "2525"))
-    recipients = {
-        value.strip()
-        for value in os.getenv("TEAM_INBOX_SMTP_INBOUND_RECIPIENTS", "").split(",")
-        if value.strip()
-    }
-    fallback_service_team_id = (
-        os.getenv("TEAM_INBOX_SMTP_FALLBACK_SERVICE_TEAM_ID", "").strip() or None
-    )
+    host = settings.team_inbox_smtp_inbound_host
+    recipients = smtp_inbound_allowed_recipients()
+    if not recipients:
+        logger.error("team_inbox_smtp_missing_allowed_recipients")
+        return False
+    port = settings.team_inbox_smtp_inbound_port
+    fallback_service_team_id = settings.team_inbox_smtp_fallback_service_team_id or None
     controller = SMTPController(
         TeamInboxSMTPHandler(
             allowed_recipients=recipients or None,
@@ -160,9 +224,16 @@ def start_smtp_inbound_server() -> None:
         hostname=host,
         port=port,
     )
-    controller.start()
+    try:
+        controller.start()
+    except Exception:
+        logger.exception(
+            "team_inbox_smtp_server_start_failed host=%s port=%s", host, port
+        )
+        return False
     _SMTP_CONTROLLER = controller
     logger.info("team_inbox_smtp_server_started host=%s port=%s", host, port)
+    return True
 
 
 def stop_smtp_inbound_server() -> None:
