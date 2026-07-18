@@ -338,7 +338,7 @@ class PaymentProviderEvents(ListResponseMixin):
                         memo=f"{provider.name} webhook event: {payload.event_type}",
                     )
                     payment = result.payment
-                    created_settled = result.payment_created
+                    created_settled = True
                 # Non-invoice provider success keeps the established generic or
                 # consolidated settlement path.
                 allocations: list[PaymentAllocationApply] | None = None
@@ -387,6 +387,7 @@ class PaymentProviderEvents(ListResponseMixin):
                         ),
                         origin=PaymentSettlementOrigin.provider_event,
                     ).payment
+                    created_settled = True
                 elif not is_invoice_checkout:
                     payment = Payments.create(
                         db,
