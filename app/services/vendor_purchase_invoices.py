@@ -17,7 +17,6 @@ from app.models.vendor_routes import (
     VendorPurchaseInvoiceLineItem,
     VendorPurchaseInvoiceStatus,
 )
-from app.schemas.status_presentation import StatusTone
 from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceCreate,
     VendorPurchaseInvoiceLineCreate,
@@ -134,35 +133,6 @@ def _recalculate(invoice: VendorPurchaseInvoice) -> None:
     invoice.total = _money(subtotal + tax_total)
 
 
-def _payment_projection(invoice: VendorPurchaseInvoice) -> dict:
-    """Vendor-facing payment state, owned here from the ERP payables status.
-
-    ERP is the payables/payment system of record; the native invoice status
-    covers only Sub-side review, so a vendor cannot tell from it whether they
-    have been paid. This maps ``erp_purchase_invoice_status`` to a plain
-    vendor-friendly signal. The ordering checks the negatives (unpaid/partly)
-    before ``paid`` because they contain it as a substring.
-    """
-    raw = (invoice.erp_purchase_invoice_status or "").strip()
-    low = raw.lower()
-    if not raw:
-        return {
-            "label": "Not yet sent to finance",
-            "tone": StatusTone.neutral,
-            "detail": None,
-        }
-    if "overdue" in low:
-        return {"label": "Payment overdue", "tone": StatusTone.warning, "detail": raw}
-    if "unpaid" in low:
-        return {"label": "Awaiting payment", "tone": StatusTone.warning, "detail": raw}
-    if "partly" in low:
-        return {"label": "Partly paid", "tone": StatusTone.info, "detail": raw}
-    if "paid" in low:
-        return {"label": "Paid", "tone": StatusTone.positive, "detail": raw}
-    # created / submitted / anything else ERP reports -> in finance, not yet paid.
-    return {"label": "Awaiting payment", "tone": StatusTone.warning, "detail": raw}
-
-
 def serialize(invoice: VendorPurchaseInvoice) -> dict:
     attachment = invoice.attachment
     editable = invoice.status in _EDITABLE
@@ -196,8 +166,6 @@ def serialize(invoice: VendorPurchaseInvoice) -> dict:
         "attachment_file_name": attachment.original_filename if attachment else None,
         "attachment_content_type": attachment.content_type if attachment else None,
         "attachment_file_size": attachment.file_size if attachment else None,
-        # Payment-received visibility, owned from the ERP payables status.
-        "payment": _payment_projection(invoice),
         "erp_purchase_order_id": invoice.erp_purchase_order_id,
         "erp_purchase_invoice_id": invoice.erp_purchase_invoice_id,
         "erp_purchase_invoice_status": invoice.erp_purchase_invoice_status,

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
+from app.services.vendor_portal_operations import _serialize_project
 from app.web import vendor_portal
 
 TEMPLATE = (
@@ -37,6 +39,34 @@ def test_asbuilt_offers_gps_capture_and_serializes_a_linestring():
     # Submit stays gated until a real line exists.
     assert "points.length < 2" in TEMPLATE
     assert "map.on('click'" in TEMPLATE
+    assert 'role="region" aria-label="As-built route map"' in TEMPLATE
+    assert 'role="status" aria-live="polite"' in TEMPLATE
+
+
+def test_asbuilt_action_is_owned_and_only_allows_the_assigned_vendor():
+    project = SimpleNamespace(
+        id="p1",
+        project_id="native-p1",
+        project=SimpleNamespace(code="PRJ-1", name="Fiber install"),
+        subscriber_id=None,
+        assigned_vendor_id="vendor-1",
+        assignment_type=None,
+        status="in_progress",
+        bidding_open_at=None,
+        bidding_close_at=None,
+        approved_quote_id=None,
+        erp_purchase_order_id=None,
+        notes=None,
+        created_at=None,
+        updated_at=None,
+    )
+    assigned = _serialize_project(project, viewer_vendor_id="vendor-1")
+    available = _serialize_project(project, viewer_vendor_id="vendor-2")
+
+    assert assigned["as_built_action"].allowed is True
+    assert available["as_built_action"].allowed is False
+    assert available["as_built_action"].reason
+    assert "action_permitted(request, project.as_built_action)" in TEMPLATE
 
 
 def test_detail_route_feeds_proposed_route_context():
