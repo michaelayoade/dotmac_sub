@@ -32,6 +32,7 @@ from app.models.subscriber import (
     SubscriberStatus,
     UserType,
 )
+from app.schemas.status_presentation import StatusTone
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services.account_lifecycle import (
@@ -61,6 +62,7 @@ from app.services.status_presentation import (
     payment_status_presentation,
 )
 from app.services.topology.connection_status import connection_status
+from app.services.ui_contracts import Action, Kpi, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -1036,6 +1038,52 @@ def preview_customer_account_status_actions(
     return previews
 
 
+# Display labels/tones/blocked-reasons for the three account status actions. The
+# raw preview dict above stays the command-path contract (it carries the
+# fingerprint the confirm flow re-checks); this maps its eligibility into the
+# shared Action contract so the template renders allowed/reason from the owner
+# instead of re-deriving a button state from the account status string.
+_ACCOUNT_STATUS_ACTION_LABELS = {
+    "restore": "Restore account",
+    "deactivate": "Deactivate account",
+    "disable": "Disable account",
+}
+_ACCOUNT_STATUS_ACTION_TONES = {
+    "restore": StatusTone.positive,
+    "deactivate": StatusTone.warning,
+    "disable": StatusTone.negative,
+}
+_ACCOUNT_STATUS_BLOCKED_REASONS = {
+    "restore": "No deactivated services are eligible to restore.",
+    "deactivate": "No active services are eligible to deactivate.",
+    "disable": "No services are eligible to disable.",
+}
+
+
+def account_status_action_contracts(
+    previews: dict[str, dict],
+) -> dict[str, Action]:
+    """Project ``preview_customer_account_status_actions`` eligibility into Action.
+
+    Reseller portal pages are session-scoped, so cohort/preview URLs carry no
+    reseller id; the confirm step stays a CSRF POST, so no ``preview_url`` is set
+    here and the fingerprint keeps flowing through the raw preview dict.
+    """
+    contracts: dict[str, Action] = {}
+    for action in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        preview = previews.get(action) or {}
+        allowed = bool(preview.get("allowed"))
+        contracts[action] = Action(
+            key=action,
+            label=_ACCOUNT_STATUS_ACTION_LABELS[action],
+            allowed=allowed,
+            reason=None if allowed else _ACCOUNT_STATUS_BLOCKED_REASONS[action],
+            affected=int(preview.get("affected", 0) or 0),
+            tone=_ACCOUNT_STATUS_ACTION_TONES[action],
+        )
+    return contracts
+
+
 def preview_customer_account_status_confirmation(
     db: Session,
     reseller_id: str,
@@ -1436,12 +1484,12 @@ def get_dashboard_summary(
 ) -> dict:
     accounts = list_accounts(db, reseller_id, limit, offset)
 
-    total_accounts = (
-        _customer_accounts_query(db, reseller_id)
-        .with_entities(func.count(Subscriber.id))
-        .scalar()
-        or 0
-    )
+    # KPI-parity: the Accounts tile links to /reseller/accounts, whose default
+    # list (and this dashboard's Recent Accounts list) excludes 'disabled'
+    # (deactivated-but-not-canceled) accounts. Count that exact cohort via
+    # count_accounts so the headline number can never exceed the list it links
+    # to. _customer_accounts_query would over-count by including disabled rows.
+    total_accounts = count_accounts(db, reseller_id)
     open_statuses = {
         InvoiceStatus.issued,
         InvoiceStatus.partially_paid,
@@ -1531,6 +1579,42 @@ def get_dashboard_summary(
             "open_invoices": open_invoices,
         },
         "alerts": alerts,
+    }
+
+
+def dashboard_kpis(summary: dict) -> dict[str, Kpi]:
+    """Project the dashboard ``totals`` into the shared Kpi contract.
+
+    ``get_dashboard_summary`` stays the JSON-API shape the bearer route returns;
+    this wraps its already-computed totals so the web dashboard renders headline
+    numbers that each drill into the exact cohort that produced them (open
+    tickets stay a bare StateValue in the route — the CRM count has no
+    reseller-scoped cohort list to link to)."""
+    totals = summary.get("totals", {})
+    return {
+        "accounts": Kpi(
+            label="Accounts",
+            value=StateValue.present(totals.get("accounts", 0)),
+            cohort_url="/reseller/accounts",
+        ),
+        # No reseller-scoped filtered-invoice route exists, so these money tiles
+        # link to /reseller/billing, the only reseller billing surface. It does
+        # NOT itemize a per-figure cohort that sums to exactly these values (its
+        # statement view uses a different account clause and shows no open-invoice
+        # count), so this is the closest billing context, not a strict same-set
+        # drill-down. Kpi still requires a "/"-relative cohort_url.
+        "open_balance": Kpi(
+            label="Open Balance",
+            value=StateValue.present(totals.get("open_balance", 0)),
+            cohort_url="/reseller/billing",
+            tone=StatusTone.warning,
+        ),
+        "open_invoices": Kpi(
+            label="Open Invoices",
+            value=StateValue.present(totals.get("open_invoices", 0)),
+            cohort_url="/reseller/billing",
+            tone=StatusTone.info,
+        ),
     }
 
 
@@ -2131,12 +2215,12 @@ def get_revenue_summary(
             }
         )
 
-    # Account count
-    account_count = (
-        _customer_accounts_query(db, reseller_id)
-        .with_entities(func.count(Subscriber.id))
-        .scalar()
-    ) or 0
+    # Account count — KPI-parity: the Account Count tile links to
+    # /reseller/accounts, whose default list excludes 'disabled' accounts. Count
+    # that same cohort (consistent with dashboard_kpis) so the tile value equals
+    # its drill-down. _customer_accounts_query would include disabled rows and
+    # overstate the count relative to the linked list.
+    account_count = count_accounts(db, reseller_id)
 
     return {
         "total_paid": total_paid,
@@ -2144,6 +2228,38 @@ def get_revenue_summary(
         "currency": currency,
         "account_count": account_count,
         "monthly": monthly,
+    }
+
+
+def revenue_kpis(summary: dict) -> dict[str, Kpi]:
+    """Project the revenue report headline figures into the shared Kpi contract.
+
+    These are customer BILLING totals (invoice money paid to / owed to Dotmac),
+    not reseller commission — commission ownership is undecided and untouched
+    here. ``get_revenue_summary`` keeps its JSON-API shape for the bearer route."""
+    return {
+        # No reseller-scoped filtered-invoice route exists, so both money tiles
+        # link to /reseller/billing, the only reseller billing surface. It does
+        # not display a matching paid / outstanding total itemized to each
+        # figure, so this is the closest billing context rather than a strict
+        # same-set drill-down. Kpi still requires a "/"-relative cohort_url.
+        "total_paid": Kpi(
+            label="Customer billing (paid)",
+            value=StateValue.present(summary.get("total_paid", 0)),
+            cohort_url="/reseller/billing",
+            tone=StatusTone.positive,
+        ),
+        "total_outstanding": Kpi(
+            label="Outstanding Balance",
+            value=StateValue.present(summary.get("total_outstanding", 0)),
+            cohort_url="/reseller/billing",
+            tone=StatusTone.warning,
+        ),
+        "account_count": Kpi(
+            label="Account Count",
+            value=StateValue.present(summary.get("account_count", 0)),
+            cohort_url="/reseller/accounts",
+        ),
     }
 
 
