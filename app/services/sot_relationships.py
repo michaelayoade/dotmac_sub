@@ -736,6 +736,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_enforcement_state",
+                module="app.services.prepaid_enforcement_state",
+                owns=(
+                    "prepaid low-balance timer state",
+                    "prepaid deactivation timer state",
+                    "funded and terminal prepaid timer cleanup",
+                ),
+                notes=(
+                    "Writes prepared timer observations and cleanup requests in "
+                    "the caller transaction. It owns no eligibility, threshold, "
+                    "grace, suspension, restoration, or commit decision."
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_enforcement_readiness",
                 module="app.services.prepaid_enforcement_readiness",
                 owns=(
@@ -856,6 +870,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.ledger",
                     "financial.payment_arrangements",
                     "financial.billing_health",
+                    "financial.prepaid_enforcement_state",
                     "access.subscription_lifecycle",
                     "access.walled_garden_policy",
                 ),
@@ -922,6 +937,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.dunning",
                     "financial.access_resolution",
                     "financial.prepaid_enforcement",
+                    "financial.prepaid_enforcement_state",
                     "financial.prepaid_enforcement_readiness",
                 ),
             ),
@@ -3027,7 +3043,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription access-status transitions",
                     "subscriber access-status projection",
                 ),
-                depends_on=("events.dispatcher",),
+                depends_on=(
+                    "events.dispatcher",
+                    "financial.prepaid_enforcement_state",
+                ),
             ),
             SOTService(
                 name="access.control_resolution",

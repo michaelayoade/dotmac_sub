@@ -54,6 +54,7 @@ from app.models.enforcement_lock import (
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.events import emit_event as _emit_event
 from app.services.events.types import EventType
+from app.services.prepaid_enforcement_state import clear_prepaid_enforcement_timers
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -1087,6 +1088,9 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     } or (new_status == SubscriberStatus.suspended and not explicitly_suspended)
     if subscriber.is_active != should_be_active:
         subscriber.is_active = should_be_active
+
+    if new_status in {SubscriberStatus.disabled, SubscriberStatus.canceled}:
+        clear_prepaid_enforcement_timers(db, subscriber_id)
 
     db.flush()
 
