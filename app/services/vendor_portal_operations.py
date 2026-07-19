@@ -96,8 +96,19 @@ def _recalculate(quote: ProjectQuote) -> None:
     quote.total = _money(quote.subtotal + quote.tax_total)
 
 
-def _serialize_project(row: InstallationProject) -> dict:
+def _serialize_project(
+    row: InstallationProject, viewer_vendor_id: str | None = None
+) -> dict:
     project = row.project
+    # Lifecycle-action eligibility is owned here (Sub owns the vendor work
+    # lifecycle): the awarded vendor may start an approved project and complete
+    # an in-progress one. Rendered from these flags, never a template status
+    # string.
+    is_mine = (
+        viewer_vendor_id is not None
+        and row.assigned_vendor_id is not None
+        and str(row.assigned_vendor_id) == str(viewer_vendor_id)
+    )
     return {
         "id": row.id,
         "project_id": row.project_id,
@@ -114,6 +125,10 @@ def _serialize_project(row: InstallationProject) -> dict:
         "notes": row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
+        "can_start": is_mine
+        and row.status == InstallationProjectStatus.approved.value,
+        "can_complete": is_mine
+        and row.status == InstallationProjectStatus.in_progress.value,
     }
 
 
@@ -206,7 +221,7 @@ class VendorPortalOperations:
             .limit(limit)
             .all()
         )
-        return [_serialize_project(row) for row in rows]
+        return [_serialize_project(row, viewer_vendor_id=vendor_id) for row in rows]
 
     @staticmethod
     def create_quote(
@@ -507,6 +522,49 @@ class VendorPortalOperations:
             quote.status = ProjectQuoteStatus.revision_requested.value
         db.commit()
         return _serialize_quote(_quote(db, quote_id))
+
+    @staticmethod
+    def start_project(db: Session, project_id: str, *, vendor_id: str) -> dict:
+        """Awarded vendor begins field work: approved -> in_progress.
+
+        Sub owns the vendor work lifecycle. Authority to move the project is
+        enforced against the assigned vendor and the current status here, not
+        inferred from the caller or a template.
+        """
+        project = _project(db, project_id, for_update=True)
+        if project.assigned_vendor_id != coerce_uuid(vendor_id):
+            raise HTTPException(
+                status_code=403, detail="Project is not assigned to this vendor"
+            )
+        if project.status != InstallationProjectStatus.approved.value:
+            raise HTTPException(
+                status_code=409,
+                detail="Only an approved project can be started",
+            )
+        project.status = InstallationProjectStatus.in_progress.value
+        db.commit()
+        return _serialize_project(_project(db, project_id), viewer_vendor_id=vendor_id)
+
+    @staticmethod
+    def complete_project(db: Session, project_id: str, *, vendor_id: str) -> dict:
+        """Awarded vendor finishes field work: in_progress -> completed.
+
+        Final acceptance/verification remains a separate, non-vendor
+        transition; completing only reports that the vendor's work is done.
+        """
+        project = _project(db, project_id, for_update=True)
+        if project.assigned_vendor_id != coerce_uuid(vendor_id):
+            raise HTTPException(
+                status_code=403, detail="Project is not assigned to this vendor"
+            )
+        if project.status != InstallationProjectStatus.in_progress.value:
+            raise HTTPException(
+                status_code=409,
+                detail="Only an in-progress project can be completed",
+            )
+        project.status = InstallationProjectStatus.completed.value
+        db.commit()
+        return _serialize_project(_project(db, project_id), viewer_vendor_id=vendor_id)
 
     @staticmethod
     def create_route_revision(

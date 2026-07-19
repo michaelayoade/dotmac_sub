@@ -138,6 +138,32 @@ def vendor_create_quote(
     return _redirect(project_id, "Quote created")
 
 
+@router.post("/projects/{project_id}/start")
+def vendor_start_project(
+    project_id: str,
+    auth: dict = Depends(require_web_auth),
+    db: Session = Depends(get_db),
+):
+    context = _context(auth, db)
+    vendor_portal_operations.start_project(
+        db, project_id, vendor_id=str(context["native_vendor_id"])
+    )
+    return _redirect(project_id, "Project started")
+
+
+@router.post("/projects/{project_id}/complete")
+def vendor_complete_project(
+    project_id: str,
+    auth: dict = Depends(require_web_auth),
+    db: Session = Depends(get_db),
+):
+    context = _context(auth, db)
+    vendor_portal_operations.complete_project(
+        db, project_id, vendor_id=str(context["native_vendor_id"])
+    )
+    return _redirect(project_id, "Project marked complete")
+
+
 @router.post("/projects/{project_id}/quotes/{quote_id}/lines")
 def vendor_add_quote_line(
     project_id: str,
