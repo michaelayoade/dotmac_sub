@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from urllib.parse import urlencode
 
 from pydantic import ValidationError
 from sqlalchemy import case, func, select
@@ -46,6 +47,7 @@ from app.schemas.catalog import (
     RadiusProfileCreate,
     RadiusProfileUpdate,
 )
+from app.schemas.status_presentation import StatusTone
 from app.services import catalog as catalog_service
 from app.services import catalog_billing_governance, settings_spec
 from app.services.audit_helpers import (
@@ -60,6 +62,7 @@ from app.services.network.profile_sync import (
     enqueue_offer_profile_sync_tasks_for_existing_bundles,
 )
 from app.services.radius import reconcile_subscription_connectivity
+from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -966,9 +969,67 @@ def offer_form_context(
     return context
 
 
+def _overview_cohort_url(*, status: str | None = None) -> str:
+    """Drill-down into the offer overview list filtered exactly as the tile counts."""
+    query = urlencode([("status", status)]) if status else ""
+    return f"/admin/catalog?{query}" if query else "/admin/catalog"
+
+
+def _subscriptions_cohort_url(*, status: str | None = None) -> str:
+    """Drill-down into the subscriptions list filtered exactly as the tile counts."""
+    query = urlencode([("status", status)]) if status else ""
+    return (
+        f"/admin/catalog/subscriptions?{query}"
+        if query
+        else "/admin/catalog/subscriptions"
+    )
+
+
+def catalog_overview_kpis(stats: dict[str, object]) -> dict[str, Kpi]:
+    """Project the catalog overview headline counts as KPI-parity tiles.
+
+    Each ``cohort_url`` drills into the exact filtered list that produced the
+    number, so a tile total and the list it opens can never diverge. The
+    subscription tile crosses into the subscriptions list, where its ``active``
+    filter matches the count query.
+    """
+    return {
+        "active_offers": Kpi(
+            label="Active Offers",
+            value=StateValue.present(int(stats.get("active_count") or 0)),
+            cohort_url=_overview_cohort_url(status=OfferStatus.active.value),
+            tone=StatusTone.positive,
+        ),
+        "total_plans": Kpi(
+            label="Total Plans",
+            value=StateValue.present(int(stats.get("total_count") or 0)),
+            cohort_url=_overview_cohort_url(),
+        ),
+        "active_subscriptions": Kpi(
+            label="Active Subscriptions",
+            value=StateValue.present(int(stats.get("total_subscriptions") or 0)),
+            cohort_url=_subscriptions_cohort_url(
+                status=SubscriptionStatus.active.value
+            ),
+            tone=StatusTone.info,
+        ),
+        "archived": Kpi(
+            label="Archived",
+            value=StateValue.present(int(stats.get("archived_count") or 0)),
+            cohort_url=_overview_cohort_url(status=OfferStatus.archived.value),
+        ),
+    }
+
+
 def dashboard_stats(db: Session) -> dict[str, object]:
-    """Return catalog dashboard KPIs and chart data from core service."""
-    return catalog_service.offers.get_dashboard_stats(db)
+    """Return catalog dashboard KPIs and chart data from core service.
+
+    The four headline counts are projected as ``Kpi`` contracts under ``kpis``;
+    chart datasets stay as raw dicts for the client-side chart renderers.
+    """
+    stats = catalog_service.offers.get_dashboard_stats(db)
+    stats["kpis"] = catalog_overview_kpis(stats)
+    return stats
 
 
 def overview_page_data(
