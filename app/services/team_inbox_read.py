@@ -235,6 +235,8 @@ def list_conversations(
     snoozed: bool | None = None,
     open_only: bool = False,
     unassigned: bool = False,
+    order_by: str | None = None,
+    order_dir: str = "desc",
     limit: int = 50,
     offset: int = 0,
 ) -> InboxConversationListResult:
@@ -322,11 +324,29 @@ def list_conversations(
         ).where(InboxConversationAssignment.is_active.is_(True))
         query = query.filter(~InboxConversation.id.in_(assigned_conversation_ids))
 
-    ordered_query = query.order_by(
-        InboxConversation.priority.asc(),
-        InboxConversation.last_message_at.desc().nullslast(),
-        InboxConversation.created_at.desc(),
-    )
+    # order_by=None (default) or "priority" keeps the urgency composite so the
+    # default queue is untouched; last_message_at / created_at sort by that one
+    # column with a stable id tie-breaker. Additive change.
+    if order_by == "last_message_at":
+        primary = InboxConversation.last_message_at
+        primary = (primary.asc() if order_dir == "asc" else primary.desc()).nullslast()
+        ordered_query = query.order_by(primary, InboxConversation.id.asc())
+    elif order_by == "created_at":
+        primary = InboxConversation.created_at
+        primary = primary.asc() if order_dir == "asc" else primary.desc()
+        ordered_query = query.order_by(primary, InboxConversation.id.asc())
+    else:
+        priority_order = (
+            InboxConversation.priority.desc()
+            if order_by == "priority" and order_dir == "desc"
+            else InboxConversation.priority.asc()
+        )
+        ordered_query = query.order_by(
+            priority_order,
+            InboxConversation.last_message_at.desc().nullslast(),
+            InboxConversation.created_at.desc(),
+            InboxConversation.id.asc(),
+        )
     total = query.count()
     needs_python_filter = bool(needs_response or contact_resolution_status)
     rows = (
