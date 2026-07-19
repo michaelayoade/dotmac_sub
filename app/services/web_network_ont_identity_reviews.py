@@ -16,6 +16,7 @@ from app.models.ont_assignment_cutover import (
 )
 from app.models.ont_assignment_identity import OntAssignmentIdentityDecision
 from app.models.ont_topology_observation import OntTopologyObservationEvidence
+from app.schemas.status_presentation import StatusTone
 from app.services.network.ont_assignment_cutover import (
     REASON_LABELS,
     REPAIR_OWNER,
@@ -30,6 +31,7 @@ from app.services.network.ont_assignment_identity import (
     preview_assignment_identity_repair,
     propose_assignment_identity_repair,
 )
+from app.services.ui_contracts import Action
 
 DECISION_STATUSES = ("proposed", "approved", "declined", "applied", "closed")
 
@@ -50,6 +52,7 @@ class OntAssignmentIdentityCandidate:
     repair_owner: str
     review_path: str
     active_decision_id: str | None
+    propose_action: Action
 
     @property
     def reason_labels(self) -> tuple[str, ...]:
@@ -110,6 +113,21 @@ def list_assignment_identity_candidates(
         if normalized_query and normalized_query not in searchable:
             continue
         active_decision_id = active_decision_by_assignment.get(finding.assignment_id)
+        # Eligibility owned here, not re-derived in the template: a fresh
+        # investigation is offered only while no repair decision is already open
+        # for this assignment; an active decision blocks a second parallel one.
+        propose_action = Action(
+            key="propose_repair",
+            label="Investigate",
+            allowed=active_decision_id is None,
+            reason=(
+                None
+                if active_decision_id is None
+                else "An open repair decision already exists for this assignment"
+            ),
+            permission="network:fiber:write",
+            tone=StatusTone.warning,
+        )
         candidates.append(
             OntAssignmentIdentityCandidate(
                 assignment_id=str(finding.assignment_id),
@@ -148,6 +166,7 @@ def list_assignment_identity_candidates(
                 active_decision_id=(
                     str(active_decision_id) if active_decision_id else None
                 ),
+                propose_action=propose_action,
             )
         )
         if len(candidates) >= bounded_limit:
