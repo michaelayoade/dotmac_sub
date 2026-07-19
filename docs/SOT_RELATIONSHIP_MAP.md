@@ -1029,6 +1029,14 @@ evidenced owner contract:
   subscription/account status.
   RADIUS and session-enforcement services project that lifecycle result; they
   do not decide whether debt, funding, a shield, or a case permits access.
+- Timer-state writer: `financial.prepaid_enforcement_state`
+  (`app.services.prepaid_enforcement_state`) exclusively arms and clears the
+  Subscriber low-balance and deactivation timestamps. The enforcement planner,
+  scheduled sweep, funded-restoration flow, and account lifecycle submit
+  prepared observations or cleanup requests; they do not assign the fields.
+  Disabled and canceled accounts clear obsolete timers in the lifecycle
+  transaction. The timer writer flushes but never commits and owns no funding,
+  grace, suspension, restoration, or eligibility decision.
 - Evidence boundary: every confirmed financial suspend, reject, throttle, or
   restore writes one `FinancialAccessConsequence` containing the exact locked
   preview fingerprint, idempotency key, separated receivable/prepaid/profile/
