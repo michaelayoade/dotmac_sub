@@ -132,10 +132,10 @@ class Action:
 
     ``allowed`` and ``reason`` come from the owning transition service, never a
     status string re-derived in the template. ``permission`` is the granular
-    RBAC key the route enforces. ``visible`` is the effective viewer projection:
-    unauthorized actions are absent from the rendered controls while the route
-    still authorizes. ``requires_confirmation`` is a safety control,
-    separate from semantic ``tone``. Destructive and financial actions bind it
+    RBAC key the route enforces; templates pass the action to
+    ``action_permitted(request, action)`` so unauthorized controls are omitted
+    while the route remains authoritative. ``requires_confirmation`` is a
+    safety control, separate from semantic ``tone``. Destructive and financial actions bind it
     to ``preview_url`` so presentation style can never decide whether
     confirmation is required; ``affected`` is a lightweight impact count.
     """
@@ -149,15 +149,12 @@ class Action:
     affected: int | None = None
     tone: StatusTone = StatusTone.neutral
     requires_confirmation: bool = False
-    visible: bool = True
 
     def __post_init__(self) -> None:
         if not self.key.strip() or not self.label.strip():
             raise ValueError("Action key and label are required")
         if self.allowed and self.reason:
             raise ValueError("Allowed action cannot carry a blocked reason")
-        if not self.visible and self.allowed:
-            raise ValueError("Hidden action cannot be allowed")
         if not self.allowed and not str(self.reason or "").strip():
             raise ValueError("Blocked action requires a reason")
         if self.affected is not None and self.affected < 0:

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_dispatch_work_orders as work_orders_service
-from app.services.auth_dependencies import has_permission, require_permission
+from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -45,7 +45,6 @@ def dispatch_work_orders(
     error: str | None = None,
     db: Session = Depends(get_db),
 ):
-    auth = getattr(request.state, "auth", None) or {}
     state = work_orders_service.list_page(
         db,
         status=status,
@@ -53,8 +52,6 @@ def dispatch_work_orders(
         active=active,
         page=page,
         per_page=per_page,
-        can_assign=bool(auth)
-        and has_permission(auth, db, "operations:dispatch:assign"),
     )
     context = _ctx(request, db)
     context.update(state)

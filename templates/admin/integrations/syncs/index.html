@@ -12,7 +12,9 @@
         </div>
         <div class="flex flex-wrap items-center gap-2">
             <a href="/admin/integrations/connectors" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Connectors</a>
+            {% if can(request, "system:settings:write") %}
             <a href="/admin/integrations/jobs/new" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add Sync Job</a>
+            {% endif %}
         </div>
     </div>
 
@@ -79,15 +81,13 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 text-right">
-                            {% if run_action.visible %}
-                            {% if run_action.allowed %}
+                            {% if action_permitted(request, run_action) %}
                             <form method="post" action="/admin/integrations/syncs/{{ job.id }}/run" class="inline" onsubmit="return confirm('Run this sync profile now?');">
                                 {% include "components/forms/csrf_input.html" %}
                                 <button type="submit" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ run_action.label }}</button>
                             </form>
-                            {% else %}
+                            {% elif can(request, run_action.permission) %}
                             <span class="text-sm text-slate-400" title="{{ run_action.reason }}">{{ run_action.label }}</span>
-                            {% endif %}
                             {% endif %}
                         </td>
                     </tr>

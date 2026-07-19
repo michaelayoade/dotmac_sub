@@ -85,15 +85,6 @@ def test_queue_action_is_blocked_with_a_reason_for_terminal_or_inactive():
     assert inactive.reason == "Work order is inactive"
 
 
-def test_queue_action_is_hidden_without_effective_assign_permission():
-    action = service._queue_action(
-        SimpleNamespace(is_active=True, status="scheduled"), can_assign=False
-    )
-    assert action.allowed is False
-    assert action.visible is False
-    assert "permission" in action.reason
-
-
 def test_action_contract_rejects_an_allowed_action_that_carries_a_reason():
     with pytest.raises(ValueError):
         Action(key="queue", label="Queue", allowed=True, reason="nope")
@@ -137,9 +128,6 @@ def test_template_consumes_the_kpi_and_action_contracts():
     assert "kpis.total.value.value" in source
     assert "href=kpis.active.cohort_url" in source
     assert "href=kpis.completed.cohort_url" in source
-    # The queue button is gated on owner-supplied eligibility, showing the
-    # blocked reason instead of the form when assignment is not allowed.
+    # The shared helper combines owner eligibility with the cached RBAC keys.
     assert "item.actions.queue" in source
-    assert "queue_action.allowed" in source
-    assert "queue_action.reason" in source
-    assert "queue_action.visible" in source
+    assert "action_permitted(request, queue_action)" in source

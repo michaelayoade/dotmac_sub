@@ -749,9 +749,9 @@ def get_churn_report_data(db: Session) -> dict:
     summary = subscriber_growth.churn_summary(db)
     total_subscribers = summary["total"]
     at_risk_count = summary["at_risk_count"]
-    # KPI-parity: the Cancellations tile and Churn Rate both drill into the
-    # strict ``status=canceled`` customer cohort, and that list
-    # (_load_report_subscribers) filters strictly on ``Subscriber.status``.
+    # KPI-parity: the Cancellations tile drills into the strict
+    # ``status=canceled`` customer cohort, and that list (_load_report_subscribers)
+    # filters strictly on ``Subscriber.status``.
     # churn_summary()'s ``cancelled_count`` uses the wider derived-cancelled rule
     # (``status == canceled`` OR ``status IS NULL AND not is_active``), so it can
     # exceed the drill-down. Count with the same strict rule the linked list
@@ -777,16 +777,15 @@ def get_churn_report_data(db: Session) -> dict:
     churn_rate = (
         (cancelled_count / total_subscribers * 100) if total_subscribers > 0 else 0
     )
-    # Retention drills into the strict active cohort, so its numerator must be
-    # that exact cohort rather than the complement of cancellations (which also
-    # includes suspended and other non-cancelled states).
+    # Retention is the strict active share, not the complement of cancellations
+    # (which also includes suspended and other non-cancelled states).
     retention_rate = (
         (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
     )
     # Tone is owned by the report, not re-derived in the template: churn worsens
     # as it rises, so its semantic signal flips at the same thresholds the
-    # dashboard reads. Each tile drills into the customer report status cohort
-    # that produced its number (KPI-parity).
+    # dashboard reads. Count tiles drill into exact customer cohorts; rate tiles
+    # return to the overview showing the identical aggregate (KPI-parity).
     churn_tone = (
         StatusTone.negative
         if churn_rate > 10
@@ -798,9 +797,10 @@ def get_churn_report_data(db: Session) -> dict:
         "churn_rate": Kpi(
             label="Churn Rate",
             value=StateValue.present(f"{churn_rate:.1f}%"),
-            cohort_url=_customers_report_cohort_url(
-                status=AccountStatus.canceled.value
-            ),
+            # A rate is an aggregate over the full population, not the
+            # cancelled numerator alone. Drill back to the overview that shows
+            # the identical aggregate rather than a mismatched entity list.
+            cohort_url="/admin/reports/churn#churn-summary",
             tone=churn_tone,
         ),
         "cancelled": Kpi(
@@ -822,7 +822,7 @@ def get_churn_report_data(db: Session) -> dict:
         "retention_rate": Kpi(
             label="Retention Rate",
             value=StateValue.present(f"{retention_rate:.1f}%"),
-            cohort_url=_customers_report_cohort_url(status=AccountStatus.active.value),
+            cohort_url="/admin/reports/churn#churn-summary",
             tone=StatusTone.positive,
         ),
     }

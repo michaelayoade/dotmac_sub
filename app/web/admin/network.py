@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_network_core_devices as web_network_core_devices_service
-from app.services.auth_dependencies import has_permission, require_permission
+from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
@@ -25,11 +25,6 @@ def _base_context(
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
-
-
-def _can_write_devices(request: Request, db: Session) -> bool:
-    auth = getattr(request.state, "auth", None) or {}
-    return bool(auth) and has_permission(auth, db, "network:device:write")
 
 
 @router.get(
@@ -120,9 +115,7 @@ def devices_list(
         offset=offset,
         limit=limit,
     )
-    page_data = web_network_core_devices_service.devices_list_page_data(
-        db, list_query, can_write=_can_write_devices(request, db)
-    )
+    page_data = web_network_core_devices_service.devices_list_page_data(db, list_query)
     context = _base_context(request, db, active_page="devices")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/devices/index.html", context)
@@ -149,9 +142,7 @@ def devices_search(
         offset=offset,
         limit=limit,
     )
-    devices = web_network_core_devices_service.devices_search_data(
-        db, list_query, can_write=_can_write_devices(request, db)
-    )
+    devices = web_network_core_devices_service.devices_search_data(db, list_query)
     return templates.TemplateResponse(
         "admin/network/devices/_table_rows.html",
         {"request": request, "devices": devices},
@@ -187,9 +178,7 @@ def devices_filter(
         offset=offset,
         limit=limit,
     )
-    devices = web_network_core_devices_service.devices_filter_data(
-        db, list_query, can_write=_can_write_devices(request, db)
-    )
+    devices = web_network_core_devices_service.devices_filter_data(db, list_query)
     return templates.TemplateResponse(
         "admin/network/devices/_table_rows.html",
         {"request": request, "devices": devices},

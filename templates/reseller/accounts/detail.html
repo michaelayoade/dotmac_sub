@@ -246,7 +246,7 @@
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">{{ status_action_contracts.restore.label }}</h3>
                     <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Restoring reactivates deactivated services when no payment or enforcement locks are active. Affects {{ status_action_contracts.restore.affected }} service{{ '' if status_action_contracts.restore.affected == 1 else 's' }}.</p>
                 </div>
-                {% if status_action_contracts.restore.allowed %}
+                {% if action_permitted(request, status_action_contracts.restore) %}
                 <form method="post" action="/reseller/accounts/{{ account.id }}/status">
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="action" value="restore">
@@ -256,7 +256,7 @@
                         Review restore
                     </button>
                 </form>
-                {% else %}
+                {% elif not status_action_contracts.restore.allowed %}
                 <p class="text-xs font-medium text-slate-400 dark:text-slate-500">{{ status_action_contracts.restore.reason }}</p>
                 {% endif %}
             </div>
@@ -265,7 +265,7 @@
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">{{ status_action_contracts.deactivate.label }}</h3>
                     <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Deactivating temporarily stops active services without marking the account as payment-suspended. Affects {{ status_action_contracts.deactivate.affected }} service{{ '' if status_action_contracts.deactivate.affected == 1 else 's' }}.</p>
                 </div>
-                {% if status_action_contracts.deactivate.allowed %}
+                {% if action_permitted(request, status_action_contracts.deactivate) %}
                 <form method="post" action="/reseller/accounts/{{ account.id }}/status">
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="action" value="deactivate">
@@ -275,7 +275,7 @@
                         Review deactivation
                     </button>
                 </form>
-                {% else %}
+                {% elif not status_action_contracts.deactivate.allowed %}
                 <p class="text-xs font-medium text-slate-400 dark:text-slate-500">{{ status_action_contracts.deactivate.reason }}</p>
                 {% endif %}
             </div>
@@ -284,7 +284,7 @@
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">{{ status_action_contracts.disable.label }}</h3>
                     <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Warning: disabling this account will disable its services and remove it from the default reseller accounts list. Affects {{ status_action_contracts.disable.affected }} service{{ '' if status_action_contracts.disable.affected == 1 else 's' }}.</p>
                 </div>
-                {% if status_action_contracts.disable.allowed %}
+                {% if action_permitted(request, status_action_contracts.disable) %}
                 <form method="post" action="/reseller/accounts/{{ account.id }}/status">
                     {% include "components/forms/csrf_input.html" %}
                     <input type="hidden" name="action" value="disable">
@@ -294,7 +294,7 @@
                         Review disable
                     </button>
                 </form>
-                {% else %}
+                {% elif not status_action_contracts.disable.allowed %}
                 <p class="text-xs font-medium text-slate-400 dark:text-slate-500">{{ status_action_contracts.disable.reason }}</p>
                 {% endif %}
             </div>

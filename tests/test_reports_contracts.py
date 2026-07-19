@@ -187,11 +187,10 @@ def test_churn_report_returns_kpi_contracts(db_session):
         assert kpi.value.is_present
         assert kpi.cohort_url.startswith("/")
 
+    assert kpis["churn_rate"].cohort_url == "/admin/reports/churn#churn-summary"
+    assert kpis["retention_rate"].cohort_url == "/admin/reports/churn#churn-summary"
     assert _cohort_status(kpis["cancelled"].cohort_url) == AccountStatus.canceled.value
     assert _cohort_status(kpis["at_risk"].cohort_url) == AccountStatus.suspended.value
-    assert (
-        _cohort_status(kpis["retention_rate"].cohort_url) == AccountStatus.active.value
-    )
     # KPI-parity: the count tiles equal the size of the cohort they link to.
     assert kpis["cancelled"].value.value == _count_at_cohort(
         db_session, kpis["cancelled"].cohort_url

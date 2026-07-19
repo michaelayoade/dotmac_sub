@@ -183,6 +183,6 @@ def test_identity_reviews_template_renders_action_eligibility():
     source = (_TEMPLATES / "admin/network/fiber/ont_identity_reviews.html").read_text(
         encoding="utf-8"
     )
-    assert "candidate.propose_action.allowed" in source
+    assert "action_permitted(request, candidate.propose_action)" in source
     assert "candidate.propose_action.label" in source
     assert "candidate.propose_action.reason" in source

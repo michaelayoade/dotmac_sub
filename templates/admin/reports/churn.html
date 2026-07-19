@@ -42,7 +42,7 @@
     {% endcall %}
 
     {# ── Summary Stats ── #}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div id="churn-summary" class="grid scroll-mt-6 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {{ stats_card(
             churn_kpis.churn_rate.label,
             (churn_kpis.churn_rate.value.value if churn_kpis.churn_rate.value.is_present else churn_kpis.churn_rate.value.placeholder),

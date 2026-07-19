@@ -10,8 +10,8 @@ makes the report layer a parallel projection of account status.
 
 The fix carries derived values in explicit immutable view models or local
 mappings; this test pins the persistent-column boundary for the report/display
-modules. AST-based: any ``Assign``/``AugAssign`` whose target is an attribute
-named exactly ``status`` fails, regardless of the value expression. Extend
+modules. AST-based: any ``Assign``/``AnnAssign``/``AugAssign`` whose target is
+an attribute named exactly ``status`` fails, regardless of the value expression. Extend
 ``REPORT_MODULES`` when a new report/analytics service module is added.
 """
 
@@ -35,6 +35,8 @@ def test_report_modules_never_assign_status() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
             elif isinstance(node, ast.AugAssign):
                 targets = [node.target]
             else:

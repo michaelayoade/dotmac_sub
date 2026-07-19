@@ -7,6 +7,7 @@ now expose an Action from the same set the mutation paths enforce.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.services.vendor_portal_operations import _serialize_quote
@@ -87,3 +88,11 @@ def test_invoice_edit_action_only_allows_editable_statuses():
     assert blocked.allowed is False
     assert blocked.reason
     assert serialize_invoice(_invoice_row("submitted"))["edit_action"].allowed is False
+
+
+def test_vendor_template_uses_the_shared_action_gate():
+    source = (
+        Path(__file__).resolve().parents[1] / "templates/vendor/project_detail.html"
+    ).read_text(encoding="utf-8")
+    assert "action_permitted(request, quote.edit_action)" in source
+    assert "action_permitted(request, invoice.edit_action)" in source

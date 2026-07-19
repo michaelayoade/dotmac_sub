@@ -214,6 +214,9 @@ def test_account_detail_template_uses_action_contracts_for_eligibility():
     assert "status_action_contracts.restore.allowed" in source
     assert "status_action_contracts.deactivate.allowed" in source
     assert "status_action_contracts.disable.allowed" in source
+    assert "action_permitted(request, status_action_contracts.restore)" in source
+    assert "action_permitted(request, status_action_contracts.deactivate)" in source
+    assert "action_permitted(request, status_action_contracts.disable)" in source
     assert "status_action_contracts.deactivate.reason" in source
     # A blocked restore renders its reason instead of hiding the whole block.
     assert "status_action_contracts.restore.reason" in source

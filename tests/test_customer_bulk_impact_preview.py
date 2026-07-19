@@ -92,6 +92,36 @@ def test_status_execute_rejects_a_stale_scope(db_session):
     assert exc.value.status_code == 409
 
 
+def test_status_execute_rejects_stale_state_impact(db_session):
+    active = _make_customer(db_session, is_active=True)
+    preview = actions.bulk_update_customer_status_from_payload(
+        db_session,
+        {
+            "customer_ids": [{"id": str(active.id)}],
+            "status": "inactive",
+            "preview_only": True,
+        },
+    )
+    active.is_active = False
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        actions.bulk_update_customer_status_from_payload(
+            db_session,
+            {
+                "selection": {
+                    "mode": "selected",
+                    "ids": [{"id": str(active.id)}],
+                    "expected_count": preview["matched_count"],
+                    "expected_scope_token": preview["scope_token"],
+                },
+                "status": "inactive",
+                "confirmed": True,
+            },
+        )
+    assert exc.value.status_code == 409
+
+
 def test_status_execute_applies_after_a_valid_preview(db_session):
     active = _make_customer(db_session, is_active=True)
     preview = actions.bulk_update_customer_status_from_payload(
@@ -128,6 +158,7 @@ def test_delete_preview_flags_active_rows_and_requires_confirmation(db_session):
     assert preview["preview"] is True
     assert preview["impact"]["destructive"] is True
     assert preview["impact"]["active"] == 1
+    assert preview["impact"]["eligible"] == 0
     assert preview["scope_token"]
 
     with pytest.raises(HTTPException) as exc:
@@ -135,3 +166,29 @@ def test_delete_preview_flags_active_rows_and_requires_confirmation(db_session):
             db_session, {"customer_ids": [{"id": str(active.id)}]}
         )
     assert exc.value.status_code == 400
+
+
+def test_delete_execute_rejects_stale_eligibility_impact(db_session):
+    inactive = _make_customer(db_session, is_active=False)
+    preview = actions.bulk_delete_customers_from_payload(
+        db_session,
+        {"customer_ids": [{"id": str(inactive.id)}], "preview_only": True},
+    )
+    assert preview["impact"]["eligible"] == 1
+    inactive.is_active = True
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        actions.bulk_delete_customers_from_payload(
+            db_session,
+            {
+                "selection": {
+                    "mode": "selected",
+                    "ids": [{"id": str(inactive.id)}],
+                    "expected_count": preview["matched_count"],
+                    "expected_scope_token": preview["scope_token"],
+                },
+                "confirmed": True,
+            },
+        )
+    assert exc.value.status_code == 409

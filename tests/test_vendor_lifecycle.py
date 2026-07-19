@@ -201,13 +201,12 @@ def test_lifecycle_routes_and_template_are_thin_action_adapters():
     assert "vendor_portal_operations.start_project(" not in routes
     assert "vendor_portal_operations.complete_project(" not in routes
     assert "project.lifecycle_action.preview_url" in template
+    assert "action_permitted(request, project.lifecycle_action)" in template
     assert 'onsubmit="return confirm(' not in template
     assert "operations.vendor_project_lifecycle" in sot
     assert "installation_project_lifecycle_events" in sot
     assert "installation_project_lifecycle_events_append_only" in migration
     assert "vendor_project.started" in sot
     assert "vendor_project.completed" in sot
-    registry = (root / "app/services/sot_relationships.py").read_text(
-        encoding="utf-8"
-    )
+    registry = (root / "app/services/sot_relationships.py").read_text(encoding="utf-8")
     assert 'name="operations.vendor_project_lifecycle"' in registry

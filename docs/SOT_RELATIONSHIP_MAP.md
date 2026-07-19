@@ -1379,10 +1379,13 @@ rather than the legacy table-field registry.
    and filters. Search, filter, or page-size changes clear the selection.
 5. `app.services.web_customer_actions` resolves selected IDs or the explicit
    filtered query again at preview and execution. Mutations require the preview
-   count and exact-membership token in the confirmation request and fail with
-   HTTP 409 when the cohort has changed. Commands continue to re-check domain
-   state and return partial
-   outcomes or notification identifiers.
+   count and confirmation token in the confirmation request and fail with HTTP
+   409 when the cohort has changed. Customer activation/deactivation binds that
+   token to each selected account's observed active state and the requested
+   target; customer deletion also binds active/subscription eligibility, so a
+   newly eligible row cannot be deleted under a stale impact preview. Commands
+   continue to re-check domain state and return partial outcomes or notification
+   identifiers.
 6. `ui.invoice_bulk_action_projection` adopts the same interaction contract for
    invoice issue, send, void, mark-paid, PDF-generation, and export actions.
    `app.services.web_billing_invoice_bulk` remains the single eligibility and

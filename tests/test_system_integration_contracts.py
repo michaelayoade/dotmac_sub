@@ -150,13 +150,6 @@ def test_run_action_eligibility_mirrors_the_disabled_guard():
     assert blocked.reason == "Profile is disabled"
 
 
-def test_run_action_is_hidden_without_effective_write_permission():
-    blocked = syncs._run_action(_job(is_active=True), can_run=False)
-    assert blocked.allowed is False
-    assert blocked.visible is False
-    assert "permission" in blocked.reason
-
-
 def test_action_invariants_reject_inconsistent_eligibility():
     # An allowed action may not carry a blocked reason; a blocked one must.
     with pytest.raises(ValueError):
@@ -196,8 +189,7 @@ def test_syncs_template_renders_kpi_state_and_action_fields():
     # Freshness is a StateValue guarded on is_present before formatting.
     assert "last_run.is_present" in source
     assert "last_run.is_stale" in source
-    # The run button is gated on Action eligibility, not a status string.
-    assert "run_action.allowed" in source
-    assert "run_action.reason" in source
-    assert "run_action.visible" in source
+    # The shared helper combines owner eligibility with the cached RBAC keys.
+    assert "action_permitted(request, run_action)" in source
+    assert 'can(request, "system:settings:write")' in source
     assert "{{ stats.total }}" not in source
