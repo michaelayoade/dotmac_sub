@@ -8,8 +8,8 @@ presentation is an autoflush hazard — any later query in the same session can
 flush the derived default into the database as real account state — and it
 makes the report layer a parallel projection of account status.
 
-The fix carries derived values on non-column attributes (``derived_status``)
-or local mappings; this test pins that convention for the report/display
+The fix carries derived values in explicit immutable view models or local
+mappings; this test pins the persistent-column boundary for the report/display
 modules. AST-based: any ``Assign``/``AugAssign`` whose target is an attribute
 named exactly ``status`` fails, regardless of the value expression. Extend
 ``REPORT_MODULES`` when a new report/analytics service module is added.
@@ -44,6 +44,6 @@ def test_report_modules_never_assign_status() -> None:
                     offenders.append(f"{rel}:{node.lineno}")
     assert not offenders, (
         "Report/display modules must not mutate a persistent .status attribute "
-        "— derive into a local variable or a non-column view attribute "
-        "(e.g. .derived_status): " + ", ".join(sorted(offenders))
+        "— derive into a local variable or immutable view model: "
+        + ", ".join(sorted(offenders))
     )

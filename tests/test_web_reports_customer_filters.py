@@ -80,3 +80,22 @@ def test_customer_report_includes_usage_for_filtered_period(
     assert "period_usage_gb,period_avg_mbps,period_active_services" in csv_content
     assert "Usage Customer" in csv_content
     assert ",5.0,1" in csv_content
+
+
+def test_recent_signups_use_a_view_model_without_mutating_subscriber(
+    db_session, subscriber
+):
+    subscriber.status = SubscriberStatus.active
+    subscriber.is_active = True
+    subscriber.user_type = UserType.customer
+    subscriber.created_at = datetime(2026, 1, 10, tzinfo=UTC)
+    db_session.commit()
+
+    data = web_reports.get_subscribers_report_data(db_session)
+
+    recent = next(
+        row for row in data["recent_subscribers"] if row.name == subscriber.name
+    )
+    assert recent.derived_status == SubscriberStatus.active
+    assert subscriber.status == SubscriberStatus.active
+    assert not hasattr(subscriber, "derived_status")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -21,6 +22,15 @@ from app.services import subscriber_growth
 from app.services import usage_summary as usage_summary_service
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RecentSubscriberReportRow:
+    """Immutable presentation projection for the recent-signups panel."""
+
+    name: str
+    created_at: datetime | None
+    derived_status: AccountStatus
 
 
 def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
@@ -459,10 +469,6 @@ def get_subscribers_report_data(
     suspended_count = 0
     for sub in all_subscribers:
         derived_status = _derive_subscriber_status(sub)
-        # View-model only: carried on a non-column attribute for the template
-        # badge. Never written back to the ORM status column (autoflush would
-        # persist a derived display default as real account state).
-        sub.derived_status = derived_status
         status_name = derived_status.value if derived_status else "unknown"
         status_breakdown[status_name] = status_breakdown.get(status_name, 0) + 1
         if derived_status == AccountStatus.active:
@@ -472,14 +478,21 @@ def get_subscribers_report_data(
     active_rate = (
         (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
     )
-    recent_subscribers = sorted(
-        all_subscribers,
-        key=lambda x: (
-            subscriber_service.get_effective_created_at(x)
-            or datetime.min.replace(tzinfo=UTC)
-        ),
-        reverse=True,
-    )[:10]
+    recent_subscribers = [
+        RecentSubscriberReportRow(
+            name=sub.name,
+            created_at=sub.created_at,
+            derived_status=_derive_subscriber_status(sub),
+        )
+        for sub in sorted(
+            all_subscribers,
+            key=lambda x: (
+                subscriber_service.get_effective_created_at(x)
+                or datetime.min.replace(tzinfo=UTC)
+            ),
+            reverse=True,
+        )[:10]
+    ]
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     new_this_month = len(
