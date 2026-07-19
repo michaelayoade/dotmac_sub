@@ -1,6 +1,7 @@
 """Scenario tests for subscription/account lifecycle state machine."""
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from app.services.account_lifecycle import (
     has_active_lock,
     restore_subscription,
     suspend_subscription,
+    transition_account_status,
 )
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -71,6 +73,52 @@ def _make_subscription(
     db.add(sub)
     db.flush()
     return sub
+
+
+@pytest.mark.parametrize(
+    "target_status",
+    (SubscriberStatus.disabled, SubscriberStatus.canceled),
+)
+def test_terminal_account_transition_clears_prepaid_timers(
+    db_session: Session,
+    target_status: SubscriberStatus,
+) -> None:
+    subscriber = _make_subscriber(
+        db_session,
+        prepaid_low_balance_at=datetime.now(UTC),
+        prepaid_deactivation_at=datetime.now(UTC),
+    )
+    offer = _make_offer(db_session)
+    _make_subscription(db_session, subscriber, offer)
+
+    result = transition_account_status(
+        db_session,
+        str(subscriber.id),
+        target_status,
+        reason="operator terminal transition",
+        source="test:terminal-prepaid-timers",
+        emit=False,
+    )
+
+    assert result == target_status
+    assert subscriber.prepaid_low_balance_at is None
+    assert subscriber.prepaid_deactivation_at is None
+
+
+def test_last_subscription_expiry_clears_prepaid_timers(db_session: Session) -> None:
+    subscriber = _make_subscriber(
+        db_session,
+        prepaid_low_balance_at=datetime.now(UTC),
+        prepaid_deactivation_at=datetime.now(UTC),
+    )
+    offer = _make_offer(db_session)
+    subscription = _make_subscription(db_session, subscriber, offer)
+
+    expire_subscription(db_session, str(subscription.id), emit=False)
+
+    assert subscriber.status == SubscriberStatus.canceled
+    assert subscriber.prepaid_low_balance_at is None
+    assert subscriber.prepaid_deactivation_at is None
 
 
 class TestSuspendSubscription:

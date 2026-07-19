@@ -412,11 +412,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.ledger",
         "financial.payment_arrangements",
         "financial.billing_health",
+        "financial.prepaid_enforcement_state",
         "access.subscription_lifecycle",
         "access.walled_garden_policy",
     )
     assert sot_relationships.dependencies_for("access.subscription_lifecycle") == (
         "events.dispatcher",
+        "financial.prepaid_enforcement_state",
     )
     assert sot_relationships.dependencies_for("financial.access_resolution") == (
         "financial.billing_profile",
@@ -454,6 +456,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.dunning",
         "financial.access_resolution",
         "financial.prepaid_enforcement",
+        "financial.prepaid_enforcement_state",
         "financial.prepaid_enforcement_readiness",
     )
     assert sot_relationships.dependencies_for("financial.payment_webhooks") == (
