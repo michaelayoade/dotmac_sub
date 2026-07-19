@@ -189,6 +189,9 @@ def test_lifecycle_evidence_is_append_only(db_session):
 def test_lifecycle_routes_and_template_are_thin_action_adapters():
     root = Path(__file__).resolve().parents[1]
     routes = (root / "app/web/vendor_portal.py").read_text(encoding="utf-8")
+    migration = (
+        root / "alembic/versions/369_vendor_project_lifecycle_evidence.py"
+    ).read_text(encoding="utf-8")
     template = (root / "templates/vendor/project_detail.html").read_text(
         encoding="utf-8"
     )
@@ -201,5 +204,6 @@ def test_lifecycle_routes_and_template_are_thin_action_adapters():
     assert 'onsubmit="return confirm(' not in template
     assert "operations.vendor_project_lifecycle" in sot
     assert "installation_project_lifecycle_events" in sot
+    assert "installation_project_lifecycle_events_append_only" in migration
     assert "vendor_project.started" in sot
     assert "vendor_project.completed" in sot

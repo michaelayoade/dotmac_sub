@@ -67,8 +67,41 @@ def upgrade() -> None:
         ["project_id", "occurred_at"],
     )
 
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            """
+            CREATE FUNCTION reject_installation_project_lifecycle_event_mutation()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                RAISE EXCEPTION
+                    'installation_project_lifecycle_events is append-only'
+                    USING ERRCODE = 'integrity_constraint_violation';
+            END;
+            $$
+            """
+        )
+        op.execute(
+            """
+            CREATE TRIGGER installation_project_lifecycle_events_append_only
+            BEFORE UPDATE OR DELETE ON installation_project_lifecycle_events
+            FOR EACH ROW EXECUTE FUNCTION
+                reject_installation_project_lifecycle_event_mutation()
+            """
+        )
+
 
 def downgrade() -> None:
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            "DROP TRIGGER installation_project_lifecycle_events_append_only "
+            "ON installation_project_lifecycle_events"
+        )
+        op.execute(
+            "DROP FUNCTION reject_installation_project_lifecycle_event_mutation()"
+        )
+
     op.drop_index(
         "ix_installation_project_lifecycle_project_occurred",
         table_name="installation_project_lifecycle_events",
