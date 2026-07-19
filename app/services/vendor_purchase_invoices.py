@@ -25,6 +25,7 @@ from app.schemas.vendor_purchase_invoice import (
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.file_storage import FileValidationError, file_uploads
+from app.services.ui_contracts import Action
 
 _MONEY = Decimal("0.01")
 _EDITABLE = {
@@ -141,8 +142,15 @@ def serialize(invoice: VendorPurchaseInvoice) -> dict:
         "invoice_number": invoice.invoice_number,
         "status": invoice.status,
         # Editability is owned here (the same set the mutation paths enforce),
-        # not re-derived from a status string in the template.
-        "can_edit": invoice.status in _EDITABLE,
+        # projected as an Action, not re-derived from a status string.
+        "edit_action": Action(key="edit", label="Edit invoice", allowed=True)
+        if invoice.status in _EDITABLE
+        else Action(
+            key="edit",
+            label="Edit invoice",
+            allowed=False,
+            reason=f"A {invoice.status.replace('_', ' ')} invoice cannot be edited",
+        ),
         "currency": invoice.currency,
         "tax_rate_percent": invoice.tax_rate_percent,
         "subtotal": invoice.subtotal,

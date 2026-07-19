@@ -22,6 +22,7 @@ from app.models.vendor_routes import (
     ProposedRouteRevisionStatus,
     VendorAssignmentType,
 )
+from app.schemas.status_presentation import StatusTone
 from app.schemas.vendor_portal import (
     VendorAsBuiltCreate,
     VendorQuoteCreate,
@@ -30,11 +31,73 @@ from app.schemas.vendor_portal import (
     VendorRouteRevisionCreate,
 )
 from app.services.common import coerce_uuid
+from app.services.ui_contracts import Action
 
 _EDITABLE_QUOTES = {
     ProjectQuoteStatus.draft.value,
     ProjectQuoteStatus.revision_requested.value,
 }
+
+# Vendor portal auth is contextual (vendor ownership via vendor_context), not a
+# named granular RBAC permission, so these Actions carry permission=None; the
+# route still authorizes on ownership.
+_NOT_YOURS = "This project is assigned to another vendor"
+
+
+def _project_lifecycle_actions(row: InstallationProject, *, is_mine: bool) -> dict:
+    """Owner-computed lifecycle Actions for the awarded vendor.
+
+    ``allowed``/``reason`` mirror exactly what ``start_project`` /
+    ``complete_project`` enforce, so a button never 409s on a fresh page and a
+    blocked action can explain itself. Sub owns the vendor work lifecycle.
+    """
+    status = row.status
+    if is_mine and status == InstallationProjectStatus.approved.value:
+        start = Action(
+            key="start", label="Start work", allowed=True, tone=StatusTone.info
+        )
+    else:
+        start = Action(
+            key="start",
+            label="Start work",
+            allowed=False,
+            reason=_NOT_YOURS
+            if not is_mine
+            else "Only an approved project can be started",
+        )
+    if is_mine and status == InstallationProjectStatus.in_progress.value:
+        complete = Action(
+            key="complete",
+            label="Mark complete",
+            allowed=True,
+            tone=StatusTone.positive,
+        )
+    else:
+        complete = Action(
+            key="complete",
+            label="Mark complete",
+            allowed=False,
+            reason=_NOT_YOURS
+            if not is_mine
+            else "Only an in-progress project can be completed",
+        )
+    return {"start": start, "complete": complete}
+
+
+def _editable_action(
+    *, key: str, label: str, editable: bool, noun: str, status: str
+) -> Action:
+    """Owner-computed edit eligibility as an Action (same set the mutation paths
+    enforce), so the template renders allowed/reason instead of re-deriving a
+    status string."""
+    if editable:
+        return Action(key=key, label=label, allowed=True)
+    return Action(
+        key=key,
+        label=label,
+        allowed=False,
+        reason=f"A {status.replace('_', ' ')} {noun} cannot be edited",
+    )
 
 
 def _now() -> datetime:
@@ -102,8 +165,8 @@ def _serialize_project(
     project = row.project
     # Lifecycle-action eligibility is owned here (Sub owns the vendor work
     # lifecycle): the awarded vendor may start an approved project and complete
-    # an in-progress one. Rendered from these flags, never a template status
-    # string.
+    # an in-progress one. Projected as Action contracts (allowed/reason from the
+    # owner), never a template status string.
     is_mine = (
         viewer_vendor_id is not None
         and row.assigned_vendor_id is not None
@@ -125,10 +188,7 @@ def _serialize_project(
         "notes": row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
-        "can_start": is_mine
-        and row.status == InstallationProjectStatus.approved.value,
-        "can_complete": is_mine
-        and row.status == InstallationProjectStatus.in_progress.value,
+        "actions": _project_lifecycle_actions(row, is_mine=is_mine),
     }
 
 
@@ -139,8 +199,14 @@ def _serialize_quote(row: ProjectQuote) -> dict:
         "vendor_id": row.vendor_id,
         "status": row.status,
         # Editability is owned here (the same set the mutation paths enforce),
-        # not re-derived from a status string in the template.
-        "can_edit": row.status in _EDITABLE_QUOTES,
+        # projected as an Action, not re-derived from a status string.
+        "edit_action": _editable_action(
+            key="edit",
+            label="Edit quote",
+            editable=row.status in _EDITABLE_QUOTES,
+            noun="quote",
+            status=row.status,
+        ),
         "currency": row.currency,
         "subtotal": row.subtotal,
         "vat_rate_percent": row.vat_rate_percent,

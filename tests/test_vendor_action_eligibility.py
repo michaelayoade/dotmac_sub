@@ -2,7 +2,8 @@
 
 The vendor project detail used to decide whether the edit/submit forms showed by
 re-deriving ``status in ['draft','revision_requested']`` in Jinja. The serializers
-now expose ``can_edit`` from the same set the mutation paths enforce.
+now expose an ``edit_action`` (the shared Action contract) from the same set the
+mutation paths enforce — allowed when editable, otherwise blocked with a reason.
 """
 
 from __future__ import annotations
@@ -65,15 +66,25 @@ def _invoice_row(status: str) -> SimpleNamespace:
     )
 
 
-def test_quote_can_edit_only_for_editable_statuses():
-    assert _serialize_quote(_quote_row("draft"))["can_edit"] is True
-    assert _serialize_quote(_quote_row("revision_requested"))["can_edit"] is True
-    assert _serialize_quote(_quote_row("approved"))["can_edit"] is False
-    assert _serialize_quote(_quote_row("submitted"))["can_edit"] is False
+def test_quote_edit_action_only_allowed_for_editable_statuses():
+    assert _serialize_quote(_quote_row("draft"))["edit_action"].allowed is True
+    assert (
+        _serialize_quote(_quote_row("revision_requested"))["edit_action"].allowed
+        is True
+    )
+    approved = _serialize_quote(_quote_row("approved"))["edit_action"]
+    assert approved.allowed is False
+    assert approved.reason  # blocked actions carry a reason for the template
+    assert _serialize_quote(_quote_row("submitted"))["edit_action"].allowed is False
 
 
-def test_invoice_can_edit_only_for_editable_statuses():
-    assert serialize_invoice(_invoice_row("draft"))["can_edit"] is True
-    assert serialize_invoice(_invoice_row("revision_requested"))["can_edit"] is True
-    assert serialize_invoice(_invoice_row("approved"))["can_edit"] is False
-    assert serialize_invoice(_invoice_row("submitted"))["can_edit"] is False
+def test_invoice_edit_action_only_allowed_for_editable_statuses():
+    assert serialize_invoice(_invoice_row("draft"))["edit_action"].allowed is True
+    assert (
+        serialize_invoice(_invoice_row("revision_requested"))["edit_action"].allowed
+        is True
+    )
+    approved = serialize_invoice(_invoice_row("approved"))["edit_action"]
+    assert approved.allowed is False
+    assert approved.reason
+    assert serialize_invoice(_invoice_row("submitted"))["edit_action"].allowed is False
