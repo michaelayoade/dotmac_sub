@@ -37,6 +37,9 @@ class WorkOrderListFilters:
     assigned_to_crm_person_id: str | None = None
     q: str | None = None
     is_active: bool | None = True
+    # Non-terminal lifecycle filter (distinct from ``is_active`` soft-delete):
+    # True keeps open work, False keeps only terminal ones. None applies neither.
+    active: bool | None = None
     scheduled_from: datetime | None = None
     scheduled_to: datetime | None = None
     limit: int = DEFAULT_LIMIT
@@ -126,6 +129,11 @@ def _base_query(db: Session):
 def _apply_filters(query, filters: WorkOrderListFilters):
     if filters.is_active is not None:
         query = query.filter(WorkOrder.is_active.is_(filters.is_active))
+    if filters.active is not None:
+        if filters.active:
+            query = query.filter(WorkOrder.status.notin_(TERMINAL_STATUSES))
+        else:
+            query = query.filter(WorkOrder.status.in_(TERMINAL_STATUSES))
     if filters.status:
         query = query.filter(WorkOrder.status == filters.status)
     if filters.priority:

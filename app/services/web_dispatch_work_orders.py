@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from math import ceil
 from typing import Any
+from urllib.parse import urlencode
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -22,12 +23,16 @@ from app.schemas.dispatch import (
     WorkOrderHeaderCreate,
     WorkOrderHeaderUpdate,
 )
+from app.schemas.status_presentation import StatusTone
 from app.services import dispatch as dispatch_service
 from app.services import work_order_views
 from app.services.common import coerce_uuid
 from app.services.field.work_order_status import WORK_ORDER_TERMINAL_VALUES
 from app.services.list_query import ListDefinition, ListFieldDefinition, ListQuery
+from app.services.ui_contracts import Action, Kpi, StateValue
 from app.services.work_order_views import WorkOrderListFilters
+
+WORK_ORDERS_LIST_URL = "/admin/dispatch/work-orders"
 
 STATUS_OPTIONS = (
     "draft",
@@ -121,6 +126,77 @@ def _work_order_counts(db: Session) -> dict[str, int]:
     }
 
 
+def _work_order_cohort_url(*, status: str | None = None, active: bool = False) -> str:
+    """Drill-down to the queue filtered to exactly the cohort a tile counts.
+
+    The owner supplies this so a summary tile and the rows it summarises can
+    never diverge (KPI-parity). The counts are global, so each link narrows by
+    the one dimension the tile measures: a single ``status`` for status tiles,
+    or ``active=1`` (non-terminal) for the open-work tile.
+    """
+    params = {"status": status, "active": "1" if active else None}
+    query = urlencode({key: value for key, value in params.items() if value})
+    return WORK_ORDERS_LIST_URL + (f"?{query}" if query else "")
+
+
+def _work_order_kpis(counts: dict[str, int]) -> dict[str, Kpi]:
+    return {
+        "total": Kpi(
+            label="Total",
+            value=StateValue.present(counts["total"]),
+            cohort_url=_work_order_cohort_url(),
+        ),
+        "active": Kpi(
+            label="Active",
+            value=StateValue.present(counts["active"]),
+            cohort_url=_work_order_cohort_url(active=True),
+            tone=StatusTone.info,
+        ),
+        "scheduled": Kpi(
+            label="Scheduled",
+            value=StateValue.present(counts["scheduled"]),
+            cohort_url=_work_order_cohort_url(status="scheduled"),
+            tone=StatusTone.warning,
+        ),
+        "in_progress": Kpi(
+            label="In progress",
+            value=StateValue.present(counts["in_progress"]),
+            cohort_url=_work_order_cohort_url(status="in_progress"),
+            tone=StatusTone.info,
+        ),
+        "completed": Kpi(
+            label="Completed",
+            value=StateValue.present(counts["completed"]),
+            cohort_url=_work_order_cohort_url(status="completed"),
+            tone=StatusTone.positive,
+        ),
+    }
+
+
+def _queue_action(work_order: WorkOrder) -> Action:
+    """Assignment eligibility owned by the work-order transition command.
+
+    Mirrors ``work_order_commands.preview_assignment``: a soft-deleted or
+    terminal work order cannot be assigned. Eligibility is derived here, never
+    re-read from the status string in the template.
+    """
+    if not work_order.is_active:
+        allowed, reason = False, "Work order is inactive"
+    elif work_order.status in WORK_ORDER_TERMINAL_VALUES:
+        allowed = False
+        reason = f"Cannot assign a work order in status {work_order.status}"
+    else:
+        allowed, reason = True, None
+    return Action(
+        key="queue",
+        label="Queue",
+        allowed=allowed,
+        reason=reason,
+        permission="operations:dispatch:assign",
+        tone=StatusTone.info,
+    )
+
+
 def _queue_status_by_work_order(db: Session, rows: list[WorkOrder]) -> dict[str, str]:
     ids = [row.id for row in rows]
     if not ids:
@@ -202,6 +278,7 @@ def list_page(
     *,
     status: str | None = None,
     q: str | None = None,
+    active: bool | None = None,
     page: int = 1,
     per_page: int = 25,
 ) -> dict[str, Any]:
@@ -212,6 +289,7 @@ def list_page(
         status=list_query.filter_value("status"),
         q=list_query.search,
         is_active=None,
+        active=active,
         limit=list_query.per_page,
         offset=list_query.offset,
     )
@@ -228,13 +306,17 @@ def list_page(
             "subscriber": subscriber,
             "subscriber_label": _subscriber_label(subscriber),
             "queue_status": queue_status.get(str(row.id)),
+            "actions": {"queue": _queue_action(row)},
         }
         for row, subscriber in rows
     ]
+    counts = _work_order_counts(db)
     return {
         "items": items,
-        "counts": _work_order_counts(db),
+        "counts": counts,
+        "kpis": _work_order_kpis(counts),
         "status_filter": list_query.filter_value("status"),
+        "active_filter": bool(active),
         "q": list_query.search or "",
         "page": list_query.page,
         "per_page": list_query.per_page,
