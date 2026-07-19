@@ -33,7 +33,16 @@ def test_portal_ui_migrations_extend_current_main_as_one_head():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [migration_367.revision]
+    # The chain must stay single-headed with 367 in its ancestry; later
+    # revisions (e.g. the legacy-153 bridge merge) may extend past it, so
+    # asserting the exact head would break on every subsequent migration.
+    script = ScriptDirectory.from_config(config)
+    heads = script.get_heads()
+    assert len(heads) == 1
+    ancestry = {
+        rev.revision for rev in script.walk_revisions(base="base", head=heads[0])
+    }
+    assert migration_367.revision in ancestry
 
 
 def test_coarse_gis_permission_downgrade_restores_role_grants(monkeypatch):
