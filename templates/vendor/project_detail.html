@@ -5,7 +5,14 @@
 {% if message %}<div class="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ message }}</div>{% endif %}
 <div class="mb-6 flex flex-wrap items-start justify-between gap-4">
   <div><p class="text-sm text-slate-500">{{ project.project_code or project.id }}</p><h1 class="text-2xl font-bold">{{ project.project_name or "Installation project" }}</h1></div>
-  <span class="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold uppercase text-blue-700">{{ project.status|replace('_', ' ') }}</span>
+  <div class="flex items-center gap-3">
+    <span class="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold uppercase text-blue-700">{{ project.status|replace('_', ' ') }}</span>
+    {% if project.can_start %}
+    <form method="post" action="/vendor/projects/{{ project.id }}/start" onsubmit="return confirm('Start field work on this project? This tells Dotmac the assigned crew is on site.');"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Start work</button></form>
+    {% elif project.can_complete %}
+    <form method="post" action="/vendor/projects/{{ project.id }}/complete" onsubmit="return confirm('Mark this project complete? Dotmac reviews and verifies the work before final acceptance.');"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white">Mark complete</button></form>
+    {% endif %}
+  </div>
 </div>
 <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
   <div class="space-y-6">
