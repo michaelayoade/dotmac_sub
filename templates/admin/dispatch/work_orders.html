@@ -43,11 +43,16 @@
     {% endif %}
 
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {{ stats_card("Total", counts.total, icon=work_icon, color="slate", color2="cyan") }}
-        {{ stats_card("Active", counts.active, icon=work_icon, color="cyan", color2="blue") }}
-        {{ stats_card("Scheduled", counts.scheduled, icon=work_icon, color="amber", color2="orange") }}
-        {{ stats_card("In progress", counts.in_progress, icon=work_icon, color="blue", color2="cyan") }}
-        {{ stats_card("Completed", counts.completed, icon=work_icon, color="emerald", color2="green") }}
+        {{ stats_card(kpis.total.label, kpis.total.value.value, icon=work_icon, color="slate", color2="cyan",
+            href=kpis.total.cohort_url, tone=kpis.total.tone) }}
+        {{ stats_card(kpis.active.label, kpis.active.value.value, icon=work_icon, color="cyan", color2="blue",
+            href=kpis.active.cohort_url, tone=kpis.active.tone) }}
+        {{ stats_card(kpis.scheduled.label, kpis.scheduled.value.value, icon=work_icon, color="amber", color2="orange",
+            href=kpis.scheduled.cohort_url, tone=kpis.scheduled.tone) }}
+        {{ stats_card(kpis.in_progress.label, kpis.in_progress.value.value, icon=work_icon, color="blue", color2="cyan",
+            href=kpis.in_progress.cohort_url, tone=kpis.in_progress.tone) }}
+        {{ stats_card(kpis.completed.label, kpis.completed.value.value, icon=work_icon, color="emerald", color2="green",
+            href=kpis.completed.cohort_url, tone=kpis.completed.tone) }}
     </div>
 
     {% call card("Create Work Order", color="cyan") %}
@@ -145,7 +150,7 @@
                 <input name="q" value="{{ q }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white" placeholder="Work order, customer, site">
             </div>
             <button class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Filter</button>
-            {% if status_filter or q %}
+            {% if status_filter or q or active_filter %}
             <a href="/admin/dispatch/work-orders" class="rounded-lg px-3 py-2 text-sm font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white">Clear</a>
             {% endif %}
         </form>
@@ -203,6 +208,8 @@
                         </form>
                     </td>
                     <td class="min-w-64 px-5 py-4 align-top">
+                        {% set queue_action = item.actions.queue %}
+                        {% if queue_action.allowed %}
                         <form method="post" action="/admin/dispatch/work-orders/{{ wo.public_id }}/queue" class="space-y-2">
                             <select name="assigned_technician_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
                                 <option value="">Technician</option>
@@ -216,8 +223,11 @@
                                 {% endfor %}
                             </select>
                             <input name="reason" maxlength="2000" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white" placeholder="Reason">
-                            <button class="w-full rounded-lg border border-cyan-300 px-3 py-2 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 dark:border-cyan-700 dark:text-cyan-200 dark:hover:bg-cyan-950/40">Queue</button>
+                            <button class="w-full rounded-lg border border-cyan-300 px-3 py-2 text-sm font-semibold text-cyan-700 hover:bg-cyan-50 dark:border-cyan-700 dark:text-cyan-200 dark:hover:bg-cyan-950/40">{{ queue_action.label }}</button>
                         </form>
+                        {% else %}
+                        <p class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">{{ queue_action.reason }}</p>
+                        {% endif %}
                     </td>
                     {% endcall %}
                     {% endfor %}
@@ -238,7 +248,7 @@
             <div class="flex items-center justify-between text-sm">
                 <span class="text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }} · {{ total }} total</span>
                 <div class="flex gap-2">
-                    {% set query_suffix = '&per_page=' ~ per_page ~ (status_filter and '&status=' ~ status_filter or '') ~ (q and '&q=' ~ q or '') %}
+                    {% set query_suffix = '&per_page=' ~ per_page ~ (status_filter and '&status=' ~ status_filter or '') ~ (q and '&q=' ~ q or '') ~ (active_filter and '&active=1' or '') %}
                     {% if page > 1 %}
                     <a href="/admin/dispatch/work-orders?page={{ page - 1 }}{{ query_suffix }}" class="rounded-lg border border-slate-300 px-3 py-1.5 font-semibold text-slate-600 hover:bg-white dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800">Previous</a>
                     {% endif %}

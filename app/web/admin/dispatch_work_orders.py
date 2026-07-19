@@ -38,6 +38,7 @@ def dispatch_work_orders(
     request: Request,
     status: str | None = None,
     q: str | None = None,
+    active: bool | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     notice: str | None = None,
@@ -48,6 +49,7 @@ def dispatch_work_orders(
         db,
         status=status,
         q=q,
+        active=active,
         page=page,
         per_page=per_page,
     )
