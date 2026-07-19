@@ -6,12 +6,14 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from time import monotonic
+from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.schemas.status_presentation import StatusTone
 from app.services import admin_alerts as admin_alerts_service
 from app.services import admin_attention as admin_attention_service
 from app.services import admin_whats_new as admin_whats_new_service
@@ -38,6 +40,7 @@ from app.services.audit_helpers import (
     load_audit_actor_subscribers,
     resolve_actor_name,
 )
+from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -140,13 +143,14 @@ def _build_health_thresholds(db: Session) -> dict:
     return {field: values.get(field) for field in keys.values()}
 
 
-def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
+def _build_dashboard_billing_summary(db: Session) -> dict[str, float] | None:
     """Return the small billing aggregate needed by the admin overview.
 
     Revenue this month comes from the billing reporting read owner
     (BillingReporting.get_overview_stats); this service no longer sums payments
     itself. Pending/overdue receivables stay on the invoice_collectibility owner
-    so the value matches the Overdue KPI exactly.
+    so the value matches the Overdue KPI exactly. Returns ``None`` when the read
+    owner is unavailable so the KPI renders "Unknown" rather than a lying ₦0.
     """
     from app.services.billing.reporting import BillingReporting
     from app.services.invoice_collectibility import (
@@ -172,18 +176,15 @@ def _build_dashboard_billing_summary(db: Session) -> dict[str, float]:
     except Exception:
         logger.debug("Failed to load dashboard billing summary", exc_info=True)
         _rollback_after_failed_query(db)
-        return {
-            "payments_this_month": 0.0,
-            "pending_amount": 0.0,
-            "overdue_amount": 0.0,
-        }
+        return None
 
 
-def _build_online_customer_summary(db: Session) -> dict[str, int]:
+def _build_online_customer_summary(db: Session) -> dict[str, int] | None:
     """Return active-session counts focused on customers, not raw sessions.
 
     Delegates to the radius_sessions read owner (online_summary); this service no
-    longer queries RadiusActiveSession directly.
+    longer queries RadiusActiveSession directly. Returns ``None`` when the read
+    owner is unavailable so the KPI renders "Unknown" rather than a false 0.
     """
     try:
         from app.services.network import radius_sessions
@@ -192,7 +193,7 @@ def _build_online_customer_summary(db: Session) -> dict[str, int]:
     except Exception:
         logger.debug("Failed to load online customer summary", exc_info=True)
         _rollback_after_failed_query(db)
-        return {"sessions": 0, "customers": 0}
+        return None
 
 
 def _build_recent_activities(
@@ -235,6 +236,78 @@ def _build_recent_activities(
     return recent_activities
 
 
+def build_dashboard_kpis(
+    *,
+    total_subscribers: int,
+    online_sessions_value: StateValue,
+    devices_online: int,
+    devices_total: int,
+    payments_this_month: float,
+    overdue_amount: float,
+    total_alarms: int,
+    billing_ok: bool,
+) -> dict[str, Kpi]:
+    """Project the dashboard headline tiles as Kpi contracts.
+
+    Each ``cohort_url`` drills into the exact admin list that produced the number
+    (KPI-parity), so a headline and its list can never diverge. The money tiles
+    carry ``StateValue.unknown()`` when the billing read owner is down, so a
+    decimal 0 never stands in for an unresolved value; the online tile carries
+    whatever state the RADIUS read owner resolved.
+    """
+    money = (
+        (lambda amount: StateValue.present(f"₦{amount:,.0f}"))
+        if billing_ok
+        else (lambda amount: StateValue.unknown())
+    )
+    return {
+        "total_subscribers": Kpi(
+            label="Subscribers",
+            value=StateValue.present(total_subscribers),
+            cohort_url="/admin/customers",
+        ),
+        "online": Kpi(
+            # The destination lists session rows, so this headline counts the
+            # exact same entity instead of distinct customers.
+            label="Online Sessions",
+            value=online_sessions_value,
+            cohort_url="/admin/network/sessions",
+            tone=StatusTone.positive,
+        ),
+        "network_devices": Kpi(
+            label="Network Devices",
+            value=StateValue.present(f"{devices_online} / {devices_total}"),
+            cohort_url="/admin/network/monitoring",
+            tone=StatusTone.info,
+        ),
+        "collections": Kpi(
+            label="Collections This Month",
+            value=money(payments_this_month),
+            # This is the billing-overview collected figure (invoice settled
+            # value over the calendar month) — the same number /admin/billing
+            # displays. No itemized list sums to exactly that invoice-settled,
+            # calendar-month aggregate (the payments list is a different entity
+            # on a rolling window), so the drill-down is the overview that shows
+            # the identical figure — KPI-parity by same-number, not a mismatched
+            # list.
+            cohort_url="/admin/billing",
+            tone=StatusTone.positive,
+        ),
+        "overdue": Kpi(
+            label="Overdue",
+            value=money(overdue_amount),
+            cohort_url="/admin/billing/invoices?" + urlencode({"status": "overdue"}),
+            tone=StatusTone.warning,
+        ),
+        "alarms": Kpi(
+            label="Alarms",
+            value=StateValue.present(total_alarms),
+            cohort_url="/admin/network/alarms",
+            tone=StatusTone.negative,
+        ),
+    }
+
+
 def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     """Build the heavy, non-user-specific portion of the dashboard context.
 
@@ -253,6 +326,12 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     sub_stats = subscriber_service.subscribers.get_dashboard_stats(db)
     net_stats = network_monitoring_service.network_devices.get_dashboard_stats(db)
     billing_summary = _build_dashboard_billing_summary(db)
+    billing_ok = billing_summary is not None
+    billing_values = billing_summary or {
+        "payments_this_month": 0.0,
+        "pending_amount": 0.0,
+        "overdue_amount": 0.0,
+    }
 
     # --- Network health (counts + ring status from the monitoring read owner) ---
     warn_pct = int(thresholds.get("network_warn_pct") or 90)
@@ -273,9 +352,9 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     health_status = network_health["health_status"]
 
     # --- Billing summary ---
-    payments_this_month = billing_summary["payments_this_month"]
-    pending_amount = billing_summary["pending_amount"]
-    overdue_amount = billing_summary["overdue_amount"]
+    payments_this_month = billing_values["payments_this_month"]
+    pending_amount = billing_values["pending_amount"]
+    overdue_amount = billing_values["overdue_amount"]
     active_subscribers = sub_stats["active_count"]
     arpu = payments_this_month / active_subscribers if active_subscribers > 0 else 0
 
@@ -373,8 +452,10 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
 
     # --- Who's Online (distinct customers with active RADIUS sessions) ---
     online_summary = _build_online_customer_summary(db)
-    online_customers = online_summary["customers"]
-    online_sessions = online_summary["sessions"]
+    online_ok = online_summary is not None
+    online_values = online_summary or {"customers": 0, "sessions": 0}
+    online_customers = online_values["customers"]
+    online_sessions = online_values["sessions"]
 
     # --- Monitoring device summary (for operations dashboard) ---
     monitoring_summary = {
@@ -486,11 +567,36 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         admin_whats_new_service.get_visible_items(db, limit=4)
     )
 
+    # Freshness of this snapshot travels with the cached context so the header
+    # and any staleness signal reflect build time, not render time.
+    refreshed_at = datetime.now(UTC)
+
+    # Whos-online counts carry their own state: a failed RADIUS read renders
+    # "Unknown", never a 0 that would read as "nobody online".
+    online_customers_state = (
+        StateValue.present(online_customers) if online_ok else StateValue.unknown()
+    )
+    online_sessions_state = (
+        StateValue.present(online_sessions) if online_ok else StateValue.unknown()
+    )
+
+    dashboard_kpis = build_dashboard_kpis(
+        total_subscribers=sub_stats["total_count"],
+        online_sessions_value=online_sessions_state,
+        devices_online=monitoring_summary["devices_online"],
+        devices_total=monitoring_summary["devices_total"],
+        payments_this_month=payments_this_month,
+        overdue_amount=overdue_amount,
+        total_alarms=total_alarms,
+        billing_ok=billing_ok,
+    )
+
     return {
         "stats": stats,
         "subscriber_stats": sub_stats,
         "network_stats": net_stats,
-        "billing_stats": {"stats": billing_summary},
+        "billing_stats": {"stats": billing_values},
+        "dashboard_kpis": dashboard_kpis,
         "network_health": {
             "percent": health_pct,
             "status": health_status,
@@ -512,6 +618,8 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "online_count": online_customers,
         "online_customers": online_customers,
         "online_sessions": online_sessions,
+        "online_customers_state": online_customers_state,
+        "online_sessions_state": online_sessions_state,
         "online_customer_pct": online_pct,
         "monitoring_summary": monitoring_summary,
         "ont_service_summary": ont_service_summary,
@@ -523,7 +631,9 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
         "unconfigured_ont_count": unconfigured_ont_count,
         # Wall-clock time this snapshot was built. Travels with the cached
         # context so the header shows real freshness, not render time.
-        "refreshed_at": datetime.now(UTC),
+        "refreshed_at": refreshed_at,
+        # Same instant as a freshness-bearing StateValue for the header.
+        "data_freshness": StateValue.present(refreshed_at, as_of=refreshed_at),
     }
 
 
@@ -572,12 +682,12 @@ def _resolve_dashboard_permissions(
         return (
             _has("billing:invoice:read")
             or _has("billing:payment:read")
-            or _has("reports:billing"),
+            or _has("reports:billing:read"),
             _has("network:device:read")
             or _has("network:olt:read")
             or _has("network:ont:read")
             or _has("monitoring:read")
-            or _has("reports:network"),
+            or _has("reports:network:read"),
             _has("customer:read"),
         )
     if user:

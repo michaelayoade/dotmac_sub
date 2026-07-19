@@ -174,7 +174,7 @@ CARD_SAVE_ERROR_MESSAGE = (
 @router.get(
     "/dashboard",
     tags=["billing"],
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def billing_dashboard(db: Session = Depends(get_db)) -> dict:
     """Billing dashboard stats for external consumers."""

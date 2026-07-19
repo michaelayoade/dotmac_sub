@@ -574,13 +574,13 @@ def test_usage_routes_require_catalog_permissions():
 
 def test_report_routes_require_domain_permissions():
     assert _route_has_permission(
-        admin_reports.router, "/reports/revenue", "GET", "reports:billing"
+        admin_reports.router, "/reports/revenue", "GET", "reports:billing:read"
     )
     assert _route_has_permission(
         admin_reports.router, "/reports/subscribers", "GET", "customer:read"
     )
     assert _route_has_permission(
-        admin_reports.router, "/reports/network", "GET", "reports:network"
+        admin_reports.router, "/reports/network", "GET", "reports:network:read"
     )
     assert _route_has_permission(
         admin_reports.router,

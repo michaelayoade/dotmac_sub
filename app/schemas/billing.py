@@ -2264,6 +2264,8 @@ class BillingAccountStatement(BaseModel):
     recent_payments: list[BillingAccountStatementPayment]
     recent_payments_total: int = 0
     total_outstanding: Decimal
+    open_invoice_count: int = 0
+    paid_invoice_total: Decimal = Decimal("0.00")
     unallocated_balance: Decimal
 
 

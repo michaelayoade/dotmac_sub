@@ -243,6 +243,22 @@ def device_reboot(request: Request, device_id: str, db: Session = Depends(get_db
 
 
 @router.get(
+    "/devices/{device_id}/reboot/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:device:write"))],
+)
+def device_reboot_preview(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+):
+    """Safe impact-preview step before the existing reboot command adapter."""
+    context = _base_context(request, db, active_page="devices")
+    context.update({"device_id": device_id, "affected": 1})
+    return templates.TemplateResponse(
+        "admin/network/devices/reboot_preview.html", context
+    )
+
+
+@router.get(
     "/map",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:map:read"))],

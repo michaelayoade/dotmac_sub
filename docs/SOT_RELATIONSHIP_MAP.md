@@ -22,6 +22,10 @@ The approved cross-Dotmac presentation contract is
    `operations:dispatch` covering list, create, update, and assign is a
    violation — split it into `:read`/`:write`/`:assign`). Event/timeline
    services own official history.
+   During the reports permission migration, persisted `reports:billing` and
+   `reports:network` API-key scopes are compatibility aliases for `:read` only;
+   they never authorize `:export`. Database grants are migrated to the granular
+   keys and the coarse permission rows are retired.
 4. UI page contracts own relevance, ordering, progressive disclosure,
    responsive depth, and interaction shape.
 5. Routes, templates, HTMX handlers, and mobile clients render the contract and
@@ -1379,10 +1383,13 @@ rather than the legacy table-field registry.
    and filters. Search, filter, or page-size changes clear the selection.
 5. `app.services.web_customer_actions` resolves selected IDs or the explicit
    filtered query again at preview and execution. Mutations require the preview
-   count and exact-membership token in the confirmation request and fail with
-   HTTP 409 when the cohort has changed. Commands continue to re-check domain
-   state and return partial
-   outcomes or notification identifiers.
+   count and confirmation token in the confirmation request and fail with HTTP
+   409 when the cohort has changed. Customer activation/deactivation binds that
+   token to each selected account's observed active state and the requested
+   target; customer deletion also binds active/subscription eligibility, so a
+   newly eligible row cannot be deleted under a stale impact preview. Commands
+   continue to re-check domain state and return partial outcomes or notification
+   identifiers.
 6. `ui.invoice_bulk_action_projection` adopts the same interaction contract for
    invoice issue, send, void, mark-paid, PDF-generation, and export actions.
    `app.services.web_billing_invoice_bulk` remains the single eligibility and
@@ -2303,13 +2310,15 @@ Dependency order:
    may read that timeline or consume those events; they do not infer actor/time
    from `updated_at` and do not write project status directly. Vendor routes,
    confirmation handlers, templates, and future delivery integrations are thin
-   adapters around this owner.
-9. `operations.vendor_project_workflow` owns installation-project quote and
-   as-built evidence lifecycles, including the read-only impact snapshot used
-   before submit.
-10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
+   adapters around this owner. The owner raises transport-neutral
+   `VendorProjectLifecycleError` rejections; the confirmation/delivery adapter
+   alone maps them to HTTP responses. The same named owner also owns the
+   installation-project quote and as-built evidence lifecycles, including the
+   read-only impact snapshot used before submit; one implementation module is
+   therefore declared under one owner name.
+9. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
-11. `operations.vendor_action_confirmation` (implemented by
+10. `operations.vendor_submission_confirmation` (implemented by
    `app.services.vendor_submission_proposals`) owns the short-lived signed
    confirmation proposal, stale-preview comparison, idempotency reservation,
    and replay result for lifecycle actions, quote, as-built, and

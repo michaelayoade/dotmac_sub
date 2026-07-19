@@ -2788,14 +2788,24 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="operations.vendor_project_workflow",
+                name="operations.vendor_project_lifecycle",
                 module="app.services.vendor_portal_operations",
                 owns=(
+                    "vendor start/complete installation-project transitions",
+                    "durable vendor lifecycle actor/time/event evidence",
+                    "typed vendor project lifecycle outbox events",
                     "vendor installation-project quote lifecycle",
                     "quote submission eligibility and impact snapshot",
                     "as-built evidence lifecycle and impact snapshot",
                 ),
-                depends_on=("operations.project_lifecycle",),
+                depends_on=("events.dispatcher", "operations.project_lifecycle"),
+                notes=(
+                    "This is the sole writer for approved -> in_progress -> "
+                    "completed vendor work transitions and owns the related quote "
+                    "and as-built workflow in the same implementation module. It "
+                    "raises transport-neutral domain errors; adapters translate "
+                    "them for HTTP delivery."
+                ),
             ),
             SOTService(
                 name="operations.vendor_purchase_invoices",
@@ -2804,7 +2814,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vendor purchase-invoice lifecycle",
                     "purchase-invoice submission eligibility and financial preview",
                 ),
-                depends_on=("operations.vendor_project_workflow",),
+                depends_on=("operations.vendor_project_lifecycle",),
             ),
             SOTService(
                 name="operations.vendor_submission_confirmation",
@@ -2815,7 +2825,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "vendor submission idempotency and replay result",
                 ),
                 depends_on=(
-                    "operations.vendor_project_workflow",
+                    "operations.vendor_project_lifecycle",
                     "operations.vendor_purchase_invoices",
                 ),
                 notes=(

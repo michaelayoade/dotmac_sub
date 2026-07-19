@@ -2,11 +2,12 @@
 
 The vendor project detail used to decide whether the edit/submit forms showed by
 re-deriving ``status in ['draft','revision_requested']`` in Jinja. The serializers
-now expose ``can_edit`` from the same set the mutation paths enforce.
+now expose an Action from the same set the mutation paths enforce.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from app.services.vendor_portal_operations import _serialize_quote
@@ -65,15 +66,33 @@ def _invoice_row(status: str) -> SimpleNamespace:
     )
 
 
-def test_quote_can_edit_only_for_editable_statuses():
-    assert _serialize_quote(_quote_row("draft"))["can_edit"] is True
-    assert _serialize_quote(_quote_row("revision_requested"))["can_edit"] is True
-    assert _serialize_quote(_quote_row("approved"))["can_edit"] is False
-    assert _serialize_quote(_quote_row("submitted"))["can_edit"] is False
+def test_quote_edit_action_only_allows_editable_statuses():
+    assert _serialize_quote(_quote_row("draft"))["edit_action"].allowed is True
+    assert (
+        _serialize_quote(_quote_row("revision_requested"))["edit_action"].allowed
+        is True
+    )
+    blocked = _serialize_quote(_quote_row("approved"))["edit_action"]
+    assert blocked.allowed is False
+    assert blocked.reason
+    assert _serialize_quote(_quote_row("submitted"))["edit_action"].allowed is False
 
 
-def test_invoice_can_edit_only_for_editable_statuses():
-    assert serialize_invoice(_invoice_row("draft"))["can_edit"] is True
-    assert serialize_invoice(_invoice_row("revision_requested"))["can_edit"] is True
-    assert serialize_invoice(_invoice_row("approved"))["can_edit"] is False
-    assert serialize_invoice(_invoice_row("submitted"))["can_edit"] is False
+def test_invoice_edit_action_only_allows_editable_statuses():
+    assert serialize_invoice(_invoice_row("draft"))["edit_action"].allowed is True
+    assert (
+        serialize_invoice(_invoice_row("revision_requested"))["edit_action"].allowed
+        is True
+    )
+    blocked = serialize_invoice(_invoice_row("approved"))["edit_action"]
+    assert blocked.allowed is False
+    assert blocked.reason
+    assert serialize_invoice(_invoice_row("submitted"))["edit_action"].allowed is False
+
+
+def test_vendor_template_uses_the_shared_action_gate():
+    source = (
+        Path(__file__).resolve().parents[1] / "templates/vendor/project_detail.html"
+    ).read_text(encoding="utf-8")
+    assert "action_permitted(request, quote.edit_action)" in source
+    assert "action_permitted(request, invoice.edit_action)" in source

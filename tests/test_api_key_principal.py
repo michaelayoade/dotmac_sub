@@ -39,11 +39,14 @@ def test_require_user_auth_rejects_unknown_key(db_session):
     assert exc.value.status_code == 401
 
 
-def test_require_permission_honors_exact_scope(db_session):
+def test_legacy_reports_scope_remains_read_only_during_granular_migration(db_session):
     _make_key(db_session, scopes=["reports:billing"], raw="pk2")
     auth = require_user_auth(authorization=None, x_api_key="pk2", db=db_session)
-    out = require_permission("reports:billing")(auth=auth, db=db_session)
+    out = require_permission("reports:billing:read")(auth=auth, db=db_session)
     assert out["principal_type"] == "api_key"
+    with pytest.raises(HTTPException) as exc:
+        require_permission("reports:billing:export")(auth=auth, db=db_session)
+    assert exc.value.status_code == 403
 
 
 def test_require_permission_honors_wildcard_scope(db_session):

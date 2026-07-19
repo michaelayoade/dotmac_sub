@@ -132,9 +132,10 @@ class Action:
 
     ``allowed`` and ``reason`` come from the owning transition service, never a
     status string re-derived in the template. ``permission`` is the granular
-    RBAC key the route enforces (the UI hides what the principal cannot do; the
-    route still authorizes). ``requires_confirmation`` is a safety control,
-    separate from semantic ``tone``. Destructive and financial actions bind it
+    RBAC key the route enforces; templates pass the action to
+    ``action_permitted(request, action)`` so unauthorized controls are omitted
+    while the route remains authoritative. ``requires_confirmation`` is a
+    safety control, separate from semantic ``tone``. Destructive and financial actions bind it
     to ``preview_url`` so presentation style can never decide whether
     confirmation is required; ``affected`` is a lightweight impact count.
     """

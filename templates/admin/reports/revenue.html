@@ -20,6 +20,7 @@
         color="teal",
         color2="cyan"
     ) %}
+        {% if can(request, "reports:billing:export") %}
         <form method="GET" action="/admin/reports/revenue/export" class="flex items-center gap-2">
             <label for="days" class="sr-only">Export period</label>
             <select id="days" name="days" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -32,6 +33,7 @@
                 Export
             </button>
         </form>
+        {% endif %}
     {% endcall %}
 
     {# KPI Cards #}

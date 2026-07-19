@@ -66,6 +66,7 @@ def _app_datetime_filter(
 
 def _attach_globals(templates: Jinja2Templates) -> None:
     from app.config import settings
+    from app.services.auth_dependencies import action_permitted, can
     from app.services.display_format import currency_symbol
     from app.services.status_presentation import (
         account_status_presentation,
@@ -87,6 +88,13 @@ def _attach_globals(templates: Jinja2Templates) -> None:
         work_order_status_presentation,
     )
     from app.web.customer.branding import _format_portal_datetime
+
+    # UI action gating: templates hide actions the principal cannot perform.
+    # Reads the permission set require_permission cached on the request (no DB);
+    # the route still authorizes. Usage: {% if can(request, "reports:billing:export") %}
+    # or, for an Action contract: {% if action_permitted(request, action) %}
+    templates.env.globals.setdefault("can", can)
+    templates.env.globals.setdefault("action_permitted", action_permitted)
 
     templates.env.globals.setdefault(
         "infra_service_status_presentation",

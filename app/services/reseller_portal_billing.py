@@ -72,6 +72,9 @@ def get_billing_account_summary(
         "subscribers": subscriber_rows,
         "recent_payments": [p.model_dump() for p in statement.recent_payments],
         "total_outstanding": statement.total_outstanding,
+        "open_invoice_count": statement.open_invoice_count,
+        "paid_invoice_total": statement.paid_invoice_total,
+        "subscribers_total": statement.subscribers_total,
         "unallocated_balance": statement.unallocated_balance,
         "subscriber_search": (subscriber_search or "").strip(),
         # Admin bank account(s) for the bank-transfer pay option (mobile shows

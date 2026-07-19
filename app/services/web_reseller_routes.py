@@ -186,6 +186,14 @@ def reseller_dashboard(
             "Could not fetch CRM open tickets for reseller dashboard", exc_info=True
         )
 
+    # Open-ticket count has no reseller-scoped cohort list, so it renders as a
+    # bare StateValue: an unreachable CRM shows "Unavailable", never a false 0.
+    open_tickets_state = (
+        reseller_portal.StateValue.present(open_tickets)
+        if open_tickets is not None
+        else reseller_portal.StateValue.unavailable()
+    )
+
     return templates.TemplateResponse(
         "reseller/dashboard/index.html",
         {
@@ -194,8 +202,10 @@ def reseller_dashboard(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "summary": summary,
+            "kpis": reseller_portal.dashboard_kpis(summary),
             "customer_statuses": customer_statuses,
             "open_tickets": open_tickets,
+            "open_tickets_state": open_tickets_state,
             "page": page,
             "per_page": per_page,
         },
@@ -351,6 +361,11 @@ def reseller_account_detail(
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "account": detail,
+            # Eligibility/reason owned by the backend; the raw preview dict on
+            # `account.status_actions` still supplies each POST's fingerprint.
+            "status_action_contracts": reseller_portal.account_status_action_contracts(
+                detail["status_actions"]
+            ),
             "status_success": request.query_params.get("status_success"),
             "status_error": request.query_params.get("status_error"),
         },
@@ -621,6 +636,7 @@ def reseller_revenue_report(request: Request, db: Session):
             "current_user": context["current_user"],
             "reseller": context["reseller"],
             "summary": summary,
+            "kpis": reseller_portal.revenue_kpis(summary),
         },
     )
 

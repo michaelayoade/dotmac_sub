@@ -61,7 +61,7 @@ def dashboard_activity_partial(request: Request, db: Session = Depends(get_db)):
                 "network:olt:read",
                 "network:ont:read",
                 "monitoring:read",
-                "reports:network",
+                "reports:network:read",
             )
         )
     ],

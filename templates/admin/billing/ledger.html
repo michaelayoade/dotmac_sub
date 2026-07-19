@@ -110,17 +110,20 @@
 
     {# ── Summary Stats ── #}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {{ stats_card("Total Credits", ledger_totals.credit_display,
+        {{ stats_card(ledger_kpis.credits.label, ledger_kpis.credits.value.value,
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>',
-            color="emerald", color2="green"
+            color="emerald", color2="green",
+            href=ledger_kpis.credits.cohort_url, tone=ledger_kpis.credits.tone
         ) }}
-        {{ stats_card("Total Debits", ledger_totals.debit_display,
+        {{ stats_card(ledger_kpis.debits.label, ledger_kpis.debits.value.value,
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>',
-            color="amber", color2="orange"
+            color="amber", color2="orange",
+            href=ledger_kpis.debits.cohort_url, tone=ledger_kpis.debits.tone
         ) }}
-        {{ stats_card("Net Balance", ledger_totals.net_display,
+        {{ stats_card(ledger_kpis.net.label, ledger_kpis.net.value.value,
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>',
-            color="violet", color2="purple"
+            color="violet", color2="purple",
+            href=ledger_kpis.net.cohort_url, tone=ledger_kpis.net.tone
         ) }}
     </div>
 

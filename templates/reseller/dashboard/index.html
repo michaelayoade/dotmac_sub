@@ -48,7 +48,7 @@
     <div class="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4 xl:gap-6">
         <!-- Accounts Card -->
         <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg hover:-translate-y-1 dark:border-slate-700/60 dark:bg-slate-800/80">
-            <a href="/reseller/accounts" class="absolute inset-0 z-10" aria-label="View all accounts"></a>
+            <a href="{{ kpis.accounts.cohort_url }}" class="absolute inset-0 z-10" aria-label="View all accounts"></a>
             <div class="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
             <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-indigo-400/10 to-violet-400/10 blur-2xl transition-all duration-500 group-hover:scale-150"></div>
             <div class="relative">
@@ -57,8 +57,8 @@
                         <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                     </div>
                     <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Accounts</p>
-                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ summary.totals.accounts }}</p>
+                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ kpis.accounts.label }}</p>
+                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ kpis.accounts.value.value }}</p>
                     </div>
                 </div>
             </div>
@@ -66,7 +66,7 @@
 
         <!-- Open Balance Card -->
         <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg hover:-translate-y-1 dark:border-slate-700/60 dark:bg-slate-800/80">
-            <a href="/reseller/billing" class="absolute inset-0 z-10" aria-label="View billing and balances"></a>
+            <a href="{{ kpis.open_balance.cohort_url }}" class="absolute inset-0 z-10" aria-label="View billing and balances"></a>
             <div class="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
             <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-amber-400/10 to-orange-400/10 blur-2xl transition-all duration-500 group-hover:scale-150"></div>
             <div class="relative">
@@ -75,8 +75,8 @@
                         <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </div>
                     <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Open Balance</p>
-                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ summary.totals.open_balance }}</p>
+                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ kpis.open_balance.label }}</p>
+                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ kpis.open_balance.value.value }}</p>
                     </div>
                 </div>
             </div>
@@ -84,7 +84,7 @@
 
         <!-- Open Invoices Card -->
         <div class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg hover:-translate-y-1 dark:border-slate-700/60 dark:bg-slate-800/80">
-            <a href="/reseller/billing" class="absolute inset-0 z-10" aria-label="View open invoices"></a>
+            <a href="{{ kpis.open_invoices.cohort_url }}" class="absolute inset-0 z-10" aria-label="View open invoices"></a>
             <div class="absolute inset-0 bg-gradient-to-br from-violet-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
             <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-violet-400/10 to-purple-400/10 blur-2xl transition-all duration-500 group-hover:scale-150"></div>
             <div class="relative">
@@ -93,8 +93,8 @@
                         <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                     </div>
                     <div>
-                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Open Invoices</p>
-                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ summary.totals.open_invoices }}</p>
+                        <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ kpis.open_invoices.label }}</p>
+                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ kpis.open_invoices.value.value }}</p>
                     </div>
                 </div>
             </div>
@@ -111,10 +111,10 @@
                     </div>
                     <div>
                         <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Open Tickets</p>
-                        {% if open_tickets is none %}
-                        <p class="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-300">Unavailable</p>
+                        {% if open_tickets_state.is_present %}
+                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ open_tickets_state.value.value }}</p>
                         {% else %}
-                        <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white" style="font-family: var(--font-display);">{{ open_tickets }}</p>
+                        <p class="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-300">{{ open_tickets_state.placeholder }}</p>
                         {% endif %}
                     </div>
                 </div>

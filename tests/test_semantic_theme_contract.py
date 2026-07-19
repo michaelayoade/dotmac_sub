@@ -92,8 +92,8 @@ def test_migrated_web_slices_do_not_keep_local_semantic_color_maps() -> None:
         assert literal not in noc_kpis
     assert '"tones": ["positive", "warning", "negative"' in monitoring_service
     assert '"colors": ["#10b981"' not in monitoring_service
-    assert 'tone="positive"' in device_list
-    assert 'tone="negative"' in device_list
+    assert "tone=device_kpis.up.tone" in device_list
+    assert "tone=device_kpis.down.tone" in device_list
     assert 'tone="warning"' in payments
     assert "--color-semantic-positive-600" in payments
     assert "card_conn_state" not in customer_detail
