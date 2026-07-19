@@ -83,6 +83,7 @@ from app.services.payment_arrangements import (
     active_arrangement_shield_reason,
     bulk_active_arrangement_shield_reasons,
 )
+from app.services.prepaid_enforcement_state import clear_prepaid_enforcement_timers
 from app.services.response import ListResponseMixin
 from app.services.walled_garden_policy import resolve_walled_garden_decision
 
@@ -2745,16 +2746,7 @@ def _clear_prepaid_dunning_flags(db: Session, account_id: str) -> None:
     just-paid customer from being deactivated on a pending timer. The sweep
     re-sets them if the account is still below its minimum balance.
     """
-    account = db.get(Subscriber, coerce_uuid(account_id))
-    if account is not None and (
-        account.prepaid_low_balance_at is not None
-        or account.prepaid_deactivation_at is not None
-    ):
-        account.prepaid_low_balance_at = None
-        account.prepaid_deactivation_at = None
-        # Sessions use autoflush=False; make the cleared timers visible to any
-        # later query in the caller's transaction before returning.
-        db.flush()
+    clear_prepaid_enforcement_timers(db, account_id)
 
 
 def _restore_prepaid_if_funded(
