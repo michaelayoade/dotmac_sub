@@ -192,7 +192,7 @@
                         </p>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ sub.created_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}</p>
                     </div>
-                    {{ status_badge(sub.status.value|title if sub.status else 'Active', 'active', size="sm") }}
+                    {{ status_badge(sub.derived_status.value|title if sub.derived_status else 'Active', 'active', size="sm") }}
                 </div>
                 {% endfor %}
             </div>

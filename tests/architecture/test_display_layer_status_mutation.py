@@ -1,0 +1,49 @@
+"""Report/display modules never assign to a persistent ``status`` attribute.
+
+Finding 1b of the platform adoption ledger: ``web_reports`` and
+``subscriber_growth`` used to write a *derived* display status back onto live
+ORM ``Subscriber`` rows (``sub.status = _derive_subscriber_status(sub)``).
+The request path never commits, but mutating persistent objects for
+presentation is an autoflush hazard — any later query in the same session can
+flush the derived default into the database as real account state — and it
+makes the report layer a parallel projection of account status.
+
+The fix carries derived values on non-column attributes (``derived_status``)
+or local mappings; this test pins that convention for the report/display
+modules. AST-based: any ``Assign``/``AugAssign`` whose target is an attribute
+named exactly ``status`` fails, regardless of the value expression. Extend
+``REPORT_MODULES`` when a new report/analytics service module is added.
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+REPORT_MODULES = (
+    "app/services/web_reports.py",
+    "app/services/subscriber_growth.py",
+)
+
+
+def test_report_modules_never_assign_status() -> None:
+    offenders: list[str] = []
+    for rel in REPORT_MODULES:
+        tree = ast.parse((PROJECT_ROOT / rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AugAssign):
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Attribute) and target.attr == "status":
+                    offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, (
+        "Report/display modules must not mutate a persistent .status attribute "
+        "— derive into a local variable or a non-column view attribute "
+        "(e.g. .derived_status): " + ", ".join(sorted(offenders))
+    )

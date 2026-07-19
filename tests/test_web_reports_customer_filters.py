@@ -19,35 +19,6 @@ def _subscriber(email: str, status: SubscriberStatus, created_at: datetime):
     )
 
 
-def test_customer_report_filter_uses_created_range_and_current_status():
-    customers = [
-        _subscriber(
-            "active@example.test",
-            SubscriberStatus.active,
-            datetime(2026, 1, 20, tzinfo=UTC),
-        ),
-        _subscriber(
-            "blocked@example.test",
-            SubscriberStatus.blocked,
-            datetime(2026, 2, 10, tzinfo=UTC),
-        ),
-        _subscriber(
-            "old@example.test",
-            SubscriberStatus.active,
-            datetime(2025, 12, 31, tzinfo=UTC),
-        ),
-    ]
-
-    filtered = web_reports._filter_subscribers_for_report(
-        customers,
-        date_from="2026-01-01",
-        date_to="2026-03-31",
-        status="active",
-    )
-
-    assert [customer.email for customer in filtered] == ["active@example.test"]
-
-
 def test_customer_report_is_visible_from_reports_hub():
     route_source = Path("app/web/admin/reports.py").read_text(encoding="utf-8")
     page_template = Path("templates/admin/reports/subscribers.html").read_text(
