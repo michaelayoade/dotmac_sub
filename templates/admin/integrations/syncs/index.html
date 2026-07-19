@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/macros.html" import status_badge, stats_card %}
 
 {% block title %}Syncs - Integrations{% endblock %}
 
@@ -17,22 +17,10 @@
     </div>
 
     <div class="grid gap-4 sm:grid-cols-4">
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Profiles</p>
-            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Active</p>
-            <p class="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{{ stats.active }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Pull</p>
-            <p class="mt-1 text-2xl font-bold text-blue-600 dark:text-blue-400">{{ stats.pull }}</p>
-        </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Push</p>
-            <p class="mt-1 text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.push }}</p>
-        </div>
+        {{ stats_card(sync_kpis.total.label, sync_kpis.total.value.value, color="slate", href=sync_kpis.total.cohort_url, tone=sync_kpis.total.tone) }}
+        {{ stats_card(sync_kpis.active.label, sync_kpis.active.value.value, color="emerald", color2="green", href=sync_kpis.active.cohort_url, tone=sync_kpis.active.tone) }}
+        {{ stats_card(sync_kpis.pull.label, sync_kpis.pull.value.value, color="blue", href=sync_kpis.pull.cohort_url, tone=sync_kpis.pull.tone) }}
+        {{ stats_card(sync_kpis.push.label, sync_kpis.push.value.value, color="amber", color2="orange", href=sync_kpis.push.cohort_url, tone=sync_kpis.push.tone) }}
     </div>
 
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -52,10 +40,11 @@
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                    {% for job in sync_jobs %}
-                    {% set runs = runs_by_job.get(job.id|string, []) %}
-                    {% set last_run = runs[0] if runs else None %}
-                    {% set status_val = last_run.status.value if last_run and last_run.status else 'never' %}
+                    {% for row in sync_rows %}
+                    {% set job = row.job %}
+                    {% set last_run = row.last_run %}
+                    {% set status_val = row.status_val %}
+                    {% set run_action = row.run_action %}
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                         <td class="px-6 py-4">
                             <a href="/admin/integrations/syncs/{{ job.id }}" class="text-sm font-semibold text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ job.name }}</a>
@@ -69,7 +58,13 @@
                             {{ (job.trigger_mode or 'manual') | title }}
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ last_run.started_at | app_datetime('%b %d %H:%M') if last_run else 'Never' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                            {% if last_run.is_present %}
+                            {{ last_run.value | app_datetime('%b %d %H:%M') }}{% if last_run.is_stale %} <span class="text-xs text-amber-600 dark:text-amber-400">(stale)</span>{% endif %}
+                            {% else %}
+                            Never
+                            {% endif %}
+                        </td>
                         <td class="px-6 py-4">
                             {% if status_val == 'success' %}
                             {{ status_badge("Success", "active", size="sm") }}
@@ -84,10 +79,14 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 text-right">
+                            {% if run_action.allowed %}
                             <form method="post" action="/admin/integrations/syncs/{{ job.id }}/run" class="inline" onsubmit="return confirm('Run this sync profile now?');">
                                 {% include "components/forms/csrf_input.html" %}
-                                <button type="submit" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Run</button>
+                                <button type="submit" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ run_action.label }}</button>
                             </form>
+                            {% else %}
+                            <span class="text-sm text-slate-400" title="{{ run_action.reason }}">{{ run_action.label }}</span>
+                            {% endif %}
                         </td>
                     </tr>
                     {% else %}
