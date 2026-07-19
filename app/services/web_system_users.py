@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -15,6 +16,7 @@ from app.models.auth import MFAMethod, UserCredential
 from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
+from app.schemas.status_presentation import StatusTone
 from app.services.dynamic_filters import (
     DEFAULT_OPERATORS_BY_TYPE,
     NULL_TOKENS,
@@ -30,6 +32,7 @@ from app.services.dynamic_filters import (
     build_sort_clause,
     parse_filter_payload,
 )
+from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -469,6 +472,15 @@ def user_type_label(value: UserType | str | None) -> str:
     return USER_TYPE_LABELS.get(key, "System User")
 
 
+def _admin_role_id(db: Session) -> UUID | None:
+    return db.scalar(
+        select(Role.id)
+        .where(func.lower(Role.name) == "admin")
+        .where(Role.is_active.is_(True))
+        .limit(1)
+    )
+
+
 def get_user_stats(db: Session) -> dict[str, int]:
     total = (db.scalar(select(func.count()).select_from(SystemUser)) or 0) + (
         db.scalar(
@@ -495,12 +507,7 @@ def get_user_stats(db: Session) -> dict[str, int]:
         or 0
     )
 
-    admin_role_id = db.scalar(
-        select(Role.id)
-        .where(func.lower(Role.name) == "admin")
-        .where(Role.is_active.is_(True))
-        .limit(1)
-    )
+    admin_role_id = _admin_role_id(db)
     admins = 0
     if admin_role_id:
         admins = (
@@ -530,6 +537,55 @@ def get_user_stats(db: Session) -> dict[str, int]:
     )
 
     return {"total": total, "active": active, "admins": admins, "pending": pending}
+
+
+def _users_cohort_url(*, status: str | None = None, role_id: UUID | None = None) -> str:
+    """Drill-down to the user list filtered to exactly the cohort a KPI counts.
+
+    The list route accepts ``status`` (active/inactive/pending) and ``role`` as
+    real filters, so a headline total and the rows it summarises never diverge
+    (KPI-parity rule).
+    """
+    params = {"status": status, "role": str(role_id) if role_id else None}
+    query = urlencode({key: value for key, value in params.items() if value})
+    return "/admin/system/users" + (f"?{query}" if query else "")
+
+
+def build_user_kpis(db: Session) -> dict[str, Kpi]:
+    """Headline user tiles as KPI contracts drilling into their exact cohort.
+
+    Counts stay owned by :func:`get_user_stats` (also read by the system
+    overview); this is a thin presentation projection over them. The admins
+    cohort links to the admin role filter only when an admin role exists — its
+    count is zero otherwise, so the base list is the honest fallback.
+    """
+    counts = get_user_stats(db)
+    admin_role_id = _admin_role_id(db)
+    return {
+        "total": Kpi(
+            label="Total Users",
+            value=StateValue.present(counts["total"]),
+            cohort_url=_users_cohort_url(),
+        ),
+        "active": Kpi(
+            label="Active",
+            value=StateValue.present(counts["active"]),
+            cohort_url=_users_cohort_url(status="active"),
+            tone=StatusTone.positive,
+        ),
+        "admins": Kpi(
+            label="Admins",
+            value=StateValue.present(counts["admins"]),
+            cohort_url=_users_cohort_url(role_id=admin_role_id),
+            tone=StatusTone.info,
+        ),
+        "pending": Kpi(
+            label="Pending Invites",
+            value=StateValue.present(counts["pending"]),
+            cohort_url=_users_cohort_url(status="pending"),
+            tone=StatusTone.warning,
+        ),
+    }
 
 
 def _legacy_filters(
@@ -881,6 +937,7 @@ def build_users_page_state(
         "order_by": order_by or "last_name",
         "order_dir": order_dir or "asc",
         "stats": get_user_stats(db),
+        "user_kpis": build_user_kpis(db),
         "roles": list_active_roles(db),
         "user_type_options": USER_TYPE_OPTIONS,
         "filter_schema": _serialize_filter_schema(db),
