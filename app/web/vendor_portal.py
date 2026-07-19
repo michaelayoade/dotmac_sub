@@ -23,6 +23,7 @@ from app.services.common import coerce_uuid
 from app.services.field.vendor_auth import vendor_context
 from app.services.vendor_portal_operations import vendor_portal_operations
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
+from app.services.vendor_routes_api import build_project_route_geojson
 from app.web.auth.dependencies import require_web_auth
 
 templates = Jinja2Templates(directory="templates")
@@ -106,6 +107,11 @@ def vendor_project_detail(
     invoice = vendor_purchase_invoices.for_project(
         db, str(project["id"]), vendor_id=vendor_id
     )
+    # Proposed (+ any prior as-built) route geometry, so the as-built map shows
+    # the planned route as tracing context. Rendered server-side rather than a
+    # client fetch — the vendor portal authenticates by ownership, not the
+    # admin route API.
+    route_geojson = build_project_route_geojson(db, str(project["id"]))
     return templates.TemplateResponse(
         "vendor/project_detail.html",
         {
@@ -114,6 +120,7 @@ def vendor_project_detail(
             "project": project,
             "quote": quote,
             "invoice": invoice,
+            "route_geojson": route_geojson,
             "message": message,
         },
     )
