@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -23,9 +24,11 @@ from app.models.billing import (
     LedgerSource,
 )
 from app.models.subscriber import Reseller, Subscriber
+from app.schemas.status_presentation import StatusTone
 from app.services import display_format
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
+from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +125,33 @@ def _invoice_as_ledger_row(invoice: Invoice) -> SimpleNamespace:
 
 def _display_date(entry) -> datetime:  # type: ignore[no-untyped-def]
     return getattr(entry, "effective_date", None) or entry.created_at
+
+
+def _ledger_cohort_url(
+    *,
+    entry_type: str | None,
+    customer_ref: str | None,
+    start_date: str | None,
+    end_date: str | None,
+    category: str | None,
+    partner_id: str | None,
+) -> str:
+    """Drill-down to the ledger filtered to exactly the cohort a KPI counts.
+
+    The owner supplies this so a summary tile and the rows it summarises can
+    never diverge (KPI-parity rule): the active filters travel with the link
+    and only ``entry_type`` narrows it to credits or debits.
+    """
+    params = {
+        "entry_type": entry_type,
+        "customer_ref": customer_ref,
+        "start_date": start_date,
+        "end_date": end_date,
+        "category": category,
+        "partner_id": partner_id,
+    }
+    query = urlencode({key: value for key, value in params.items() if value})
+    return "/admin/billing/ledger" + (f"?{query}" if query else "")
 
 
 def build_ledger_entries_data(
@@ -292,9 +322,55 @@ def build_ledger_entries_data(
         ),
     }
 
+    # Headline tiles as KPI contracts: each drills into the exact filtered
+    # cohort it counts. "Credits"/"Debits" narrow by entry_type; "Net" keeps the
+    # active filter set (it is the balance across both sides, not one type).
+    ledger_kpis = {
+        "credits": Kpi(
+            label="Total Credits",
+            value=StateValue.present(ledger_totals["credit_display"]),
+            cohort_url=_ledger_cohort_url(
+                entry_type=LedgerEntryType.credit.value,
+                customer_ref=customer_ref,
+                start_date=start_date,
+                end_date=end_date,
+                category=category,
+                partner_id=partner_id,
+            ),
+            tone=StatusTone.positive,
+        ),
+        "debits": Kpi(
+            label="Total Debits",
+            value=StateValue.present(ledger_totals["debit_display"]),
+            cohort_url=_ledger_cohort_url(
+                entry_type=LedgerEntryType.debit.value,
+                customer_ref=customer_ref,
+                start_date=start_date,
+                end_date=end_date,
+                category=category,
+                partner_id=partner_id,
+            ),
+            tone=StatusTone.warning,
+        ),
+        "net": Kpi(
+            label="Net Balance",
+            value=StateValue.present(ledger_totals["net_display"]),
+            cohort_url=_ledger_cohort_url(
+                entry_type=None,
+                customer_ref=customer_ref,
+                start_date=start_date,
+                end_date=end_date,
+                category=category,
+                partner_id=partner_id,
+            ),
+            tone=StatusTone.info,
+        ),
+    }
+
     return {
         "entries": entries,
         "ledger_totals": ledger_totals,
+        "ledger_kpis": ledger_kpis,
         "entry_type": entry_type,
         "customer_ref": customer_ref,
         "start_date": date_range.start_date.isoformat()
