@@ -108,8 +108,15 @@ gate for. Verified at 7807afcd:
    attribute.
 2. **Audit has two writer entry points** (`AuditEvents.create/.record` and
    `record_audit_event`) — consolidate on the adapter.
-3. **Scoped-permission guard duplicated** (`auth_dependencies.require_scoped_permission`
-   vs `field/vendor_auth.require_scoped_permission`).
+3. **Scoped-permission guard duplication — RESOLVED.** The vendor variant was a
+   misnamed alias for `require_native_vendor_context` (membership check, zero
+   permission evaluation) whose name satisfied the route-guard architecture
+   test. The alias is deleted; the vendor-portal router depends on
+   `require_native_vendor_context` explicitly; `/api/v1/vendor` is allowlisted
+   as a self-scoped surface; route-level behavior pins added
+   (`tests/test_vendor_portal_auth.py`). Granting the vendor surface a real
+   RBAC claim (e.g. `vendor:portal:access`) would be a behavior change and
+   remains an explicit product decision.
 4. **Commit ownership is mixed** across services, `task_session`, `UnitOfWork`, and
    `auth_dependencies` — no single transaction owner yet.
 5. **FUP decisions extracted — DONE.** The enforcement sweep (enforce/warn/reset

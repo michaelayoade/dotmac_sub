@@ -65,10 +65,3 @@ def require_native_vendor_context(
             detail="Vendor account is not linked to the native vendor domain",
         )
     return vendor
-
-
-def require_scoped_permission(
-    vendor: dict = Depends(require_native_vendor_context),
-) -> dict:
-    """Authorize a caller against the vendor account linked to their user."""
-    return vendor
