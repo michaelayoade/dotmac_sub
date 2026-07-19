@@ -173,14 +173,16 @@ def _work_order_kpis(counts: dict[str, int]) -> dict[str, Kpi]:
     }
 
 
-def _queue_action(work_order: WorkOrder) -> Action:
+def _queue_action(work_order: WorkOrder, *, can_assign: bool = True) -> Action:
     """Assignment eligibility owned by the work-order transition command.
 
     Mirrors ``work_order_commands.preview_assignment``: a soft-deleted or
     terminal work order cannot be assigned. Eligibility is derived here, never
     re-read from the status string in the template.
     """
-    if not work_order.is_active:
+    if not can_assign:
+        allowed, reason = False, "You do not have permission to assign work orders"
+    elif not work_order.is_active:
         allowed, reason = False, "Work order is inactive"
     elif work_order.status in WORK_ORDER_TERMINAL_VALUES:
         allowed = False
@@ -191,6 +193,7 @@ def _queue_action(work_order: WorkOrder) -> Action:
         key="queue",
         label="Queue",
         allowed=allowed,
+        visible=can_assign,
         reason=reason,
         permission="operations:dispatch:assign",
         tone=StatusTone.info,
@@ -281,6 +284,7 @@ def list_page(
     active: bool | None = None,
     page: int = 1,
     per_page: int = 25,
+    can_assign: bool = True,
 ) -> dict[str, Any]:
     list_query = build_work_order_list_query(
         search=q, status=status, page=page, per_page=per_page
@@ -306,7 +310,7 @@ def list_page(
             "subscriber": subscriber,
             "subscriber_label": _subscriber_label(subscriber),
             "queue_status": queue_status.get(str(row.id)),
-            "actions": {"queue": _queue_action(row)},
+            "actions": {"queue": _queue_action(row, can_assign=can_assign)},
         }
         for row, subscriber in rows
     ]

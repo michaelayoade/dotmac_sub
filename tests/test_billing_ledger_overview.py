@@ -100,6 +100,36 @@ def test_build_ledger_entries_data_groups_totals_by_currency(db_session, subscri
     assert state["ledger_totals"]["net_display"] == "NGN 90.00, USD 20.00"
 
 
+def test_ledger_totals_cover_full_filtered_cohort_not_display_limit(
+    db_session, subscriber
+):
+    for _ in range(205):
+        db_session.add(
+            LedgerEntry(
+                account_id=subscriber.id,
+                entry_type=LedgerEntryType.credit,
+                source=LedgerSource.payment,
+                amount=Decimal("10.00"),
+                currency="NGN",
+                memo="high-cardinality cohort",
+            )
+        )
+    db_session.commit()
+
+    state = build_ledger_entries_data(
+        db_session,
+        customer_ref=str(subscriber.id),
+        entry_type=None,
+        limit=200,
+    )
+
+    assert len(state["entries"]) == 200
+    assert state["ledger_totals"]["credit_count"] == 205
+    assert state["ledger_totals"]["credit_amounts"] == {
+        "NGN": Decimal("2050.00")
+    }
+
+
 def test_build_ledger_entries_data_applies_custom_date_range(db_session, subscriber):
     old_entry = _create_ledger_entry(
         db_session,

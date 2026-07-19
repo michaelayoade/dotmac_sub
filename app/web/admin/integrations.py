@@ -15,7 +15,7 @@ from app.services import web_integration_syncs as web_integration_syncs_service
 from app.services import web_integrations as web_integrations_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
 
 router = APIRouter(prefix="/integrations", tags=["web-admin-integrations"])
 templates = Jinja2Templates(directory="templates")
@@ -78,10 +78,12 @@ def syncs_list(
     db: Session = Depends(get_db),
 ):
     """Generic sync profiles across external systems."""
+    auth = getattr(request.state, "auth", None) or {}
     state = web_integration_syncs_service.build_syncs_index_data(
         db,
         direction=direction,
         active=active in ("1", "true", "on", "yes"),
+        can_run=bool(auth) and has_permission(auth, db, "system:settings:write"),
     )
     context = _base_context(request, db, active_page="syncs")
     context.update(

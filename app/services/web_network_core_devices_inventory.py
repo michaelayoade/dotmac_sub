@@ -568,7 +568,7 @@ def _device_stat_kpis(
     return kpis
 
 
-def _device_row_actions(device: dict) -> dict[str, Action]:
+def _device_row_actions(device: dict, *, can_write: bool = True) -> dict[str, Action]:
     """Per-row management actions with eligibility owned here, not the template.
 
     Ping/reboot eligibility is a data-availability fact (a reachable management
@@ -578,7 +578,9 @@ def _device_row_actions(device: dict) -> dict[str, Action]:
     has_ip = bool(str(device.get("ip_address") or "").strip())
     device_type = str(device.get("type") or "").strip().lower()
     rebootable = device_type in _REBOOTABLE_DEVICE_TYPES
-    can_reboot = rebootable and has_ip
+    can_ping = has_ip and can_write
+    can_reboot = rebootable and has_ip and can_write
+    device_id = str(device.get("id") or "").strip()
     return {
         "view": Action(
             key="view",
@@ -589,30 +591,53 @@ def _device_row_actions(device: dict) -> dict[str, Action]:
         "ping": Action(
             key="ping",
             label="Ping Device",
-            allowed=has_ip,
-            reason=None if has_ip else "No management IP on record",
-            permission="network:device:read",
+            allowed=can_ping,
+            visible=can_write,
+            reason=(
+                None
+                if can_ping
+                else "You do not have permission to operate network devices"
+                if not can_write
+                else "No management IP on record"
+            ),
+            permission="network:device:write",
             tone=StatusTone.positive,
         ),
         "reboot": Action(
             key="reboot",
             label="Reboot Device",
             allowed=can_reboot,
+            visible=can_write,
             reason=None
             if can_reboot
             else (
-                "No management IP on record"
+                "You do not have permission to operate network devices"
+                if not can_write
+                else "No management IP on record"
                 if rebootable
                 else "Reboot is not available for this device type"
             ),
-            permission="network:device:manage",
+            permission="network:device:write",
+            preview_url=(
+                f"/admin/network/devices/{device_id}/reboot/preview"
+                if can_reboot and device_id
+                else None
+            ),
+            affected=1 if can_reboot else 0,
             tone=StatusTone.warning,
+            requires_confirmation=can_reboot and bool(device_id),
         ),
         "delete": Action(
             key="delete",
             label="Remove Device",
-            allowed=True,
-            permission="network:device:delete",
+            allowed=False,
+            visible=can_write,
+            reason=(
+                "Removal is not supported from this inventory"
+                if can_write
+                else "You do not have permission to operate network devices"
+            ),
+            permission="network:device:write",
             tone=StatusTone.negative,
         ),
     }
@@ -632,7 +657,9 @@ def _query_page(db: Session, list_query: ListQuery) -> tuple[list[dict], int]:
     )
 
 
-def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, object]:
+def devices_list_page_data(
+    db: Session, list_query: ListQuery, *, can_write: bool = True
+) -> dict[str, object]:
     """Return full payload for the devices index page.
 
     Reads the materialised device_projections table (SQL search/filter/sort/
@@ -642,7 +669,7 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
     """
     devices, total = _query_page(db, list_query)
     for device in devices:
-        device["actions"] = _device_row_actions(device)
+        device["actions"] = _device_row_actions(device, can_write=can_write)
     stats = device_projection_views.device_projection_stats(
         db,
         device_type=list_query.filter_value("type"),
@@ -692,19 +719,23 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
     }
 
 
-def devices_search_data(db: Session, list_query: ListQuery) -> list[dict]:
+def devices_search_data(
+    db: Session, list_query: ListQuery, *, can_write: bool = True
+) -> list[dict]:
     """Return one page of matching devices for the HTMX search/filter partial."""
     devices, _total = _query_page(db, list_query)
     for device in devices:
-        device["actions"] = _device_row_actions(device)
+        device["actions"] = _device_row_actions(device, can_write=can_write)
     return devices
 
 
-def devices_filter_data(db: Session, list_query: ListQuery) -> list[dict]:
+def devices_filter_data(
+    db: Session, list_query: ListQuery, *, can_write: bool = True
+) -> list[dict]:
     """Return one page of filtered devices for the HTMX filter partial."""
     devices, _total = _query_page(db, list_query)
     for device in devices:
-        device["actions"] = _device_row_actions(device)
+        device["actions"] = _device_row_actions(device, can_write=can_write)
     return devices
 
 

@@ -40,6 +40,29 @@ _EDITABLE_QUOTES = {
 }
 
 
+class VendorProjectLifecycleError(ValueError):
+    """Transport-neutral rejection from the vendor project lifecycle owner."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _lifecycle_project(
+    db: Session, project_id: str, *, for_update: bool = False
+) -> InstallationProject:
+    query = db.query(InstallationProject).filter(
+        InstallationProject.id == coerce_uuid(project_id)
+    )
+    if for_update:
+        query = query.with_for_update(of=InstallationProject)
+    row = query.one_or_none()
+    if row is None or not row.is_active:
+        raise VendorProjectLifecycleError("not_found", "Installation project not found")
+    return row
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -148,14 +171,22 @@ def _serialize_project(
 
 
 def _serialize_quote(row: ProjectQuote) -> dict:
+    editable = row.status in _EDITABLE_QUOTES
     return {
         "id": row.id,
         "project_id": row.project_id,
         "vendor_id": row.vendor_id,
         "status": row.status,
-        # Editability is owned here (the same set the mutation paths enforce),
-        # not re-derived from a status string in the template.
-        "can_edit": row.status in _EDITABLE_QUOTES,
+        # Editability is projected from the same set the mutation paths enforce;
+        # the template consumes allowed/reason and never re-derives status rules.
+        "edit_action": Action(
+            key="edit",
+            label="Edit quote",
+            allowed=editable,
+            reason=None
+            if editable
+            else f"A {row.status.replace('_', ' ')} quote cannot be edited",
+        ),
         "currency": row.currency,
         "subtotal": row.subtotal,
         "vat_rate_percent": row.vat_rate_percent,
@@ -549,10 +580,10 @@ class VendorPortalOperations:
     ) -> dict:
         """Return the owner-validated impact and stale-check state."""
 
-        project = _project(db, project_id, for_update=for_update)
+        project = _lifecycle_project(db, project_id, for_update=for_update)
         if project.assigned_vendor_id != coerce_uuid(vendor_id):
-            raise HTTPException(
-                status_code=403, detail="Project is not assigned to this vendor"
+            raise VendorProjectLifecycleError(
+                "not_assigned", "Project is not assigned to this vendor"
             )
         transitions = {
             "start": (
@@ -569,14 +600,15 @@ class VendorPortalOperations:
             ),
         }
         if action not in transitions:
-            raise HTTPException(status_code=400, detail="Unsupported lifecycle action")
+            raise VendorProjectLifecycleError(
+                "unsupported_action", "Unsupported lifecycle action"
+            )
         expected, target, title, summary = transitions[action]
         if project.status != expected:
             label = "approved" if action == "start" else "in-progress"
             verb = "started" if action == "start" else "completed"
-            raise HTTPException(
-                status_code=409,
-                detail=f"Only an {label} project can be {verb}",
+            raise VendorProjectLifecycleError(
+                "invalid_transition", f"Only an {label} project can be {verb}"
             )
         native_project = project.project
         return {
@@ -614,8 +646,8 @@ class VendorPortalOperations:
         """Own one locked transition plus actor/time/event evidence."""
 
         if not str(actor_id or "").strip() or not str(actor_type or "").strip():
-            raise HTTPException(
-                status_code=400, detail="Lifecycle transition actor is required"
+            raise VendorProjectLifecycleError(
+                "actor_required", "Lifecycle transition actor is required"
             )
 
         preview = VendorPortalOperations.preview_project_lifecycle(
@@ -625,7 +657,7 @@ class VendorPortalOperations:
             action=action,
             for_update=True,
         )
-        project = _project(db, project_id, for_update=True)
+        project = _lifecycle_project(db, project_id, for_update=True)
         previous = str(preview["state"]["from_status"])
         target = str(preview["state"]["to_status"])
         event_type = (

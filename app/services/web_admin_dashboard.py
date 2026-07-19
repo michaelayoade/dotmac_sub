@@ -239,7 +239,7 @@ def _build_recent_activities(
 def build_dashboard_kpis(
     *,
     total_subscribers: int,
-    online_value: StateValue,
+    online_sessions_value: StateValue,
     devices_online: int,
     devices_total: int,
     payments_this_month: float,
@@ -267,8 +267,10 @@ def build_dashboard_kpis(
             cohort_url="/admin/customers",
         ),
         "online": Kpi(
-            label="Online Customers",
-            value=online_value,
+            # The destination lists session rows, so this headline counts the
+            # exact same entity instead of distinct customers.
+            label="Online Sessions",
+            value=online_sessions_value,
             cohort_url="/admin/network/sessions",
             tone=StatusTone.positive,
         ),
@@ -451,8 +453,9 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
     # --- Who's Online (distinct customers with active RADIUS sessions) ---
     online_summary = _build_online_customer_summary(db)
     online_ok = online_summary is not None
-    online_customers = online_summary["customers"] if online_ok else 0
-    online_sessions = online_summary["sessions"] if online_ok else 0
+    online_values = online_summary or {"customers": 0, "sessions": 0}
+    online_customers = online_values["customers"]
+    online_sessions = online_values["sessions"]
 
     # --- Monitoring device summary (for operations dashboard) ---
     monitoring_summary = {
@@ -579,7 +582,7 @@ def _build_dashboard_global_context(db: Session) -> dict[str, object]:
 
     dashboard_kpis = build_dashboard_kpis(
         total_subscribers=sub_stats["total_count"],
-        online_value=online_customers_state,
+        online_sessions_value=online_sessions_state,
         devices_online=monitoring_summary["devices_online"],
         devices_total=monitoring_summary["devices_total"],
         payments_this_month=payments_this_month,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
+from decimal import Decimal
 from urllib.parse import urlencode
 
 from pydantic import ValidationError
@@ -985,6 +986,13 @@ def _subscriptions_cohort_url(*, status: str | None = None) -> str:
     )
 
 
+def _stat_int(stats: dict[str, object], key: str) -> int:
+    value = stats.get(key)
+    if isinstance(value, (int, float, Decimal, str)):
+        return int(value)
+    return 0
+
+
 def catalog_overview_kpis(stats: dict[str, object]) -> dict[str, Kpi]:
     """Project the catalog overview headline counts as KPI-parity tiles.
 
@@ -996,18 +1004,18 @@ def catalog_overview_kpis(stats: dict[str, object]) -> dict[str, Kpi]:
     return {
         "active_offers": Kpi(
             label="Active Offers",
-            value=StateValue.present(int(stats.get("active_count") or 0)),
+            value=StateValue.present(_stat_int(stats, "active_count")),
             cohort_url=_overview_cohort_url(status=OfferStatus.active.value),
             tone=StatusTone.positive,
         ),
         "total_plans": Kpi(
             label="Total Plans",
-            value=StateValue.present(int(stats.get("total_count") or 0)),
+            value=StateValue.present(_stat_int(stats, "total_count")),
             cohort_url=_overview_cohort_url(),
         ),
         "active_subscriptions": Kpi(
             label="Active Subscriptions",
-            value=StateValue.present(int(stats.get("total_subscriptions") or 0)),
+            value=StateValue.present(_stat_int(stats, "total_subscriptions")),
             cohort_url=_subscriptions_cohort_url(
                 status=SubscriptionStatus.active.value
             ),
@@ -1015,7 +1023,7 @@ def catalog_overview_kpis(stats: dict[str, object]) -> dict[str, Kpi]:
         ),
         "archived": Kpi(
             label="Archived",
-            value=StateValue.present(int(stats.get("archived_count") or 0)),
+            value=StateValue.present(_stat_int(stats, "archived_count")),
             cohort_url=_overview_cohort_url(status=OfferStatus.archived.value),
         ),
     }

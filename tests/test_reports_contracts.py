@@ -173,6 +173,7 @@ def test_subscribers_kpi_preserves_active_date_filter(db_session):
 
 
 def test_churn_report_returns_kpi_contracts(db_session):
+    _make_subscriber(db_session, AccountStatus.active)
     _make_subscriber(db_session, AccountStatus.canceled)
     _make_subscriber(db_session, AccountStatus.suspended)
 
@@ -200,6 +201,8 @@ def test_churn_report_returns_kpi_contracts(db_session):
         db_session, kpis["at_risk"].cohort_url
     )
     assert kpis["at_risk"].value.value == 1
+    # Retention is active / total (1 / 3), not 100 - cancelled / total (2 / 3).
+    assert kpis["retention_rate"].value.value == "33.3%"
     # Rate tiles render an owner-formatted string, not a raw number the template
     # would have to reinterpret.
     assert kpis["churn_rate"].value.value.endswith("%")

@@ -62,8 +62,8 @@ def test_dashboard_kpis_are_contracts_that_drill_into_their_cohort():
 
     # Cohort URLs are application-relative and point at the exact list.
     assert kpis["accounts"].cohort_url == "/reseller/accounts"
-    assert kpis["open_balance"].cohort_url == "/reseller/billing"
-    assert kpis["open_invoices"].cohort_url == "/reseller/billing"
+    assert kpis["open_balance"].cohort_url == "/reseller/billing#total-outstanding"
+    assert kpis["open_invoices"].cohort_url == "/reseller/billing#open-invoices"
     assert all(kpi.cohort_url.startswith("/") for kpi in kpis.values())
 
 
@@ -83,6 +83,11 @@ def test_revenue_kpis_wrap_customer_billing_figures():
     assert kpis["account_count"].value.value == 7
 
     assert kpis["total_paid"].tone is StatusTone.positive
+    assert kpis["total_paid"].cohort_url == "/reseller/billing#customer-paid"
+    assert (
+        kpis["total_outstanding"].cohort_url
+        == "/reseller/billing#total-outstanding"
+    )
     assert kpis["account_count"].cohort_url == "/reseller/accounts"
     assert all(kpi.cohort_url.startswith("/") for kpi in kpis.values())
 

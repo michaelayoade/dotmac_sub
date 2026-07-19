@@ -2303,13 +2303,15 @@ Dependency order:
    may read that timeline or consume those events; they do not infer actor/time
    from `updated_at` and do not write project status directly. Vendor routes,
    confirmation handlers, templates, and future delivery integrations are thin
-   adapters around this owner.
+   adapters around this owner. The owner raises transport-neutral
+   `VendorProjectLifecycleError` rejections; the confirmation/delivery adapter
+   alone maps them to HTTP responses.
 9. `operations.vendor_project_workflow` owns installation-project quote and
    as-built evidence lifecycles, including the read-only impact snapshot used
    before submit.
 10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
-11. `operations.vendor_action_confirmation` (implemented by
+11. `operations.vendor_submission_confirmation` (implemented by
    `app.services.vendor_submission_proposals`) owns the short-lived signed
    confirmation proposal, stale-preview comparison, idempotency reservation,
    and replay result for lifecycle actions, quote, as-built, and

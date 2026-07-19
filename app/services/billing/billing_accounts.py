@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
@@ -23,7 +24,7 @@ from app.models.billing import (
     Payment,
     PaymentAllocation,
 )
-from app.models.subscriber import Reseller, Subscriber
+from app.models.subscriber import Reseller, Subscriber, UserType
 from app.schemas.billing import (
     BillingAccountCreate,
     BillingAccountStatement,
@@ -51,7 +52,76 @@ _OPEN_INVOICE_STATUSES = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class BillingAccountInvoiceSummary:
+    """Canonical reseller-customer invoice aggregates.
+
+    Dashboard, revenue report, and consolidated billing all consume this one
+    projection so their identical figures cannot drift through parallel query
+    clauses.
+    """
+
+    total_outstanding: Decimal
+    open_invoice_count: int
+    paid_invoice_total: Decimal
+    subscribers_with_balance: int
+
+
+def _customer_invoice_query(db: Session, billing_account: BillingAccount):
+    from app.services.subscriber import not_soft_deleted_subscriber_clause
+
+    return (
+        db.query(Invoice)
+        .join(Subscriber, Invoice.account_id == Subscriber.id)
+        .filter(Subscriber.reseller_id == billing_account.reseller_id)
+        .filter(
+            or_(
+                Subscriber.user_type.is_(None),
+                Subscriber.user_type != UserType.reseller,
+            )
+        )
+        .filter(not_soft_deleted_subscriber_clause())
+        .filter(Invoice.is_active.is_(True))
+    )
+
+
+def _invoice_summary(
+    db: Session, billing_account: BillingAccount
+) -> BillingAccountInvoiceSummary:
+    base = _customer_invoice_query(db, billing_account)
+    open_invoices = base.filter(Invoice.status.in_(_OPEN_INVOICE_STATUSES)).filter(
+        Invoice.balance_due > 0
+    )
+    open_row = open_invoices.with_entities(
+        func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00")).label(
+            "total_outstanding"
+        ),
+        func.count(Invoice.id).label("open_invoice_count"),
+        func.count(func.distinct(Subscriber.id)).label("subscribers_with_balance"),
+    ).first()
+    paid_total = base.filter(Invoice.status == InvoiceStatus.paid).with_entities(
+        func.coalesce(func.sum(Invoice.total), Decimal("0.00"))
+    ).scalar() or Decimal("0.00")
+    return BillingAccountInvoiceSummary(
+        total_outstanding=round_money(
+            to_decimal(open_row.total_outstanding if open_row else 0)
+        ),
+        open_invoice_count=int(open_row.open_invoice_count if open_row else 0),
+        paid_invoice_total=round_money(to_decimal(paid_total)),
+        subscribers_with_balance=int(
+            open_row.subscribers_with_balance if open_row else 0
+        ),
+    )
+
+
 class BillingAccounts(ListResponseMixin):
+    @staticmethod
+    def invoice_summary(
+        db: Session, billing_account_id: str
+    ) -> BillingAccountInvoiceSummary:
+        """Return the one reseller-customer invoice aggregate projection."""
+        return _invoice_summary(db, BillingAccounts.get(db, billing_account_id))
+
     @staticmethod
     def list(
         db: Session,
@@ -217,49 +287,28 @@ class BillingAccounts(ListResponseMixin):
     ) -> BillingAccountStatement:
         ba = BillingAccounts.get(db, billing_account_id)
         search = (subscriber_search or "").strip()
+        invoice_summary = _invoice_summary(db, ba)
 
         # Aggregates: do these in SQL so they don't depend on the page being
         # rendered. The per-subscriber rows below are then a pure page-of-data.
         open_invoice_filter = (
-            db.query(Invoice)
-            .join(Subscriber, Invoice.account_id == Subscriber.id)
-            .filter(Subscriber.reseller_id == ba.reseller_id)
-            .filter(Invoice.is_active.is_(True))
+            _customer_invoice_query(db, ba)
             .filter(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
             .filter(Invoice.balance_due > 0)
         )
-        total_outstanding = round_money(
-            to_decimal(
-                open_invoice_filter.with_entities(
-                    func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00"))
-                ).scalar()
-                or Decimal("0.00")
-            )
-        )
-        subscribers_total = int(
-            open_invoice_filter.with_entities(
-                func.count(func.distinct(Subscriber.id))
-            ).scalar()
-            or 0
-        )
+        total_outstanding = invoice_summary.total_outstanding
+        subscribers_total = invoice_summary.subscribers_with_balance
 
-        subscriber_rows_query = (
-            db.query(
-                Subscriber.id,
-                Subscriber.first_name,
-                Subscriber.last_name,
-                Subscriber.display_name,
-                Subscriber.company_name,
-                func.count(Invoice.id).label("open_invoice_count"),
-                func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00")).label(
-                    "open_balance"
-                ),
-            )
-            .join(Invoice, Invoice.account_id == Subscriber.id)
-            .filter(Subscriber.reseller_id == ba.reseller_id)
-            .filter(Invoice.is_active.is_(True))
-            .filter(Invoice.status.in_(_OPEN_INVOICE_STATUSES))
-            .filter(Invoice.balance_due > 0)
+        subscriber_rows_query = open_invoice_filter.with_entities(
+            Subscriber.id,
+            Subscriber.first_name,
+            Subscriber.last_name,
+            Subscriber.display_name,
+            Subscriber.company_name,
+            func.count(Invoice.id).label("open_invoice_count"),
+            func.coalesce(func.sum(Invoice.balance_due), Decimal("0.00")).label(
+                "open_balance"
+            ),
         )
         if search:
             pattern = f"%{search}%"
@@ -359,6 +408,8 @@ class BillingAccounts(ListResponseMixin):
             recent_payments=recent_payments,
             recent_payments_total=payments_total,
             total_outstanding=total_outstanding,
+            open_invoice_count=invoice_summary.open_invoice_count,
+            paid_invoice_total=invoice_summary.paid_invoice_total,
             unallocated_balance=round_money(to_decimal(ba.balance)),
         )
 

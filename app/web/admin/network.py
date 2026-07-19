@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_network_core_devices as web_network_core_devices_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
@@ -25,6 +25,11 @@ def _base_context(
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+def _can_write_devices(request: Request, db: Session) -> bool:
+    auth = getattr(request.state, "auth", None) or {}
+    return bool(auth) and has_permission(auth, db, "network:device:write")
 
 
 @router.get(
@@ -115,7 +120,9 @@ def devices_list(
         offset=offset,
         limit=limit,
     )
-    page_data = web_network_core_devices_service.devices_list_page_data(db, list_query)
+    page_data = web_network_core_devices_service.devices_list_page_data(
+        db, list_query, can_write=_can_write_devices(request, db)
+    )
     context = _base_context(request, db, active_page="devices")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/devices/index.html", context)
@@ -142,7 +149,9 @@ def devices_search(
         offset=offset,
         limit=limit,
     )
-    devices = web_network_core_devices_service.devices_search_data(db, list_query)
+    devices = web_network_core_devices_service.devices_search_data(
+        db, list_query, can_write=_can_write_devices(request, db)
+    )
     return templates.TemplateResponse(
         "admin/network/devices/_table_rows.html",
         {"request": request, "devices": devices},
@@ -178,7 +187,9 @@ def devices_filter(
         offset=offset,
         limit=limit,
     )
-    devices = web_network_core_devices_service.devices_filter_data(db, list_query)
+    devices = web_network_core_devices_service.devices_filter_data(
+        db, list_query, can_write=_can_write_devices(request, db)
+    )
     return templates.TemplateResponse(
         "admin/network/devices/_table_rows.html",
         {"request": request, "devices": devices},
@@ -239,6 +250,22 @@ def device_reboot(request: Request, device_id: str, db: Session = Depends(get_db
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
         f"Reboot request queued for device {device_id}."
         "</div>"
+    )
+
+
+@router.get(
+    "/devices/{device_id}/reboot/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:device:write"))],
+)
+def device_reboot_preview(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+):
+    """Safe impact-preview step before the existing reboot command adapter."""
+    context = _base_context(request, db, active_page="devices")
+    context.update({"device_id": device_id, "affected": 1})
+    return templates.TemplateResponse(
+        "admin/network/devices/reboot_preview.html", context
     )
 
 

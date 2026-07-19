@@ -85,6 +85,15 @@ def test_queue_action_is_blocked_with_a_reason_for_terminal_or_inactive():
     assert inactive.reason == "Work order is inactive"
 
 
+def test_queue_action_is_hidden_without_effective_assign_permission():
+    action = service._queue_action(
+        SimpleNamespace(is_active=True, status="scheduled"), can_assign=False
+    )
+    assert action.allowed is False
+    assert action.visible is False
+    assert "permission" in action.reason
+
+
 def test_action_contract_rejects_an_allowed_action_that_carries_a_reason():
     with pytest.raises(ValueError):
         Action(key="queue", label="Queue", allowed=True, reason="nope")
@@ -133,3 +142,4 @@ def test_template_consumes_the_kpi_and_action_contracts():
     assert "item.actions.queue" in source
     assert "queue_action.allowed" in source
     assert "queue_action.reason" in source
+    assert "queue_action.visible" in source

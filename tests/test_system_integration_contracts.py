@@ -150,6 +150,13 @@ def test_run_action_eligibility_mirrors_the_disabled_guard():
     assert blocked.reason == "Profile is disabled"
 
 
+def test_run_action_is_hidden_without_effective_write_permission():
+    blocked = syncs._run_action(_job(is_active=True), can_run=False)
+    assert blocked.allowed is False
+    assert blocked.visible is False
+    assert "permission" in blocked.reason
+
+
 def test_action_invariants_reject_inconsistent_eligibility():
     # An allowed action may not carry a blocked reason; a blocked one must.
     with pytest.raises(ValueError):
@@ -192,4 +199,5 @@ def test_syncs_template_renders_kpi_state_and_action_fields():
     # The run button is gated on Action eligibility, not a status string.
     assert "run_action.allowed" in source
     assert "run_action.reason" in source
+    assert "run_action.visible" in source
     assert "{{ stats.total }}" not in source

@@ -2788,6 +2788,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.vendor_project_lifecycle",
+                module="app.services.vendor_portal_operations",
+                owns=(
+                    "vendor start/complete installation-project transitions",
+                    "durable vendor lifecycle actor/time/event evidence",
+                    "typed vendor project lifecycle outbox events",
+                ),
+                depends_on=("events.dispatcher",),
+                notes=(
+                    "This is the sole writer for approved -> in_progress -> "
+                    "completed vendor work transitions. It raises transport-neutral "
+                    "domain errors; adapters translate them for HTTP delivery."
+                ),
+            ),
+            SOTService(
                 name="operations.vendor_project_workflow",
                 module="app.services.vendor_portal_operations",
                 owns=(
@@ -2795,7 +2810,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "quote submission eligibility and impact snapshot",
                     "as-built evidence lifecycle and impact snapshot",
                 ),
-                depends_on=("operations.project_lifecycle",),
+                depends_on=(
+                    "operations.project_lifecycle",
+                    "operations.vendor_project_lifecycle",
+                ),
             ),
             SOTService(
                 name="operations.vendor_purchase_invoices",

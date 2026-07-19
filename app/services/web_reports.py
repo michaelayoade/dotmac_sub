@@ -765,10 +765,24 @@ def get_churn_report_data(db: Session) -> dict:
         )
         or 0
     )
+    active_count = int(
+        db.scalar(
+            select(func.count(Subscriber.id)).where(
+                subscriber_service.visible_subscriber_clause(),
+                Subscriber.status == AccountStatus.active,
+            )
+        )
+        or 0
+    )
     churn_rate = (
         (cancelled_count / total_subscribers * 100) if total_subscribers > 0 else 0
     )
-    retention_rate = 100 - churn_rate
+    # Retention drills into the strict active cohort, so its numerator must be
+    # that exact cohort rather than the complement of cancellations (which also
+    # includes suspended and other non-cancelled states).
+    retention_rate = (
+        (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
+    )
     # Tone is owned by the report, not re-derived in the template: churn worsens
     # as it rises, so its semantic signal flips at the same thresholds the
     # dashboard reads. Each tile drills into the customer report status cohort

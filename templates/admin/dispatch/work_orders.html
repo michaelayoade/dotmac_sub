@@ -209,6 +209,7 @@
                     </td>
                     <td class="min-w-64 px-5 py-4 align-top">
                         {% set queue_action = item.actions.queue %}
+                        {% if queue_action.visible %}
                         {% if queue_action.allowed %}
                         <form method="post" action="/admin/dispatch/work-orders/{{ wo.public_id }}/queue" class="space-y-2">
                             <select name="assigned_technician_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
@@ -227,6 +228,7 @@
                         </form>
                         {% else %}
                         <p class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">{{ queue_action.reason }}</p>
+                        {% endif %}
                         {% endif %}
                     </td>
                     {% endcall %}

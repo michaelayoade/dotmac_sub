@@ -23,7 +23,10 @@ from sqlalchemy.orm import Session
 from app.models.idempotency import IdempotencyKey
 from app.schemas.vendor_portal import VendorAsBuiltCreate
 from app.services import context_signing
-from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.vendor_portal_operations import (
+    VendorProjectLifecycleError,
+    vendor_portal_operations,
+)
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 
 _TOKEN_TYPE = "vendor_submission_confirmation"
@@ -37,6 +40,17 @@ _SCOPES = {
     "project_start": "vendor_project_start",
     "project_complete": "vendor_project_complete",
 }
+
+
+def _lifecycle_http_error(exc: VendorProjectLifecycleError) -> HTTPException:
+    status_code = {
+        "not_found": 404,
+        "not_assigned": 403,
+        "unsupported_action": 400,
+        "actor_required": 400,
+        "invalid_transition": 409,
+    }.get(exc.code, 409)
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 @dataclass(frozen=True)
@@ -162,9 +176,12 @@ def issue_project_lifecycle(
     vendor_id: str,
     user_id: str,
 ) -> VendorSubmissionProposal:
-    preview = vendor_portal_operations.preview_project_lifecycle(
-        db, project_id, vendor_id=vendor_id, action=action
-    )
+    try:
+        preview = vendor_portal_operations.preview_project_lifecycle(
+            db, project_id, vendor_id=vendor_id, action=action
+        )
+    except VendorProjectLifecycleError as exc:
+        raise _lifecycle_http_error(exc) from exc
     return _issue(db, preview, vendor_id=vendor_id, user_id=user_id)
 
 
@@ -294,13 +311,16 @@ def confirm_submission(
             )
         else:
             action = "start" if submission_type == "project_start" else "complete"
-            preview = vendor_portal_operations.preview_project_lifecycle(
-                db,
-                target_id,
-                vendor_id=vendor_id,
-                action=action,
-                for_update=True,
-            )
+            try:
+                preview = vendor_portal_operations.preview_project_lifecycle(
+                    db,
+                    target_id,
+                    vendor_id=vendor_id,
+                    action=action,
+                    for_update=True,
+                )
+            except VendorProjectLifecycleError as exc:
+                raise _lifecycle_http_error(exc) from exc
         if not hmac.compare_digest(
             str(claims.get("state_fingerprint") or ""),
             _fingerprint(preview["state"]),
@@ -323,15 +343,18 @@ def confirm_submission(
             )
         else:
             action = "start" if submission_type == "project_start" else "complete"
-            result = vendor_portal_operations.transition_project(
-                db,
-                target_id,
-                vendor_id=vendor_id,
-                action=action,
-                actor_id=user_id,
-                actor_type="vendor_user",
-                commit=False,
-            )
+            try:
+                result = vendor_portal_operations.transition_project(
+                    db,
+                    target_id,
+                    vendor_id=vendor_id,
+                    action=action,
+                    actor_id=user_id,
+                    actor_type="vendor_user",
+                    commit=False,
+                )
+            except VendorProjectLifecycleError as exc:
+                raise _lifecycle_http_error(exc) from exc
         reservation.ref_id = str(result.get("lifecycle_event_id") or result.get("id"))
         db.commit()
     except Exception:

@@ -196,28 +196,38 @@ def _last_run_state(job: IntegrationJob, runs: list[IntegrationRun]) -> StateVal
     return StateValue.present(started, as_of=started)
 
 
-def _run_action(job: IntegrationJob) -> Action:
+def _run_action(job: IntegrationJob, *, can_run: bool = True) -> Action:
     """Manual-run eligibility owned here, mirroring the route's disabled guard
     (``sync_run`` refuses inactive jobs) so the button is never offered on a
     profile the backend would reject."""
     active = bool(job.is_active)
+    allowed = active and can_run
     return Action(
         key="run",
         label="Run",
-        allowed=active,
-        reason=None if active else "Profile is disabled",
+        allowed=allowed,
+        visible=can_run,
+        reason=(
+            None
+            if allowed
+            else "Profile is disabled"
+            if not active
+            else "You do not have permission to run sync profiles"
+        ),
         permission="system:settings:write",
         tone=StatusTone.info if active else StatusTone.neutral,
     )
 
 
-def _sync_row(job: IntegrationJob, runs: list[IntegrationRun]) -> dict[str, Any]:
+def _sync_row(
+    job: IntegrationJob, runs: list[IntegrationRun], *, can_run: bool = True
+) -> dict[str, Any]:
     latest = runs[0] if runs else None
     return {
         "job": job,
         "last_run": _last_run_state(job, runs),
         "status_val": (latest.status.value if latest and latest.status else "never"),
-        "run_action": _run_action(job),
+        "run_action": _run_action(job, can_run=can_run),
     }
 
 
@@ -226,6 +236,7 @@ def build_syncs_index_data(
     *,
     direction: str | None = None,
     active: bool | None = None,
+    can_run: bool = True,
 ) -> dict[str, Any]:
     ensure_default_crm_ticket_sync(db)
     sync_jobs = (
@@ -253,7 +264,8 @@ def build_syncs_index_data(
         and (active is not True or job.is_active)
     ]
     sync_rows = [
-        _sync_row(job, runs_by_job.get(str(job.id), [])) for job in displayed_jobs
+        _sync_row(job, runs_by_job.get(str(job.id), []), can_run=can_run)
+        for job in displayed_jobs
     ]
     sync_kpis = {
         "total": Kpi(

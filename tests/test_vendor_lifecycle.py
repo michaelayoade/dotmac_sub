@@ -12,7 +12,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.event_store import EventStore
 from app.models.project import Project
@@ -25,6 +24,7 @@ from app.models.vendor_routes import (
 )
 from app.services.ui_contracts import Action
 from app.services.vendor_portal_operations import (
+    VendorProjectLifecycleError,
     _serialize_project,
     vendor_portal_operations,
 )
@@ -137,38 +137,38 @@ def test_complete_project_moves_in_progress_to_completed(db_session):
 
 def test_start_rejects_a_vendor_who_does_not_own_the_project(db_session):
     install, _vendor = _install(db_session, InstallationProjectStatus.approved.value)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(VendorProjectLifecycleError) as exc:
         vendor_portal_operations.start_project(
             db_session,
             str(install.id),
             vendor_id=str(uuid4()),
             actor_id="vendor-user-1",
         )
-    assert exc.value.status_code == 403
+    assert exc.value.code == "not_assigned"
 
 
 def test_start_rejects_a_project_that_is_not_approved(db_session):
     install, vendor = _install(db_session, InstallationProjectStatus.quoted.value)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(VendorProjectLifecycleError) as exc:
         vendor_portal_operations.start_project(
             db_session,
             str(install.id),
             vendor_id=str(vendor.id),
             actor_id="vendor-user-1",
         )
-    assert exc.value.status_code == 409
+    assert exc.value.code == "invalid_transition"
 
 
 def test_complete_rejects_a_project_that_is_not_in_progress(db_session):
     install, vendor = _install(db_session, InstallationProjectStatus.approved.value)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(VendorProjectLifecycleError) as exc:
         vendor_portal_operations.complete_project(
             db_session,
             str(install.id),
             vendor_id=str(vendor.id),
             actor_id="vendor-user-1",
         )
-    assert exc.value.status_code == 409
+    assert exc.value.code == "invalid_transition"
 
 
 def test_lifecycle_evidence_is_append_only(db_session):
@@ -207,3 +207,7 @@ def test_lifecycle_routes_and_template_are_thin_action_adapters():
     assert "installation_project_lifecycle_events_append_only" in migration
     assert "vendor_project.started" in sot
     assert "vendor_project.completed" in sot
+    registry = (root / "app/services/sot_relationships.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'name="operations.vendor_project_lifecycle"' in registry

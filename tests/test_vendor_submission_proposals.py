@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.models.event_store import EventStore
 from app.models.idempotency import IdempotencyKey
 from app.models.project import Project
 from app.models.system_user import SystemUser
@@ -282,6 +283,8 @@ def test_project_start_confirmation_is_preview_bound_and_replay_safe(db_session)
     assert first.replayed is False
     assert replay.result_id == str(evidence.id)
     assert replay.replayed is True
+    assert db_session.query(InstallationProjectLifecycleEvent).count() == 1
+    assert db_session.query(EventStore).count() == 1
     assert proposal.confirmation_label == "Confirm start"
     assert (
         db_session.query(IdempotencyKey)

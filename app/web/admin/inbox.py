@@ -110,6 +110,38 @@ def team_inbox_queue(
     per_page: int = Query(default=25),
     db: Session = Depends(get_db),
 ):
+    # FastAPI resolves Query defaults before normal route execution, but focused
+    # route tests and internal adapters can call this function directly. In that
+    # case omitted values are still ``Query`` objects; normalize them at the
+    # adapter boundary so they cannot look truthy or trigger a false redirect.
+    search = search if isinstance(search, str) else None
+    status = status if isinstance(status, str) else None
+    channel_type = channel_type if isinstance(channel_type, str) else None
+    service_team_id = service_team_id if isinstance(service_team_id, str) else None
+    assigned_person_id = (
+        assigned_person_id if isinstance(assigned_person_id, str) else None
+    )
+    needs_response = needs_response if isinstance(needs_response, bool) else False
+    contact_resolution_status = (
+        contact_resolution_status
+        if isinstance(contact_resolution_status, str)
+        else None
+    )
+    priority_at_most = (
+        priority_at_most
+        if isinstance(priority_at_most, int) and not isinstance(priority_at_most, bool)
+        else None
+    )
+    muted = muted if isinstance(muted, bool) else None
+    snoozed = snoozed if isinstance(snoozed, bool) else None
+    open_only = open_only if isinstance(open_only, bool) else False
+    unassigned = unassigned if isinstance(unassigned, bool) else False
+    sort_by = sort_by if isinstance(sort_by, str) else None
+    sort_dir = sort_dir if isinstance(sort_dir, str) else None
+    page = page if isinstance(page, int) and not isinstance(page, bool) else 1
+    per_page = (
+        per_page if isinstance(per_page, int) and not isinstance(per_page, bool) else 25
+    )
     requested_status = status
     requested_channel_type = channel_type
     requested_service_team_id = service_team_id

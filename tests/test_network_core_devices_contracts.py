@@ -176,6 +176,21 @@ def test_row_actions_allowed_ping_carries_no_reason() -> None:
     assert actions["ping"].allowed
     assert actions["ping"].reason is None
     assert actions["reboot"].allowed  # core + ip is rebootable
+    assert actions["reboot"].requires_confirmation is True
+    assert actions["reboot"].preview_url.endswith("/reboot/preview")
+    assert actions["delete"].allowed is False
+    assert actions["delete"].reason
+
+
+def test_row_actions_are_hidden_when_viewer_lacks_write_permission() -> None:
+    actions = _device_row_actions(
+        {"id": "d1", "type": "core", "ip_address": "10.0.0.1"},
+        can_write=False,
+    )
+    assert actions["view"].visible is True
+    for key in ("ping", "reboot", "delete"):
+        assert actions[key].visible is False
+        assert actions[key].allowed is False
 
 
 def test_row_actions_block_ping_without_ip_and_reboot_for_cpe() -> None:
@@ -206,3 +221,5 @@ def test_table_rows_template_gates_actions_on_eligibility() -> None:
     assert "device.actions.reboot" in text
     assert "ping.allowed" in text
     assert "reboot.reason" in text
+    assert "reboot.preview_url" in text
+    assert "hx-confirm" not in text

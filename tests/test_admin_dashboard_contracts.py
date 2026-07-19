@@ -19,7 +19,7 @@ from app.services.web_admin_dashboard import build_dashboard_kpis
 def _kpis(*, billing_ok=True, online_value=None):
     return build_dashboard_kpis(
         total_subscribers=1200,
-        online_value=online_value or StateValue.present(340),
+        online_sessions_value=online_value or StateValue.present(340),
         devices_online=48,
         devices_total=50,
         payments_this_month=1_500_000.0,
@@ -46,6 +46,7 @@ def test_headline_tiles_are_kpis_that_drill_into_their_cohort():
         assert kpi.cohort_url.startswith("/")
     assert kpis["total_subscribers"].cohort_url == "/admin/customers"
     assert kpis["online"].cohort_url == "/admin/network/sessions"
+    assert kpis["online"].label == "Online Sessions"
     assert kpis["network_devices"].cohort_url == "/admin/network/monitoring"
     assert kpis["alarms"].cohort_url == "/admin/network/alarms"
 

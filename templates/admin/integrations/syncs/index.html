@@ -79,6 +79,7 @@
                             {% endif %}
                         </td>
                         <td class="px-6 py-4 text-right">
+                            {% if run_action.visible %}
                             {% if run_action.allowed %}
                             <form method="post" action="/admin/integrations/syncs/{{ job.id }}/run" class="inline" onsubmit="return confirm('Run this sync profile now?');">
                                 {% include "components/forms/csrf_input.html" %}
@@ -86,6 +87,7 @@
                             </form>
                             {% else %}
                             <span class="text-sm text-slate-400" title="{{ run_action.reason }}">{{ run_action.label }}</span>
+                            {% endif %}
                             {% endif %}
                         </td>
                     </tr>

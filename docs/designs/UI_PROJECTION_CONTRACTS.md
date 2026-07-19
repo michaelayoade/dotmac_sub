@@ -47,7 +47,8 @@ diverge (the KPI-parity rule). `tone`/`icon` reuse the canonical `StatusTone` /
 
 `allowed` + `reason` come from the owning transition service, never a status
 string in the template. `permission` is the granular RBAC key the route
-enforces (the UI hides what the principal can't do; the route still authorizes).
+enforces; routes evaluate it for the current viewer and project unauthorized
+actions with `visible=False` (the route still authorizes independently).
 `requires_confirmation` + `preview_url` + `affected` mark destructive/financial
 actions that must preview impact and confirm before running. Confirmation policy
 is deliberately separate from semantic `tone`: styling cannot weaken a safety
@@ -55,8 +56,9 @@ control.
 
 The dataclasses reject contradictory shapes at construction time: absent state
 cannot carry a value/freshness, every KPI has an application-relative cohort
-URL, blocked actions explain why, negative impact counts are invalid, and a
-confirmation requirement cannot exist without its preview URL.
+URL, blocked actions explain why, negative impact counts are invalid, hidden
+actions cannot be allowed, and a confirmation requirement cannot exist without
+its preview URL.
 
 ## Adoption
 

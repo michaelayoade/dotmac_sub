@@ -1490,25 +1490,14 @@ def get_dashboard_summary(
     # count_accounts so the headline number can never exceed the list it links
     # to. _customer_accounts_query would over-count by including disabled rows.
     total_accounts = count_accounts(db, reseller_id)
-    open_statuses = {
-        InvoiceStatus.issued,
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.overdue,
-    }
-    balance_row = (
-        db.query(
-            func.coalesce(func.sum(Invoice.balance_due), 0).label("open_balance"),
-            func.count(Invoice.id).label("open_invoices"),
-        )
-        .join(Subscriber, Invoice.account_id == Subscriber.id)
-        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
-        .filter(_customer_account_join_filter())
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.status.in_(open_statuses))
-        .first()
+    from app.services import billing as billing_service
+
+    billing_account = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+    invoice_summary = billing_service.billing_accounts.invoice_summary(
+        db, str(billing_account.id)
     )
-    open_balance = balance_row.open_balance if balance_row else 0
-    open_invoices = balance_row.open_invoices if balance_row else 0
+    open_balance = invoice_summary.total_outstanding
+    open_invoices = invoice_summary.open_invoice_count
 
     # Alert data: overdue invoices, new accounts this week, suspended accounts
     overdue_count = (
@@ -1597,22 +1586,16 @@ def dashboard_kpis(summary: dict) -> dict[str, Kpi]:
             value=StateValue.present(totals.get("accounts", 0)),
             cohort_url="/reseller/accounts",
         ),
-        # No reseller-scoped filtered-invoice route exists, so these money tiles
-        # link to /reseller/billing, the only reseller billing surface. It does
-        # NOT itemize a per-figure cohort that sums to exactly these values (its
-        # statement view uses a different account clause and shows no open-invoice
-        # count), so this is the closest billing context, not a strict same-set
-        # drill-down. Kpi still requires a "/"-relative cohort_url.
         "open_balance": Kpi(
             label="Open Balance",
             value=StateValue.present(totals.get("open_balance", 0)),
-            cohort_url="/reseller/billing",
+            cohort_url="/reseller/billing#total-outstanding",
             tone=StatusTone.warning,
         ),
         "open_invoices": Kpi(
             label="Open Invoices",
             value=StateValue.present(totals.get("open_invoices", 0)),
-            cohort_url="/reseller/billing",
+            cohort_url="/reseller/billing#open-invoices",
             tone=StatusTone.info,
         ),
     }
@@ -2151,36 +2134,13 @@ def get_revenue_summary(
     from app.services import billing as billing_service
 
     reseller_uuid = coerce_uuid(reseller_id)
-    currency = billing_service.billing_accounts.get_for_reseller(
-        db, reseller_id
-    ).currency
-
-    # Total revenue (all paid invoices)
-    total_paid = (
-        db.query(func.coalesce(func.sum(Invoice.total), 0))
-        .join(Subscriber, Invoice.account_id == Subscriber.id)
-        .filter(Subscriber.reseller_id == reseller_uuid)
-        .filter(_customer_account_join_filter())
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.status == InvoiceStatus.paid)
-        .scalar()
-    ) or 0
-
-    # Outstanding balance
-    open_statuses = {
-        InvoiceStatus.issued,
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.overdue,
-    }
-    total_outstanding = (
-        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .join(Subscriber, Invoice.account_id == Subscriber.id)
-        .filter(Subscriber.reseller_id == reseller_uuid)
-        .filter(_customer_account_join_filter())
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.status.in_(open_statuses))
-        .scalar()
-    ) or 0
+    billing_account = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+    currency = billing_account.currency
+    invoice_summary = billing_service.billing_accounts.invoice_summary(
+        db, str(billing_account.id)
+    )
+    total_paid = invoice_summary.paid_invoice_total
+    total_outstanding = invoice_summary.total_outstanding
 
     # Monthly breakdown (last 12 months)
     monthly_rows = (
@@ -2238,21 +2198,16 @@ def revenue_kpis(summary: dict) -> dict[str, Kpi]:
     not reseller commission — commission ownership is undecided and untouched
     here. ``get_revenue_summary`` keeps its JSON-API shape for the bearer route."""
     return {
-        # No reseller-scoped filtered-invoice route exists, so both money tiles
-        # link to /reseller/billing, the only reseller billing surface. It does
-        # not display a matching paid / outstanding total itemized to each
-        # figure, so this is the closest billing context rather than a strict
-        # same-set drill-down. Kpi still requires a "/"-relative cohort_url.
         "total_paid": Kpi(
             label="Customer billing (paid)",
             value=StateValue.present(summary.get("total_paid", 0)),
-            cohort_url="/reseller/billing",
+            cohort_url="/reseller/billing#customer-paid",
             tone=StatusTone.positive,
         ),
         "total_outstanding": Kpi(
             label="Outstanding Balance",
             value=StateValue.present(summary.get("total_outstanding", 0)),
-            cohort_url="/reseller/billing",
+            cohort_url="/reseller/billing#total-outstanding",
             tone=StatusTone.warning,
         ),
         "account_count": Kpi(
