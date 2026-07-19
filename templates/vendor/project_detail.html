@@ -62,6 +62,12 @@
     {% if not invoice %}
     <form method="post" action="/vendor/projects/{{ project.id }}/purchase-invoices" class="space-y-3"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><input name="invoice_number" required placeholder="Vendor invoice number" class="w-full rounded-md border-slate-300"><input name="tax_rate_percent" type="number" step="0.01" value="0" class="w-full rounded-md border-slate-300"><button class="w-full rounded-md bg-teal-600 px-4 py-2 font-semibold text-white">Create invoice</button></form>
     {% else %}
+    {# Payment-received visibility: owner-computed from the ERP payables status. #}
+    {% set _pt = invoice.payment.tone.value if invoice.payment and invoice.payment.tone else 'neutral' %}
+    <div class="mb-4 flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800">
+      <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Payment</span>
+      <span class="text-xs font-bold {% if _pt == 'positive' %}text-emerald-700 dark:text-emerald-300{% elif _pt == 'info' %}text-sky-700 dark:text-sky-300{% elif _pt == 'warning' %}text-amber-700 dark:text-amber-300{% else %}text-slate-600 dark:text-slate-300{% endif %}"{% if invoice.payment.detail %} title="Finance status: {{ invoice.payment.detail }}"{% endif %}>{{ invoice.payment.label }}</span>
+    </div>
     <div class="mb-4 space-y-2 text-sm">{% for line in invoice.line_items %}<div class="flex justify-between border-b border-slate-100 py-2 dark:border-slate-800"><span>{{ line.description }}</span><strong>{{ line.amount }}</strong></div>{% endfor %}<div class="flex justify-between pt-2 text-base"><strong>Total</strong><strong>{{ invoice.currency }} {{ invoice.total }}</strong></div></div>
     {% if action_permitted(request, invoice.edit_action) %}
     <form method="post" action="/vendor/projects/{{ project.id }}/purchase-invoices/{{ invoice.id }}/lines" class="space-y-2"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><input name="description" required placeholder="Description" class="w-full rounded-md border-slate-300"><div class="grid grid-cols-2 gap-2"><input name="quantity" required type="number" step="0.001" min="0.001" placeholder="Qty" class="rounded-md border-slate-300"><input name="unit_price" required type="number" step="0.01" min="0" placeholder="Unit price" class="rounded-md border-slate-300"></div><button class="w-full rounded-md border border-teal-600 px-4 py-2 font-semibold text-teal-700">Add line</button></form>
