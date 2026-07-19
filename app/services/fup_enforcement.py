@@ -45,6 +45,14 @@ def run_fup_evaluation(
     Runs periodically to check usage against FUP thresholds and apply
     throttle/block/notify actions. Also handles time-based profile switching
     (e.g., night boost) and FUP state resets at period boundaries.
+
+    CONCURRENCY INVARIANT: sweeps must not run concurrently (duplicate
+    enforcement/notifications, racing per-subscription commits). That
+    serialization is owned by the Celery task wrapper
+    (app.tasks.usage.evaluate_fup_rules) via pg advisory lock 778_003 —
+    it is deliberately NOT re-acquired here. Do not call this function from
+    a new entry point without going through the task, or without providing
+    equivalent serialization.
     """
     import uuid
     from datetime import UTC, datetime
