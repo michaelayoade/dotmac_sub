@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlencode
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice
 from app.models.network_monitoring import DeviceInterface, NetworkDevice
+from app.schemas.status_presentation import StatusTone
 from app.services import device_projection_views
 from app.services import network as network_service
 from app.services.device_operational_status import (
@@ -30,6 +33,7 @@ from app.services.list_query import (
 from app.services.network import cpe as cpe_service
 from app.services.network.imported_service_ports import imported_service_port_summary
 from app.services.status_presentation import device_operational_status_presentation
+from app.services.ui_contracts import Action, Kpi, StateValue
 
 # UI page contract for the admin network-device list. The projection-boundary
 # owner: it declares the searchable/filterable/sortable fields, default order and
@@ -464,6 +468,156 @@ def compute_device_stats(devices: list[dict]) -> dict[str, int]:
     }
 
 
+# Device-count summary tiles as KPI contracts. Each drills into the exact
+# cohort it counts: type tiles narrow by ``type`` (across every status), status
+# tiles by ``status`` (across every type), and every tile carries the surface's
+# active vendor/search. Tile counts are an overview computed independent of the
+# page status/type filter, so a headline and the list it links to can never
+# diverge and a tile never shrinks because the table below it was filtered
+# (KPI-parity rule).
+_TYPE_KPI_LABELS = {
+    "total": "All Devices",
+    "core": "Core",
+    "olt": "OLT",
+    "ont": "ONT",
+    "cpe": "CPE",
+}
+_STATUS_KPI_LABELS = {
+    "up": "Up",
+    "down": "Down",
+    "degraded": "Degraded",
+    "maintenance": "Maintenance",
+    "unknown": "Unknown",
+}
+_STATUS_KPI_TONES = {
+    "up": StatusTone.positive,
+    "down": StatusTone.negative,
+    "degraded": StatusTone.warning,
+    "maintenance": StatusTone.neutral,
+    "unknown": StatusTone.neutral,
+}
+# Device types that expose an operator-driven reboot; CPE/unknown rows do not.
+_REBOOTABLE_DEVICE_TYPES = {"core", "olt", "ont"}
+
+
+def _device_cohort_url(
+    list_query: ListQuery,
+    *,
+    device_type: str | None = None,
+    status: str | None = None,
+) -> str:
+    """Drill-down URL to the device list filtered to exactly a KPI's cohort.
+
+    A tile carries ONLY its own narrowing dimension (``device_type`` for the
+    type/total tiles, ``status`` for the status tiles) plus the surface's active
+    vendor/search. It deliberately does NOT inherit the page's active status/type
+    filter, so a type tile drills across every status and a status tile across
+    every type — matching the overview count the tile displays (KPI-parity rule).
+    """
+    params = {
+        "type": device_type,
+        "status": status,
+        "vendor": list_query.filter_value("vendor"),
+        "search": list_query.search,
+    }
+    query = urlencode({key: value for key, value in params.items() if value})
+    return "/admin/network/devices" + (f"?{query}" if query else "")
+
+
+def _device_stat_kpis(
+    stats: dict[str, int],
+    list_query: ListQuery,
+    *,
+    refreshed_at: datetime | None,
+) -> dict[str, Kpi]:
+    """Wrap the projection's summary counts as KPI contracts.
+
+    When the projection has never reconciled (``refreshed_at is None``) the
+    counts are genuinely unknown rather than zero, so they project as an unknown
+    StateValue the template renders as a placeholder — never a 0 standing in for
+    "not yet measured".
+    """
+
+    def _count(key: str) -> StateValue:
+        if refreshed_at is None:
+            return StateValue.unknown()
+        return StateValue.present(int(stats.get(key, 0)))
+
+    kpis: dict[str, Kpi] = {
+        "total": Kpi(
+            label=_TYPE_KPI_LABELS["total"],
+            value=_count("total"),
+            # "All devices" drills across every type and status; only the
+            # active vendor/search narrow the cohort.
+            cohort_url=_device_cohort_url(list_query, device_type="all"),
+        )
+    }
+    for key in ("core", "olt", "ont", "cpe"):
+        kpis[key] = Kpi(
+            label=_TYPE_KPI_LABELS[key],
+            value=_count(key),
+            cohort_url=_device_cohort_url(list_query, device_type=key),
+        )
+    for key, label in _STATUS_KPI_LABELS.items():
+        kpis[key] = Kpi(
+            label=label,
+            value=_count(key),
+            cohort_url=_device_cohort_url(list_query, status=key),
+            tone=_STATUS_KPI_TONES[key],
+        )
+    return kpis
+
+
+def _device_row_actions(device: dict) -> dict[str, Action]:
+    """Per-row management actions with eligibility owned here, not the template.
+
+    Ping/reboot eligibility is a data-availability fact (a reachable management
+    IP, a device type that can be rebooted), computed once so the template hides
+    or disables what cannot run instead of re-deriving it from a status string.
+    """
+    has_ip = bool(str(device.get("ip_address") or "").strip())
+    device_type = str(device.get("type") or "").strip().lower()
+    rebootable = device_type in _REBOOTABLE_DEVICE_TYPES
+    can_reboot = rebootable and has_ip
+    return {
+        "view": Action(
+            key="view",
+            label="View Details",
+            allowed=True,
+            permission="network:device:read",
+        ),
+        "ping": Action(
+            key="ping",
+            label="Ping Device",
+            allowed=has_ip,
+            reason=None if has_ip else "No management IP on record",
+            permission="network:device:read",
+            tone=StatusTone.positive,
+        ),
+        "reboot": Action(
+            key="reboot",
+            label="Reboot Device",
+            allowed=can_reboot,
+            reason=None
+            if can_reboot
+            else (
+                "No management IP on record"
+                if rebootable
+                else "Reboot is not available for this device type"
+            ),
+            permission="network:device:manage",
+            tone=StatusTone.warning,
+        ),
+        "delete": Action(
+            key="delete",
+            label="Remove Device",
+            allowed=True,
+            permission="network:device:delete",
+            tone=StatusTone.negative,
+        ),
+    }
+
+
 def _query_page(db: Session, list_query: ListQuery) -> tuple[list[dict], int]:
     return device_projection_views.query_device_projections(
         db,
@@ -487,6 +641,8 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
     last-known as of ``devices_refreshed_at``.
     """
     devices, total = _query_page(db, list_query)
+    for device in devices:
+        device["actions"] = _device_row_actions(device)
     stats = device_projection_views.device_projection_stats(
         db,
         device_type=list_query.filter_value("type"),
@@ -494,12 +650,28 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
         vendor=list_query.filter_value("vendor"),
         search=list_query.search,
     )
+    # KPI tiles are a fixed overview: each tile counts its own cohort across
+    # every status and type, so the headline number never shrinks because the
+    # operator filtered the table below it. The counts drop the page status/type
+    # filter (keeping only vendor/search, which each tile's cohort_url also
+    # carries) so a tile's value equals the count at the cohort it links to.
+    overview_stats = device_projection_views.device_projection_stats(
+        db,
+        device_type=None,
+        status=None,
+        vendor=list_query.filter_value("vendor"),
+        search=list_query.search,
+    )
     per_page = list_query.per_page
     total_pages = (total + per_page - 1) // per_page if total else 1
     device_type = list_query.filter_value("type")
+    refreshed_at = device_projection_views.latest_refreshed_at(db)
     return {
         "devices": devices,
         "stats": stats,
+        "device_kpis": _device_stat_kpis(
+            overview_stats, list_query, refreshed_at=refreshed_at
+        ),
         "device_type": device_type,
         "type": device_type,
         "search": list_query.search or "",
@@ -516,19 +688,23 @@ def devices_list_page_data(db: Session, list_query: ListQuery) -> dict[str, obje
         "htmx_url": "/admin/network/devices/filter",
         "htmx_target": "devices-table-body",
         # Freshness: projected operational status is last-known as of this stamp.
-        "devices_refreshed_at": device_projection_views.latest_refreshed_at(db),
+        "devices_refreshed_at": refreshed_at,
     }
 
 
 def devices_search_data(db: Session, list_query: ListQuery) -> list[dict]:
     """Return one page of matching devices for the HTMX search/filter partial."""
     devices, _total = _query_page(db, list_query)
+    for device in devices:
+        device["actions"] = _device_row_actions(device)
     return devices
 
 
 def devices_filter_data(db: Session, list_query: ListQuery) -> list[dict]:
     """Return one page of filtered devices for the HTMX filter partial."""
     devices, _total = _query_page(db, list_query)
+    for device in devices:
+        device["actions"] = _device_row_actions(device)
     return devices
 
 
