@@ -47,7 +47,7 @@ Classifications used below:
 | Roles/permissions | `app/models/rbac.py` + guards in `app/services/auth_dependencies.py` (`require_role`, `require_permission`, `require_scoped_permission`, `require_method_permission`); router-level declarative modes in `app/main.py` | adapt | String permission keys (`<domain>:read/:write`) map cleanly onto manifest-declared codes. **Convergence item:** a second `require_scoped_permission` implementation exists in `app/services/field/vendor_auth.py` — fold into the central guard (migrate-later) |
 | Settings | `DomainSetting` (`app/models/domain_settings.py`) + `app/services/settings_spec.py` registry/resolver + seed/cache | adapt | Same settings-as-data shape the kernel standardizes; kernel contract slots behind `resolve_value` |
 | Feature flags / module gates | `app/services/control_registry.py` (`is_enabled` — MODULE/FEATURE/SAFETY layers) over `module_manager.py` | adapt | Already one read path with declared fail direction. Legacy alias keys are instrumented for removal: **retire** those |
-| Audit | `AuditEvent` (`app/models/audit.py`); writers `app/services/audit.py` (`AuditEvents.create/.record`) and the `record_audit_event` façade (`app/services/audit_adapter.py`) | adapt | **Two writer entry points, one table.** Adopt the kernel audit contract behind `record_audit_event`; migrate direct `AuditEvents` callers onto the adapter |
+| Audit | `AuditEvent` (`app/models/audit.py`); writers `app/services/audit.py` (`AuditEvents.create/.record`) and the `record_audit_event` façade (`app/services/audit_adapter.py`) | adapt | Two sanctioned surfaces (adapter + in-transaction `stage`), zero stray callers — pinned by `tests/architecture/test_audit_writer_surfaces.py`. Kernel audit contract adopts behind `record_audit_event` |
 | Session/transaction ownership | `app/db.py` (`get_db` never commits; `task_session` commits; `form_write` rollback guard) + `app/services/unit_of_work.py` | adapt | **Mixed commit ownership** (services, `auth_dependencies` API-key touch, `task_session`, `UnitOfWork(auto_commit)`). The kernel one-transaction-owner contract is the formalization target |
 
 ### Commercial lifecycles
@@ -106,8 +106,12 @@ gate for. Verified at 7807afcd:
    is an autoflush hazard and makes the UI a parallel projection of account
    status. Candidate cleanup: derive into a view-model field instead of the ORM
    attribute.
-2. **Audit has two writer entry points** (`AuditEvents.create/.record` and
-   `record_audit_event`) — consolidate on the adapter.
+2. **Audit writer consolidation — DONE, now pinned.** At origin/main there are
+   zero direct `AuditEvents.create/.record` callers; the two sanctioned
+   surfaces are `record_audit_event` (adapter, request/consequence paths) and
+   `AuditEvents.stage` (stages in the caller's transaction — the correct
+   surface for commit-owning services; billing uses it deliberately). Pinned by
+   `tests/architecture/test_audit_writer_surfaces.py`.
 3. **Scoped-permission guard duplication — RESOLVED.** The vendor variant was a
    misnamed alias for `require_native_vendor_context` (membership check, zero
    permission evaluation) whose name satisfied the route-guard architecture
