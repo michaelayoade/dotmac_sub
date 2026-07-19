@@ -133,13 +133,16 @@ def enqueue(
         status=FieldErpSyncStatus.pending.value,
         attempts=0,
     )
-    db.add(event)
     try:
-        db.flush()
+        # Isolate the unique-key race to a savepoint.  A full session rollback
+        # here would also discard the source business transition that is meant
+        # to commit atomically with this outbox row.
+        with db.begin_nested():
+            db.add(event)
+            db.flush()
     except IntegrityError:
         # Concurrent enqueue of the same key — return the winner (which exists,
         # since the unique-constraint violation means a row is already there).
-        db.rollback()
         winner = (
             db.query(FieldErpSyncEvent)
             .filter(FieldErpSyncEvent.idempotency_key == idempotency_key)
@@ -260,9 +263,11 @@ def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
     The outbox stays flow-agnostic: it classifies the response and stores it on
     the event, then dispatches to the owning flow module so the money link (ERP
     claim id / number / status) lands on the source entity. Handlers are looked up
-    lazily to keep the outbox free of flow-module import cycles, and any handler
-    failure is logged, never allowed to fail the delivery (the event's terminal
-    outcome is already recorded).
+    lazily to keep the outbox free of flow-module import cycles. The material
+    support flow is fail-atomic: its source projection must succeed in the same
+    commit as the delivered outcome, otherwise the idempotent ERP request is
+    retried. Legacy flows retain their existing logged best-effort behavior until
+    their own ownership slices migrate.
     """
     if row.flow == FieldErpSyncFlow.expense_claim.value:
         try:
@@ -276,16 +281,9 @@ def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
                 row.id,
             )
     elif row.flow == FieldErpSyncFlow.material_request.value:
-        try:
-            from app.services.dotmac_erp.material_sync import apply_erp_response
+        from app.services.dotmac_erp.material_sync import apply_erp_response
 
-            apply_erp_response(db, row)
-        except Exception:  # noqa: BLE001 — write-back must not fail delivery
-            logger.exception(
-                "field_erp_sync: write-back failed for %s event %s",
-                row.flow,
-                row.id,
-            )
+        apply_erp_response(db, row)
     elif row.flow == FieldErpSyncFlow.purchase_order.value:
         try:
             from app.services.dotmac_erp.purchase_order_sync import apply_erp_response

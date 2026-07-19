@@ -14,9 +14,9 @@ Three responsibilities live here:
   ``outbox.enqueue``. It does NOT deliver — the worker owns delivery, and the
   outbox refuses any flow sub does not own in ``sync_flow_ownership``.
 * **write-back** — ``apply_erp_response`` runs on the outbox's accepted/rejected
-  path and writes the ERP request id / status back onto the source row (the
-  "dropped money link" mitigation from the review doc). Terminal ERP fulfillment
-  flips the sub row to ``fulfilled`` (verbatim CRM parity).
+  path, extracts ERP's request id / status, and delegates the Sub projection to
+  ``operations.material_dependencies``. ERP ``issued`` is terminal for the
+  support request and resumes the Sub material dependency.
 * **reconcile** — ``refresh_material_request_statuses`` polls ERP for in-flight
   requests and refreshes the mirror fields (ports CRM's status-poll refresh).
 
@@ -33,7 +33,6 @@ selected warehouse and exact serialized units for an auditable handoff.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, selectinload
 
@@ -53,16 +52,6 @@ _ERP_ISSUE_STATUS = "issued"
 # The sub-side statuses a request can still change while ERP owns fulfillment;
 # only these get polled for a status refresh.
 _IN_FLIGHT_STATUSES = ("approved", "issued")
-
-# ERP material statuses that map onto a terminal sub status. Ported from CRM's
-# ``refresh_material_request_status`` (which flips to fulfilled on
-# fulfilled/complete/completed). Anything else only refreshes the mirror field.
-_ERP_TERMINAL_STATUS_MAP = {
-    "fulfilled": "fulfilled",
-    "complete": "fulfilled",
-    "completed": "fulfilled",
-}
-
 
 # ---------------------------------------------------------------------------
 # Mapping + idempotency key (port of CRM's _map_material_request)
@@ -247,31 +236,29 @@ def _extract_material_status(response: dict | None) -> str | None:
 
 
 def apply_material_response(
-    request: FieldMaterialRequest, response: dict | None
-) -> None:
+    db: Session, request: FieldMaterialRequest, response: dict | None
+) -> bool:
     """Write an ERP material-request response back onto a ``FieldMaterialRequest``.
 
-    Shared by the outbox accepted/rejected path and the status reconcile. Ports
-    CRM's write-back: records request id / status and, when ERP reports terminal
-    fulfillment, flips the sub row to ``fulfilled`` + stamps ``fulfilled_at``.
-    Idempotent — safe to run on every poll.
+    Shared by the outbox accepted/rejected path and status reconciliation.  This
+    adapter extracts the wire values, then delegates every Sub-side transition
+    to ``operations.material_dependencies``.  ERP ``issued`` is a terminal
+    support outcome: stock has been posted out of ERP and Sub may resume the
+    service workflow with the resulting allocation projection.
     """
     if not isinstance(response, dict):
-        return
+        return False
 
     erp_id = _extract_request_id(response)
     material_status = _extract_material_status(response)
+    from app.services.field.material_requests import field_material_requests
 
-    if erp_id and not request.erp_material_request_id:
-        request.erp_material_request_id = str(erp_id)[:120]
-    if not material_status:
-        return
-
-    request.erp_material_status = material_status
-    mapped = _ERP_TERMINAL_STATUS_MAP.get(material_status)
-    if mapped == "fulfilled" and request.status in _IN_FLIGHT_STATUSES:
-        request.status = "fulfilled"
-        request.fulfilled_at = request.fulfilled_at or datetime.now(UTC)
+    return field_material_requests.apply_backoffice_outcome(
+        db,
+        request,
+        erp_request_id=erp_id,
+        erp_status=material_status,
+    )
 
 
 def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
@@ -291,7 +278,7 @@ def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
             event.entity_id,
         )
         return
-    apply_material_response(request, event.erp_response)
+    apply_material_response(db, request, event.erp_response)
 
 
 # ---------------------------------------------------------------------------
@@ -342,22 +329,21 @@ def refresh_material_request_statuses(
     try:
         for request in pending:
             processed += 1
+            request_id = str(request.id)
             try:
-                response = owned_client.get_material_request_status(str(request.id))
+                response = owned_client.get_material_request_status(request_id)
+                if not response:
+                    continue
+                if apply_material_response(db, request, response):
+                    updated += 1
+                db.commit()
             except Exception as exc:  # noqa: BLE001 — one bad row can't stall the batch
                 db.rollback()
-                errors.append(f"{request.id}: {exc}")
+                errors.append(f"{request_id}: {exc}")
                 logger.warning(
-                    "material_sync: status refresh failed for %s: %s", request.id, exc
+                    "material_sync: status refresh failed for %s: %s", request_id, exc
                 )
                 continue
-            if not response:
-                continue
-            before = request.erp_material_status
-            apply_material_response(request, response)
-            if request.erp_material_status != before:
-                updated += 1
-            db.commit()
     finally:
         if created_client:
             owned_client.close()
