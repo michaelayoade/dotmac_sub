@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -21,6 +22,15 @@ from app.services import subscriber_growth
 from app.services import usage_summary as usage_summary_service
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RecentSubscriberReportRow:
+    """Immutable presentation projection for the recent-signups panel."""
+
+    name: str
+    created_at: datetime | None
+    derived_status: AccountStatus
 
 
 def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
@@ -201,34 +211,6 @@ def _date_range_values(
     parsed_to = parse_date_filter(date_to)
     end = parsed_to + timedelta(days=1) if parsed_to else None
     return start, end, date_from or "", date_to or ""
-
-
-def _filter_subscribers_for_report(
-    subscribers: list[Subscriber],
-    *,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    status: str | None = None,
-) -> list[Subscriber]:
-    start, end, _, _ = _date_range_values(date_from=date_from, date_to=date_to)
-    status_filter = (status or "").strip().lower()
-    allowed_statuses = {item.value for item in AccountStatus}
-    if status_filter and status_filter not in allowed_statuses:
-        status_filter = ""
-
-    filtered: list[Subscriber] = []
-    for sub in subscribers:
-        derived_status = _derive_subscriber_status(sub)
-        sub.status = derived_status
-        if status_filter and derived_status.value != status_filter:
-            continue
-        created_at = subscriber_service.get_effective_created_at(sub)
-        if start and (created_at is None or created_at < start):
-            continue
-        if end and (created_at is None or created_at >= end):
-            continue
-        filtered.append(sub)
-    return filtered
 
 
 def _load_report_subscribers(
@@ -487,7 +469,6 @@ def get_subscribers_report_data(
     suspended_count = 0
     for sub in all_subscribers:
         derived_status = _derive_subscriber_status(sub)
-        sub.status = derived_status
         status_name = derived_status.value if derived_status else "unknown"
         status_breakdown[status_name] = status_breakdown.get(status_name, 0) + 1
         if derived_status == AccountStatus.active:
@@ -497,14 +478,21 @@ def get_subscribers_report_data(
     active_rate = (
         (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
     )
-    recent_subscribers = sorted(
-        all_subscribers,
-        key=lambda x: (
-            subscriber_service.get_effective_created_at(x)
-            or datetime.min.replace(tzinfo=UTC)
-        ),
-        reverse=True,
-    )[:10]
+    recent_subscribers = [
+        RecentSubscriberReportRow(
+            name=sub.name,
+            created_at=sub.created_at,
+            derived_status=_derive_subscriber_status(sub),
+        )
+        for sub in sorted(
+            all_subscribers,
+            key=lambda x: (
+                subscriber_service.get_effective_created_at(x)
+                or datetime.min.replace(tzinfo=UTC)
+            ),
+            reverse=True,
+        )[:10]
+    ]
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     new_this_month = len(
@@ -654,8 +642,6 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
         limit=5000,
         offset=0,
     )
-    for sub in all_subscribers:
-        sub.status = _derive_subscriber_status(sub)
     if days:
         cutoff = datetime.now(UTC) - timedelta(days=days)
         all_subscribers = [
@@ -666,11 +652,18 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
             and updated_at >= cutoff
         ]
     total_subscribers = len(all_subscribers)
+    derived_status_by_id = {
+        sub.id: _derive_subscriber_status(sub) for sub in all_subscribers
+    }
     cancelled_subscribers = [
-        sub for sub in all_subscribers if sub.status == AccountStatus.canceled
+        sub
+        for sub in all_subscribers
+        if derived_status_by_id[sub.id] == AccountStatus.canceled
     ]
     at_risk_subscribers = [
-        sub for sub in all_subscribers if sub.status == AccountStatus.suspended
+        sub
+        for sub in all_subscribers
+        if derived_status_by_id[sub.id] == AccountStatus.suspended
     ]
     churn_rate = (
         (len(cancelled_subscribers) / total_subscribers * 100)
@@ -701,7 +694,7 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
             [
                 str(sub.id),
                 name,
-                sub.status.value if sub.status else "",
+                derived_status_by_id[sub.id].value,
                 (
                     updated_at.isoformat()
                     if (updated_at := subscriber_service.get_effective_updated_at(sub))
