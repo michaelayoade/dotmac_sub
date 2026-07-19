@@ -23,9 +23,41 @@ from app.services import (
     team_inbox_read,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    PageMeta,
+)
 
 router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
+
+# The inbox queue's declared capabilities. The default sort is "priority", which
+# list_conversations maps to the urgency composite (priority, then recency), so
+# the default view is unchanged; last_message_at / created_at are single-column
+# sorts. All filters are declared so list_query.url round-trips them on a
+# sort/page click.
+INBOX_LIST_DEFINITION = ListDefinition(
+    key="team_inbox",
+    fields=(
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("channel_type", "Channel", filterable=True),
+        ListFieldDefinition("service_team_id", "Team", filterable=True),
+        ListFieldDefinition("assigned_person_id", "Assignee", filterable=True),
+        ListFieldDefinition("contact_resolution_status", "Contact", filterable=True),
+        ListFieldDefinition("needs_response", "Needs response", filterable=True),
+        ListFieldDefinition("muted", "Muted", filterable=True),
+        ListFieldDefinition("snoozed", "Snoozed", filterable=True),
+        ListFieldDefinition("priority_at_most", "Max priority", filterable=True),
+        ListFieldDefinition("priority", "Priority", sortable=True),
+        ListFieldDefinition("last_message_at", "Last activity", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="priority",
+    default_sort_dir="asc",
+    per_page_options=(10, 25, 50, 100),
+    default_per_page=25,
+)
 
 
 def _ctx(request: Request, db: Session) -> dict:
@@ -57,6 +89,8 @@ def team_inbox_queue(
     priority_at_most: int | None = Query(default=None, ge=0, le=999),
     muted: bool | None = Query(default=None),
     snoozed: bool | None = Query(default=None),
+    sort_by: str | None = Query(default=None, alias="sort"),
+    sort_dir: str | None = Query(default=None, alias="dir"),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -72,7 +106,38 @@ def team_inbox_queue(
     )
     clean_muted = muted if isinstance(muted, bool) else None
     clean_snoozed = snoozed if isinstance(snoozed, bool) else None
-    offset = (page - 1) * per_page
+    definition = INBOX_LIST_DEFINITION
+    safe_sort = (
+        sort_by if sort_by in definition.sortable_keys else definition.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page if per_page in definition.per_page_options else definition.default_per_page
+    )
+    list_query = definition.build_query(
+        search=search,
+        filters={
+            "status": status,
+            "channel_type": channel_type,
+            "service_team_id": service_team_id,
+            "assigned_person_id": assigned_person_id,
+            "contact_resolution_status": clean_contact_resolution_status,
+            "needs_response": "true" if needs_response else None,
+            "muted": ("true" if clean_muted else "false")
+            if clean_muted is not None
+            else None,
+            "snoozed": ("true" if clean_snoozed else "false")
+            if clean_snoozed is not None
+            else None,
+            "priority_at_most": str(clean_priority_at_most)
+            if clean_priority_at_most is not None
+            else None,
+        },
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
     result = team_inbox_read.list_conversations(
         db,
         search=search,
@@ -85,19 +150,24 @@ def team_inbox_queue(
         priority_at_most=clean_priority_at_most,
         muted=clean_muted,
         snoozed=clean_snoozed,
-        limit=per_page,
-        offset=offset,
+        order_by=list_query.sort_by,
+        order_dir=list_query.sort_dir,
+        limit=list_query.per_page,
+        offset=(list_query.page - 1) * list_query.per_page,
     )
+    page_meta = PageMeta.from_query(list_query, result.count)
     context = _ctx(request, db)
     context.update(
         {
             "rows": result.items,
             "queue_metrics": team_inbox_operations.queue_metrics(db),
             "count": result.count,
-            "page": page,
-            "per_page": per_page,
-            "has_previous": page > 1,
-            "has_next": offset + len(result.items) < result.count,
+            "list_query": list_query,
+            "page_meta": page_meta,
+            "page": page_meta.page,
+            "per_page": page_meta.per_page,
+            "has_previous": page_meta.has_previous,
+            "has_next": page_meta.has_next,
             "search": search or "",
             "status": status or "",
             "channel_type": channel_type or "",
