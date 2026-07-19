@@ -55,7 +55,7 @@ Classifications used below:
 | Concern | Current authority | Class | Notes |
 |---|---|---|---|
 | Catalog/offers/pricing | `app/models/catalog.py` + `app/services/catalog/*`, exposed to network via `service_intent.*` adapters | adapt | Catalog stays ISP-shaped; kernel entitlement/offer contracts sit behind the existing `service_intent` seam. Note: `catalog.py` mixes commercial and network-access models in one module |
-| Subscription lifecycle | `app/services/account_lifecycle.py` (legal transitions, suspend/restore/activate/expire/cancel, `compute_account_status`) + `EnforcementLock` ledger; access decision in `access_resolution.py`; network consequence in `enforcement.py` | **reuse** | Already kernel-shaped (state machine + lock ledger + observation/decision/consequence split). **Blocker: stray status writers** (below) must be closed first |
+| Subscription lifecycle | `app/services/account_lifecycle.py` (legal transitions, suspend/restore/activate/expire/cancel, `compute_account_status`) + `EnforcementLock` ledger; access decision in `access_resolution.py`; network consequence in `enforcement.py` | **reuse** | Already kernel-shaped (state machine + lock ledger + observation/decision/consequence split). Raw-writer consolidation was completed by the 2026-07-13 re-audit (see `tests/test_access_enforcement_strays.py`) and is now pinned by `tests/architecture/test_subscription_status_writers.py` |
 | Billing/invoicing/payments/ledger | `app/services/billing/*` over `app/models/billing.py` (invoice-state legality, allocations, ledger, credit notes, tax) | adapt | Money is **Decimal-clean** (`Numeric(12,2)`, no float money found); single-currency NGN hardcoded on 8 tables. Kernel `Money` type = reuse; FX is a later low-friction bolt-on |
 | Dunning/collections | `app/services/collections/_core.py` + policy sets; "dunning owns postpaid enforcement; prepaid enforcement owns prepaid access" | product-owned | ISP-policy machinery, not kernel material |
 | Usage/metering/FUP | `app/models/usage.py` + `app/tasks/usage.py` (RADIUS accounting import, rating runs, quota, FUP) | product-owned | Kernel metering could front `UsageRatingRun`/`QuotaBucket` at earliest migrate-later. **Convergence item:** FUP *decision* logic lives inside the task body against the repo's own thin-task rule — extract to a service before any kernel job-contract adoption |
@@ -89,17 +89,23 @@ Classifications used below:
 These are the parallel decision paths the adoption plan requires a cutover-and-removal
 gate for. Verified at 7807afcd:
 
-1. **`Subscription.status` written outside `account_lifecycle`** — bypassing
-   `assert_legal_subscription_transition`:
-   - `app/services/crm_api.py:1178` (sets `disabled`) and `:1934` (sets `canceled` in
-     an IntegrityError fallback);
-   - `app/services/reseller_portal.py:1471` (sets `active`) and `:1490` (sets
-     `disabled`) — these do consult the lock ledger but still bypass the transition
-     service;
-   - `app/services/web_system_restore_tool.py` (restore tooling; arguably legitimate,
-     needs an explicit exemption note if kept).
-   Closing these is the prerequisite for classifying subscription lifecycle as
-   kernel-**reuse**.
+1. **`Subscription.status` single-writer consolidation — DONE, now pinned.** At
+   7807afcd the only modules assigning `SubscriptionStatus` are the owner
+   (`account_lifecycle`), the legality-gated catalog coordinator
+   (`catalog/subscriptions.py` — calls `assert_legal_subscription_transition`;
+   its `_revert_failed_activation` is a commented compensation write), and the
+   snapshot-restore tool (`web_system_restore_tool.py`, maintenance exemption).
+   The historical strays (CRM API, reseller portal — S3 of the 2026-07-13
+   re-audit) were already routed through the owner. The consolidation is pinned
+   going forward by `tests/architecture/test_subscription_status_writers.py`
+   (AST-based, allowlisted owners, sensitivity-proven).
+1b. **`Subscriber.status` mutated in-memory for display** — `web_reports.py`
+   (three sites) and `subscriber_growth.py` assign a *derived* `AccountStatus`
+   onto live ORM `Subscriber` rows purely for report filtering/rendering. The
+   request path never commits, but mutating persistent objects for presentation
+   is an autoflush hazard and makes the UI a parallel projection of account
+   status. Candidate cleanup: derive into a view-model field instead of the ORM
+   attribute.
 2. **Audit has two writer entry points** (`AuditEvents.create/.record` and
    `record_audit_event`) — consolidate on the adapter.
 3. **Scoped-permission guard duplicated** (`auth_dependencies.require_scoped_permission`
@@ -118,8 +124,8 @@ gate for. Verified at 7807afcd:
    paths (invoice settlement, prepaid credit, suspend/restore).
 3. Declare the `subscriber_management` `ProductAssemblySpec` (modules, providers,
    brand, surfaces, compatibility) once the kernel publishes the spec contract.
-4. Open the stray-writer cleanup (finding 1) as its own SOT slice — it is valuable
-   independent of kernel adoption.
+4. Review the `Subscriber.status` display-mutation sites (finding 1b) — move the
+   derived status into a view-model field rather than the ORM attribute.
 
 ## Explicitly out of scope for Phase 0
 
