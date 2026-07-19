@@ -59,11 +59,13 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -284,6 +286,75 @@ class InstallationProject(Base):
     project_notes = relationship("InstallationProjectNote", back_populates="project")
     as_built_routes = relationship("AsBuiltRoute", back_populates="project")
     purchase_invoices = relationship("VendorPurchaseInvoice", back_populates="project")
+    lifecycle_events = relationship(
+        "InstallationProjectLifecycleEvent",
+        back_populates="project",
+        order_by="InstallationProjectLifecycleEvent.occurred_at",
+    )
+
+
+class InstallationProjectLifecycleEvent(Base):
+    """Append-only official evidence for the vendor project lifecycle."""
+
+    __tablename__ = "installation_project_lifecycle_events"
+    __table_args__ = (
+        CheckConstraint(
+            "from_status <> to_status",
+            name="ck_installation_project_lifecycle_status_change",
+        ),
+        Index(
+            "ix_installation_project_lifecycle_project_occurred",
+            "project_id",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, unique=True, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("installation_projects.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    vendor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vendors.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    from_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    to_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now
+    )
+
+    project = relationship("InstallationProject", back_populates="lifecycle_events")
+    vendor = relationship("Vendor")
+
+
+class InstallationProjectLifecycleEventImmutableError(RuntimeError):
+    pass
+
+
+@event.listens_for(InstallationProjectLifecycleEvent, "before_update")
+def _reject_installation_lifecycle_event_update(*_args: object) -> None:
+    raise InstallationProjectLifecycleEventImmutableError(
+        "Installation-project lifecycle evidence is append-only"
+    )
+
+
+@event.listens_for(InstallationProjectLifecycleEvent, "before_delete")
+def _reject_installation_lifecycle_event_delete(*_args: object) -> None:
+    raise InstallationProjectLifecycleEventImmutableError(
+        "Installation-project lifecycle evidence is append-only"
+    )
 
 
 class ProjectQuote(Base):

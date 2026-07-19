@@ -80,6 +80,10 @@ class EventType(enum.Enum):
     service_order_assigned = "service_order.assigned"
     service_order_completed = "service_order.completed"
 
+    # Operations - vendor installation project lifecycle
+    vendor_project_started = "vendor_project.started"
+    vendor_project_completed = "vendor_project.completed"
+
     # Operations - Appointment events (2)
     appointment_scheduled = "appointment.scheduled"
     appointment_missed = "appointment.missed"

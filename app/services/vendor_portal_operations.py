@@ -14,6 +14,7 @@ from app.models.vendor_routes import (
     AsBuiltLineItem,
     AsBuiltRoute,
     InstallationProject,
+    InstallationProjectLifecycleEvent,
     InstallationProjectStatus,
     ProjectQuote,
     ProjectQuoteLineItem,
@@ -30,6 +31,8 @@ from app.schemas.vendor_portal import (
     VendorRouteRevisionCreate,
 )
 from app.services.common import coerce_uuid
+from app.services.events import EventType, emit_event
+from app.services.ui_contracts import Action
 
 _EDITABLE_QUOTES = {
     ProjectQuoteStatus.draft.value,
@@ -96,8 +99,34 @@ def _recalculate(quote: ProjectQuote) -> None:
     quote.total = _money(quote.subtotal + quote.tax_total)
 
 
-def _serialize_project(row: InstallationProject) -> dict:
+def _serialize_project(
+    row: InstallationProject, viewer_vendor_id: str | None = None
+) -> dict:
     project = row.project
+    is_mine = (
+        viewer_vendor_id is not None
+        and row.assigned_vendor_id is not None
+        and str(row.assigned_vendor_id) == str(viewer_vendor_id)
+    )
+    lifecycle_action = None
+    if is_mine and row.status == InstallationProjectStatus.approved.value:
+        lifecycle_action = Action(
+            key="start",
+            label="Start work",
+            allowed=True,
+            preview_url=f"/vendor/projects/{row.id}/start",
+            affected=1,
+            requires_confirmation=True,
+        )
+    elif is_mine and row.status == InstallationProjectStatus.in_progress.value:
+        lifecycle_action = Action(
+            key="complete",
+            label="Mark complete",
+            allowed=True,
+            preview_url=f"/vendor/projects/{row.id}/complete",
+            affected=1,
+            requires_confirmation=True,
+        )
     return {
         "id": row.id,
         "project_id": row.project_id,
@@ -114,6 +143,7 @@ def _serialize_project(row: InstallationProject) -> dict:
         "notes": row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
+        "lifecycle_action": lifecycle_action,
     }
 
 
@@ -206,7 +236,7 @@ class VendorPortalOperations:
             .limit(limit)
             .all()
         )
-        return [_serialize_project(row) for row in rows]
+        return [_serialize_project(row, viewer_vendor_id=vendor_id) for row in rows]
 
     @staticmethod
     def create_quote(
@@ -507,6 +537,179 @@ class VendorPortalOperations:
             quote.status = ProjectQuoteStatus.revision_requested.value
         db.commit()
         return _serialize_quote(_quote(db, quote_id))
+
+    @staticmethod
+    def preview_project_lifecycle(
+        db: Session,
+        project_id: str,
+        *,
+        vendor_id: str,
+        action: str,
+        for_update: bool = False,
+    ) -> dict:
+        """Return the owner-validated impact and stale-check state."""
+
+        project = _project(db, project_id, for_update=for_update)
+        if project.assigned_vendor_id != coerce_uuid(vendor_id):
+            raise HTTPException(
+                status_code=403, detail="Project is not assigned to this vendor"
+            )
+        transitions = {
+            "start": (
+                InstallationProjectStatus.approved.value,
+                InstallationProjectStatus.in_progress.value,
+                "Start field work",
+                "Records that the assigned vendor has begun field work",
+            ),
+            "complete": (
+                InstallationProjectStatus.in_progress.value,
+                InstallationProjectStatus.completed.value,
+                "Mark field work complete",
+                "Records vendor completion for Dotmac review and verification",
+            ),
+        }
+        if action not in transitions:
+            raise HTTPException(status_code=400, detail="Unsupported lifecycle action")
+        expected, target, title, summary = transitions[action]
+        if project.status != expected:
+            label = "approved" if action == "start" else "in-progress"
+            verb = "started" if action == "start" else "completed"
+            raise HTTPException(
+                status_code=409,
+                detail=f"Only an {label} project can be {verb}",
+            )
+        native_project = project.project
+        return {
+            "submission_type": f"project_{action}",
+            "project_id": str(project.id),
+            "target_id": str(project.id),
+            "title": title,
+            "summary": summary,
+            "details": [
+                ("Project", getattr(native_project, "name", None) or str(project.id)),
+                ("Current state", expected.replace("_", " ").title()),
+                ("Result", target.replace("_", " ").title()),
+                ("Affected", "1 installation project"),
+            ],
+            "state": {
+                "project_id": str(project.id),
+                "vendor_id": str(project.assigned_vendor_id),
+                "from_status": project.status,
+                "to_status": target,
+                "updated_at": project.updated_at,
+            },
+        }
+
+    @staticmethod
+    def transition_project(
+        db: Session,
+        project_id: str,
+        *,
+        vendor_id: str,
+        action: str,
+        actor_id: str,
+        actor_type: str,
+        commit: bool = True,
+    ) -> dict:
+        """Own one locked transition plus actor/time/event evidence."""
+
+        if not str(actor_id or "").strip() or not str(actor_type or "").strip():
+            raise HTTPException(
+                status_code=400, detail="Lifecycle transition actor is required"
+            )
+
+        preview = VendorPortalOperations.preview_project_lifecycle(
+            db,
+            project_id,
+            vendor_id=vendor_id,
+            action=action,
+            for_update=True,
+        )
+        project = _project(db, project_id, for_update=True)
+        previous = str(preview["state"]["from_status"])
+        target = str(preview["state"]["to_status"])
+        event_type = (
+            EventType.vendor_project_started
+            if action == "start"
+            else EventType.vendor_project_completed
+        )
+        project.status = target
+        domain_event = emit_event(
+            db,
+            event_type,
+            {
+                "project_id": str(project.id),
+                "native_project_id": str(project.project_id),
+                "vendor_id": str(project.assigned_vendor_id),
+                "from_status": previous,
+                "to_status": target,
+                "actor_type": str(actor_type),
+                "actor_id": str(actor_id),
+            },
+            actor=str(actor_id),
+            subscriber_id=project.subscriber_id,
+            account_id=project.subscriber_id,
+        )
+        evidence = InstallationProjectLifecycleEvent(
+            event_id=domain_event.event_id,
+            project_id=project.id,
+            vendor_id=project.assigned_vendor_id,
+            event_type=domain_event.event_type.value,
+            from_status=previous,
+            to_status=target,
+            actor_type=str(actor_type),
+            actor_id=str(actor_id),
+            occurred_at=domain_event.occurred_at,
+        )
+        db.add(evidence)
+        db.flush()
+        if commit:
+            db.commit()
+        result = _serialize_project(project, viewer_vendor_id=vendor_id)
+        result["lifecycle_event_id"] = str(evidence.id)
+        result["domain_event_id"] = str(domain_event.event_id)
+        result["transitioned_at"] = domain_event.occurred_at
+        return result
+
+    @staticmethod
+    def start_project(
+        db: Session,
+        project_id: str,
+        *,
+        vendor_id: str,
+        actor_id: str,
+        actor_type: str = "vendor_user",
+        commit: bool = True,
+    ) -> dict:
+        return VendorPortalOperations.transition_project(
+            db,
+            project_id,
+            vendor_id=vendor_id,
+            action="start",
+            actor_id=actor_id,
+            actor_type=actor_type,
+            commit=commit,
+        )
+
+    @staticmethod
+    def complete_project(
+        db: Session,
+        project_id: str,
+        *,
+        vendor_id: str,
+        actor_id: str,
+        actor_type: str = "vendor_user",
+        commit: bool = True,
+    ) -> dict:
+        return VendorPortalOperations.transition_project(
+            db,
+            project_id,
+            vendor_id=vendor_id,
+            action="complete",
+            actor_id=actor_id,
+            actor_type=actor_type,
+            commit=commit,
+        )
 
     @staticmethod
     def create_route_revision(

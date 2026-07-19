@@ -1891,12 +1891,41 @@ def update_customer_account_status(
     }
 
 
+ACCOUNT_INVOICE_SORT_COLUMNS = {
+    "issued_at": Invoice.issued_at,
+    "created_at": Invoice.created_at,
+    "due_at": Invoice.due_at,
+    "total": Invoice.total,
+    "status": Invoice.status,
+}
+
+
+def count_account_invoices(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+) -> int | None:
+    """Count a reseller account's active invoices, or None if not owned."""
+    account = _get_customer_account(db, reseller_id, account_id)
+    if not account:
+        return None
+    return (
+        db.query(func.count(Invoice.id))
+        .filter(Invoice.account_id == account.id)
+        .filter(Invoice.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+
+
 def list_account_invoices(
     db: Session,
     reseller_id: str,
     account_id: str,
     limit: int = 25,
     offset: int = 0,
+    order_by: str = "created_at",
+    order_dir: str = "desc",
 ) -> list[dict] | None:
     """List invoices for a reseller's subscriber account.
 
@@ -1906,11 +1935,18 @@ def list_account_invoices(
     if not account:
         return None
 
+    sort_column = ACCOUNT_INVOICE_SORT_COLUMNS.get(order_by, Invoice.created_at)
+    ordered = (
+        sort_column.asc().nullslast()
+        if order_dir == "asc"
+        else sort_column.desc().nullslast()
+    )
     invoices = (
         db.query(Invoice)
         .filter(Invoice.account_id == account.id)
         .filter(Invoice.is_active.is_(True))
-        .order_by(Invoice.created_at.desc())
+        # Unique tie-breaker keeps ordering deterministic across pages.
+        .order_by(ordered, Invoice.id.asc())
         .limit(limit)
         .offset(offset)
         .all()
@@ -1926,10 +1962,10 @@ def list_account_invoices(
                 "status_presentation": invoice_status_presentation(
                     inv.status
                 ).model_dump(mode="json"),
-                "total_amount": getattr(inv, "total", 0),
+                "total": getattr(inv, "total", 0),
                 "balance_due": inv.balance_due or 0,
                 "issued_at": getattr(inv, "issued_at", None),
-                "due_date": getattr(inv, "due_at", None),
+                "due_at": getattr(inv, "due_at", None),
                 "created_at": inv.created_at,
             }
         )

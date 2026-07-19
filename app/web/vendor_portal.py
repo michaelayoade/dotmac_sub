@@ -138,6 +138,56 @@ def vendor_create_quote(
     return _redirect(project_id, "Quote created")
 
 
+@router.post("/projects/{project_id}/start")
+def vendor_start_project(
+    request: Request,
+    project_id: str,
+    auth: dict = Depends(require_web_auth),
+    db: Session = Depends(get_db),
+):
+    context = _context(auth, db)
+    proposal = vendor_submission_proposals.issue_project_lifecycle(
+        db,
+        project_id=project_id,
+        action="start",
+        vendor_id=str(context["native_vendor_id"]),
+        user_id=str(auth["principal_id"]),
+    )
+    return templates.TemplateResponse(
+        "vendor/submission_confirm.html",
+        {
+            "request": request,
+            "vendor": context["native_vendor"],
+            "proposal": proposal,
+        },
+    )
+
+
+@router.post("/projects/{project_id}/complete")
+def vendor_complete_project(
+    request: Request,
+    project_id: str,
+    auth: dict = Depends(require_web_auth),
+    db: Session = Depends(get_db),
+):
+    context = _context(auth, db)
+    proposal = vendor_submission_proposals.issue_project_lifecycle(
+        db,
+        project_id=project_id,
+        action="complete",
+        vendor_id=str(context["native_vendor_id"]),
+        user_id=str(auth["principal_id"]),
+    )
+    return templates.TemplateResponse(
+        "vendor/submission_confirm.html",
+        {
+            "request": request,
+            "vendor": context["native_vendor"],
+            "proposal": proposal,
+        },
+    )
+
+
 @router.post("/projects/{project_id}/quotes/{quote_id}/lines")
 def vendor_add_quote_line(
     project_id: str,
@@ -333,6 +383,8 @@ def vendor_confirm_submission(
         "quote": "Quote submitted",
         "as_built": "As-built submitted",
         "purchase_invoice": "Invoice submitted",
+        "project_start": "Project started",
+        "project_complete": "Project marked complete",
     }
     message = labels[result.submission_type]
     if result.replayed:
