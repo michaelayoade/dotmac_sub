@@ -3138,6 +3138,62 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=("access-state CoA/disconnect execution",),
                 depends_on=("access.radius_state", "sessions.radius_resolution"),
             ),
+            SOTService(
+                name="access.fup_rule_engine",
+                module="app.services.fup",
+                owns=(
+                    "FUP policy and rule definitions (CRUD)",
+                    "FUP rule evaluation and simulation",
+                ),
+                depends_on=("access.fup_usage_windows",),
+                notes=(
+                    "Pure decision engine shared by the enforcement sweep and "
+                    "the what-if simulator; it writes no enforcement state."
+                ),
+            ),
+            SOTService(
+                name="access.fup_runtime_state",
+                module="app.services.fup_state",
+                owns=("FUP per-subscription runtime state rows",),
+                depends_on=(),
+                notes=(
+                    "State store only: get/apply/clear/list. Decisions live in "
+                    "the rule engine and the enforcement sweep."
+                ),
+            ),
+            SOTService(
+                name="access.fup_usage_windows",
+                module="app.services.fup_usage",
+                owns=(
+                    "FUP consumption window bounds",
+                    "windowed FUP usage aggregation",
+                ),
+                depends_on=(),
+                notes=(
+                    "Single source of truth for FUP consumption windows and "
+                    "windowed usage reads; read-only over usage facts."
+                ),
+            ),
+            SOTService(
+                name="access.fup_enforcement_sweep",
+                module="app.services.fup_enforcement",
+                owns=(
+                    "FUP sweep enforce/warn/reset decisions",
+                    "FUP enforcement transition and cooldown hysteresis",
+                    "FUP repeat-upsell nudge policy",
+                    "FUP customer notification fan-out",
+                ),
+                depends_on=(
+                    "access.session_enforcement",
+                    "control.settings_spec",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Celery tasks keep only the advisory-lock plumbing, task "
+                    "names, and queue chaining; the sweep owns every "
+                    "enforce/warn/reset/repeat-upsell decision."
+                ),
+            ),
         ),
         entrypoints=(
             "app.services.events.handlers.enforcement",

@@ -58,6 +58,7 @@ def _run_evaluate(*, throttle_profile, should_enforce=True):
 
     with (
         patch("app.tasks.usage.SessionLocal", return_value=session),
+        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
             "app.services.usage._resolve_or_create_quota_bucket", return_value=bucket
@@ -75,8 +76,11 @@ def _run_evaluate(*, throttle_profile, should_enforce=True):
             side_effect=_settings_side_effect(throttle_profile=throttle_profile),
         ),
         patch("app.services.events.emit_event", emit_mock),
-        patch("app.tasks.usage._emit_fup_notifications", notif_mock),
-        patch("app.tasks.usage._fup_should_enforce", return_value=should_enforce),
+        patch("app.services.fup_enforcement._emit_fup_notifications", notif_mock),
+        patch(
+            "app.services.fup_enforcement._fup_should_enforce",
+            return_value=should_enforce,
+        ),
     ):
         from app.tasks.usage import evaluate_fup_rules
 
@@ -161,7 +165,7 @@ def test_fup_copy_does_not_falsely_claim_next_cycle():
     """The reset wording must reflect the actual data-allowance reset, not the
     billing 'cycle' (the monthly FUP window is the calendar month, not the
     subscriber's billing anchor)."""
-    from app.tasks.usage import _build_fup_notification
+    from app.services.fup_enforcement import _build_fup_notification
 
     # With a known reset time, the copy names the actual date.
     _subj, body = _build_fup_notification(

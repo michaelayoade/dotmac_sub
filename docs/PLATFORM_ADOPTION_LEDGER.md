@@ -123,7 +123,12 @@ gate for. Verified at 7807afcd:
    remains an explicit product decision.
 4. **Commit ownership is mixed** across services, `task_session`, `UnitOfWork`, and
    `auth_dependencies` — no single transaction owner yet.
-5. **FUP decisions embedded in `app/tasks/usage.py`** against the thin-task rule.
+5. **FUP decisions extracted — DONE.** The enforcement sweep (enforce/warn/reset
+   hysteresis, repeat-upsell policy, notification fan-out; ~570 lines) moved
+   verbatim from the Celery task body to `app/services/fup_enforcement.py`,
+   registered as `access.fup_enforcement_sweep` in the SOT relationships
+   registry; `app/tasks/usage.py` keeps only task shells, advisory-lock
+   plumbing, task names, and queue chaining.
 6. **`crm_native_sync` dual-write** — intentional and transitional, with a documented
    retirement point; hold it to that date.
 
