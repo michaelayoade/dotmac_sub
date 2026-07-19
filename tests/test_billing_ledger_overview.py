@@ -125,9 +125,7 @@ def test_ledger_totals_cover_full_filtered_cohort_not_display_limit(
 
     assert len(state["entries"]) == 200
     assert state["ledger_totals"]["credit_count"] == 205
-    assert state["ledger_totals"]["credit_amounts"] == {
-        "NGN": Decimal("2050.00")
-    }
+    assert state["ledger_totals"]["credit_amounts"] == {"NGN": Decimal("2050.00")}
 
 
 def test_build_ledger_entries_data_applies_custom_date_range(db_session, subscriber):

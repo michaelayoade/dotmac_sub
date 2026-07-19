@@ -682,12 +682,12 @@ def _resolve_dashboard_permissions(
         return (
             _has("billing:invoice:read")
             or _has("billing:payment:read")
-            or _has("reports:billing"),
+            or _has("reports:billing:read"),
             _has("network:device:read")
             or _has("network:olt:read")
             or _has("network:ont:read")
             or _has("monitoring:read")
-            or _has("reports:network"),
+            or _has("reports:network:read"),
             _has("customer:read"),
         )
     if user:

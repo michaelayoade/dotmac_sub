@@ -84,10 +84,7 @@ def test_revenue_kpis_wrap_customer_billing_figures():
 
     assert kpis["total_paid"].tone is StatusTone.positive
     assert kpis["total_paid"].cohort_url == "/reseller/billing#customer-paid"
-    assert (
-        kpis["total_outstanding"].cohort_url
-        == "/reseller/billing#total-outstanding"
-    )
+    assert kpis["total_outstanding"].cohort_url == "/reseller/billing#total-outstanding"
     assert kpis["account_count"].cohort_url == "/reseller/accounts"
     assert all(kpi.cohort_url.startswith("/") for kpi in kpis.values())
 

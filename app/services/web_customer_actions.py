@@ -714,7 +714,8 @@ def _require_bulk_execution_confirmation(
         raise HTTPException(
             status_code=409,
             detail=(
-                "The selected customer scope or impact changed after preview. "
+                "The selected customer scope changed after preview, or its impact "
+                "changed. "
                 "Review the updated impact before confirming again."
             ),
         )

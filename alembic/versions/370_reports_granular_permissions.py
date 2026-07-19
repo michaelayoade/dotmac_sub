@@ -64,9 +64,7 @@ def _copy_holder_grants(
 ) -> None:
     if table not in tables:
         return
-    extra_columns = (
-        f", granted_at, {granted_by_column}" if granted_by_column else ""
-    )
+    extra_columns = f", granted_at, {granted_by_column}" if granted_by_column else ""
     rows = bind.execute(
         sa.text(
             f"SELECT {holder_column}{extra_columns} "

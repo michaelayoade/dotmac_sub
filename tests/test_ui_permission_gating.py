@@ -44,6 +44,12 @@ def test_can_requires_the_specific_expanded_key():
     assert can(_request(held), "reports:billing:export") is False
 
 
+def test_legacy_reports_scope_is_read_only_in_ui_projection():
+    held = frozenset({"reports:billing"})
+    assert can(_request(held), "reports:billing:read") is True
+    assert can(_request(held), "reports:billing:export") is False
+
+
 def test_can_denies_when_no_permission_cache_is_present():
     # An ungated page never populated the cache; deny (route stays the authority).
     assert can(SimpleNamespace(state=SimpleNamespace(auth={})), "x:y:z") is False

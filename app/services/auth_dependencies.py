@@ -396,12 +396,22 @@ def require_role(role_name: str):
 
 
 def _permission_domain_aliases(permission_key: str) -> list[str]:
-    """Return permission aliases used during customer->subscriber transition."""
+    """Return explicit compatibility aliases for permission-key transitions.
+
+    Legacy report API-key scopes remain read-only aliases during the granular
+    reports migration. They intentionally do not satisfy ``:export``.
+    """
     aliases = [permission_key]
     if permission_key.startswith("customer:"):
         aliases.append(permission_key.replace("customer:", "subscriber:", 1))
     elif permission_key.startswith("subscriber:"):
         aliases.append(permission_key.replace("subscriber:", "customer:", 1))
+    legacy_report_read_scope = {
+        "reports:billing:read": "reports:billing",
+        "reports:network:read": "reports:network",
+    }.get(permission_key)
+    if legacy_report_read_scope:
+        aliases.append(legacy_report_read_scope)
     return aliases
 
 
