@@ -421,33 +421,115 @@ def save_address_coordinates(
     }
 
 
+def _bulk_id_refs(customers: list[Subscriber]) -> list[dict[str, str]]:
+    """Shape resolved subscribers as the {id, type} refs the executors expect."""
+    return [
+        {
+            "id": str(customer.id),
+            "type": "business" if customer.is_business else "person",
+        }
+        for customer in customers
+    ]
+
+
 def bulk_update_customer_status_from_payload(
     db: Session, payload: dict[str, Any]
 ) -> dict[str, object]:
-    customer_ids = payload.get("customer_ids", [])
     new_status = payload.get("status")
-    if not customer_ids or not new_status:
-        raise HTTPException(
-            status_code=400, detail="customer_ids and status are required"
-        )
     if new_status not in ("active", "inactive"):
         raise HTTPException(
             status_code=400, detail="status must be 'active' or 'inactive'"
         )
-    return bulk_update_customer_status(
-        db=db,
-        customer_ids=customer_ids,
-        is_active=new_status == "active",
+    resolved = resolve_bulk_customer_scope(db, payload)
+    if not resolved.customers:
+        raise HTTPException(status_code=400, detail="No customers matched this scope")
+
+    # Impact preview: how many rows actually transition vs already sit in the
+    # target state. Deactivation is destructive (cuts service), so the owner
+    # marks it and the caller must preview then confirm against an unchanged
+    # scope before it runs (mirrors the bulk-update contract).
+    target_active = new_status == "active"
+    active_now = sum(1 for customer in resolved.customers if customer.is_active)
+    will_change = (resolved.matched_count - active_now) if target_active else active_now
+    impact = {
+        "total": resolved.matched_count,
+        "will_change": will_change,
+        "already_in_target_state": resolved.matched_count - will_change,
+        "target_status": new_status,
+        "destructive": not target_active,
+    }
+    action_label = "Reactivate customers" if target_active else "Deactivate customers"
+
+    if bool(payload.get("preview_only")):
+        return {
+            "success": True,
+            "preview": True,
+            "scope": resolved.scope,
+            "matched_count": resolved.matched_count,
+            "scope_token": resolved.scope_token,
+            "missing_ids": list(resolved.missing_ids),
+            "impact": impact,
+        }
+
+    _require_bulk_execution_confirmation(
+        payload, resolved=resolved, action_label=action_label
     )
+    result = bulk_update_customer_status(
+        db=db,
+        customer_ids=_bulk_id_refs(resolved.customers),
+        is_active=target_active,
+    )
+    return {
+        **result,
+        "preview": False,
+        "matched_count": resolved.matched_count,
+        "scope_token": resolved.scope_token,
+        "missing_ids": list(resolved.missing_ids),
+        "impact": impact,
+    }
 
 
 def bulk_delete_customers_from_payload(
     db: Session, payload: dict[str, Any]
 ) -> dict[str, object]:
-    customer_ids = payload.get("customer_ids", [])
-    if not customer_ids:
-        raise HTTPException(status_code=400, detail="customer_ids is required")
-    return bulk_delete_customers(db=db, customer_ids=customer_ids)
+    resolved = resolve_bulk_customer_scope(db, payload)
+    if not resolved.customers:
+        raise HTTPException(status_code=400, detail="No customers matched this scope")
+
+    # Deletion is permanent — surface how many of the deleted rows are still
+    # active (extra caution) and always require a scope-verified confirmation.
+    active_now = sum(1 for customer in resolved.customers if customer.is_active)
+    impact = {
+        "total": resolved.matched_count,
+        "active": active_now,
+        "destructive": True,
+    }
+
+    if bool(payload.get("preview_only")):
+        return {
+            "success": True,
+            "preview": True,
+            "scope": resolved.scope,
+            "matched_count": resolved.matched_count,
+            "scope_token": resolved.scope_token,
+            "missing_ids": list(resolved.missing_ids),
+            "impact": impact,
+        }
+
+    _require_bulk_execution_confirmation(
+        payload, resolved=resolved, action_label="Delete customers"
+    )
+    result = bulk_delete_customers(
+        db=db, customer_ids=_bulk_id_refs(resolved.customers)
+    )
+    return {
+        **result,
+        "preview": False,
+        "matched_count": resolved.matched_count,
+        "scope_token": resolved.scope_token,
+        "missing_ids": list(resolved.missing_ids),
+        "impact": impact,
+    }
 
 
 _CUSTOMER_BULK_FILTER_KEYS = (
