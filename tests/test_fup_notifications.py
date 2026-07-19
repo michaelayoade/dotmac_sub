@@ -3,7 +3,10 @@
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.notification import Notification, NotificationChannel
 from app.models.subscription_engine import SettingValueType
-from app.tasks.usage import _build_fup_notification, _emit_fup_notifications
+from app.services.fup_enforcement import (
+    _build_fup_notification,
+    _emit_fup_notifications,
+)
 
 
 def test_build_fup_notification_messages():
@@ -154,7 +157,7 @@ def test_repeat_upsell_fires_after_two_of_three_cycles(
     from decimal import Decimal
 
     from app.models.usage import QuotaBucket
-    from app.tasks.usage import _maybe_queue_repeat_upsell
+    from app.services.fup_enforcement import _maybe_queue_repeat_upsell
 
     subscriber.email = "fup.customer3@example.com"
     db_session.commit()
@@ -203,7 +206,7 @@ def test_repeat_upsell_silent_on_first_offense(db_session, subscriber, subscript
     from decimal import Decimal
 
     from app.models.usage import QuotaBucket
-    from app.tasks.usage import _maybe_queue_repeat_upsell
+    from app.services.fup_enforcement import _maybe_queue_repeat_upsell
 
     now = datetime.now(UTC)
     bucket = QuotaBucket(
@@ -234,7 +237,7 @@ def test_build_repeat_upsell_message():
 def test_emit_push_still_created_when_subscriber_has_no_email(db_session, subscriber):
     """A missing email must only skip the email channel, not push."""
     from app.models.notification import Notification, NotificationChannel
-    from app.tasks.usage import _emit_fup_notifications
+    from app.services.fup_enforcement import _emit_fup_notifications
 
     subscriber.email = ""
     db_session.commit()
