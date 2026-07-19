@@ -7,10 +7,11 @@
   <div><p class="text-sm text-slate-500">{{ project.project_code or project.id }}</p><h1 class="text-2xl font-bold">{{ project.project_name or "Installation project" }}</h1></div>
   <div class="flex items-center gap-3">
     <span class="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold uppercase text-blue-700">{{ project.status|replace('_', ' ') }}</span>
-    {% if project.can_start %}
-    <form method="post" action="/vendor/projects/{{ project.id }}/start" onsubmit="return confirm('Start field work on this project? This tells Dotmac the assigned crew is on site.');"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">Start work</button></form>
-    {% elif project.can_complete %}
-    <form method="post" action="/vendor/projects/{{ project.id }}/complete" onsubmit="return confirm('Mark this project complete? Dotmac reviews and verifies the work before final acceptance.');"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white">Mark complete</button></form>
+    {% if project.lifecycle_action and project.lifecycle_action.allowed %}
+    <form method="post" action="{{ project.lifecycle_action.preview_url }}">
+      {% include "components/forms/csrf_input.html" %}
+      <button class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">{{ project.lifecycle_action.label }}</button>
+    </form>
     {% endif %}
   </div>
 </div>

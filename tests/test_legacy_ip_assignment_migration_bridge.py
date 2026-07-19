@@ -31,7 +31,7 @@ def test_deployed_legacy_revision_is_restored_as_idempotent_operation() -> None:
     assert "if not _has_index(TABLE" in source
 
 
-def test_legacy_branch_merges_above_current_head() -> None:
+def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
     migration = _load_migration(
         "368_merge_legacy_ip_assignments_branch.py",
         "migration_368_merge_legacy_ip_assignments_branch",
@@ -42,11 +42,16 @@ def test_legacy_branch_merges_above_current_head() -> None:
         "367_reports_support_permission",
         "153_ip_assignments_subscription_owner",
     }
+    current = _load_migration(
+        "369_vendor_project_lifecycle_evidence.py",
+        "migration_369_vendor_project_lifecycle_evidence",
+    )
+    assert current.down_revision == migration.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["368_merge_legacy_ip_assignments_branch"]
+    assert script.get_heads() == [current.revision]
     legacy = script.get_revision("153_ip_assignments_subscription_owner")
     assert legacy is not None
     assert "368_merge_legacy_ip_assignments_branch" in {

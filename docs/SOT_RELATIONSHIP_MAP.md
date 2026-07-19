@@ -2284,14 +2284,28 @@ Dependency order:
    requirements, and completion transitions.
 7. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
-7. `operations.vendor_project_workflow` owns installation-project quote and
+8. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
+   is the only writer for vendor start/complete transitions on
+   `installation_projects`: `approved -> in_progress -> completed`. It locks
+   the project, rechecks the assigned vendor and current state, and atomically
+   appends `installation_project_lifecycle_events` evidence carrying the
+   authenticated actor type/id, transition time, previous/result state, vendor,
+   and durable event id. The same transaction stages the typed outbox events
+   `vendor_project.started` or `vendor_project.completed`. Cross-team consumers
+   may read that timeline or consume those events; they do not infer actor/time
+   from `updated_at` and do not write project status directly. Vendor routes,
+   confirmation handlers, templates, and future delivery integrations are thin
+   adapters around this owner.
+9. `operations.vendor_project_workflow` owns installation-project quote and
    as-built evidence lifecycles, including the read-only impact snapshot used
    before submit.
-8. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
+10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
-9. `operations.vendor_submission_confirmation` owns the short-lived signed
+11. `operations.vendor_action_confirmation` (implemented by
+   `app.services.vendor_submission_proposals`) owns the short-lived signed
    confirmation proposal, stale-preview comparison, idempotency reservation,
-   and replay result for quote, as-built, and purchase-invoice submissions.
+   and replay result for lifecycle actions, quote, as-built, and
+   purchase-invoice submissions.
    The proposal carries no decision authority: each domain owner locks and
    rechecks its current facts, and the mutation plus idempotency result commit
    once. Vendor web routes only request preview or confirmation.

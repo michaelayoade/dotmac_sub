@@ -27,6 +27,7 @@ from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
     PageMeta,
+    request_needs_canonicalization,
 )
 
 router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
@@ -74,6 +75,16 @@ def _ctx(request: Request, db: Session) -> dict:
     }
 
 
+def _clean_uuid(value: str | None) -> str | None:
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    try:
+        return str(UUID(candidate))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 @router.get(
     "",
     response_class=HTMLResponse,
@@ -88,17 +99,28 @@ def team_inbox_queue(
     assigned_person_id: str | None = Query(default=None),
     needs_response: bool = Query(default=False),
     contact_resolution_status: str | None = Query(default=None),
-    priority_at_most: int | None = Query(default=None, ge=0, le=999),
+    priority_at_most: int | None = Query(default=None),
     muted: bool | None = Query(default=None),
     snoozed: bool | None = Query(default=None),
     open_only: bool = Query(default=False),
     unassigned: bool = Query(default=False),
     sort_by: str | None = Query(default=None, alias="sort"),
     sort_dir: str | None = Query(default=None, alias="dir"),
-    page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=25, ge=10, le=100),
+    page: int = Query(default=1),
+    per_page: int = Query(default=25),
     db: Session = Depends(get_db),
 ):
+    requested_status = status
+    requested_channel_type = channel_type
+    requested_service_team_id = service_team_id
+    requested_assigned_person_id = assigned_person_id
+    requested_priority_at_most = priority_at_most
+    status_values = {item.value for item in InboxConversationStatus}
+    channel_values = {item.value for item in InboxChannelType}
+    status = status if status in status_values else None
+    channel_type = channel_type if channel_type in channel_values else None
+    service_team_id = _clean_uuid(service_team_id)
+    assigned_person_id = _clean_uuid(assigned_person_id)
     clean_contact_resolution_status = (
         contact_resolution_status.strip()
         if isinstance(contact_resolution_status, str)
@@ -106,7 +128,9 @@ def team_inbox_queue(
         else None
     )
     clean_priority_at_most = (
-        priority_at_most if isinstance(priority_at_most, int) else None
+        priority_at_most
+        if isinstance(priority_at_most, int) and 0 <= priority_at_most <= 999
+        else None
     )
     clean_muted = muted if isinstance(muted, bool) else None
     clean_snoozed = snoozed if isinstance(snoozed, bool) else None
@@ -118,9 +142,11 @@ def team_inbox_queue(
     )
     safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
     safe_per_page = (
-        per_page if per_page in definition.per_page_options else definition.default_per_page
+        per_page
+        if per_page in definition.per_page_options
+        else definition.default_per_page
     )
-    list_query = definition.build_query(
+    requested_query = definition.build_query(
         search=search,
         filters={
             "status": status,
@@ -148,7 +174,7 @@ def team_inbox_queue(
     )
     result = team_inbox_read.list_conversations(
         db,
-        search=search,
+        search=requested_query.search,
         status=status,
         channel_type=channel_type,
         service_team_id=service_team_id,
@@ -160,12 +186,58 @@ def team_inbox_queue(
         snoozed=clean_snoozed,
         open_only=clean_open_only,
         unassigned=clean_unassigned,
-        order_by=list_query.sort_by,
-        order_dir=list_query.sort_dir,
-        limit=list_query.per_page,
-        offset=(list_query.page - 1) * list_query.per_page,
+        order_by=requested_query.sort_by,
+        order_dir=requested_query.sort_dir,
+        limit=requested_query.per_page,
+        offset=requested_query.offset,
     )
-    page_meta = PageMeta.from_query(list_query, result.count)
+    page_meta = PageMeta.from_query(requested_query, result.count)
+    list_query = requested_query.with_page(page_meta.page)
+    if list_query.page != requested_query.page:
+        result = team_inbox_read.list_conversations(
+            db,
+            search=list_query.search,
+            status=status,
+            channel_type=channel_type,
+            service_team_id=service_team_id,
+            assigned_person_id=assigned_person_id,
+            needs_response=needs_response,
+            contact_resolution_status=clean_contact_resolution_status,
+            priority_at_most=clean_priority_at_most,
+            muted=clean_muted,
+            snoozed=clean_snoozed,
+            open_only=clean_open_only,
+            unassigned=clean_unassigned,
+            order_by=list_query.sort_by,
+            order_dir=list_query.sort_dir,
+            limit=list_query.per_page,
+            offset=list_query.offset,
+        )
+    raw_filters = {
+        "status": requested_status,
+        "channel_type": requested_channel_type,
+        "service_team_id": requested_service_team_id,
+        "assigned_person_id": requested_assigned_person_id,
+        "contact_resolution_status": contact_resolution_status,
+        "needs_response": "true" if needs_response else None,
+        "muted": ("true" if muted else "false") if muted is not None else None,
+        "snoozed": ("true" if snoozed else "false") if snoozed is not None else None,
+        "open_only": "true" if open_only else None,
+        "unassigned": "true" if unassigned else None,
+        "priority_at_most": str(requested_priority_at_most)
+        if requested_priority_at_most is not None
+        else None,
+    }
+    if request_needs_canonicalization(
+        list_query,
+        search=search,
+        filters=raw_filters,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    ):
+        return RedirectResponse(url=list_query.url("/admin/inbox"), status_code=307)
     context = _ctx(request, db)
     context.update(
         {
@@ -178,7 +250,7 @@ def team_inbox_queue(
             "per_page": page_meta.per_page,
             "has_previous": page_meta.has_previous,
             "has_next": page_meta.has_next,
-            "search": search or "",
+            "search": list_query.search or "",
             "status": status or "",
             "channel_type": channel_type or "",
             "service_team_id": service_team_id or "",

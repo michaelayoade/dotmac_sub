@@ -869,6 +869,8 @@ from app.models.vendor_routes import (  # noqa: F401
     AsBuiltRoute,
     AsBuiltRouteStatus,
     InstallationProject,
+    InstallationProjectLifecycleEvent,
+    InstallationProjectLifecycleEventImmutableError,
     InstallationProjectNote,
     InstallationProjectStatus,
     ProjectQuote,

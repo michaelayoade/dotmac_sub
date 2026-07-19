@@ -108,8 +108,8 @@ def reseller_service_request_create(
 @router.get("/accounts", response_class=HTMLResponse)
 def reseller_accounts(
     request: Request,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=5, le=100),
+    page: int = Query(1),
+    per_page: int = Query(20),
     search: str = Query(""),
     status_filter: str = Query(""),
     sort_by: str | None = Query(None, alias="sort"),
@@ -141,8 +141,8 @@ def reseller_account_detail(
 def reseller_account_invoices(
     request: Request,
     account_id: str,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=5, le=100),
+    page: int = Query(1),
+    per_page: int = Query(25),
     sort_by: str | None = Query(None, alias="sort"),
     sort_dir: str | None = Query(None, alias="dir"),
     db: Session = Depends(get_db),

@@ -964,7 +964,7 @@ class Leads(ListResponseMixin):
             order_by,
             order_dir,
             {"created_at": Lead.created_at, "updated_at": Lead.updated_at},
-        )
+        ).order_by(Lead.id.asc())
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
@@ -1334,7 +1334,7 @@ class Quotes(ListResponseMixin):
             order_by,
             order_dir,
             {"created_at": Quote.created_at, "updated_at": Quote.updated_at},
-        )
+        ).order_by(Quote.id.asc())
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod

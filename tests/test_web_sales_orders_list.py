@@ -50,3 +50,18 @@ def test_build_sales_orders_list_context_normalizes_stale_params(db_session):
     assert query.per_page == 25
     assert query.filter_value("status") is None
     assert query.filter_value("source_type") is None
+    assert ctx["canonicalization_needed"] is True
+
+
+def test_sales_order_context_clamps_stale_page_into_query(db_session):
+    ctx = web_sales.build_sales_orders_list_context(
+        db_session,
+        status=None,
+        payment_status=None,
+        source_type=None,
+        search=None,
+        page=999,
+        per_page=25,
+    )
+    assert ctx["list_query"].page == ctx["page_meta"].page == 1
+    assert ctx["canonicalization_needed"] is True

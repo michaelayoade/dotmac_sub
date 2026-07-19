@@ -25,8 +25,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
-from sqlalchemy import case, func, or_
+from sqlalchemy import String, case, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.sales import (
@@ -57,6 +58,7 @@ from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
     PageMeta,
+    request_needs_canonicalization,
 )
 from app.services.sales.selfserve import compute_feasibility
 from app.services.sales_orders import _resolve_project_for_sales_order
@@ -165,6 +167,18 @@ def _clean_choice(value: str | None, allowed: list[str]) -> str | None:
     (stale/hand-edited query params must not 400 a list page)."""
     candidate = (value or "").strip()
     return candidate if candidate in allowed else None
+
+
+def _clean_uuid(value: str | None) -> str | None:
+    """Canonicalize a UUID filter, clearing malformed stale bookmarks."""
+
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    try:
+        return str(UUID(candidate))
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def subscriber_label(subscriber: Subscriber | None) -> str:
@@ -313,7 +327,13 @@ def build_leads_list_context(
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
+    requested_status = status
+    requested_pipeline_id = pipeline_id
+    requested_stage_id = stage_id
+    requested_lead_source = lead_source
     status = _clean_choice(status, lead_status_values())
+    pipeline_id = _clean_uuid(pipeline_id)
+    stage_id = _clean_uuid(stage_id)
     lead_source_options = list(sales_service.LEAD_SOURCE_OPTIONS)
     lead_source = _clean_choice(lead_source, lead_source_options)
 
@@ -329,7 +349,7 @@ def build_leads_list_context(
         if per_page in LEAD_LIST_DEFINITION.per_page_options
         else LEAD_LIST_DEFINITION.default_per_page
     )
-    list_query = LEAD_LIST_DEFINITION.build_query(
+    requested_query = LEAD_LIST_DEFINITION.build_query(
         search=search,
         filters={
             "status": status,
@@ -349,9 +369,10 @@ def build_leads_list_context(
         pipeline_id=pipeline_id or None,
         stage_id=stage_id or None,
         lead_source=lead_source,
-        search=search or None,
+        search=requested_query.search,
     )
-    page_meta = PageMeta.from_query(list_query, total)
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     leads = sales_service.leads.list(
         db,
         pipeline_id=pipeline_id or None,
@@ -364,7 +385,7 @@ def build_leads_list_context(
         limit=list_query.per_page,
         offset=(page_meta.page - 1) * list_query.per_page,
         lead_source=lead_source,
-        search=search or None,
+        search=list_query.search,
     )
 
     options = _sales_options(db)
@@ -373,6 +394,20 @@ def build_leads_list_context(
     return {
         "leads": leads,
         "list_query": list_query,
+        "canonicalization_needed": request_needs_canonicalization(
+            list_query,
+            search=search,
+            filters={
+                "status": requested_status,
+                "pipeline_id": requested_pipeline_id,
+                "stage_id": requested_stage_id,
+                "lead_source": requested_lead_source,
+            },
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        ),
         "page_meta": page_meta,
         "page": page_meta.page,
         "per_page": page_meta.per_page,
@@ -382,7 +417,7 @@ def build_leads_list_context(
         "pipeline_id": pipeline_id or "",
         "stage_id": stage_id or "",
         "lead_source": lead_source or "",
-        "search": search or "",
+        "search": list_query.search or "",
         "lead_statuses": lead_status_values(),
         "lead_sources": lead_source_options,
         "pipelines": options["pipelines"],
@@ -650,6 +685,7 @@ def _count_quotes(
                 Subscriber.first_name.ilike(like),
                 Subscriber.last_name.ilike(like),
                 Subscriber.email.ilike(like),
+                cast(Quote.id, String).ilike(like),
             )
         )
     return int(query.scalar() or 0)
@@ -1035,7 +1071,10 @@ def build_quotes_list_context(
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
+    requested_status = status
+    requested_lead_id = lead_id
     status = _clean_choice(status, quote_status_values())
+    lead_id = _clean_uuid(lead_id)
     safe_sort = (
         sort_by
         if sort_by in QUOTE_LIST_DEFINITION.sortable_keys
@@ -1047,7 +1086,7 @@ def build_quotes_list_context(
         if per_page in QUOTE_LIST_DEFINITION.per_page_options
         else QUOTE_LIST_DEFINITION.default_per_page
     )
-    list_query = QUOTE_LIST_DEFINITION.build_query(
+    requested_query = QUOTE_LIST_DEFINITION.build_query(
         search=search,
         filters={"status": status, "lead_id": lead_id},
         sort_by=safe_sort,
@@ -1056,9 +1095,10 @@ def build_quotes_list_context(
         per_page=safe_per_page,
     )
     total = _count_quotes(
-        db, status=status, lead_id=lead_id or None, search=search or None
+        db, status=status, lead_id=lead_id, search=requested_query.search
     )
-    page_meta = PageMeta.from_query(list_query, total)
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     quotes = sales_service.quotes.list(
         db,
         lead_id=lead_id or None,
@@ -1068,7 +1108,7 @@ def build_quotes_list_context(
         order_dir=list_query.sort_dir,
         limit=list_query.per_page,
         offset=(page_meta.page - 1) * list_query.per_page,
-        search=search or None,
+        search=list_query.search,
     )
 
     leads = sales_service.leads.list(
@@ -1088,6 +1128,15 @@ def build_quotes_list_context(
     return {
         "quotes": quotes,
         "list_query": list_query,
+        "canonicalization_needed": request_needs_canonicalization(
+            list_query,
+            search=search,
+            filters={"status": requested_status, "lead_id": requested_lead_id},
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        ),
         "page_meta": page_meta,
         "page": page_meta.page,
         "per_page": page_meta.per_page,
@@ -1095,7 +1144,7 @@ def build_quotes_list_context(
         "total_pages": page_meta.total_pages,
         "status": status or "",
         "lead_id": lead_id or "",
-        "search": search or "",
+        "search": list_query.search or "",
         "quote_statuses": quote_status_values(),
         "leads": leads,
         "lead_map": {str(item.id): item for item in leads},
@@ -1198,6 +1247,9 @@ def build_sales_orders_list_context(
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
+    requested_status = status
+    requested_payment_status = payment_status
+    requested_source_type = source_type
     status = _clean_choice(status, sales_order_status_values())
     payment_status = _clean_choice(payment_status, sales_order_payment_status_values())
     if source_type not in {"quote", "manual"}:
@@ -1214,7 +1266,7 @@ def build_sales_orders_list_context(
         if per_page in SALES_ORDER_LIST_DEFINITION.per_page_options
         else SALES_ORDER_LIST_DEFINITION.default_per_page
     )
-    list_query = SALES_ORDER_LIST_DEFINITION.build_query(
+    requested_query = SALES_ORDER_LIST_DEFINITION.build_query(
         search=search,
         filters={
             "status": status,
@@ -1230,7 +1282,7 @@ def build_sales_orders_list_context(
         "status": status,
         "payment_status": payment_status,
         "source_type": source_type,
-        "search": search or None,
+        "search": requested_query.search,
     }
 
     totals = (
@@ -1277,11 +1329,10 @@ def build_sales_orders_list_context(
         .one()
     )
     total = int(totals.total or 0)
-    page_meta = PageMeta.from_query(list_query, total)
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     sort_column = _SALES_ORDER_SORT_COLUMNS[list_query.sort_by]
-    ordered = (
-        sort_column.desc() if list_query.sort_dir == "desc" else sort_column.asc()
-    )
+    ordered = sort_column.desc() if list_query.sort_dir == "desc" else sort_column.asc()
     orders = (
         _sales_orders_query(db, **filters)
         # Unique tie-breaker keeps ordering deterministic across pages.
@@ -1310,6 +1361,19 @@ def build_sales_orders_list_context(
         "orders": orders,
         "stats": stats,
         "list_query": list_query,
+        "canonicalization_needed": request_needs_canonicalization(
+            list_query,
+            search=search,
+            filters={
+                "status": requested_status,
+                "payment_status": requested_payment_status,
+                "source_type": requested_source_type,
+            },
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        ),
         "page_meta": page_meta,
         "page": page_meta.page,
         "per_page": page_meta.per_page,
@@ -1318,7 +1382,7 @@ def build_sales_orders_list_context(
         "status": status or "",
         "payment_status": payment_status or "",
         "source_type": source_type or "",
-        "search": search or "",
+        "search": list_query.search or "",
         "statuses": sales_order_status_values(),
         "payment_statuses": sales_order_payment_status_values(),
         "subscriber_map": subscriber_map,

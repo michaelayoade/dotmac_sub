@@ -22,6 +22,7 @@ from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
     PageMeta,
+    request_needs_canonicalization,
 )
 from app.web.reseller.branding import get_reseller_templates
 
@@ -53,9 +54,10 @@ RESELLER_INVOICE_LIST_DEFINITION = ListDefinition(
         ListFieldDefinition("status", "Status", sortable=True),
         ListFieldDefinition("total", "Total", sortable=True),
         ListFieldDefinition("due_at", "Due", sortable=True),
-        ListFieldDefinition("created_at", "Issued", sortable=True),
+        ListFieldDefinition("issued_at", "Issued", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
     ),
-    default_sort="created_at",
+    default_sort="issued_at",
     default_sort_dir="desc",
     per_page_options=(10, 25, 50, 100),
     default_per_page=25,
@@ -215,14 +217,19 @@ def reseller_accounts(
         return RedirectResponse(url="/reseller/auth/login", status_code=303)
 
     definition = RESELLER_ACCOUNT_LIST_DEFINITION
+    requested_status_filter = status_filter
+    if status_filter not in reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS:
+        status_filter = None
     safe_sort = (
         sort_by if sort_by in definition.sortable_keys else definition.default_sort
     )
     safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
     safe_per_page = (
-        per_page if per_page in definition.per_page_options else definition.default_per_page
+        per_page
+        if per_page in definition.per_page_options
+        else definition.default_per_page
     )
-    list_query = definition.build_query(
+    requested_query = definition.build_query(
         search=search,
         filters={"status_filter": status_filter},
         sort_by=safe_sort,
@@ -234,20 +241,33 @@ def reseller_accounts(
     total = reseller_portal.count_accounts(
         db,
         reseller_id=reseller_id,
-        search=search,
+        search=requested_query.search,
         status_filter=status_filter,
     )
-    page_meta = PageMeta.from_query(list_query, total)
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     accounts = reseller_portal.list_accounts(
         db,
         reseller_id=reseller_id,
         limit=list_query.per_page,
         offset=(page_meta.page - 1) * list_query.per_page,
-        search=search,
+        search=list_query.search,
         status_filter=status_filter,
         order_by=list_query.sort_by,
         order_dir=list_query.sort_dir,
     )
+    if request_needs_canonicalization(
+        list_query,
+        search=search,
+        filters={"status_filter": requested_status_filter},
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    ):
+        return RedirectResponse(
+            url=list_query.url("/reseller/accounts"), status_code=307
+        )
     return templates.TemplateResponse(
         "reseller/accounts/index.html",
         {
@@ -260,7 +280,7 @@ def reseller_accounts(
             "page_meta": page_meta,
             "page": page_meta.page,
             "per_page": page_meta.per_page,
-            "search": search or "",
+            "search": list_query.search or "",
             "status_filter": status_filter or "",
             "status_options": reseller_portal.ACCOUNT_LIST_STATUS_OPTIONS,
             "total": total,
@@ -486,9 +506,11 @@ def reseller_account_invoices(
     )
     safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
     safe_per_page = (
-        per_page if per_page in definition.per_page_options else definition.default_per_page
+        per_page
+        if per_page in definition.per_page_options
+        else definition.default_per_page
     )
-    list_query = definition.build_query(
+    requested_query = definition.build_query(
         search=None,
         filters={},
         sort_by=safe_sort,
@@ -496,7 +518,8 @@ def reseller_account_invoices(
         page=max(1, page),
         per_page=safe_per_page,
     )
-    page_meta = PageMeta.from_query(list_query, total)
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     invoices = (
         reseller_portal.list_account_invoices(
             db,
@@ -509,6 +532,18 @@ def reseller_account_invoices(
         )
         or []
     )
+
+    if request_needs_canonicalization(
+        list_query,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    ):
+        return RedirectResponse(
+            url=list_query.url(f"/reseller/accounts/{account_id}/invoices"),
+            status_code=307,
+        )
 
     return templates.TemplateResponse(
         "reseller/accounts/invoices.html",

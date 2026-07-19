@@ -328,13 +328,19 @@ def list_conversations(
     # default queue is untouched; last_message_at / created_at sort by that one
     # column with a stable id tie-breaker. Additive change.
     if order_by == "last_message_at":
-        primary = InboxConversation.last_message_at
-        primary = (primary.asc() if order_dir == "asc" else primary.desc()).nullslast()
-        ordered_query = query.order_by(primary, InboxConversation.id.asc())
+        last_message_order = (
+            InboxConversation.last_message_at.asc()
+            if order_dir == "asc"
+            else InboxConversation.last_message_at.desc()
+        ).nullslast()
+        ordered_query = query.order_by(last_message_order, InboxConversation.id.asc())
     elif order_by == "created_at":
-        primary = InboxConversation.created_at
-        primary = primary.asc() if order_dir == "asc" else primary.desc()
-        ordered_query = query.order_by(primary, InboxConversation.id.asc())
+        created_order = (
+            InboxConversation.created_at.asc()
+            if order_dir == "asc"
+            else InboxConversation.created_at.desc()
+        )
+        ordered_query = query.order_by(created_order, InboxConversation.id.asc())
     else:
         priority_order = (
             InboxConversation.priority.desc()

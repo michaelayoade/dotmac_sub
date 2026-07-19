@@ -14,6 +14,8 @@ from app.models.system_user import SystemUser
 from app.models.vendor_routes import (
     AsBuiltRoute,
     InstallationProject,
+    InstallationProjectLifecycleEvent,
+    InstallationProjectStatus,
     ProjectQuote,
     ProjectQuoteLineItem,
     ProjectQuoteStatus,
@@ -243,3 +245,74 @@ def test_confirmation_cannot_cross_vendor_principal_context(db_session):
         )
 
     assert exc.value.status_code == 403
+
+
+def test_project_start_confirmation_is_preview_bound_and_replay_safe(db_session):
+    installation, vendor, user = _chain(db_session)
+    installation.status = InstallationProjectStatus.approved.value
+    db_session.commit()
+    proposal = vendor_submission_proposals.issue_project_lifecycle(
+        db_session,
+        project_id=str(installation.id),
+        action="start",
+        vendor_id=str(vendor.id),
+        user_id=str(user.id),
+    )
+
+    first = vendor_submission_proposals.confirm_submission(
+        db_session,
+        confirmation_token=proposal.confirmation_token,
+        vendor_id=str(vendor.id),
+        user_id=str(user.id),
+        project_id=str(installation.id),
+    )
+    replay = vendor_submission_proposals.confirm_submission(
+        db_session,
+        confirmation_token=proposal.confirmation_token,
+        vendor_id=str(vendor.id),
+        user_id=str(user.id),
+        project_id=str(installation.id),
+    )
+
+    db_session.refresh(installation)
+    evidence = db_session.query(InstallationProjectLifecycleEvent).one()
+    assert installation.status == InstallationProjectStatus.in_progress.value
+    assert evidence.actor_id == str(user.id)
+    assert first.result_id == str(evidence.id)
+    assert first.replayed is False
+    assert replay.result_id == str(evidence.id)
+    assert replay.replayed is True
+    assert proposal.confirmation_label == "Confirm start"
+    assert (
+        db_session.query(IdempotencyKey)
+        .filter(IdempotencyKey.scope == "vendor_project_start")
+        .count()
+        == 1
+    )
+
+
+def test_project_lifecycle_confirmation_rejects_changed_state(db_session):
+    installation, vendor, user = _chain(db_session)
+    installation.status = InstallationProjectStatus.approved.value
+    db_session.commit()
+    proposal = vendor_submission_proposals.issue_project_lifecycle(
+        db_session,
+        project_id=str(installation.id),
+        action="start",
+        vendor_id=str(vendor.id),
+        user_id=str(user.id),
+    )
+    installation.status = InstallationProjectStatus.in_progress.value
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        vendor_submission_proposals.confirm_submission(
+            db_session,
+            confirmation_token=proposal.confirmation_token,
+            vendor_id=str(vendor.id),
+            user_id=str(user.id),
+            project_id=str(installation.id),
+        )
+
+    assert exc.value.status_code == 409
+    assert db_session.query(InstallationProjectLifecycleEvent).count() == 0

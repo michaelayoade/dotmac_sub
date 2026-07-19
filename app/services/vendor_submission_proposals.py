@@ -34,6 +34,8 @@ _SCOPES = {
     "quote": "vendor_quote_submit",
     "as_built": "vendor_as_built_submit",
     "purchase_invoice": "vendor_purchase_invoice_submit",
+    "project_start": "vendor_project_start",
+    "project_complete": "vendor_project_complete",
 }
 
 
@@ -45,6 +47,7 @@ class VendorSubmissionProposal:
     title: str
     summary: str
     details: tuple[tuple[str, str], ...]
+    confirmation_label: str
     confirmation_token: str
     expires_at: datetime
 
@@ -102,6 +105,13 @@ def _issue(
         title=str(preview["title"]),
         summary=str(preview["summary"]),
         details=tuple((str(label), str(value)) for label, value in preview["details"]),
+        confirmation_label={
+            "quote": "Confirm quote submission",
+            "as_built": "Confirm as-built submission",
+            "purchase_invoice": "Confirm invoice submission",
+            "project_start": "Confirm start",
+            "project_complete": "Confirm completion",
+        }[submission_type],
         confirmation_token=context_signing.sign_context_token(db, claims),
         expires_at=expires_at,
     )
@@ -140,6 +150,20 @@ def issue_purchase_invoice_submission(
 ) -> VendorSubmissionProposal:
     preview = vendor_purchase_invoices.preview_submission(
         db, invoice_id, vendor_id=vendor_id
+    )
+    return _issue(db, preview, vendor_id=vendor_id, user_id=user_id)
+
+
+def issue_project_lifecycle(
+    db: Session,
+    *,
+    project_id: str,
+    action: str,
+    vendor_id: str,
+    user_id: str,
+) -> VendorSubmissionProposal:
+    preview = vendor_portal_operations.preview_project_lifecycle(
+        db, project_id, vendor_id=vendor_id, action=action
     )
     return _issue(db, preview, vendor_id=vendor_id, user_id=user_id)
 
@@ -257,7 +281,7 @@ def confirm_submission(
             preview = vendor_purchase_invoices.preview_submission(
                 db, target_id, vendor_id=vendor_id, for_update=True
             )
-        else:
+        elif submission_type == "as_built":
             try:
                 payload = VendorAsBuiltCreate.model_validate(claims.get("payload"))
             except (TypeError, ValueError) as exc:
@@ -267,6 +291,15 @@ def confirm_submission(
                 ) from exc
             preview = vendor_portal_operations.preview_as_built_submission(
                 db, payload, vendor_id, for_update=True
+            )
+        else:
+            action = "start" if submission_type == "project_start" else "complete"
+            preview = vendor_portal_operations.preview_project_lifecycle(
+                db,
+                target_id,
+                vendor_id=vendor_id,
+                action=action,
+                for_update=True,
             )
         if not hmac.compare_digest(
             str(claims.get("state_fingerprint") or ""),
@@ -284,11 +317,22 @@ def confirm_submission(
             result = vendor_purchase_invoices.submit(
                 db, target_id, vendor_id=vendor_id, commit=False
             )
-        else:
+        elif submission_type == "as_built":
             result = vendor_portal_operations.submit_as_built(
                 db, payload, vendor_id, user_id, commit=False
             )
-        reservation.ref_id = str(result["id"])
+        else:
+            action = "start" if submission_type == "project_start" else "complete"
+            result = vendor_portal_operations.transition_project(
+                db,
+                target_id,
+                vendor_id=vendor_id,
+                action=action,
+                actor_id=user_id,
+                actor_type="vendor_user",
+                commit=False,
+            )
+        reservation.ref_id = str(result.get("lifecycle_event_id") or result.get("id"))
         db.commit()
     except Exception:
         db.rollback()

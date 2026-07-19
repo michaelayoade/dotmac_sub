@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.services import web_reseller_routes
 
 
@@ -34,3 +36,12 @@ def test_reseller_account_definition_round_trips_state_in_the_url():
     assert "dir=asc" in url
     assert "status_filter=suspended" in url
     assert "page=2" in url
+
+
+def test_reseller_accounts_template_uses_shared_list_controls():
+    source = (
+        Path(__file__).resolve().parents[1] / "templates/reseller/accounts/index.html"
+    ).read_text(encoding="utf-8")
+    assert 'name="sort" value="{{ list_query.sort_by }}"' in source
+    assert 'name="dir" value="{{ list_query.sort_dir }}"' in source
+    assert "list_pagination(list_query, page_meta" in source

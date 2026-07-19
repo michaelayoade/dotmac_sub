@@ -1,6 +1,6 @@
 {% extends "layouts/reseller.html" %}
 {% from "components/ui/macros.html" import status_presentation_badge %}
-{% from "components/ui/list_macros.html" import sort_header %}
+{% from "components/ui/list_macros.html" import list_pagination, sort_header %}
 {% set _invoices_base = '/reseller/accounts/' ~ account_id ~ '/invoices' %}
 
 {% block page_header %}
@@ -36,7 +36,7 @@
                         {{ sort_header(list_query, _invoices_base, 'status', 'Status', entity='invoices', th_class='px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400') }}
                         {{ sort_header(list_query, _invoices_base, 'total', 'Total Amount', entity='invoices', th_class='px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400') }}
                         <th class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Balance Due</th>
-                        {{ sort_header(list_query, _invoices_base, 'created_at', 'Issued', entity='invoices', th_class='px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400') }}
+                        {{ sort_header(list_query, _invoices_base, 'issued_at', 'Issued', entity='invoices', th_class='px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400') }}
                         {{ sort_header(list_query, _invoices_base, 'due_at', 'Due Date', entity='invoices', th_class='px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400') }}
                         <th class="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
                     </tr>
@@ -105,28 +105,7 @@
                 </tbody>
             </table>
         </div>
-        {# Deep-linkable via list_query.url (preserves sort). #}
-        {% if page_meta.total_pages > 1 %}
-        <div class="flex items-center justify-center border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
-            <nav class="flex items-center gap-2" aria-label="Invoices pagination">
-                {% if page_meta.has_previous %}
-                <a href="{{ list_query.url(_invoices_base, page=page_meta.page - 1) }}" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">Previous</a>
-                {% endif %}
-                {% for p in page_meta.navigation %}
-                    {% if p is none %}
-                    <span class="px-2 text-sm text-slate-400" aria-hidden="true">…</span>
-                    {% else %}
-                    <a href="{{ list_query.url(_invoices_base, page=p) }}"
-                       {% if p == page_meta.page %}aria-current="page"{% endif %}
-                       class="rounded-xl border px-4 py-2 text-sm font-medium {% if p == page_meta.page %}border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300{% else %}border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">{{ p }}</a>
-                    {% endif %}
-                {% endfor %}
-                {% if page_meta.has_next %}
-                <a href="{{ list_query.url(_invoices_base, page=page_meta.page + 1) }}" class="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">Next</a>
-                {% endif %}
-            </nav>
-        </div>
-        {% endif %}
+        {{ list_pagination(list_query, page_meta, _invoices_base, entity='invoices') }}
     </div>
 </div>
 {% endblock %}

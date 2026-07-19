@@ -1892,6 +1892,7 @@ def update_customer_account_status(
 
 
 ACCOUNT_INVOICE_SORT_COLUMNS = {
+    "issued_at": Invoice.issued_at,
     "created_at": Invoice.created_at,
     "due_at": Invoice.due_at,
     "total": Invoice.total,
@@ -1935,7 +1936,11 @@ def list_account_invoices(
         return None
 
     sort_column = ACCOUNT_INVOICE_SORT_COLUMNS.get(order_by, Invoice.created_at)
-    ordered = sort_column.asc() if order_dir == "asc" else sort_column.desc()
+    ordered = (
+        sort_column.asc().nullslast()
+        if order_dir == "asc"
+        else sort_column.desc().nullslast()
+    )
     invoices = (
         db.query(Invoice)
         .filter(Invoice.account_id == account.id)
@@ -1957,10 +1962,10 @@ def list_account_invoices(
                 "status_presentation": invoice_status_presentation(
                     inv.status
                 ).model_dump(mode="json"),
-                "total_amount": getattr(inv, "total", 0),
+                "total": getattr(inv, "total", 0),
                 "balance_due": inv.balance_due or 0,
                 "issued_at": getattr(inv, "issued_at", None),
-                "due_date": getattr(inv, "due_at", None),
+                "due_at": getattr(inv, "due_at", None),
                 "created_at": inv.created_at,
             }
         )
