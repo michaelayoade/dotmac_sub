@@ -512,11 +512,115 @@ def has_permission(auth: dict, db: Session, permission_key: str) -> bool:
     return bool(has_role_permission or has_direct_permission)
 
 
+def effective_permission_keys(auth: dict, db: Session) -> frozenset[str]:
+    """All permission keys the principal effectively holds, for UI gating.
+
+    Returns the raw granted keys (scopes + role + direct); the ``admin`` role
+    collapses to the ``"*"`` sentinel meaning "everything". A requirement is
+    checked by expanding it with ``_expand_permission_keys`` against this set
+    (see ``can``), mirroring ``has_permission`` — so the UI can hide what the
+    principal cannot do while the route stays the authority.
+    """
+    roles = set(auth.get("roles") or [])
+    if "admin" in roles:
+        return frozenset({"*"})
+    keys: set[str] = set(auth.get("scopes") or [])
+    principal_id = auth["principal_id"]
+    principal_type = auth.get("principal_type", "subscriber")
+    if principal_type == "system_user":
+        role_rows = (
+            db.query(Permission.key)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .join(Role, Role.id == RolePermission.role_id)
+            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+            .filter(SystemUserRole.system_user_id == principal_id)
+            .filter(Role.is_active.is_(True))
+            .filter(Permission.is_active.is_(True))
+        )
+        direct_rows = (
+            db.query(Permission.key)
+            .join(
+                SystemUserPermission,
+                SystemUserPermission.permission_id == Permission.id,
+            )
+            .filter(SystemUserPermission.system_user_id == principal_id)
+            .filter(Permission.is_active.is_(True))
+        )
+    else:
+        role_rows = (
+            db.query(Permission.key)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .join(Role, Role.id == RolePermission.role_id)
+            .join(SubscriberRole, SubscriberRole.role_id == Role.id)
+            .filter(SubscriberRole.subscriber_id == principal_id)
+            .filter(Role.is_active.is_(True))
+            .filter(Permission.is_active.is_(True))
+        )
+        direct_rows = (
+            db.query(Permission.key)
+            .join(
+                SubscriberPermission,
+                SubscriberPermission.permission_id == Permission.id,
+            )
+            .filter(SubscriberPermission.subscriber_id == principal_id)
+            .filter(Permission.is_active.is_(True))
+        )
+    keys.update(key for (key,) in role_rows.all())
+    keys.update(key for (key,) in direct_rows.all())
+    return frozenset(keys)
+
+
+def load_permission_keys(auth: dict, db: Session) -> frozenset[str]:
+    """Compute and memoize the effective permission-key set on the request's
+    ``auth`` dict, so a later ``can`` check in a template needs no DB access."""
+    cached = auth.get("permission_keys")
+    if cached is None:
+        cached = effective_permission_keys(auth, db)
+        auth["permission_keys"] = cached
+    return cached
+
+
+def can(request, permission_key: str) -> bool:
+    """UI gate: may the current principal perform ``permission_key``?
+
+    Pure set logic over the keys ``require_permission`` cached on the request's
+    auth — no DB — so a template can hide actions the principal lacks. Denies
+    when the set is absent (e.g. an ungated page); the route remains the
+    authority that actually enforces access.
+    """
+    auth = getattr(getattr(request, "state", None), "auth", None)
+    if not isinstance(auth, dict):
+        return False
+    held = auth.get("permission_keys")
+    if held is None:
+        return False
+    if "*" in held:
+        return True
+    return bool(set(_expand_permission_keys(permission_key)) & set(held))
+
+
+def action_permitted(request, action) -> bool:
+    """Whether an ``Action`` contract should render for the current principal.
+
+    Combines the owner's eligibility (``allowed``) with the RBAC gate
+    (``permission``): a template shows the control only when the action is both
+    eligible and permitted. Duck-typed so it needs no import of the contract.
+    """
+    if not getattr(action, "allowed", False):
+        return False
+    permission = getattr(action, "permission", None)
+    return not permission or can(request, permission)
+
+
 def require_permission(permission_key: str):
     def _require_permission(
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
+        # Cache the principal's effective permissions on the request so the
+        # rendered page can hide actions they lack (the route below still
+        # authorizes). Admin resolves to "*" without a query.
+        load_permission_keys(auth, db)
         roles = set(auth.get("roles") or [])
         if "admin" in roles:
             finish_read_transaction(db)
@@ -570,6 +674,7 @@ def require_any_permission(*permission_keys: str):
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),
     ):
+        load_permission_keys(auth, db)
         principal_id = auth["principal_id"]
         principal_type = auth.get("principal_type", "subscriber")
         roles = set(auth.get("roles") or [])
