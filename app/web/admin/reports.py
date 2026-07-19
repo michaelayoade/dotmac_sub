@@ -249,7 +249,7 @@ def reports_hub(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -276,7 +276,8 @@ def reports_revenue(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/revenue/export", dependencies=[Depends(require_permission("reports:billing"))]
+    "/revenue/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
 )
 def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_revenue_export_csv(db=db, days=days)
@@ -410,7 +411,7 @@ def reports_churn_export(days: int | None = None, db: Session = Depends(get_db))
 @router.get(
     "/network",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:network"))],
+    dependencies=[Depends(require_permission("reports:network:read"))],
 )
 def reports_network(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -440,7 +441,8 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/network/export", dependencies=[Depends(require_permission("reports:network"))]
+    "/network/export",
+    dependencies=[Depends(require_permission("reports:network:export"))],
 )
 def reports_network_export(hours: int | None = None, db: Session = Depends(get_db)):
     report_data = web_reports_service.get_network_report_data(db=db, hours=hours)
@@ -1056,7 +1058,7 @@ def reports_subscriber_growth(
 @router.get(
     "/usage-by-plan",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_usage_by_plan_data(db)
@@ -1074,7 +1076,7 @@ def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/upcoming-charges",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_upcoming_charges_data(db)
@@ -1092,7 +1094,7 @@ def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue-per-plan",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue_per_plan(
     request: Request,
@@ -1117,7 +1119,7 @@ def reports_revenue_per_plan(
 @router.get(
     "/invoices",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_invoices(
     request: Request,
@@ -1143,7 +1145,7 @@ def reports_invoices(
 @router.get(
     "/statements",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_statements(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_statements_data(db)
@@ -1157,7 +1159,7 @@ def reports_statements(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/tax",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_tax(
     request: Request,
@@ -1184,7 +1186,7 @@ def reports_tax(
 @router.get(
     "/mrr",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_mrr(
     request: Request,
@@ -1238,7 +1240,7 @@ def reports_new_services(
 @router.get(
     "/custom-pricing",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_custom_pricing_data(db)
@@ -1256,7 +1258,7 @@ def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue-categories",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_revenue_categories_data(db)
@@ -1274,7 +1276,7 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/bandwidth",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:network"))],
+    dependencies=[Depends(require_permission("reports:network:read"))],
 )
 def reports_bandwidth(
     request: Request,
@@ -1303,7 +1305,8 @@ def reports_bandwidth(
 
 
 @router.get(
-    "/bandwidth/export", dependencies=[Depends(require_permission("reports:network"))]
+    "/bandwidth/export",
+    dependencies=[Depends(require_permission("reports:network:export"))],
 )
 def reports_bandwidth_export(
     days: int | None = None,
