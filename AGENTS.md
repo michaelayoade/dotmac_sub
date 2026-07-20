@@ -41,6 +41,11 @@ authoritative documents in the same change that updates the contract.
 ## Coding rules
 
 - Public commands and queries use typed inputs and typed outcomes.
+- New and materially changed owner interfaces use precise identifier,
+  collection, optional, enum, value-object, and provenance types. Do not expose
+  `Any` containers or free-form primitive bags as domain contracts.
+- Keep domain values typed internally. Serialize UUIDs, enums, decimals, dates,
+  and value objects explicitly at adapter, persistence, or reporting boundaries.
 - Domain services raise domain errors. HTTP responses, redirects, task retries,
   and transport-specific errors are mapped only by adapters.
 - Never mass-assign untrusted mappings to ORM entities. Update an explicit set

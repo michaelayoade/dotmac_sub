@@ -67,7 +67,6 @@ financial.payment_provider_events
 financial.payment_reconciliation
 financial.payment_webhooks
 financial.payments
-financial.prepaid_enforcement
 financial.prepaid_enforcement_readiness
 financial.prepaid_funding_reconstruction
 financial.prepaid_plan_change

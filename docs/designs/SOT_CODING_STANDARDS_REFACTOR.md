@@ -26,7 +26,7 @@ adapter files. The executable registry contains 28 domains and 233 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 33 fully contracted services and 214 indexed
+Typed manifest migration now has 34 fully contracted services and 213 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
@@ -183,6 +183,15 @@ values are stable domain failures, never silent zero-day grace that can trigger
 an immediate financial access consequence. Naive input timestamps are normalized
 to UTC before phase decisions. Retiring the direct setting-row query reduces the
 decision-input inventory from 350 to 346 occurrences and from 83 to 82 files.
+
+The completed prepaid planning slice is `financial.prepaid_enforcement`. Cohort,
+funding-only eligibility, repair inclusion, policy settings, and each account's
+warn/wait/defer/shield/health/suspend/restore outcome now use typed identifiers,
+actions, policy issues, and reason provenance. Missing accounts and malformed
+blocking time, holiday, or communication policy evidence fail with stable domain
+errors. The sweep, dry-run, readiness proof, deployment acceptance, and funding
+audit continue to consume the same read-only owner; execution still belongs to
+the established timer, lifecycle, and access writers.
 
 The current completed access slice is `auth.system_user_assignments`. It is the
 only application writer for system-user role and direct-permission grants. Local

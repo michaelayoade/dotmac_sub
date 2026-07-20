@@ -89,10 +89,12 @@ def _configuration_hash(db: Session, plan: PrepaidEnforcementPlan) -> str:
             "accounts": [
                 {
                     "account_id": item.account_id,
-                    "billing_mode": item.billing_mode,
+                    "billing_mode": (
+                        item.billing_mode.value if item.billing_mode else None
+                    ),
                     "currency": item.currency,
                     "grace_days": item.grace_days,
-                    "grace_source": item.grace_source,
+                    "grace_source": item.grace_source.value,
                     "grace_policy_set_id": item.grace_policy_set_id,
                     "required_balance": item.required_balance,
                 }

@@ -1739,11 +1739,250 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "prepaid policy projection consumed by dry-run and execution",
                 ),
                 depends_on=(
+                    "access.subscription_lifecycle",
+                    "communications.customer_policy",
+                    "control.feature_registry",
+                    "control.settings_spec",
+                    "customer.accounts",
                     "financial.prepaid_funding_reconstruction",
                     "financial.access_resolution",
                     "financial.billing_profile",
+                    "financial.billing_health",
+                    "financial.dunning",
+                    "financial.prepaid_currency",
+                    "financial.prepaid_enforcement_state",
                     "financial.prepaid_threshold",
                     "financial.grace_policy",
+                    "service_intent.catalog_policy",
+                ),
+                notes=(
+                    "The production sweep, dry-run, readiness proof, and audit consume one "
+                    "typed cohort and account plan. Planning is read-only; execution and "
+                    "timer/access mutation remain with their canonical writers."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="prepaid enforcement candidate cohort",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical account eligibility",
+                                "canonical subscription lifecycle state",
+                                "canonical prepaid enforcement locks and timers",
+                                "prepaid enforcement protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="prepaid warn/suspend/restore planning",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical billing profile",
+                                "canonical prepaid funding decision",
+                                "canonical grace decision",
+                                "canonical financial shields",
+                                "canonical billing health",
+                                "canonical communication suppression",
+                                "canonical service bundle policy",
+                                "canonical prepaid policy settings",
+                                "prepaid enforcement feature control",
+                                "prepaid enforcement protocol",
+                                "evaluation time",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="prepaid policy projection consumed by dry-run and execution",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical prepaid policy settings",
+                                "prepaid enforcement feature control",
+                                "prepaid enforcement protocol",
+                                "evaluation time",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical account eligibility",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscriber identity, lifecycle status, active, billing "
+                                "enabled, billing mode, and prepaid timer fields"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscription lifecycle state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "collectible Subscription identity, status, billing mode, "
+                                "and account relationship"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical prepaid enforcement locks and timers",
+                            owner="financial.prepaid_enforcement_state",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "prepaid timer fields and active prepaid EnforcementLock rows"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical billing profile",
+                            owner="financial.billing_profile",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="typed effective billing mode and automation safety",
+                        ),
+                        AuthorityInput(
+                            name="canonical prepaid funding decision",
+                            owner="financial.access_resolution",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "currency-bound available balance and prepaid threshold"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical grace decision",
+                            owner="financial.grace_policy",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="typed grace provenance, deadline, phase, and elapsed days",
+                        ),
+                        AuthorityInput(
+                            name="canonical financial shields",
+                            owner="financial.dunning",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "payment arrangement, proof review, dispute, outage, and "
+                                "other collection-shield reasons"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical billing health",
+                            owner="financial.billing_health",
+                            kind=AuthorityKind.OBSERVATION,
+                            source="bounded enforcement health snapshot and reason codes",
+                        ),
+                        AuthorityInput(
+                            name="canonical communication suppression",
+                            owner="communications.customer_policy",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "customer-impact fault suppression for suspension notices"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical service bundle policy",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="dedicated SubscriptionBundle classification",
+                        ),
+                        AuthorityInput(
+                            name="canonical prepaid policy settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed activation, blocking time, weekend, holiday, and "
+                                "communication-template settings"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="prepaid enforcement feature control",
+                            owner="control.feature_registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "effective collections.prepaid_balance_enforcement state"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="prepaid enforcement protocol",
+                            owner="financial.prepaid_enforcement",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed action, policy-issue, and reason-source vocabularies; "
+                                "cohort repair inclusion; deterministic decision precedence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="evaluation time",
+                            owner="external:system_clock",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source="explicit as-of time or current UTC system time",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller owns the session. Cohort and account planning read "
+                            "canonical evidence and never write or complete a transaction."
+                        ),
+                        locking=(
+                            "No row lock for planning. The execution owner locks and "
+                            "re-resolves account, timer, lock, funding, and policy evidence "
+                            "before applying a consequence."
+                        ),
+                        idempotency=(
+                            "The same account selection, as-of time, and visible canonical "
+                            "evidence produce the same ordered typed plan."
+                        ),
+                        retries=(
+                            "Transient reads may be retried. Invalid account identifiers, "
+                            "missing accounts, malformed time/holiday settings, and missing "
+                            "policy text remain deterministic failures."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.prepaid_enforcement.account_not_found",
+                            "financial.prepaid_enforcement.invalid_account_id",
+                            "financial.prepaid_enforcement.invalid_blocking_time",
+                            "financial.prepaid_enforcement.invalid_holiday",
+                            "financial.prepaid_enforcement.missing_policy_text",
+                        ),
+                        mapping_owner=(
+                            "prepaid sweep, readiness, audit, and operator-report adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing or invalid selected account",
+                            "invalid billing profile, funding, threshold, grace, or currency",
+                            "malformed blocking time or holiday",
+                            "missing communication policy text",
+                            "unhealthy enforcement dependencies or active financial shield",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "primitive Any-based cohort/outcome maps, raw string policy "
+                            "issues and provenance, generic ValueError selection failures, "
+                            "and permissive malformed window/holiday policy"
+                        ),
+                        new_owner="financial.prepaid_enforcement",
+                        verification=(
+                            "Cohort, repair-only, funding, grace, drift, shield, health, "
+                            "window, readiness, sweep, failure, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Sweep, dry-run, readiness, deployment acceptance, and funding "
+                            "audit callers consume the canonical planner and typed outcomes."
+                        ),
+                        fallback_retirement=(
+                            "Any-typed identifiers/maps, generic ValueError, untyped policy "
+                            "issues/provenance, silent invalid holidays, and invalid blocking "
+                            "time bypass are removed."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_prepaid_enforcement_planner.py",
+                        "tests/test_prepaid_balance_sweep.py",
+                        "tests/test_prepaid_enforcement_readiness.py",
+                        "tests/architecture/test_prepaid_enforcement_policy_ownership.py",
+                    ),
                 ),
             ),
             SOTService(

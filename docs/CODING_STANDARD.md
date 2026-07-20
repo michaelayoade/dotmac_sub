@@ -288,6 +288,26 @@ memory. Store only an OpenBao path or approved local pointer.
 ## 13. Typing, imports, and module shape
 
 - New and migrated owner modules use strict typing.
+- Use the actual domain identifier type, such as `UUID`, inside owner contracts;
+  transport strings are parsed once at the adapter boundary.
+- Represent closed actions, phases, states, policy issues, reason sources, and
+  provenance with enums or explicit value objects instead of duplicated magic
+  strings.
+- Public decisions use typed immutable outcomes. Make optionality explicit and
+  type collections and mappings precisely; `dict[str, Any]`, `list[Any]`,
+  `set[Any]`, and free-form primitive bags are not owner interfaces.
+- Derived, defaulted, imported, reconstructed, or policy-selected values include
+  typed source provenance when callers must distinguish how the value was
+  obtained.
+- Keep UUIDs, enums, decimals, dates, and value objects typed through the domain.
+  Convert them to scalar persistence, transport, hash, or report shapes
+  explicitly at that boundary.
+- Normalize unavoidable dynamic or third-party input in one narrow adapter. Do
+  not propagate `Any`, add permissive fallbacks, or use casts merely to silence
+  the type checker.
+- Missing or malformed authoritative input raises a stable, transport-neutral
+  domain error with a code and structured context. Generic `ValueError` is not
+  a public service contract.
 - Domain modules do not import FastAPI, Celery, templates, or delivery SDKs.
 - Adapters may import owners; owners do not import adapters.
 - Cross-domain imports pass through registered public contracts.

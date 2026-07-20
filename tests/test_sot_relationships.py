@@ -444,11 +444,21 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "financial.prepaid_funding_reconstruction",
     )
     assert sot_relationships.dependencies_for("financial.prepaid_enforcement") == (
+        "access.subscription_lifecycle",
+        "communications.customer_policy",
+        "control.feature_registry",
+        "control.settings_spec",
+        "customer.accounts",
         "financial.prepaid_funding_reconstruction",
         "financial.access_resolution",
         "financial.billing_profile",
+        "financial.billing_health",
+        "financial.dunning",
+        "financial.prepaid_currency",
+        "financial.prepaid_enforcement_state",
         "financial.prepaid_threshold",
         "financial.grace_policy",
+        "service_intent.catalog_policy",
     )
     assert sot_relationships.dependencies_for(
         "financial.prepaid_enforcement_readiness"
