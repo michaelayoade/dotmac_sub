@@ -16996,6 +16996,7 @@
   },
   "POST /api/v1/staff-accounts": {
    "params": [
+    "header:Idempotency-Key",
     "header:authorization",
     "header:x-api-key"
    ],
@@ -17007,6 +17008,7 @@
   },
   "POST /api/v1/staff-accounts/{user_id}/activate": {
    "params": [
+    "header:Idempotency-Key",
     "header:authorization",
     "header:x-api-key",
     "path:user_id!"
@@ -17019,6 +17021,7 @@
   },
   "POST /api/v1/staff-accounts/{user_id}/deactivate": {
    "params": [
+    "header:Idempotency-Key",
     "header:authorization",
     "header:x-api-key",
     "path:user_id!"
@@ -17438,6 +17441,18 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/vendor/projects/{project_id}/submissions/confirm": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:project_id!"
+   ],
+   "request": "ae36823eb99c",
+   "responses": {
+    "200": "a2431939694c",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/vendor/purchase-invoices": {
    "params": [
     "header:authorization",
@@ -17481,7 +17496,7 @@
    ],
    "request": null,
    "responses": {
-    "200": "0cfbd3a6004c",
+    "200": "a2431939694c",
     "422": "a11c9d9b2af8"
    }
   },
@@ -17978,6 +17993,7 @@
   },
   "PUT /api/v1/staff-accounts/{user_id}/roles": {
    "params": [
+    "header:Idempotency-Key",
     "header:authorization",
     "header:x-api-key",
     "path:user_id!"
@@ -17996,9 +18012,9 @@
   "AccessCredentialRead": "4ad2a941f5bb",
   "AccessCredentialUpdate": "2635aeef4b64",
   "AccessType": "4deda2aa0100",
-  "AccountAdjustmentConfirm": "621c1ded4bf4",
+  "AccountAdjustmentConfirm": "d97984ed4382",
   "AccountAdjustmentPreviewRead": "d0f4baecc976",
-  "AccountAdjustmentPreviewRequest": "bd541796e086",
+  "AccountAdjustmentPreviewRequest": "c411a5e68939",
   "AccountAdjustmentRead": "b2564d33bc6e",
   "AccountAdjustmentReversalConfirm": "bd9e7da8c878",
   "AccountAdjustmentReversalPreviewRead": "7d4f7d1983ac",
@@ -19114,8 +19130,8 @@
   "SplitterPortUpdate": "199be4a28b22",
   "SplitterRead": "462df98254d1",
   "SplitterUpdate": "fc09a009fc39",
-  "StaffAccountCreate": "ad0be04a1e62",
-  "StaffAccountRead": "e6150bfe3d5c",
+  "StaffAccountCreate": "b6432e3a2f81",
+  "StaffAccountRead": "cebf0aa826aa",
   "StaffAccountRolesUpdate": "cea929707cae",
   "StatusIcon": "a2f487075407",
   "StatusPresentation": "849b7d3979d4",
@@ -19131,9 +19147,9 @@
   "SubscriberCustomFieldRead": "1042ce8928db",
   "SubscriberCustomFieldUpdate": "5119b0379783",
   "SubscriberRead": "a80d126bca9b",
-  "SubscriberRoleCreate": "2d68e8147f41",
-  "SubscriberRoleRead": "4523ff445c2e",
-  "SubscriberRoleUpdate": "83c749208f28",
+  "SubscriberRoleCreate": "14354d9a4521",
+  "SubscriberRoleRead": "ce3c778333ed",
+  "SubscriberRoleUpdate": "fb77a484b0b4",
   "SubscriberStatus": "457a9495ef4c",
   "SubscriberSyncRead": "58184c709835",
   "SubscriberUpdate": "c91ae8100670",
@@ -19241,18 +19257,19 @@
   "VendorCapabilityCreate": "5bda8a17f6b0",
   "VendorCapabilityRead": "910c9e5aaf0a",
   "VendorCapabilityUpdate": "1530a7cc897f",
-  "VendorPurchaseInvoiceCreate": "a9c1281152d8",
+  "VendorPurchaseInvoiceCreate": "19fbbc4e1285",
   "VendorPurchaseInvoiceLineCreate": "2587fe7016e4",
   "VendorPurchaseInvoiceLineRead": "e57b8e825f4f",
   "VendorPurchaseInvoiceLineUpdate": "cd8eaead795e",
   "VendorPurchaseInvoiceRead": "8dbe5c88f341",
   "VendorPurchaseInvoiceReview": "48b875ff6e6e",
   "VendorPurchaseInvoiceUpdate": "43abad2ec791",
-  "VendorQuoteCreate": "00b4a485ac77",
+  "VendorQuoteCreate": "0b74cb0747ce",
   "VendorQuoteLineCreate": "050f15cee6ec",
   "VendorQuoteLineUpdate": "d9d1913e8bd3",
   "VendorReview": "74e7731221a0",
   "VendorRouteRevisionCreate": "c47a23ac2e0a",
+  "VendorSubmissionConfirm": "02e3d0612139",
   "VerifyEmailRequest": "aedd7a91b07e",
   "VerifyEmailResponse": "1fae1392036c",
   "VlanCreate": "2b694eb08046",

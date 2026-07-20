@@ -107,7 +107,7 @@ async def _receive_verified(
     provider_event_id = str(request.headers.get(DELIVERY_HEADER) or "").strip()
     if not provider_event_id:
         provider_event_id = f"{event_type}:{hashlib.sha256(raw_body).hexdigest()}"
-    receipt, _created = integration_inbox.receive_verified(
+    receipt, should_process = integration_inbox.receive_and_claim_verified(
         db,
         capability_binding_id=binding.id,
         provider_event_id=provider_event_id,
@@ -122,9 +122,7 @@ async def _receive_verified(
             if value
         },
     )
-    if not integration_inbox.claim_for_processing(receipt):
-        return event_type, payload, receipt, False
-    return event_type, payload, receipt, True
+    return event_type, payload, receipt, should_process
 
 
 def _body(payload: dict[str, Any]) -> dict[str, Any]:
@@ -137,18 +135,20 @@ def _complete(
     receipt: IntegrationInbox,
     consequence: dict[str, Any],
 ) -> dict[str, Any]:
-    integration_inbox.mark_processed(receipt, consequence=consequence)
-    db.commit()
-    return consequence
+    return integration_inbox.complete_consequence(
+        db,
+        receipt=receipt,
+        consequence=consequence,
+    )
 
 
 def _failed(db: Session, receipt: IntegrationInbox, exc: Exception) -> None:
-    integration_inbox.mark_failed(
-        receipt,
+    integration_inbox.fail_consequence(
+        db,
+        receipt=receipt,
         error_code="crm_consequence_failed",
         error_detail=type(exc).__name__,
     )
-    db.commit()
 
 
 def _existing(receipt: IntegrationInbox, should_process: bool) -> dict[str, Any] | None:

@@ -13,6 +13,8 @@ test_fup_evaluate_commits.py): the tasks use the production ``SessionLocal`` +
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+from tests.fup_helpers import execute_owner_command_for_test
+
 
 def _sub():
     return MagicMock(id=uuid4(), offer_id=uuid4(), subscriber_id=uuid4())
@@ -49,19 +51,24 @@ def _run_evaluate(*, throttle_profile, should_enforce=True):
     session = MagicMock()
     query = session.query.return_value
     joined = query.join.return_value.outerjoin.return_value
-    joined.filter.return_value.filter.return_value.all.return_value = [sub]
+    joined.filter.return_value = joined
+    joined.all.return_value = [sub]
     fup_state_mock = MagicMock()
-    fup_state_mock.get.return_value = None  # prior_status "none"
+    fup_state_mock.get_for_update.return_value = None  # prior_status "none"
     bucket = MagicMock(used_gb=500, period_end=None)
     emit_mock = MagicMock()
     notif_mock = MagicMock(return_value=0)
 
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=session),
-        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
+        patch("app.tasks.usage.SessionLocal", side_effect=[MagicMock(), session]),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
-            "app.services.usage._resolve_or_create_quota_bucket", return_value=bucket
+            "app.services.fup_enforcement._current_quota_bucket",
+            return_value=bucket,
+        ),
+        patch(
+            "app.services.fup_enforcement._subscription_for_evaluation",
+            return_value=sub,
         ),
         patch(
             "app.services.fup.evaluate_rules",
@@ -72,11 +79,15 @@ def _run_evaluate(*, throttle_profile, should_enforce=True):
             return_value={"monthly": 500},
         ),
         patch(
-            "app.services.settings_spec.resolve_value",
-            side_effect=_settings_side_effect(throttle_profile=throttle_profile),
+            "app.services.fup_enforcement._sweep_policy",
+            return_value=(False, 0.8, bool(throttle_profile)),
         ),
-        patch("app.services.events.emit_event", emit_mock),
+        patch("app.services.fup_enforcement.emit_event", emit_mock),
         patch("app.services.fup_enforcement._emit_fup_notifications", notif_mock),
+        patch(
+            "app.services.fup_enforcement._execute",
+            side_effect=execute_owner_command_for_test,
+        ),
         patch(
             "app.services.fup_enforcement._fup_should_enforce",
             return_value=should_enforce,
@@ -124,6 +135,10 @@ def _run_safety_net(*, lift_results):
         patch("app.tasks.usage.SessionLocal", return_value=session),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch("app.services.enforcement.lift_fup_enforcement", lift_mock),
+        patch(
+            "app.services.fup_enforcement._execute",
+            side_effect=execute_owner_command_for_test,
+        ),
     ):
         from app.tasks.usage import lift_expired_fup_enforcement
 

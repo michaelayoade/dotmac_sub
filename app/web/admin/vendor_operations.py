@@ -1,6 +1,8 @@
 """Admin review workspace for vendor projects, quotes, and purchase invoices."""
 
-from fastapi import APIRouter, Depends, Form, Request
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -15,8 +17,23 @@ from app.services.auth_dependencies import (
     require_any_permission,
     require_permission,
 )
-from app.services.vendor_portal_operations import vendor_portal_operations
-from app.services.vendor_purchase_invoices import vendor_purchase_invoices
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
+from app.services.vendor_as_built_review_proposals import (
+    ConfirmVendorAsBuiltReviewCommand,
+)
+from app.services.vendor_portal_operations import (
+    ReviewVendorQuoteCommand,
+    vendor_portal_operations,
+)
+from app.services.vendor_project_review_proposals import (
+    ConfirmVendorProjectReviewCommand,
+)
+from app.services.vendor_purchase_invoices import (
+    ReviewVendorPurchaseInvoiceCommand,
+    vendor_purchase_invoices,
+)
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendors/operations", tags=["web-admin-vendor-operations"])
@@ -40,6 +57,50 @@ def _ctx(request: Request, db: Session) -> dict:
 def _actor(request: Request) -> str:
     auth = getattr(request.state, "auth", {}) or {}
     return str(auth.get("principal_id") or auth.get("person_id") or "")
+
+
+def _review_context(request: Request, *, quote_id: str) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=_actor(request),
+        scope=quote_id,
+        reason="vendor_quote_review",
+    )
+
+
+def _invoice_review_context(request: Request, *, invoice_id: str) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=_actor(request),
+        scope=invoice_id,
+        reason="vendor_purchase_invoice_review",
+    )
+
+
+def _staff_confirmation_context(
+    request: Request,
+    *,
+    scope: str,
+    reason: str,
+) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=_actor(request),
+        scope=scope,
+        reason=reason,
+    )
+
+
+def _quote_error(exc: DomainError) -> HTTPException:
+    suffix = exc.code.rsplit(".", 1)[-1]
+    status_code = 404 if suffix.endswith("not_found") else 409
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -82,13 +143,21 @@ def approve_vendor_quote(
     _auth: dict = Depends(_write),
     db: Session = Depends(get_db),
 ):
-    vendor_portal_operations.review_quote(
-        db,
-        quote_id,
-        reviewer_id=_actor(request),
-        approve=True,
-        notes=review_notes,
-    )
+    context = _review_context(request, quote_id=quote_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_portal_operations.review_quote(
+            db,
+            ReviewVendorQuoteCommand(
+                context=context,
+                quote_id=quote_id,
+                reviewer_id=_actor(request),
+                approve=True,
+                notes=review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)
 
 
@@ -124,12 +193,22 @@ def confirm_vendor_project_review(
     _auth: dict = Depends(_project_write),
     db: Session = Depends(get_db),
 ):
+    actor_id = _actor(request)
+    context = _staff_confirmation_context(
+        request,
+        scope=project_id,
+        reason="vendor_project_review_confirmation",
+    )
+    db_session_adapter.release_read_transaction(db)
     result = vendor_project_review_proposals.confirm_review(
         db,
-        confirmation_token=confirmation_token,
-        project_id=project_id,
-        action=action,
-        actor_id=_actor(request),
+        ConfirmVendorProjectReviewCommand(
+            context=context,
+            confirmation_token=confirmation_token,
+            project_id=project_id,
+            action=action,
+            actor_id=actor_id,
+        ),
     )
     label = "verified" if result.action == "verify" else "returned for rework"
     return RedirectResponse(
@@ -169,12 +248,22 @@ def confirm_vendor_as_built_review(
     _auth: dict = Depends(_project_write),
     db: Session = Depends(get_db),
 ):
+    actor_id = _actor(request)
+    context = _staff_confirmation_context(
+        request,
+        scope=as_built_id,
+        reason="vendor_as_built_review_confirmation",
+    )
+    db_session_adapter.release_read_transaction(db)
     result = vendor_as_built_review_proposals.confirm_review(
         db,
-        confirmation_token=confirmation_token,
-        as_built_id=as_built_id,
-        action=action,
-        actor_id=_actor(request),
+        ConfirmVendorAsBuiltReviewCommand(
+            context=context,
+            confirmation_token=confirmation_token,
+            as_built_id=as_built_id,
+            action=action,
+            actor_id=actor_id,
+        ),
     )
     label = "accepted" if result.action == "accept" else "rejected"
     return RedirectResponse(
@@ -191,13 +280,21 @@ def request_vendor_quote_revision(
     _auth: dict = Depends(_write),
     db: Session = Depends(get_db),
 ):
-    vendor_portal_operations.review_quote(
-        db,
-        quote_id,
-        reviewer_id=_actor(request),
-        approve=False,
-        notes=review_notes,
-    )
+    context = _review_context(request, quote_id=quote_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_portal_operations.review_quote(
+            db,
+            ReviewVendorQuoteCommand(
+                context=context,
+                quote_id=quote_id,
+                reviewer_id=_actor(request),
+                approve=False,
+                notes=review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)
 
 
@@ -209,12 +306,21 @@ def approve_vendor_invoice(
     _auth: dict = Depends(_write),
     db: Session = Depends(get_db),
 ):
-    vendor_purchase_invoices.approve(
-        db,
-        invoice_id,
-        reviewer_system_user_id=_actor(request),
-        review_notes=review_notes,
-    )
+    context = _invoice_review_context(request, invoice_id=invoice_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_purchase_invoices.review(
+            db,
+            ReviewVendorPurchaseInvoiceCommand(
+                context=context,
+                invoice_id=invoice_id,
+                reviewer_system_user_id=_actor(request),
+                approve=True,
+                review_notes=review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)
 
 
@@ -226,10 +332,19 @@ def request_vendor_invoice_revision(
     _auth: dict = Depends(_write),
     db: Session = Depends(get_db),
 ):
-    vendor_purchase_invoices.reject(
-        db,
-        invoice_id,
-        reviewer_system_user_id=_actor(request),
-        review_notes=review_notes,
-    )
+    context = _invoice_review_context(request, invoice_id=invoice_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_purchase_invoices.review(
+            db,
+            ReviewVendorPurchaseInvoiceCommand(
+                context=context,
+                invoice_id=invoice_id,
+                reviewer_system_user_id=_actor(request),
+                approve=False,
+                review_notes=review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)

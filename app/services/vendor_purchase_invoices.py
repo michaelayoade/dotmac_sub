@@ -1,20 +1,20 @@
-"""Native vendor purchase-invoice workflow and attachment handling."""
+"""Vendor purchase-invoice policy, reads, and command coordination."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal
+from typing import TypeVar
 
-from fastapi import HTTPException
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.domain_settings import SettingDomain
 from app.models.vendor_routes import (
     InstallationProject,
     ProjectQuote,
     ProjectQuoteStatus,
     VendorPurchaseInvoice,
-    VendorPurchaseInvoiceLineItem,
     VendorPurchaseInvoiceStatus,
 )
 from app.schemas.vendor_purchase_invoice import (
@@ -24,7 +24,14 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceUpdate,
 )
 from app.services.common import apply_pagination, coerce_uuid
-from app.services.file_storage import FileValidationError, file_uploads
+from app.services.domain_errors import DomainError
+from app.services.file_storage import file_uploads
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    execute_owner_command,
+)
+from app.services.settings_spec import resolve_value
 from app.services.ui_contracts import Action
 from app.services.vendor_payment_status import project_vendor_payment_status
 
@@ -37,6 +44,109 @@ _REVIEWABLE = {
     VendorPurchaseInvoiceStatus.submitted.value,
     VendorPurchaseInvoiceStatus.under_review.value,
 }
+ResultT = TypeVar("ResultT")
+
+
+class VendorPurchaseInvoiceError(DomainError):
+    """Stable failures from purchase-invoice policy and record boundaries."""
+
+
+def _error(suffix: str, message: str) -> VendorPurchaseInvoiceError:
+    return VendorPurchaseInvoiceError(
+        code=f"operations.vendor_purchase_invoices.{suffix}",
+        message=message,
+    )
+
+
+def _definition(name: str) -> OwnerCommandDefinition:
+    return OwnerCommandDefinition(
+        owner="operations.vendor_purchase_invoices",
+        concern="vendor purchase-invoice mutation coordination",
+        name=name,
+    )
+
+
+def _execute(
+    db: Session,
+    *,
+    context: CommandContext,
+    name: str,
+    operation: Callable[[], ResultT],
+) -> ResultT:
+    return execute_owner_command(
+        db,
+        definition=_definition(name),
+        context=context,
+        operation=operation,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CreateVendorPurchaseInvoiceCommand:
+    context: CommandContext
+    payload: VendorPurchaseInvoiceCreate
+    vendor_id: str
+    created_by_system_user_id: str | None
+    resolved_currency: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateVendorPurchaseInvoiceCommand:
+    context: CommandContext
+    invoice_id: str
+    payload: VendorPurchaseInvoiceUpdate
+    vendor_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AddVendorPurchaseInvoiceLineCommand:
+    context: CommandContext
+    invoice_id: str
+    payload: VendorPurchaseInvoiceLineCreate
+    vendor_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateVendorPurchaseInvoiceLineCommand:
+    context: CommandContext
+    invoice_id: str
+    line_id: str
+    payload: VendorPurchaseInvoiceLineUpdate
+    vendor_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteVendorPurchaseInvoiceLineCommand:
+    context: CommandContext
+    invoice_id: str
+    line_id: str
+    vendor_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class UploadVendorPurchaseInvoiceAttachmentCommand:
+    context: CommandContext
+    invoice_id: str
+    vendor_id: str
+    file_name: str
+    content_type: str | None
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewVendorPurchaseInvoiceCommand:
+    context: CommandContext
+    invoice_id: str
+    reviewer_system_user_id: str
+    approve: bool
+    review_notes: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class StageVendorPurchaseInvoiceSubmission:
+    context: CommandContext
+    invoice_id: str
+    vendor_id: str
 
 
 def _money(value: Decimal | int | str | None) -> Decimal:
@@ -66,29 +176,38 @@ def _get(
         query = query.with_for_update(of=VendorPurchaseInvoice)
     invoice = query.one_or_none()
     if invoice is None:
-        raise HTTPException(status_code=404, detail="Purchase invoice not found")
+        raise _error("invoice_not_found", "Purchase invoice not found.")
     return invoice
 
 
 def _assert_vendor(invoice: VendorPurchaseInvoice, vendor_id: str | None) -> None:
     if vendor_id and str(invoice.vendor_id) != str(vendor_id):
-        raise HTTPException(status_code=404, detail="Purchase invoice not found")
+        raise _error("invoice_not_found", "Purchase invoice not found.")
 
 
 def _assert_editable(invoice: VendorPurchaseInvoice) -> None:
     if invoice.status not in _EDITABLE:
-        raise HTTPException(
-            status_code=409,
-            detail="Only draft or revision-requested invoices can be edited",
+        raise _error(
+            "invoice_not_editable",
+            "Only draft or revision-requested invoices can be edited.",
         )
 
 
 def _project_for_vendor(
-    db: Session, project_id: str, vendor_id: str
+    db: Session,
+    project_id: str,
+    vendor_id: str,
+    *,
+    for_update: bool = False,
 ) -> InstallationProject:
-    project = db.get(InstallationProject, coerce_uuid(project_id))
+    query = db.query(InstallationProject).filter(
+        InstallationProject.id == coerce_uuid(project_id)
+    )
+    if for_update:
+        query = query.with_for_update(of=InstallationProject)
+    project = query.one_or_none()
     if project is None or not project.is_active:
-        raise HTTPException(status_code=404, detail="Installation project not found")
+        raise _error("project_not_found", "Installation project not found.")
     has_quote = (
         db.query(ProjectQuote.id)
         .filter(ProjectQuote.project_id == project.id)
@@ -98,11 +217,11 @@ def _project_for_vendor(
         is not None
     )
     if str(project.assigned_vendor_id or "") != str(vendor_id) and not has_quote:
-        raise HTTPException(status_code=404, detail="Installation project not found")
+        raise _error("project_not_found", "Installation project not found.")
     return project
 
 
-def _has_submitted_quote(db: Session, project_id, vendor_id) -> bool:
+def _has_submitted_quote(db: Session, project_id: object, vendor_id: object) -> bool:
     return (
         db.query(ProjectQuote.id)
         .filter(ProjectQuote.project_id == project_id)
@@ -143,15 +262,15 @@ def serialize(invoice: VendorPurchaseInvoice) -> dict:
         "vendor_id": invoice.vendor_id,
         "invoice_number": invoice.invoice_number,
         "status": invoice.status,
-        # Editability is projected from the same set the mutation paths enforce;
-        # the template consumes allowed/reason and never re-derives status rules.
         "edit_action": Action(
             key="edit",
             label="Edit invoice",
             allowed=editable,
-            reason=None
-            if editable
-            else f"A {invoice.status.replace('_', ' ')} invoice cannot be edited",
+            reason=(
+                None
+                if editable
+                else f"A {invoice.status.replace('_', ' ')} invoice cannot be edited"
+            ),
         ),
         "currency": invoice.currency,
         "tax_rate_percent": invoice.tax_rate_percent,
@@ -250,7 +369,7 @@ class VendorPurchaseInvoices:
         _assert_vendor(invoice, vendor_id)
         _assert_editable(invoice)
         if not (invoice.invoice_number or "").strip():
-            raise HTTPException(status_code=422, detail="Invoice number is required")
+            raise _error("invoice_number_required", "Invoice number is required.")
         submitted_quote_query = (
             db.query(ProjectQuote)
             .filter(ProjectQuote.project_id == invoice.project_id)
@@ -273,14 +392,15 @@ class VendorPurchaseInvoices:
             )
         submitted_quotes = submitted_quote_query.all()
         if not submitted_quotes:
-            raise HTTPException(
-                status_code=409,
-                detail="A submitted vendor quote is required before invoicing",
+            raise _error(
+                "submitted_quote_required",
+                "A submitted vendor quote is required before invoicing.",
             )
         active = [item for item in invoice.line_items if item.is_active]
         if not active:
-            raise HTTPException(
-                status_code=422, detail="At least one active invoice line is required"
+            raise _error(
+                "invoice_line_required",
+                "At least one active invoice line is required.",
             )
         subtotal = sum((_money(item.amount) for item in active), Decimal("0.00"))
         tax_total = _money(
@@ -340,274 +460,113 @@ class VendorPurchaseInvoices:
         }
 
     @staticmethod
-    def create(
-        db: Session,
-        payload: VendorPurchaseInvoiceCreate,
-        *,
-        vendor_id: str,
-        created_by_system_user_id: str | None,
-    ) -> dict:
-        project = _project_for_vendor(db, str(payload.project_id), vendor_id)
-        existing = (
-            _query(db)
-            .filter(VendorPurchaseInvoice.project_id == project.id)
-            .filter(VendorPurchaseInvoice.vendor_id == coerce_uuid(vendor_id))
-            .filter(VendorPurchaseInvoice.is_active.is_(True))
-            .one_or_none()
+    def create(db: Session, command: CreateVendorPurchaseInvoiceCommand) -> dict:
+        def operation() -> dict:
+            from app.services import vendor_purchase_invoice_records
+
+            currency = command.payload.currency or str(
+                resolve_value(db, SettingDomain.billing, "default_currency")
+            )
+            return vendor_purchase_invoice_records.stage_create(
+                db,
+                replace(command, resolved_currency=currency.strip().upper()),
+            )
+
+        return _execute(
+            db,
+            context=command.context,
+            name="create_vendor_purchase_invoice",
+            operation=operation,
         )
-        if existing is not None:
-            return serialize(existing)
-        invoice = VendorPurchaseInvoice(
-            project_id=project.id,
-            vendor_id=coerce_uuid(vendor_id),
-            invoice_number=(payload.invoice_number or "").strip() or None,
-            currency=payload.currency.upper(),
-            tax_rate_percent=payload.tax_rate_percent,
-            created_by_system_user_id=(
-                coerce_uuid(created_by_system_user_id)
-                if created_by_system_user_id
-                else None
+
+    @staticmethod
+    def update(db: Session, command: UpdateVendorPurchaseInvoiceCommand) -> dict:
+        from app.services import vendor_purchase_invoice_records
+
+        return _execute(
+            db,
+            context=command.context,
+            name="update_vendor_purchase_invoice",
+            operation=lambda: vendor_purchase_invoice_records.stage_update(db, command),
+        )
+
+    @staticmethod
+    def add_line(db: Session, command: AddVendorPurchaseInvoiceLineCommand) -> dict:
+        from app.services import vendor_purchase_invoice_records
+
+        return _execute(
+            db,
+            context=command.context,
+            name="add_vendor_purchase_invoice_line",
+            operation=lambda: vendor_purchase_invoice_records.stage_add_line(
+                db, command
             ),
         )
-        db.add(invoice)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="Invoice number is already used for this vendor",
-            ) from exc
-        return VendorPurchaseInvoices.get(db, str(invoice.id), vendor_id=vendor_id)
-
-    @staticmethod
-    def update(
-        db: Session,
-        invoice_id: str,
-        payload: VendorPurchaseInvoiceUpdate,
-        *,
-        vendor_id: str,
-    ) -> dict:
-        # Editable invoice writers lock the same parent row as submission
-        # confirmation so a concurrent edit cannot evade the stale-preview
-        # comparison.
-        invoice = _get(db, invoice_id, for_update=True)
-        _assert_vendor(invoice, vendor_id)
-        _assert_editable(invoice)
-        data = payload.model_dump(exclude_unset=True)
-        if "invoice_number" in data:
-            data["invoice_number"] = (data["invoice_number"] or "").strip() or None
-        if data.get("currency"):
-            data["currency"] = str(data["currency"]).upper()
-        for key, value in data.items():
-            setattr(invoice, key, value)
-        _recalculate(invoice)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="Invoice number is already used for this vendor",
-            ) from exc
-        return VendorPurchaseInvoices.get(db, invoice_id, vendor_id=vendor_id)
-
-    @staticmethod
-    def add_line(
-        db: Session,
-        invoice_id: str,
-        payload: VendorPurchaseInvoiceLineCreate,
-        *,
-        vendor_id: str,
-    ) -> dict:
-        invoice = _get(db, invoice_id, for_update=True)
-        _assert_vendor(invoice, vendor_id)
-        _assert_editable(invoice)
-        line = VendorPurchaseInvoiceLineItem(
-            invoice_id=invoice.id,
-            item_type=(payload.item_type or "").strip() or None,
-            description=payload.description.strip(),
-            quantity=payload.quantity,
-            unit_price=_money(payload.unit_price),
-            amount=_money(payload.quantity * payload.unit_price),
-            notes=(payload.notes or "").strip() or None,
-            is_active=True,
-        )
-        invoice.line_items.append(line)
-        _recalculate(invoice)
-        db.commit()
-        return VendorPurchaseInvoices.get(db, invoice_id, vendor_id=vendor_id)
 
     @staticmethod
     def update_line(
-        db: Session,
-        invoice_id: str,
-        line_id: str,
-        payload: VendorPurchaseInvoiceLineUpdate,
-        *,
-        vendor_id: str,
+        db: Session, command: UpdateVendorPurchaseInvoiceLineCommand
     ) -> dict:
-        invoice = _get(db, invoice_id, for_update=True)
-        _assert_vendor(invoice, vendor_id)
-        _assert_editable(invoice)
-        line = next(
-            (
-                row
-                for row in invoice.line_items
-                if str(row.id) == str(line_id) and row.is_active
+        from app.services import vendor_purchase_invoice_records
+
+        return _execute(
+            db,
+            context=command.context,
+            name="update_vendor_purchase_invoice_line",
+            operation=lambda: vendor_purchase_invoice_records.stage_update_line(
+                db, command
             ),
-            None,
         )
-        if line is None:
-            raise HTTPException(status_code=404, detail="Invoice line not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(line, key, value.strip() if isinstance(value, str) else value)
-        line.amount = _money(line.quantity * line.unit_price)
-        _recalculate(invoice)
-        db.commit()
-        return VendorPurchaseInvoices.get(db, invoice_id, vendor_id=vendor_id)
 
     @staticmethod
     def delete_line(
-        db: Session, invoice_id: str, line_id: str, *, vendor_id: str
+        db: Session, command: DeleteVendorPurchaseInvoiceLineCommand
     ) -> dict:
-        invoice = _get(db, invoice_id, for_update=True)
-        _assert_vendor(invoice, vendor_id)
-        _assert_editable(invoice)
-        line = next(
-            (
-                row
-                for row in invoice.line_items
-                if str(row.id) == str(line_id) and row.is_active
+        from app.services import vendor_purchase_invoice_records
+
+        return _execute(
+            db,
+            context=command.context,
+            name="delete_vendor_purchase_invoice_line",
+            operation=lambda: vendor_purchase_invoice_records.stage_delete_line(
+                db, command
             ),
-            None,
         )
-        if line is None:
-            raise HTTPException(status_code=404, detail="Invoice line not found")
-        line.is_active = False
-        _recalculate(invoice)
-        db.commit()
-        return VendorPurchaseInvoices.get(db, invoice_id, vendor_id=vendor_id)
 
     @staticmethod
     def upload_attachment(
-        db: Session,
-        invoice_id: str,
-        *,
-        vendor_id: str,
-        file_name: str,
-        content_type: str | None,
-        content: bytes,
+        db: Session, command: UploadVendorPurchaseInvoiceAttachmentCommand
     ) -> dict:
-        invoice = _get(db, invoice_id, for_update=True)
-        _assert_vendor(invoice, vendor_id)
-        _assert_editable(invoice)
-        if not content:
-            raise HTTPException(status_code=422, detail="Attachment is empty")
-        old_file = invoice.attachment
-        try:
-            stored = file_uploads.upload(
-                db=db,
-                domain="attachments",
-                entity_type="vendor_purchase_invoice",
-                entity_id=str(invoice.id),
-                original_filename=file_name or "invoice.pdf",
-                content_type=content_type,
-                data=content,
-                uploaded_by=None,
-                owner_subscriber_id=None,
-            )
-        except FileValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        invoice.attachment_stored_file_id = stored.id
-        db.commit()
-        if old_file and old_file.id != stored.id:
-            file_uploads.soft_delete(db=db, file=old_file)
-        return VendorPurchaseInvoices.get(db, invoice_id, vendor_id=vendor_id)
+        from app.services import vendor_purchase_invoice_records
 
-    @staticmethod
-    def submit(
-        db: Session,
-        invoice_id: str,
-        *,
-        vendor_id: str,
-        commit: bool = True,
-    ) -> dict:
-        invoice = _get(db, invoice_id, for_update=True)
-        _assert_vendor(invoice, vendor_id)
-        _assert_editable(invoice)
-        if not (invoice.invoice_number or "").strip():
-            raise HTTPException(status_code=422, detail="Invoice number is required")
-        if not _has_submitted_quote(db, invoice.project_id, invoice.vendor_id):
-            raise HTTPException(
-                status_code=409,
-                detail="A submitted vendor quote is required before invoicing",
-            )
-        if not any(item.is_active for item in invoice.line_items):
-            raise HTTPException(
-                status_code=422, detail="At least one active invoice line is required"
-            )
-        _recalculate(invoice)
-        invoice.status = VendorPurchaseInvoiceStatus.submitted.value
-        invoice.submitted_at = datetime.now(UTC)
-        invoice.review_notes = None
-        if commit:
-            db.commit()
-        else:
-            db.flush()
-        return VendorPurchaseInvoices.get(db, invoice_id, vendor_id=vendor_id)
-
-    @staticmethod
-    def approve(
-        db: Session,
-        invoice_id: str,
-        *,
-        reviewer_system_user_id: str,
-        review_notes: str | None,
-    ) -> dict:
-        invoice = _get(db, invoice_id)
-        if invoice.status not in _REVIEWABLE:
-            raise HTTPException(
-                status_code=409, detail="Only submitted invoices can be approved"
-            )
-        _recalculate(invoice)
-        invoice.status = VendorPurchaseInvoiceStatus.approved.value
-        invoice.reviewed_at = datetime.now(UTC)
-        invoice.reviewed_by_system_user_id = coerce_uuid(reviewer_system_user_id)
-        invoice.review_notes = (review_notes or "").strip() or None
-        invoice.procurement_order_reference = (
-            invoice.project.procurement_order_reference
-            or invoice.procurement_order_reference
+        return _execute(
+            db,
+            context=command.context,
+            name="upload_vendor_purchase_invoice_attachment",
+            operation=lambda: vendor_purchase_invoice_records.stage_upload_attachment(
+                db, command
+            ),
         )
-        try:
-            from app.services.backoffice import enqueue_purchase_invoice
-
-            with db.begin_nested():
-                enqueue_purchase_invoice(db, invoice)
-        except Exception as exc:  # enqueue failure is repairable by the sweeper
-            invoice.payables_submission_error = str(exc)[:500]
-        db.commit()
-        return VendorPurchaseInvoices.get(db, invoice_id)
 
     @staticmethod
-    def reject(
-        db: Session,
-        invoice_id: str,
-        *,
-        reviewer_system_user_id: str,
-        review_notes: str | None,
+    def review(db: Session, command: ReviewVendorPurchaseInvoiceCommand) -> dict:
+        from app.services import vendor_purchase_invoice_records
+
+        return _execute(
+            db,
+            context=command.context,
+            name="review_vendor_purchase_invoice",
+            operation=lambda: vendor_purchase_invoice_records.stage_review(db, command),
+        )
+
+    @staticmethod
+    def stage_submission(
+        db: Session, command: StageVendorPurchaseInvoiceSubmission
     ) -> dict:
-        invoice = _get(db, invoice_id)
-        if invoice.status not in _REVIEWABLE:
-            raise HTTPException(
-                status_code=409, detail="Only submitted invoices can be rejected"
-            )
-        invoice.status = VendorPurchaseInvoiceStatus.revision_requested.value
-        invoice.reviewed_at = datetime.now(UTC)
-        invoice.reviewed_by_system_user_id = coerce_uuid(reviewer_system_user_id)
-        invoice.review_notes = (review_notes or "").strip() or None
-        db.commit()
-        return VendorPurchaseInvoices.get(db, invoice_id)
+        """Participate in the signed-confirmation coordinator transaction."""
+        from app.services import vendor_purchase_invoice_records
+
+        return vendor_purchase_invoice_records.stage_submission(db, command)
 
     @staticmethod
     def attachment_file(db: Session, invoice_id: str, *, vendor_id: str | None):
@@ -615,7 +574,7 @@ class VendorPurchaseInvoices:
         _assert_vendor(invoice, vendor_id)
         file = invoice.attachment
         if file is None or file.is_deleted:
-            raise HTTPException(status_code=404, detail="Attachment not found")
+            raise _error("attachment_not_found", "Attachment not found.")
         return file, file_uploads.stream_file(file)
 
 

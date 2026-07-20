@@ -17,6 +17,9 @@ from app.models.notification import Notification, NotificationChannel
 
 EPHEMERAL_ACTION_METADATA_KEY = "ephemeral_action"
 REFERRAL_CREDENTIAL_ENROLLMENT_ACTION = "auth.referral_credential_enrollment"
+STAFF_ACCOUNT_INVITE_ACTION = "auth.staff_account_invite"
+RESELLER_USER_INVITE_ACTION = "auth.reseller_user_invite"
+PASSWORD_RECOVERY_ACTION = "auth.password_recovery"
 _ENVELOPE_KEYS = frozenset({"type", "version", "context"})
 
 
@@ -91,6 +94,30 @@ def materialize_email(db: Session, notification: Notification) -> EphemeralEmail
         from app.services import customer_credential_enrollment
 
         content = customer_credential_enrollment.materialize_enrollment_email(
+            db,
+            notification=notification,
+            context=context,
+        )
+    elif action_type == STAFF_ACCOUNT_INVITE_ACTION and version == 1:
+        from app.services import staff_provisioning
+
+        content = staff_provisioning.materialize_staff_invite_email(
+            db,
+            notification=notification,
+            context=context,
+        )
+    elif action_type == RESELLER_USER_INVITE_ACTION and version == 1:
+        from app.services import reseller_onboarding
+
+        content = reseller_onboarding.materialize_reseller_invite_email(
+            db,
+            notification=notification,
+            context=context,
+        )
+    elif action_type == PASSWORD_RECOVERY_ACTION and version == 1:
+        from app.services import credential_recovery
+
+        content = credential_recovery.materialize_password_recovery_email(
             db,
             notification=notification,
             context=context,

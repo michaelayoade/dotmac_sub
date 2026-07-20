@@ -3,15 +3,15 @@ holds one transaction across the whole active-subscriber list — the long-lived
 "idle in transaction" on `subscriptions` that pinned a DB pool slot and blocked
 autovacuum in prod.
 
-Driven with mocks (the established pattern for tasks in test_celery_tasks.py):
-the task uses the production `SessionLocal` + `commit()`, which the
-rollback-isolated `db_session` fixture can't host, and the test engine is
-session-scoped so committing real fixture data would leak across tests.
+Driven with mocks because the production owner boundary commits each command,
+which the rollback-isolated ``db_session`` fixture cannot host.
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 from uuid import uuid4
+
+from tests.fup_helpers import execute_owner_command_for_test
 
 
 def _fake_sub():
@@ -31,16 +31,31 @@ def _run_with_subs(subs):
     session = MagicMock()
     _set_query_subscriptions(session, subs)
     fup_state_mock = MagicMock()
-    fup_state_mock.get.return_value = None  # no period-boundary reset
+    fup_state_mock.get_for_update.return_value = None  # no period-boundary reset
     bucket = MagicMock(used_gb=0, period_end=None)
+    by_id = {sub.id: sub for sub in subs}
 
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=lock_session),
-        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
+        patch(
+            "app.tasks.usage.SessionLocal",
+            side_effect=[lock_session, session],
+        ),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
-            "app.services.usage._resolve_or_create_quota_bucket",
+            "app.services.fup_enforcement._current_quota_bucket",
             return_value=bucket,
+        ),
+        patch(
+            "app.services.fup_enforcement._subscription_for_evaluation",
+            side_effect=lambda _db, subscription_id: by_id[subscription_id],
+        ),
+        patch(
+            "app.services.fup_enforcement._sweep_policy",
+            return_value=(False, 0.8, False),
+        ),
+        patch(
+            "app.services.fup_enforcement._execute",
+            side_effect=execute_owner_command_for_test,
         ),
         patch("app.services.fup.evaluate_rules", return_value=[]),
     ):
@@ -55,10 +70,8 @@ def test_commits_once_per_subscription():
     session, result = _run_with_subs(subs)
 
     assert result["processed"] == len(subs)
-    # The fix: a commit per subscription. The bug committed exactly once, after
-    # the entire loop, so call_count would have been 1 regardless of subscriber
-    # count. Allow the trailing post-loop commit too.
-    assert session.commit.call_count >= len(subs)
+    # The owner executor commits one complete decision per subscription.
+    assert session.commit.call_count == len(subs)
     session.close.assert_called_once()
     session.rollback.assert_not_called()
 
@@ -77,16 +90,30 @@ def test_targeted_run_filters_to_changed_subscription_ids():
     session = MagicMock()
     _set_query_subscriptions(session, [changed_sub])
     fup_state_mock = MagicMock()
-    fup_state_mock.get.return_value = None
+    fup_state_mock.get_for_update.return_value = None
     bucket = MagicMock(used_gb=0, period_end=None)
 
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=lock_session),
-        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
+        patch(
+            "app.tasks.usage.SessionLocal",
+            side_effect=[lock_session, session],
+        ),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
-            "app.services.usage._resolve_or_create_quota_bucket",
+            "app.services.fup_enforcement._current_quota_bucket",
             return_value=bucket,
+        ),
+        patch(
+            "app.services.fup_enforcement._subscription_for_evaluation",
+            return_value=changed_sub,
+        ),
+        patch(
+            "app.services.fup_enforcement._sweep_policy",
+            return_value=(False, 0.8, False),
+        ),
+        patch(
+            "app.services.fup_enforcement._execute",
+            side_effect=execute_owner_command_for_test,
         ),
         patch("app.services.fup.evaluate_rules", return_value=[]),
     ):
@@ -112,12 +139,26 @@ def test_lifts_existing_fup_state_after_cap_reset_even_if_not_active():
     state = MagicMock()
     state.cap_resets_at = datetime.now(UTC) - timedelta(minutes=1)
     fup_state_mock = MagicMock()
-    fup_state_mock.get.return_value = state
+    fup_state_mock.get_for_update.return_value = state
 
     with (
-        patch("app.tasks.usage.SessionLocal", return_value=lock_session),
-        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
+        patch(
+            "app.tasks.usage.SessionLocal",
+            side_effect=[lock_session, session],
+        ),
         patch("app.services.fup_state.fup_state", fup_state_mock),
+        patch(
+            "app.services.fup_enforcement._subscription_for_evaluation",
+            return_value=sub,
+        ),
+        patch(
+            "app.services.fup_enforcement._sweep_policy",
+            return_value=(False, 0.8, False),
+        ),
+        patch(
+            "app.services.fup_enforcement._execute",
+            side_effect=execute_owner_command_for_test,
+        ),
         patch("app.services.enforcement.lift_fup_enforcement") as mock_lift,
     ):
         from app.tasks.usage import evaluate_fup_rules
@@ -126,7 +167,7 @@ def test_lifts_existing_fup_state_after_cap_reset_even_if_not_active():
 
     assert result["processed"] == 1
     assert result["reset"] == 1
-    mock_lift.assert_called_once_with(session, str(sub.id))
+    mock_lift.assert_called_once_with(session, str(sub.id), evaluated_at=ANY)
     session.close.assert_called_once()
 
 

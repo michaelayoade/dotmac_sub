@@ -6,14 +6,18 @@ reseller float wallets are never involved. CRM has no read or write role.
 
 import logging
 from urllib.parse import quote
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import referrals as referrals_service
 from app.services.customer_context import optional_customer_subscriber_id
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -37,6 +41,26 @@ def customer_refer_and_earn(
         return RedirectResponse(url=_LOGIN, status_code=303)
 
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
+    try:
+        resolved_subscriber_id = UUID(subscriber_id)
+        db_session_adapter.release_read_transaction(db)
+        referrals_service.ensure_referral_code(
+            db,
+            referrals_service.EnsureReferralCodeCommand(
+                context=CommandContext.system(
+                    actor=f"customer_portal:{resolved_subscriber_id}",
+                    scope=referrals_service.REFERRAL_PROGRAM_SCOPE,
+                    reason="Customer requested their Refer & Earn page",
+                    idempotency_key=f"referral-code:{resolved_subscriber_id}",
+                ),
+                subscriber_id=resolved_subscriber_id,
+            ),
+        )
+    except (ValueError, DomainError) as exc:
+        return RedirectResponse(
+            url=f"/portal/refer-and-earn?error={quote(str(exc))}",
+            status_code=303,
+        )
     context = {
         "request": request,
         "customer": customer,
@@ -62,16 +86,25 @@ def customer_refer_a_friend(
 
     subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
     try:
-        referrals_service.referrals.refer_a_friend(
+        resolved_subscriber_id = UUID(subscriber_id)
+        db_session_adapter.release_read_transaction(db)
+        referrals_service.refer_friend(
             db,
-            subscriber_id,
-            name=name or None,
-            email=email or None,
-            phone=phone or None,
+            referrals_service.ReferFriendCommand(
+                context=CommandContext.system(
+                    actor=f"customer_portal:{resolved_subscriber_id}",
+                    scope=referrals_service.REFERRAL_PROGRAM_SCOPE,
+                    reason="Customer submitted a Refer & Earn prospect",
+                ),
+                referrer_subscriber_id=resolved_subscriber_id,
+                name=name or None,
+                email=email or None,
+                phone=phone or None,
+            ),
         )
-    except HTTPException as exc:
+    except (ValueError, DomainError) as exc:
         return RedirectResponse(
-            url=f"/portal/refer-and-earn?error={quote(str(exc.detail))}",
+            url=f"/portal/refer-and-earn?error={quote(str(exc))}",
             status_code=303,
         )
     return RedirectResponse(url="/portal/refer-and-earn?referred=1", status_code=303)

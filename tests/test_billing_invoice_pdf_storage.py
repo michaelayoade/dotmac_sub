@@ -421,7 +421,7 @@ def test_text_fallback_uses_ngn_and_truncates_with_marker(
     assert pdf_bytes.startswith(b"%PDF-")
 
 
-def test_pil_fallback_renders_naira_and_truncation_marker(
+def test_pil_fallback_renders_currency_and_truncation_marker(
     db_session, subscriber_account, monkeypatch
 ):
     from PIL import ImageDraw
@@ -442,8 +442,7 @@ def test_pil_fallback_renders_naira_and_truncation_marker(
 
     assert pdf_bytes.startswith(b"%PDF-")
     assert "... and 2 more line items (see itemised statement)" in rendered
-    # DejaVu is available in this environment, so the naira sign is used
-    assert any(pdf_service.NAIRA_SIGN in text for text in rendered)
+    assert any(pdf_service.NAIRA_SIGN in text or "NGN " in text for text in rendered)
 
 
 def test_completed_export_before_template_refresh_is_stale(

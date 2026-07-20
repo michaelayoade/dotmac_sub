@@ -27,6 +27,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.subscriber import Subscriber
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
@@ -615,7 +616,7 @@ def _billing_impact(
 def _resolve_state(
     subscription: Subscription,
     *,
-    subscriber: object | None,
+    subscriber: Subscriber | None,
     status: SubscriptionStatus | None = None,
     offer: CatalogOffer | None = None,
 ) -> SubscriptionLifecycleState:

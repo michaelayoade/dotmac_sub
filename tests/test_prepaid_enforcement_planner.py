@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.notification import Notification
@@ -14,9 +16,12 @@ from app.models.subscriber import SubscriberStatus
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
 from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
+    PrepaidEnforcementError,
+    PrepaidEnforcementReasonSource,
     candidate_prepaid_account_ids,
     candidate_prepaid_funding_account_ids,
     plan_prepaid_enforcement,
+    resolve_prepaid_enforcement_policy,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
 
@@ -181,8 +186,8 @@ def test_plan_reports_parent_status_drift_and_distinct_suspend_action(
     ).items[0]
 
     assert item.action == PrepaidEnforcementAction.suspend
-    assert item.account_status == "new"
-    assert item.derived_account_status == "active"
+    assert item.account_status is SubscriberStatus.new
+    assert item.derived_account_status is SubscriberStatus.active
     assert item.account_status_drift is True
 
 
@@ -205,8 +210,41 @@ def test_plan_classifies_financial_shield_without_mutation(
 
     assert item.action == PrepaidEnforcementAction.shielded
     assert item.reason == "payment proof pending review"
+    assert item.reason_source is PrepaidEnforcementReasonSource.SHIELD
     db_session.refresh(subscription)
     assert subscription.status == SubscriptionStatus.active
+
+
+def test_invalid_blocking_time_is_a_stable_domain_failure(db_session, monkeypatch):
+    from app.services.prepaid_enforcement_planner import settings_spec
+
+    original = settings_spec.resolve_value
+
+    def _setting(db, domain, key):
+        if key == "prepaid_blocking_time":
+            return "not-a-time"
+        return original(db, domain, key)
+
+    monkeypatch.setattr(settings_spec, "resolve_value", _setting)
+
+    with pytest.raises(PrepaidEnforcementError) as captured:
+        resolve_prepaid_enforcement_policy(db_session)
+
+    assert captured.value.code == (
+        "financial.prepaid_enforcement.invalid_blocking_time"
+    )
+
+
+def test_missing_selected_account_is_a_stable_domain_failure(db_session):
+    import uuid
+
+    missing_id = uuid.uuid4()
+
+    with pytest.raises(PrepaidEnforcementError) as captured:
+        plan_prepaid_enforcement(db_session, account_ids=[missing_id])
+
+    assert captured.value.code == "financial.prepaid_enforcement.account_not_found"
+    assert captured.value.details == {"account_ids": [str(missing_id)]}
 
 
 def test_plan_always_uses_materialized_funding_owner(

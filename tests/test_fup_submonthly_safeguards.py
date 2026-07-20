@@ -12,9 +12,10 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import HTTPException
 
-from app.services.fup import evaluate_rules, fup_policies
+from app.services.fup import evaluate_rules
 from app.services.fup_usage import FupUsageWindow, fup_window_bounds
 from app.services.web_fup import _guard_submonthly_period
+from tests.fup_helpers import add_fup_rule, ensure_fup_policy
 
 NOW = datetime(2026, 6, 21, 12, 0, tzinfo=UTC)
 
@@ -40,10 +41,11 @@ def test_submonthly_allowed_when_flag_enabled(db_session, monkeypatch):
 
 
 def test_no_data_window_propagates_and_does_not_trigger(db_session, catalog_offer):
-    policy = fup_policies.get_or_create(db_session, str(catalog_offer.id))
-    fup_policies.add_rule(
+    offer_id = str(catalog_offer.id)
+    ensure_fup_policy(db_session, offer_id)
+    add_fup_rule(
         db_session,
-        str(policy.id),
+        offer_id,
         name="daily-5",
         consumption_period="daily",
         direction="down",

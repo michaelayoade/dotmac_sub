@@ -14,6 +14,7 @@ from app.services import web_integrations_webhooks as webhooks_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
 from app.services.auth_dependencies import require_permission
+from app.services.integrations import installations
 
 router = APIRouter(prefix="/integrations", tags=["web-admin-integrations"])
 templates = Jinja2Templates(directory="templates")
@@ -1066,24 +1067,25 @@ def whatsapp_config_save(
     db: Session = Depends(get_db),
 ):
     try:
-        web_integrations_whatsapp_service.save_config(
+        installations.execute_command(
             db,
-            provider=provider,
-            phone_number=phone_number,
-            waba_id=waba_id,
-            webhook_url=webhook_url,
-            graph_version=graph_version,
-            api_key=api_key,
-            api_secret=api_secret,
-            webhook_verify_token=webhook_verify_token,
-            message_templates_json=message_templates_json,
+            lambda: web_integrations_whatsapp_service.save_config(
+                db,
+                provider=provider,
+                phone_number=phone_number,
+                waba_id=waba_id,
+                webhook_url=webhook_url,
+                graph_version=graph_version,
+                api_key=api_key,
+                api_secret=api_secret,
+                webhook_verify_token=webhook_verify_token,
+                message_templates_json=message_templates_json,
+            ),
         )
-        db.commit()
         return RedirectResponse(
             url="/admin/integrations/whatsapp/config?saved=1", status_code=303
         )
     except Exception as exc:
-        db.rollback()
         state = web_integrations_whatsapp_service.build_config_state(db)
         context = _base_context(request, db, active_page="whatsapp")
         context.update(

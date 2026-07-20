@@ -44,7 +44,10 @@ class CommunicationIntent:
     channels: tuple[NotificationChannel, ...] | None = None
     include_reseller: bool = True
     persist_policy_suppressions: bool = True
-    subscriber_recipients: dict[NotificationChannel, str] = field(default_factory=dict)
+    recipients: dict[NotificationChannel, str] = field(default_factory=dict)
+    audience_type: str = "subscriber"
+    audience_id: UUID | None = None
+    resolve_subscriber_identity: bool = True
     metadata: dict[str, object] = field(default_factory=dict)
     dedupe_key: str | None = None
     send_at: datetime | None = None
@@ -118,9 +121,24 @@ def _reseller_addresses(
 def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResult:
     from app.services.notification import notifications as notification_service
 
+    if intent.audience_type not in {"subscriber", "system_user", "reseller_user"}:
+        raise ValueError("Unsupported communication audience type")
+    if intent.audience_type != "subscriber" and (
+        intent.subscriber_id is not None
+        or intent.include_reseller
+        or intent.communication_class == CommunicationClass.marketing
+    ):
+        raise ValueError("Internal communication cannot use customer policies")
+    if intent.audience_type != "subscriber" and intent.audience_id is None:
+        raise ValueError("Internal communication requires an audience identifier")
+
     resolved_subscriber_id = intent.subscriber_id
-    if resolved_subscriber_id is None:
-        for identity_recipient in intent.subscriber_recipients.values():
+    if (
+        intent.audience_type == "subscriber"
+        and intent.resolve_subscriber_identity
+        and resolved_subscriber_id is None
+    ):
+        for identity_recipient in intent.recipients.values():
             resolved_subscriber_id = resolve_subscriber_id_for_recipient(
                 db, identity_recipient
             )
@@ -129,7 +147,11 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
     subscriber = (
         db.get(Subscriber, resolved_subscriber_id) if resolved_subscriber_id else None
     )
-    if intent.subscriber_id is not None and subscriber is None:
+    if (
+        intent.audience_type == "subscriber"
+        and intent.subscriber_id is not None
+        and subscriber is None
+    ):
         raise ValueError("Subscriber not found")
     channels = intent.channels or resolve_notification_channels(
         db,
@@ -171,7 +193,11 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
         suppression_reasons=[],
         dedupe_key=intent.dedupe_key,
         scheduled_for=intent.send_at,
-        metadata_=dict(intent.metadata),
+        metadata_={
+            **intent.metadata,
+            "audience_type": intent.audience_type,
+            "audience_id": str(intent.audience_id) if intent.audience_id else None,
+        },
     )
     db.add(record)
     db.flush()
@@ -193,7 +219,7 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
 
     queued: list[Notification] = []
     for channel in channels:
-        delivery_recipient = intent.subscriber_recipients.get(channel) or (
+        delivery_recipient = intent.recipients.get(channel) or (
             _subscriber_address(subscriber, channel) if subscriber else None
         )
         if not delivery_recipient:
@@ -214,8 +240,10 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
                     template_id=intent.template_id,
                     subscriber_id=subscriber.id if subscriber else None,
                     communication_intent_id=record.id,
-                    audience_type="subscriber",
-                    audience_id=subscriber.id if subscriber else None,
+                    audience_type=intent.audience_type,
+                    audience_id=(
+                        subscriber.id if subscriber is not None else intent.audience_id
+                    ),
                     channel=channel,
                     event_type=intent.event_type,
                     category=intent.category,
@@ -227,11 +255,16 @@ def submit(db: Session, intent: CommunicationIntent) -> CommunicationIntentResul
                     last_error=intent.requested_last_error,
                     metadata_=dict(intent.metadata),
                 )
-                notification = (
-                    notification_service.queue_customer_notification(db, payload)
-                    if intent.persist_policy_suppressions
-                    else notification_service.queue_event_notification(db, payload)
-                )
+                if intent.audience_type == "subscriber":
+                    notification = (
+                        notification_service.queue_customer_notification(db, payload)
+                        if intent.persist_policy_suppressions
+                        else notification_service.queue_event_notification(db, payload)
+                    )
+                else:
+                    notification = notification_service.queue_internal_notification(
+                        db, payload
+                    )
                 if notification is None:
                     suppressed.append(f"subscriber:{channel.value}:customer_policy")
                 else:

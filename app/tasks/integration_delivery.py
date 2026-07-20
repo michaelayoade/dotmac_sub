@@ -7,7 +7,7 @@ from uuid import UUID
 
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
-from app.services.integrations.delivery import execute_delivery
+from app.services.integrations import delivery as integration_delivery
 
 
 @celery_app.task(
@@ -17,10 +17,15 @@ from app.services.integrations.delivery import execute_delivery
 )
 def deliver_integration_event(self, delivery_id: str) -> dict[str, object]:
     with db_session_adapter.session() as db:
-        delivery = execute_delivery(db, delivery_id=UUID(delivery_id))
+        delivery = integration_delivery.execute_command(
+            db,
+            lambda: integration_delivery.execute_delivery(
+                db,
+                delivery_id=UUID(delivery_id),
+            ),
+        )
         state = delivery.state
         next_attempt_at = delivery.next_attempt_at
-        db.commit()
     if state == "retryable" and next_attempt_at is not None:
         delay = max(
             1,

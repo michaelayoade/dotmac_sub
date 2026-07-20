@@ -6,7 +6,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 import pyotp
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from jose import JWTError
 from sqlalchemy import func
@@ -20,9 +20,16 @@ from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import auth_flow as auth_flow_service
-from app.services import customer_credential_enrollment, customer_portal, radius_auth
+from app.services import (
+    credential_recovery,
+    customer_credential_enrollment,
+    customer_portal,
+    radius_auth,
+)
 from app.services import module_manager as module_manager_service
 from app.services.auth_flow import verify_password
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.services.rate_limiter_adapter import allow_operation
 from app.services.settings_spec import resolve_value
 from app.web.customer.branding import get_customer_templates
@@ -32,6 +39,14 @@ _CUSTOMER_MFA_TOKEN_COOKIE = "customer_mfa_pending"
 _CUSTOMER_MFA_CONTEXT_COOKIE = "customer_mfa_context"
 _CUSTOMER_MFA_MAX_AGE = 300
 _CUSTOMER_RESET_LOGIN_PATH = "/portal/auth/login?next=/portal/dashboard"
+
+
+def _credential_recovery_context(reason: str) -> CommandContext:
+    return CommandContext.system(
+        actor="service:customer-auth-web",
+        scope=credential_recovery.CREDENTIAL_RECOVERY_SCOPE,
+        reason=reason,
+    )
 
 
 def _safe_next(next_url: str | None, fallback: str = "/portal/dashboard") -> str:
@@ -233,8 +248,15 @@ def customer_forgot_password_page(request: Request, db: Session, success: bool =
 
 def customer_forgot_password_submit(request: Request, db: Session, email: str):
     try:
-        auth_flow_service.forgot_password_flow(
-            db, email, next_login_path=_CUSTOMER_RESET_LOGIN_PATH
+        credential_recovery.request_password_recovery(
+            db,
+            credential_recovery.RequestPasswordRecoveryCommand(
+                context=_credential_recovery_context(
+                    "Customer portal password recovery request"
+                ),
+                email=email,
+                next_login_path=_CUSTOMER_RESET_LOGIN_PATH,
+            ),
         )
     except Exception:
         logger.info(
@@ -293,14 +315,37 @@ def customer_credential_enrollment_submit(
     try:
         customer_credential_enrollment.complete_referral_enrollment(
             db,
-            token=token,
-            new_password=password,
-            username=username or None,
+            customer_credential_enrollment.CompleteReferralEnrollmentCommand(
+                context=CommandContext.system(
+                    actor="public:customer-credential-enrollment-form",
+                    scope=customer_credential_enrollment.CUSTOMER_CREDENTIAL_ENROLLMENT_SCOPE,
+                    reason=(
+                        "Redeem referral customer credential enrollment capability"
+                    ),
+                ),
+                token=token,
+                new_password=password,
+                username=username or None,
+            ),
         )
-    except customer_credential_enrollment.CustomerCredentialEnrollmentError as exc:
+    except DomainError as exc:
+        status_code = {
+            "auth.customer_credential_enrollment.invalid_password": (
+                status.HTTP_400_BAD_REQUEST
+            ),
+            "auth.customer_credential_enrollment.inactive_account": (
+                status.HTTP_409_CONFLICT
+            ),
+            "auth.customer_credential_enrollment.username_unavailable": (
+                status.HTTP_409_CONFLICT
+            ),
+            "auth.customer_credential_enrollment.invalid_username": (
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+        }.get(exc.code, status.HTTP_401_UNAUTHORIZED)
         error = (
-            str(exc)
-            if exc.status_code in {400, 409, 422}
+            exc.message
+            if status_code in {400, 409, 422}
             else "This enrollment link is invalid, expired, or already used."
         )
         return customer_credential_enrollment_page(
@@ -309,7 +354,7 @@ def customer_credential_enrollment_submit(
             token,
             error=error,
             username=username,
-            status_code=exc.status_code,
+            status_code=status_code,
         )
     return RedirectResponse(
         url="/portal/auth/login?enrollment=success",

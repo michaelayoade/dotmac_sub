@@ -855,6 +855,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.collections,
+        key="default_prepaid_policy_set_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default Prepaid Collections Policy Set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
+        key="default_postpaid_policy_set_id",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label="Default Postpaid Collections Policy Set",
+    ),
+    SettingSpec(
+        domain=SettingDomain.collections,
         key="billing_enforcement_min_enforcing_day_offset",
         env_var="BILLING_ENFORCEMENT_MIN_ENFORCING_DAY_OFFSET",
         value_type=SettingValueType.integer,
@@ -2391,6 +2407,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
+        key="referral_signup_context_expiry_minutes",
+        env_var="REFERRAL_SIGNUP_CONTEXT_EXPIRY_MINUTES",
+        value_type=SettingValueType.integer,
+        default=1440,
+        min_value=5,
+        max_value=10080,
+        label="Referral signup context expiry (minutes)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
         key="referral_reward_amount",
         env_var="REFERRAL_REWARD_AMOUNT",
         value_type=SettingValueType.string,
@@ -2404,6 +2430,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="NGN",
         label="Referral Reward Currency",
+    ),
+    SettingSpec(
+        domain=SettingDomain.subscriber,
+        key="referral_share_base_url",
+        env_var="PORTAL_REFERRAL_SHARE_BASE",
+        value_type=SettingValueType.string,
+        default="https://app.dotmac.io",
+        label="Referral Share Base URL",
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
@@ -3525,6 +3559,26 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=1440,
         min_value=5,
     ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="credential_enrollment_request_limit",
+        env_var="CREDENTIAL_ENROLLMENT_REQUEST_LIMIT",
+        value_type=SettingValueType.integer,
+        default=3,
+        min_value=1,
+        max_value=10,
+        label="Credential enrollment request limit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.auth,
+        key="credential_enrollment_request_window_seconds",
+        env_var="CREDENTIAL_ENROLLMENT_REQUEST_WINDOW_SECONDS",
+        value_type=SettingValueType.integer,
+        default=900,
+        min_value=60,
+        max_value=86400,
+        label="Credential enrollment request window (seconds)",
+    ),
     # ============== Comms Domain: External API Timeouts ==============
     SettingSpec(
         domain=SettingDomain.comms,
@@ -3895,6 +3949,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=False,
         label="Quotes: native read path",
+    ),
+    SettingSpec(
+        domain=SettingDomain.projects,
+        key="vendor_quote_validity_days",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=1,
+        max_value=365,
+        label="Vendor quote validity (days)",
     ),
     # --- AI provider transport (docs/designs/AI_SOT.md, ai.gateway) ----------
     # Every value defaults OFF/empty: the transport is inert until an operator

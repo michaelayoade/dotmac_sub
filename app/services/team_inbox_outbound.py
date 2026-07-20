@@ -200,7 +200,7 @@ def _queue_outbox_reply(
             channels=(channel,),
             include_reseller=False,
             persist_policy_suppressions=False,
-            subscriber_recipients={channel: recipient},
+            recipients={channel: recipient},
             metadata=intent_metadata,
         ),
     )

@@ -1,0 +1,222 @@
+"""Behavior contract for the manifest-verified public command boundary."""
+
+from __future__ import annotations
+
+import pytest
+from sqlalchemy import func, select
+
+from app.models.network_monitoring import DeviceProjection
+from app.services.owner_commands import (
+    CommandContext,
+    OwnerCommandDefinition,
+    OwnerCommandError,
+    execute_owner_command,
+)
+
+_DEFINITION = OwnerCommandDefinition(
+    owner="network.device_projection",
+    concern="device_projections materialised table",
+    name="test_projection_command",
+)
+
+
+def _context() -> CommandContext:
+    return CommandContext.system(
+        actor="pytest:owner_commands",
+        scope="network:test",
+        reason="verify owner command transaction semantics",
+    )
+
+
+def _projection(source_id: str) -> DeviceProjection:
+    return DeviceProjection(
+        device_type="test",
+        source_id=source_id,
+        operational_status="unknown",
+    )
+
+
+def _count(db_session) -> int:
+    return int(
+        db_session.scalar(select(func.count()).select_from(DeviceProjection)) or 0
+    )
+
+
+def test_success_commits_before_return(db_session) -> None:
+    def operation() -> str:
+        db_session.add(_projection("committed"))
+        return "complete"
+
+    result = execute_owner_command(
+        db_session,
+        definition=_DEFINITION,
+        context=_context(),
+        operation=operation,
+    )
+
+    assert result == "complete"
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 1
+
+
+def test_failure_rolls_back_before_raising(db_session) -> None:
+    def operation() -> None:
+        db_session.add(_projection("rolled-back"))
+        db_session.flush()
+        raise RuntimeError("test failure")
+
+    with pytest.raises(RuntimeError, match="test failure"):
+        execute_owner_command(
+            db_session,
+            definition=_DEFINITION,
+            context=_context(),
+            operation=operation,
+        )
+
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 0
+
+
+def test_active_caller_transaction_fails_closed_and_is_cleared(db_session) -> None:
+    db_session.execute(select(DeviceProjection.id))
+
+    with pytest.raises(OwnerCommandError) as captured:
+        execute_owner_command(
+            db_session,
+            definition=_DEFINITION,
+            context=_context(),
+            operation=lambda: None,
+        )
+
+    assert captured.value.code == "network.device_projection.active_caller_transaction"
+    assert not db_session.in_transaction()
+
+
+def test_nested_public_command_rolls_back_outer_command(db_session) -> None:
+    def outer_operation() -> None:
+        db_session.add(_projection("nested"))
+        execute_owner_command(
+            db_session,
+            definition=_DEFINITION,
+            context=_context(),
+            operation=lambda: None,
+        )
+
+    with pytest.raises(OwnerCommandError) as captured:
+        execute_owner_command(
+            db_session,
+            definition=_DEFINITION,
+            context=_context(),
+            operation=outer_operation,
+        )
+
+    assert captured.value.code == "network.device_projection.nested_owner_command"
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 0
+
+
+def test_helper_commit_is_rejected_before_state_is_committed(db_session) -> None:
+    def operation() -> None:
+        db_session.add(_projection("helper-commit"))
+        db_session.commit()
+
+    with pytest.raises(OwnerCommandError) as captured:
+        execute_owner_command(
+            db_session,
+            definition=_DEFINITION,
+            context=_context(),
+            operation=operation,
+        )
+
+    assert (
+        captured.value.code == "network.device_projection.nested_transaction_completion"
+    )
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 0
+
+
+def test_helper_rollback_cannot_return_a_successful_outcome(db_session) -> None:
+    def operation() -> None:
+        db_session.add(_projection("helper-rollback"))
+        db_session.flush()
+        db_session.rollback()
+
+    with pytest.raises(OwnerCommandError) as captured:
+        execute_owner_command(
+            db_session,
+            definition=_DEFINITION,
+            context=_context(),
+            operation=operation,
+        )
+
+    assert (
+        captured.value.code == "network.device_projection.nested_transaction_completion"
+    )
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 0
+
+
+def test_open_savepoint_rolls_back_the_owner_transaction(db_session) -> None:
+    savepoint = None
+
+    def operation() -> None:
+        nonlocal savepoint
+        db_session.add(_projection("open-savepoint"))
+        savepoint = db_session.begin_nested()
+
+    with pytest.raises(OwnerCommandError) as captured:
+        execute_owner_command(
+            db_session,
+            definition=_DEFINITION,
+            context=_context(),
+            operation=operation,
+        )
+
+    assert (
+        captured.value.code == "network.device_projection.nested_transaction_completion"
+    )
+    assert savepoint is not None
+    assert not savepoint.is_active
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 0
+
+
+def test_helper_savepoint_rollback_cannot_hide_partial_failure(db_session) -> None:
+    def operation() -> None:
+        savepoint = db_session.begin_nested()
+        db_session.add(_projection("savepoint-rollback"))
+        db_session.flush()
+        savepoint.rollback()
+
+    with pytest.raises(OwnerCommandError) as captured:
+        execute_owner_command(
+            db_session,
+            definition=_DEFINITION,
+            context=_context(),
+            operation=operation,
+        )
+
+    assert (
+        captured.value.code == "network.device_projection.nested_transaction_completion"
+    )
+    assert not db_session.in_transaction()
+    assert _count(db_session) == 0
+
+
+def test_uncontracted_owner_cannot_use_runtime_boundary(db_session) -> None:
+    uncontracted = OwnerCommandDefinition(
+        owner="events.store",
+        concern="event persistence",
+        name="invalid_event_store_command",
+    )
+
+    with pytest.raises(OwnerCommandError) as captured:
+        execute_owner_command(
+            db_session,
+            definition=uncontracted,
+            context=_context(),
+            operation=lambda: None,
+        )
+
+    assert captured.value.code == "events.store.command_contract_violation"
+    assert not db_session.in_transaction()

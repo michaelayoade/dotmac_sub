@@ -1,12 +1,14 @@
 """Event-driven enforcement for sessions and FUP actions."""
 
 import logging
+from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
 from app.models.subscriber import Subscriber
-from app.services import enforcement_event_policy
+from app.services import fup_enforcement
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services.enforcement import (
@@ -17,7 +19,19 @@ from app.services.enforcement import (
     remove_subscription_address_list_block,
     update_subscription_sessions,
 )
+from app.services.enforcement_event_policy import (
+    FupEnforcementAction,
+    ResolveFupEventPolicy,
+    parse_fup_action_override,
+    resolve_fup_event_policy,
+    resolve_group_routing_policy,
+    resolve_session_refresh_policy,
+)
 from app.services.events.types import Event, EventType
+from app.services.fup_state import (
+    ApplyFupRuntimeState,
+    FupRuntimeStateError,
+)
 from app.services.radius_access_state import (
     derive_access_state,
     set_subscription_access_state,
@@ -108,7 +122,7 @@ class EnforcementHandler:
             sub.access_state = target
             db.flush()
 
-        if not enforcement_event_policy.group_routing_enabled(db):
+        if not resolve_group_routing_policy(db).enabled:
             return
         try:
             result = set_subscription_access_state(db, str(subscription_id), state)
@@ -251,9 +265,7 @@ class EnforcementHandler:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
             return
-        refresh_enabled = (
-            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
-        )
+        refresh_enabled = resolve_session_refresh_policy(db).enabled
 
         subscription = db.get(Subscription, subscription_id)
 
@@ -368,9 +380,7 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
-        refresh_enabled = (
-            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
-        )
+        refresh_enabled = resolve_session_refresh_policy(db).enabled
         try:
             if refresh_enabled and projection_ready:
                 disconnect_account_sessions(db, str(account_id), reason="throttle")
@@ -404,9 +414,7 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
-        refresh_enabled = (
-            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
-        )
+        refresh_enabled = resolve_session_refresh_policy(db).enabled
         try:
             if refresh_enabled and projection_ready:
                 disconnect_account_sessions(db, str(account_id), reason="unthrottle")
@@ -427,8 +435,14 @@ class EnforcementHandler:
                 account_id,
             )
             return
-        action = enforcement_event_policy.fup_action(db, event.payload.get("action"))
-        if action == "none":
+        policy = resolve_fup_event_policy(
+            db,
+            ResolveFupEventPolicy(
+                requested_action=parse_fup_action_override(event.payload.get("action"))
+            ),
+        )
+        action = policy.action
+        if action is FupEnforcementAction.NONE:
             return
 
         # Resolve offer_id and rule_id from payload for state tracking
@@ -441,7 +455,7 @@ class EnforcementHandler:
         fup_block_downgraded = False
 
         fup_access_mode = None
-        if action == "block":
+        if action is FupEnforcementAction.BLOCK:
             from app.models.enforcement_lock import AccessRestrictionMode
             from app.models.subscriber import Subscriber
             from app.services.walled_garden_policy import (
@@ -457,7 +471,7 @@ class EnforcementHandler:
                 requested_mode=AccessRestrictionMode.captive,
             )
             fup_access_mode = decision.effective_mode
-            action = "suspend"
+            action = FupEnforcementAction.SUSPEND
             fup_block_downgraded = fup_access_mode == AccessRestrictionMode.hard_reject
             if fup_block_downgraded:
                 logger.warning(
@@ -468,7 +482,7 @@ class EnforcementHandler:
                     rule_id,
                     decision.reason,
                 )
-        if action == "suspend":
+        if action is FupEnforcementAction.SUSPEND:
             from app.models.enforcement_lock import (
                 AccessRestrictionMode,
                 EnforcementReason,
@@ -496,6 +510,7 @@ class EnforcementHandler:
                     offer_id,
                     rule_id,
                     action_status="blocked",
+                    evaluated_at=event.occurred_at,
                     cap_resets_at=cap_resets_at_raw,
                     notes=(
                         "FUP cap: block downgraded to suspend (captive not enabled)"
@@ -503,6 +518,8 @@ class EnforcementHandler:
                         else "FUP suspension applied"
                     ),
                 )
+            except FupRuntimeStateError:
+                raise
             except ValueError as e:
                 logger.info(
                     "Skipped FUP suspension for subscription %s: %s",
@@ -516,15 +533,7 @@ class EnforcementHandler:
                     exc,
                 )
             return
-        throttle_profile_id = enforcement_event_policy.fup_throttle_radius_profile_id(
-            db
-        )
-        if not throttle_profile_id:
-            logger.warning(
-                "FUP throttle profile not configured. "
-                "Set 'fup_throttle_radius_profile_id' in usage domain settings."
-            )
-            return
+        throttle_profile_id = policy.required_throttle_profile_id()
         # Capture the subscriber's current full-speed profile BEFORE the
         # throttle overwrites it, so the period-reset lift can restore it. The
         # offer's effective profile is the durable "should be" value.
@@ -538,12 +547,7 @@ class EnforcementHandler:
                 db, str(account_id), str(throttle_profile_id)
             )
             if updated:
-                refresh_enabled = (
-                    enforcement_event_policy.refresh_sessions_on_profile_change_enabled(
-                        db
-                    )
-                )
-                if refresh_enabled:
+                if policy.refresh_sessions:
                     disconnect_account_sessions(
                         db, str(account_id), reason="fup_throttle"
                     )
@@ -553,11 +557,14 @@ class EnforcementHandler:
                     offer_id,
                     rule_id,
                     action_status="throttled",
+                    evaluated_at=event.occurred_at,
                     throttle_profile_id=str(throttle_profile_id),
                     original_profile_id=original_profile_id,
                     cap_resets_at=cap_resets_at_raw,
                     notes="FUP throttle applied",
                 )
+        except FupRuntimeStateError:
+            raise
         except Exception as exc:
             logger.warning(
                 "Failed to apply FUP throttle for subscription %s: %s",
@@ -573,6 +580,7 @@ class EnforcementHandler:
         rule_id: str | None,
         *,
         action_status: str,
+        evaluated_at: datetime,
         throttle_profile_id: str | None = None,
         original_profile_id: str | None = None,
         cap_resets_at: str | None = None,
@@ -585,47 +593,45 @@ class EnforcementHandler:
             if subscription:
                 offer_id = str(subscription.offer_id) if subscription.offer_id else None
         if not offer_id:
-            logger.debug(
-                "Cannot persist FUP state: subscription %s has no offer_id (direct plan?)",
-                subscription_id,
+            raise FupRuntimeStateError(
+                code="access.fup_runtime_state.offer_required",
+                message="FUP runtime state requires a canonical subscription offer.",
             )
-            return
+        from app.models.fup_state import FupActionStatus
+
+        status_map = {
+            "none": FupActionStatus.none,
+            "throttled": FupActionStatus.throttled,
+            "blocked": FupActionStatus.blocked,
+            "notified": FupActionStatus.notified,
+        }
         try:
-            from app.models.fup_state import FupActionStatus
-            from app.services.fup_state import fup_state
-
-            status_map = {
-                "none": FupActionStatus.none,
-                "throttled": FupActionStatus.throttled,
-                "blocked": FupActionStatus.blocked,
-                "notified": FupActionStatus.notified,
-            }
-            parsed_resets_at = None
-            if cap_resets_at:
-                from datetime import datetime
-
-                try:
-                    parsed_resets_at = datetime.fromisoformat(cap_resets_at)
-                except (ValueError, TypeError):
-                    pass
-
-            fup_state.apply_action(
-                db,
-                subscription_id,
-                offer_id=offer_id,
-                rule_id=rule_id,
+            parsed_resets_at = (
+                datetime.fromisoformat(cap_resets_at) if cap_resets_at else None
+            )
+            command = ApplyFupRuntimeState(
+                subscription_id=UUID(subscription_id),
+                offer_id=UUID(offer_id),
+                rule_id=UUID(rule_id) if rule_id else None,
                 action_status=status_map.get(action_status, FupActionStatus.none),
-                throttle_profile_id=throttle_profile_id,
-                original_profile_id=original_profile_id,
+                throttle_profile_id=(
+                    UUID(throttle_profile_id) if throttle_profile_id else None
+                ),
+                original_profile_id=(
+                    UUID(original_profile_id) if original_profile_id else None
+                ),
                 cap_resets_at=parsed_resets_at,
+                evaluated_at=evaluated_at,
                 notes=notes,
             )
-        except Exception as exc:
-            logger.warning(
-                "Failed to persist FUP state for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
+        except FupRuntimeStateError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise FupRuntimeStateError(
+                code="access.fup_runtime_state.invalid_event_evidence",
+                message="FUP runtime event evidence is invalid.",
+            ) from exc
+        fup_enforcement.stage_fup_runtime_state(db, command)
 
     def _handle_payment_received(self, db: Session, event: Event) -> None:
         """Submit payment observation to the financial-access reconciler."""

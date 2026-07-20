@@ -9,6 +9,10 @@ import pytest
 from fastapi import HTTPException
 
 from app.services import reseller_portal
+from tests.reseller_status_helpers import (
+    confirm_current_status_action,
+    confirm_status_action,
+)
 
 # =============================================================================
 # Test Fixtures
@@ -1393,12 +1397,11 @@ def test_reseller_can_deactivate_own_customer_account(db_session, reseller):
     subscription.status = SubscriptionStatus.active
     db_session.commit()
 
-    result = reseller_portal.update_customer_account_status(
+    result = confirm_current_status_action(
         db_session,
-        reseller_id=str(reseller.id),
-        account_id=str(account.id),
+        reseller_id=reseller.id,
+        account_id=account.id,
         action="deactivate",
-        actor_id=str(account.id),
     )
 
     db_session.refresh(account)
@@ -1455,19 +1458,17 @@ def test_reseller_can_restore_own_deactivated_customer_account(db_session, resel
     subscription.status = SubscriptionStatus.active
     db_session.commit()
 
-    reseller_portal.update_customer_account_status(
+    confirm_current_status_action(
         db_session,
-        reseller_id=str(reseller.id),
-        account_id=str(account.id),
+        reseller_id=reseller.id,
+        account_id=account.id,
         action="deactivate",
-        actor_id=str(account.id),
     )
-    result = reseller_portal.update_customer_account_status(
+    result = confirm_current_status_action(
         db_session,
-        reseller_id=str(reseller.id),
-        account_id=str(account.id),
+        reseller_id=reseller.id,
+        account_id=account.id,
         action="restore",
-        actor_id=str(account.id),
     )
 
     db_session.refresh(account)
@@ -1517,12 +1518,11 @@ def test_reseller_can_disable_own_customer_account(db_session, reseller):
     subscription.status = SubscriptionStatus.active
     db_session.commit()
 
-    result = reseller_portal.update_customer_account_status(
+    result = confirm_current_status_action(
         db_session,
-        reseller_id=str(reseller.id),
-        account_id=str(account.id),
+        reseller_id=reseller.id,
+        account_id=account.id,
         action="disable",
-        actor_id=str(account.id),
     )
 
     db_session.refresh(account)
@@ -1547,11 +1547,13 @@ def test_reseller_cannot_update_foreign_customer_account(
     subscriber.reseller_id = other_reseller.id
     db_session.commit()
 
-    result = reseller_portal.update_customer_account_status(
+    result = confirm_status_action(
         db_session,
-        reseller_id=str(reseller.id),
-        account_id=str(subscriber.id),
+        reseller_id=reseller.id,
+        account_id=subscriber.id,
         action="disable",
+        fingerprint="0" * 64,
+        idempotency_key=f"foreign-{uuid.uuid4().hex}",
     )
 
     assert result is None

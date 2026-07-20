@@ -43,12 +43,68 @@ from app.schemas.auth_flow import (
     VerifyEmailResponse,
 )
 from app.services import auth_flow as auth_flow_service
-from app.services import customer_credential_enrollment
+from app.services import credential_recovery, customer_credential_enrollment
 from app.services import session_manager as session_manager_service
 from app.services import user_profile as user_profile_service
 from app.services.auth_dependencies import require_user_auth
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _credential_recovery_context(reason: str) -> CommandContext:
+    return CommandContext.system(
+        actor="service:public-auth-api",
+        scope=credential_recovery.CREDENTIAL_RECOVERY_SCOPE,
+        reason=reason,
+    )
+
+
+def _credential_recovery_http_error(exc: DomainError) -> HTTPException:
+    status_code = {
+        "auth.credential_recovery.invalid_password": status.HTTP_400_BAD_REQUEST,
+        "auth.credential_recovery.credential_not_found": status.HTTP_404_NOT_FOUND,
+        "auth.credential_recovery.invalid_reset_capability": (
+            status.HTTP_401_UNAUTHORIZED
+        ),
+    }.get(exc.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return HTTPException(status_code=status_code, detail=exc.message)
+
+
+def _credential_enrollment_context(reason: str) -> CommandContext:
+    return CommandContext.system(
+        actor="public:customer-credential-enrollment",
+        scope=customer_credential_enrollment.CUSTOMER_CREDENTIAL_ENROLLMENT_SCOPE,
+        reason=reason,
+    )
+
+
+def _credential_enrollment_http_error(exc: DomainError) -> HTTPException:
+    status_code = {
+        "auth.customer_credential_enrollment.invalid_password": (
+            status.HTTP_400_BAD_REQUEST
+        ),
+        "auth.customer_credential_enrollment.invalid_capability": (
+            status.HTTP_401_UNAUTHORIZED
+        ),
+        "auth.customer_credential_enrollment.context_not_found": (
+            status.HTTP_401_UNAUTHORIZED
+        ),
+        "auth.customer_credential_enrollment.stale_context": (
+            status.HTTP_401_UNAUTHORIZED
+        ),
+        "auth.customer_credential_enrollment.inactive_account": (
+            status.HTTP_409_CONFLICT
+        ),
+        "auth.customer_credential_enrollment.username_unavailable": (
+            status.HTTP_409_CONFLICT
+        ),
+        "auth.customer_credential_enrollment.invalid_username": (
+            status.HTTP_422_UNPROCESSABLE_ENTITY
+        ),
+    }.get(exc.code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 @router.post(
@@ -371,7 +427,15 @@ def forgot_password(
     Request a password reset email.
     Always returns success to prevent email enumeration.
     """
-    auth_flow_service.forgot_password_flow(db, payload.email)
+    credential_recovery.request_password_recovery(
+        db,
+        credential_recovery.RequestPasswordRecoveryCommand(
+            context=_credential_recovery_context(
+                "Public API password recovery request"
+            ),
+            email=payload.email,
+        ),
+    )
     return ForgotPasswordResponse()
 
 
@@ -391,8 +455,20 @@ def reset_password_endpoint(
     """
     Reset password using the token from forgot-password email.
     """
-    reset_at = auth_flow_service.reset_password(db, payload.token, payload.new_password)
-    return ResetPasswordResponse(reset_at=reset_at)
+    try:
+        outcome = credential_recovery.complete_password_reset(
+            db,
+            credential_recovery.CompletePasswordResetCommand(
+                context=_credential_recovery_context(
+                    "Public API password reset capability redemption"
+                ),
+                token=payload.token,
+                new_password=payload.new_password,
+            ),
+        )
+    except DomainError as exc:
+        raise _credential_recovery_http_error(exc) from exc
+    return ResetPasswordResponse(reset_at=outcome.reset_at)
 
 
 @router.post(
@@ -415,12 +491,17 @@ def credential_enrollment_endpoint(
     try:
         result = customer_credential_enrollment.complete_referral_enrollment(
             db,
-            token=payload.token,
-            new_password=payload.new_password,
-            username=payload.username,
+            customer_credential_enrollment.CompleteReferralEnrollmentCommand(
+                context=_credential_enrollment_context(
+                    "Redeem referral customer credential enrollment capability"
+                ),
+                token=payload.token,
+                new_password=payload.new_password,
+                username=payload.username,
+            ),
         )
-    except customer_credential_enrollment.CustomerCredentialEnrollmentError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except DomainError as exc:
+        raise _credential_enrollment_http_error(exc) from exc
     return CredentialEnrollmentResponse.model_validate(result, from_attributes=True)
 
 

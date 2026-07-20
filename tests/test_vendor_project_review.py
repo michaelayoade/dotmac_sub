@@ -22,8 +22,41 @@ from app.models.vendor_routes import (
 )
 from app.models.work_order import WorkOrder
 from app.services import vendor_project_review_proposals
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_errors import VendorProjectLifecycleError
 from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.vendor_project_review_proposals import (
+    ConfirmVendorProjectReviewCommand,
+)
+
+
+def _confirm(
+    db_session,
+    *,
+    token: str,
+    project_id: str,
+    action: str,
+    actor_id: str,
+):
+    db_session_adapter.release_read_transaction(db_session)
+    command_id = uuid4()
+    return vendor_project_review_proposals.confirm_review(
+        db_session,
+        ConfirmVendorProjectReviewCommand(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor=actor_id,
+                scope=project_id,
+                reason="test_vendor_project_review_confirmation",
+            ),
+            confirmation_token=token,
+            project_id=project_id,
+            action=action,
+            actor_id=actor_id,
+        ),
+    )
 
 
 def _completed(
@@ -211,16 +244,16 @@ def test_staff_review_confirmation_is_stale_safe_and_exact_replay(db_session):
         reason="Completion accepted",
     )
 
-    first = vendor_project_review_proposals.confirm_review(
+    first = _confirm(
         db_session,
-        confirmation_token=proposal.confirmation_token,
+        token=proposal.confirmation_token,
         project_id=str(installation.id),
         action="verify",
         actor_id=str(reviewer.id),
     )
-    replay = vendor_project_review_proposals.confirm_review(
+    replay = _confirm(
         db_session,
-        confirmation_token=proposal.confirmation_token,
+        token=proposal.confirmation_token,
         project_id=str(installation.id),
         action="verify",
         actor_id=str(reviewer.id),

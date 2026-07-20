@@ -20,7 +20,11 @@ class DbSessionProvider(Protocol):
 
     def session(self) -> Generator[Session, None, None]: ...
 
+    def owner_command_session(self) -> Generator[Session, None, None]: ...
+
     def read_session(self) -> Generator[Session, None, None]: ...
+
+    def release_read_transaction(self, db: Session) -> None: ...
 
     def advisory_lock(
         self,
@@ -65,8 +69,33 @@ class SqlAlchemySessionAdapter:
     def create_session(self) -> Session:
         return SessionLocal()
 
+    def release_read_transaction(self, db: Session) -> None:
+        """Close an implicit read transaction without discarding business writes.
+
+        SQLAlchemy opens a transaction for refreshes and SELECTs. Sequential
+        owner-command adapters may release that read-only transaction before
+        entering the next verified owner boundary. Any pending mutation fails
+        closed instead of being silently rolled back.
+        """
+
+        if not db.in_transaction():
+            return
+        if db.new or db.dirty or db.deleted:
+            raise RuntimeError(
+                "Cannot release a read transaction with pending session mutations"
+            )
+        # Completing an empty read transaction preserves rows already committed
+        # through a surrounding connection transaction (as used by integration
+        # harnesses); rolling it back could unwind that external lifecycle.
+        db.commit()
+
     @contextmanager
     def session(self) -> Generator[Session, None, None]:
+        """Legacy auto-committing write session.
+
+        New adapters call :meth:`owner_command_session` so the registered
+        public service, rather than this lifecycle adapter, owns commit.
+        """
         db = SessionLocal()
         try:
             yield db
@@ -76,6 +105,23 @@ class SqlAlchemySessionAdapter:
             raise
         finally:
             db.close()
+
+    @contextmanager
+    def owner_command_session(self) -> Generator[Session, None, None]:
+        """Open and close a session without owning the business transaction."""
+
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            try:
+                # A compliant public command returns transaction-free. Roll
+                # back defensively if adapter work or an unexpected failure
+                # left a read transaction open; never commit business state.
+                if db.in_transaction():
+                    db.rollback()
+            finally:
+                db.close()
 
     @contextmanager
     def read_session(self) -> Generator[Session, None, None]:

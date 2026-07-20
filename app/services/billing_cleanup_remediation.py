@@ -37,6 +37,11 @@ from app.services.account_lifecycle import (
 )
 from app.services.billing._common import _recalculate_invoice_totals
 from app.services.billing.invoices import Invoices
+from app.services.billing_profile import (
+    BillingProfileReason,
+    plan_billing_mode_transition,
+    resolve_billing_profile,
+)
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.collections import has_overdue_balance
 from app.services.common import coerce_uuid
@@ -254,28 +259,12 @@ def plan_account_mode_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
     if account is None:
         return _refuse(action, row, "subscriber_missing")
 
-    live_modes = {
-        mode.value
-        for (mode,) in (
-            db.query(Subscription.billing_mode)
-            .filter(Subscription.subscriber_id == account.id)
-            .filter(
-                Subscription.status.in_(
-                    [
-                        SubscriptionStatus.active,
-                        SubscriptionStatus.pending,
-                        SubscriptionStatus.suspended,
-                    ]
-                )
-            )
-            .distinct()
-            .all()
-        )
-    }
-    if live_modes != {subscription_mode}:
-        return _refuse(action, row, "mixed_or_changed_live_subscription_modes")
     target_mode = BillingMode(subscription_mode)
-    if account.billing_mode == target_mode:
+    decision = plan_billing_mode_transition(
+        resolve_billing_profile(db, account),
+        target_mode,
+    )
+    if decision.reason is BillingProfileReason.ALREADY_ALIGNED:
         return {
             "action": action,
             "decision": "skip",
@@ -283,6 +272,9 @@ def plan_account_mode_row(db: Session, row: dict[str, str]) -> dict[str, Any]:
             "subscriber_id": str(account.id),
             "before": {"account_billing_mode": account.billing_mode.value},
         }
+    if not decision.allowed or decision.requires_subscription_alignment:
+        reason = decision.reason or BillingProfileReason.BILLING_MODE_UNRESOLVED
+        return _refuse(action, row, reason.value)
     if row.get("account_mode") and account.billing_mode.value != row["account_mode"]:
         return _refuse(action, row, "account_mode_changed_since_audit")
     return {
@@ -894,7 +886,15 @@ def _execute_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         account = db.get(Subscriber, coerce_uuid(item["subscriber_id"]))
         if account is None:
             raise ValueError(f"subscriber missing: {item['subscriber_id']}")
-        account.billing_mode = BillingMode(item["target_billing_mode"])
+        target_mode = BillingMode(item["target_billing_mode"])
+        decision = plan_billing_mode_transition(
+            resolve_billing_profile(db, account),
+            target_mode,
+        )
+        if not decision.allowed or decision.requires_subscription_alignment:
+            reason = decision.reason or BillingProfileReason.BILLING_MODE_UNRESOLVED
+            raise ValueError(f"billing mode transition rejected: {reason.value}")
+        account.billing_mode = target_mode
         db.flush()
         return {"account_billing_mode": account.billing_mode.value}
     if item["action"] == "advance_invoice_next_billing_at":
