@@ -133,7 +133,7 @@ def test_model_and_migration_enforce_normalized_catalog_identity() -> None:
     }
 
     source = MIGRATION.read_text(encoding="utf-8")
-    assert 'down_revision = "380_integration_platform_cutover"' in source
+    assert 'down_revision = "384_collection_account_payment_details"' in source
     assert "HAVING count(*) > 1" in source
     assert "lower(btrim(name))" in source
     assert "lower(btrim(key))" in source

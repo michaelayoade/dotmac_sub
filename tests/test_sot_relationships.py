@@ -607,14 +607,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "operations.work_order_status",
     )
     assert sot_relationships.dependencies_for(
-        "integration.vendor_purchase_invoice_erp_projection"
+        "integration.dotmac_erp_payables_adapter"
+    ) == ("integration.backoffice_adapter",)
+    assert sot_relationships.dependencies_for(
+        "integration.dotmac_erp_material_support_adapter"
     ) == (
-        "control.settings_spec",
-        "events.dispatcher",
-        "operations.vendor_purchase_invoice_records",
-    )
-    assert sot_relationships.dependencies_for("integration.erp_material_support") == (
-        "control.settings_spec",
+        "integration.backoffice_adapter",
         "operations.material_dependencies",
     )
     subscriber_api_mapping = sot_relationships.owning_service_for(

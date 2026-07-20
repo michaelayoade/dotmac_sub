@@ -14,6 +14,7 @@ app/services/bandwidth.py
 app/services/billing/_common.py
 app/services/billing/account_credit.py
 app/services/billing/billing_accounts.py
+app/services/billing/collection_accounts.py
 app/services/billing/configuration.py
 app/services/billing/consolidated_payments.py
 app/services/billing/credit_notes.py

@@ -4836,7 +4836,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         mapping_owner=(
                             "field material API/web adapters and "
-                            "integration.erp_material_support"
+                            "integration.dotmac_erp_material_support_adapter"
                         ),
                         retryable_codes=(
                             "operations.material_dependencies.sync_unavailable",
