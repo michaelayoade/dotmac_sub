@@ -1,9 +1,8 @@
 """Native referrals module flow on PostgreSQL: refer → qualify → reward.
 
 Nothing external is faked: the reward credit is a real issued CreditNote via
-``crm_api.create_account_credit`` with the shared ``referral:{id}``
-idempotency namespace, on a real database (the row lock in ``issue_reward``
-is PG-only surface the unit suite can't exercise).
+``financial.credit_notes`` with the shared ``referral:{id}`` idempotency
+namespace, on a real database with the program owner's row locks.
 """
 
 from __future__ import annotations
@@ -20,6 +19,11 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import party as party_service
 from app.services.referrals import referrals
 from app.services.subscriber import _default_reseller_id
+from tests.referral_program_testkit import (
+    issue_reward,
+    qualify_for_subscriber,
+    refer_friend,
+)
 
 
 def _program(db, *, amount: str = "2500") -> None:
@@ -36,7 +40,7 @@ def _program(db, *, amount: str = "2500") -> None:
                 is_active=True,
             )
         )
-    db.flush()
+    db.commit()
 
 
 def _subscriber(db, *, status=SubscriberStatus.active) -> Subscriber:
@@ -49,7 +53,8 @@ def _subscriber(db, *, status=SubscriberStatus.active) -> Subscriber:
         reseller_id=_default_reseller_id(db),
     )
     db.add(sub)
-    db.flush()
+    db.commit()
+    db.refresh(sub)
     return sub
 
 
@@ -63,7 +68,7 @@ def test_referral_lifecycle_native(db_session):
     friend_email = f"friend-{uuid.uuid4().hex[:8]}@example.com"
 
     # 1. Refer — native, referrer has NO CRM link.
-    out = referrals.refer_a_friend(
+    out = refer_friend(
         db_session,
         str(referrer.id),
         name="Flow Friend",
@@ -86,7 +91,7 @@ def test_referral_lifecycle_native(db_session):
         source="integration_review",
         reason="Integration flow reviewed the referral identity",
     )
-    referrals.attach_subscriber(
+    referrals.attach_subscriber_for_conversion(
         db_session,
         referral_id=str(referral.id),
         subscriber_id=str(prospect.id),
@@ -94,15 +99,15 @@ def test_referral_lifecycle_native(db_session):
         reason="Integration flow reviewed the referral identity",
     )
     prospect.status = SubscriberStatus.active
-    db_session.flush()
-    qualified = referrals.qualify_for_subscriber(db_session, prospect)
+    db_session.commit()
+    qualified = qualify_for_subscriber(db_session, prospect)
     assert qualified is not None and qualified.id == referral.id
     assert qualified.status == "qualified"
     assert qualified.reward_amount == Decimal("2500")
 
     # 3. Reward — a real issued CreditNote lands on the referrer's account,
     # memo-marked with the shared idempotency namespace.
-    rewarded = referrals.issue_reward(db_session, str(referral.id))
+    rewarded = issue_reward(db_session, referral.id)
     assert rewarded.status == "rewarded"
     assert rewarded.reward_status == "issued"
     marker = f"[ref:referral:{referral.id}]"
@@ -118,7 +123,7 @@ def test_referral_lifecycle_native(db_session):
 
     # 4. Idempotency: issuing again returns the same credit, no re-credit —
     # the same guarantee that makes a pre-cutover CRM payout safe to replay.
-    again = referrals.issue_reward(db_session, str(referral.id))
+    again = issue_reward(db_session, referral.id)
     assert again.reward_status == "issued"
     assert (again.metadata_ or {}).get("reward_credit_id") == str(notes[0].id)
     assert (
@@ -134,10 +139,10 @@ def test_double_capture_guard_native(db_session):
     """Referring the same contact twice yields one active referral row."""
     referrer = _subscriber(db_session)
     friend_email = f"dup-{uuid.uuid4().hex[:8]}@example.com"
-    first = referrals.refer_a_friend(
+    first = refer_friend(
         db_session, str(referrer.id), name="Dup Friend", email=friend_email
     )
-    second = referrals.refer_a_friend(
+    second = refer_friend(
         db_session, str(referrer.id), name="Dup Friend", email=friend_email
     )
     assert first["id"] == second["id"]

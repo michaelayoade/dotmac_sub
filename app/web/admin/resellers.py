@@ -1,6 +1,7 @@
 """Admin reseller portal web routes."""
 
 from urllib.parse import quote_plus
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -10,13 +11,61 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
+from app.services import reseller_onboarding, subscriber_assignments
 from app.services import web_admin_resellers as reseller_svc
 from app.services.auth_dependencies import require_permission
+from app.services.owner_commands import CommandContext
 from app.services.web_system_common import humanize_integrity_error
 from app.web.request_parsing import parse_form_data
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/resellers", tags=["web-admin-resellers"])
+
+
+def _command_context(
+    auth: dict,
+    *,
+    scope: str,
+    reason: str,
+    idempotency_key: str,
+    correlation_id=None,
+) -> CommandContext:
+    principal_id = str(auth.get("principal_id") or "").strip()
+    if not principal_id:
+        raise HTTPException(status_code=403, detail="Authorized actor is missing")
+    actor_type = "api_key" if auth.get("principal_type") == "api_key" else "user"
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=correlation_id or command_id,
+        actor=f"{actor_type}:{principal_id}",
+        scope=scope,
+        reason=reason,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _assignment_context(
+    auth: dict, *, reason: str, idempotency_key: str, correlation_id=None
+) -> CommandContext:
+    return _command_context(
+        auth,
+        scope=subscriber_assignments.ASSIGNMENT_SCOPE,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        correlation_id=correlation_id,
+    )
+
+
+def _onboarding_context(
+    auth: dict, *, reason: str, idempotency_key: str
+) -> CommandContext:
+    return _command_context(
+        auth,
+        scope=reseller_onboarding.RESELLER_WRITE_SCOPE,
+        reason=reason,
+        idempotency_key=idempotency_key,
+    )
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -156,11 +205,12 @@ def reseller_edit(
 @router.post(
     "",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_create(
     request: Request,
     form: FormData = Depends(parse_form_data),
+    reseller_auth: dict = Depends(require_permission("reseller:write")),
+    assignment_auth: dict = Depends(require_permission("rbac:assign")),
     db: Session = Depends(get_db),
 ):
     payload = reseller_svc.parse_reseller_payload(form)
@@ -179,7 +229,22 @@ def reseller_create(
             "admin/resellers/reseller_form.html", context, status_code=400
         )
     try:
-        reseller, invite_note = reseller_svc.create_reseller_from_form(db, form)
+        owner_context = _onboarding_context(
+            reseller_auth,
+            reason="Create reseller and optional portal principal",
+            idempotency_key="reseller-onboarding",
+        )
+        outcome, invite_note = reseller_svc.create_reseller_from_form(
+            db,
+            form,
+            context=owner_context,
+            assignment_context=_assignment_context(
+                assignment_auth,
+                reason="Reseller onboarding role assignment",
+                idempotency_key="reseller-onboarding-role-assignment",
+                correlation_id=owner_context.correlation_id,
+            ),
+        )
     except Exception as exc:
         db.rollback()
         context = _base_context(request, db, active_page="resellers")
@@ -195,7 +260,10 @@ def reseller_create(
         )
     if invite_note and "could not" in invite_note.lower():
         return RedirectResponse(
-            url=f"/admin/resellers/{reseller.id}?notice={quote_plus(invite_note)}",
+            url=(
+                f"/admin/resellers/{outcome.reseller_id}"
+                f"?notice={quote_plus(invite_note)}"
+            ),
             status_code=303,
         )
     return RedirectResponse(url="/admin/resellers", status_code=303)
@@ -332,12 +400,13 @@ def reseller_user_link(
 @router.post(
     "/{reseller_id}/users/create",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reseller:write"))],
 )
 def reseller_user_create(
     reseller_id: str,
     request: Request,
     form: FormData = Depends(parse_form_data),
+    reseller_auth: dict = Depends(require_permission("reseller:write")),
+    assignment_auth: dict = Depends(require_permission("rbac:assign")),
     db: Session = Depends(get_db),
 ):
     page = _form_int(form, "page", 1)
@@ -363,6 +432,11 @@ def reseller_user_create(
             "admin/resellers/detail.html", context, status_code=400
         )
     try:
+        owner_context = _onboarding_context(
+            reseller_auth,
+            reason="Provision reseller portal principal",
+            idempotency_key=f"reseller-user-onboarding:{reseller_id}",
+        )
         reseller_svc.create_and_link_reseller_user(
             db,
             reseller_id=reseller_id,
@@ -371,6 +445,13 @@ def reseller_user_create(
             email=fields["email"],
             username=fields["username"],
             role=fields["role"],
+            context=owner_context,
+            assignment_context=_assignment_context(
+                assignment_auth,
+                reason="Reseller user role assignment",
+                idempotency_key=f"reseller-user-role-assignment:{reseller_id}",
+                correlation_id=owner_context.correlation_id,
+            ),
         )
     except Exception as exc:
         db.rollback()

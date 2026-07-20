@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pyotp
@@ -19,10 +20,12 @@ from app.models.auth import (
 )
 from app.models.auth import Session as AuthSession
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.subscriber import UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.services import auth_flow as auth_flow_service
+from app.services import credential_recovery, staff_provisioning
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.auth_dependencies import require_user_auth
 from app.services.auth_flow import (
@@ -33,6 +36,7 @@ from app.services.auth_flow import (
     reset_password,
     verify_password,
 )
+from app.services.owner_commands import CommandContext
 
 
 def _make_request(user_agent: str = "pytest"):
@@ -422,18 +426,21 @@ def test_user_invite_uses_configured_invite_ttl(db_session, monkeypatch):
     db_session.add(setting)
     db_session.commit()
 
-    def _fake_request_password_reset(db, email: str, *, ttl_minutes: int | None = None):
+    def _fake_reset_capability(db, email: str, *, ttl_minutes: int | None = None):
         captured["ttl_minutes"] = ttl_minutes
-        return {
-            "token": "reset-token",
-            "email": email,
-            "subscriber_name": "Invitee",
-        }
+        return credential_recovery.PasswordResetCapability(
+            token="reset-token",
+            email=email,
+            person_name="Invitee",
+            principal_type="system_user",
+            principal_id=uuid.uuid4(),
+            ttl_minutes=int(ttl_minutes or 60),
+        )
 
     monkeypatch.setattr(
-        auth_flow_service,
-        "request_password_reset",
-        _fake_request_password_reset,
+        credential_recovery,
+        "issue_reset_capability_for_email",
+        _fake_reset_capability,
     )
     monkeypatch.setattr(
         "app.services.email.send_user_invite_email",
@@ -722,18 +729,19 @@ def test_forgot_password_flow_rate_limited(db_session, person, monkeypatch):
         is_active=True,
     )
     db_session.add(credential)
+    recovery_email = person.email
     db_session.commit()
 
-    sent = []
-    monkeypatch.setattr(
-        "app.services.email.send_password_reset_email",
-        lambda **kwargs: sent.append(kwargs) or True,
-    )
-
     for _ in range(5):
-        auth_flow_service.forgot_password_flow(db_session, person.email)
+        auth_flow_service.forgot_password_flow(db_session, recovery_email)
 
-    assert len(sent) == 3
+    intents = (
+        db_session.query(CommunicationIntentRecord)
+        .filter(CommunicationIntentRecord.event_type == "auth.password_recovery")
+        .all()
+    )
+    assert len(intents) == 3
+    assert all(intent.body is None for intent in intents)
 
 
 def test_web_forgot_password_submit_sends_email(db_session, person, monkeypatch):
@@ -749,21 +757,21 @@ def test_web_forgot_password_submit_sends_email(db_session, person, monkeypatch)
         is_active=True,
     )
     db_session.add(credential)
+    recovery_email = person.email
     db_session.commit()
 
-    sent = []
-    monkeypatch.setattr(
-        "app.services.email.send_password_reset_email",
-        lambda **kwargs: sent.append(kwargs) or True,
-    )
-
     response = web_auth_service.forgot_password_submit(
-        _make_request(), db_session, person.email
+        _make_request(), db_session, recovery_email
     )
 
     assert response.status_code == 200
-    assert len(sent) == 1
-    assert sent[0]["to_email"] == person.email
+    notification = (
+        db_session.query(Notification)
+        .filter(Notification.event_type == "auth.password_recovery")
+        .one()
+    )
+    assert notification.recipient == recovery_email
+    assert notification.body is None
 
 
 def test_password_reset_does_not_bypass_mfa(db_session, person, monkeypatch):
@@ -1376,10 +1384,24 @@ def test_deactivate_system_user_revokes_sessions(db_session):
         expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     db_session.add(session)
+    system_user_id = system_user.id
     db_session.commit()
 
-    web_system_user_mutations_service.set_user_active(
-        db_session, user_id=str(system_user.id), is_active=False
+    command_id = uuid.uuid4()
+    staff_provisioning.set_staff_account_active(
+        db_session,
+        staff_provisioning.SetStaffAccountActiveCommand(
+            context=CommandContext(
+                command_id=command_id,
+                correlation_id=command_id,
+                actor="service:auth-flow-test",
+                scope=staff_provisioning.STAFF_ASSIGN_SCOPE,
+                reason="verify session revocation on staff deactivation",
+                idempotency_key=f"deactivate:{system_user_id}",
+            ),
+            user_id=system_user_id,
+            is_active=False,
+        ),
     )
     db_session.refresh(session)
     assert session.status == SessionStatus.revoked

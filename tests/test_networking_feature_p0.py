@@ -2423,9 +2423,22 @@ def test_devices_list_page_data_includes_core_network_devices(db_session):
     db_session.add_all([core, olt_monitor, olt])
     db_session.commit()
 
-    from app.services.device_projection_reconcile import reconcile_device_projections
+    from app.services.device_projection_reconcile import (
+        ReconcileDeviceProjectionsCommand,
+        reconcile_device_projections,
+    )
+    from app.services.owner_commands import CommandContext
 
-    reconcile_device_projections(db_session)
+    reconcile_device_projections(
+        db_session,
+        ReconcileDeviceProjectionsCommand(
+            context=CommandContext.system(
+                actor="pytest:networking_feature_p0",
+                scope="network:test",
+                reason="materialize device-list test projection",
+            )
+        ),
+    )
     query = core_devices_inventory_service.build_network_device_list_query()
     payload = core_devices_inventory_service.devices_list_page_data(db_session, query)
 
@@ -2458,9 +2471,22 @@ def test_devices_list_page_data_filters_core_network_devices(db_session):
     )
     db_session.commit()
 
-    from app.services.device_projection_reconcile import reconcile_device_projections
+    from app.services.device_projection_reconcile import (
+        ReconcileDeviceProjectionsCommand,
+        reconcile_device_projections,
+    )
+    from app.services.owner_commands import CommandContext
 
-    reconcile_device_projections(db_session)
+    reconcile_device_projections(
+        db_session,
+        ReconcileDeviceProjectionsCommand(
+            context=CommandContext.system(
+                actor="pytest:networking_feature_p0",
+                scope="network:test",
+                reason="materialize filtered device-list test projection",
+            )
+        ),
+    )
     query = core_devices_inventory_service.build_network_device_list_query(
         device_type="core"
     )

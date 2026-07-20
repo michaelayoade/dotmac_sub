@@ -12,7 +12,6 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 from app.models.billing import CreditNote
@@ -20,8 +19,15 @@ from app.models.domain_settings import DomainSetting, SettingDomain, SettingValu
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import party as party_service
 from app.services import web_referrals
-from app.services.referrals import referrals
+from app.services.referrals import ReferralProgramError, referrals
 from app.web.admin import crm_referrals as admin_referrals_web
+from tests.referral_program_testkit import (
+    capture,
+    ensure_code,
+    issue_reward,
+    qualify_override,
+    reject,
+)
 
 
 def _unique_email() -> str:
@@ -70,9 +76,9 @@ def _program(db, *, enabled=True, amount="2500", auto_approve=None):
 
 def _captured_referral(db, referrer=None, **capture_kwargs):
     referrer = referrer or _subscriber(db)
-    code = referrals.ensure_code(db, str(referrer.id))
+    code = ensure_code(db, referrer.id)
     capture_kwargs.setdefault("email", _unique_email())
-    return referrals.capture(db, code=code.code, **capture_kwargs), referrer
+    return capture(db, code=code.code, **capture_kwargs), referrer
 
 
 def _attach_referred_account(db, referral):
@@ -84,7 +90,7 @@ def _attach_referred_account(db, referral):
         source="admin_test_review",
         reason="Admin test reviewed the referral identity",
     )
-    referrals.attach_subscriber(
+    referrals.attach_subscriber_for_conversion(
         db,
         referral_id=str(referral.id),
         subscriber_id=str(subscriber.id),
@@ -199,7 +205,7 @@ def test_list_data_filters(db_session):
     pending, _ = _captured_referral(db_session)
     qualified, _ = _captured_referral(db_session)
     _attach_referred_account(db_session, qualified)
-    referrals.qualify_override(db_session, str(qualified.id))
+    qualify_override(db_session, qualified.id)
 
     only_qualified = web_referrals.list_data(db_session, status="qualified")
     ids = {r["id"] for r in only_qualified["referrals"]}
@@ -247,7 +253,7 @@ def test_qualify_override_forces_pending_to_qualified(db_session):
     referral, _ = _captured_referral(db_session)
     _attach_referred_account(db_session, referral)
     # Referred prospect is NOT active — the automatic path would refuse.
-    result = referrals.qualify_override(db_session, str(referral.id))
+    result = qualify_override(db_session, referral.id)
     assert result.status == "qualified"
     assert result.reward_status == "pending"
     assert result.reward_amount == Decimal("2500")
@@ -261,7 +267,7 @@ def test_qualify_override_auto_approve_and_expired_rescue(db_session):
     referral.status = "expired"  # window lapsed before activation
     db_session.commit()
 
-    result = referrals.qualify_override(db_session, str(referral.id))
+    result = qualify_override(db_session, referral.id)
     assert result.status == "qualified"
     assert result.reward_status == "approved"
 
@@ -269,20 +275,19 @@ def test_qualify_override_auto_approve_and_expired_rescue(db_session):
 def test_qualify_override_guards(db_session):
     _program(db_session)
     referral, _ = _captured_referral(db_session)
-    referrals.reject(db_session, str(referral.id), "dup")
-    with pytest.raises(HTTPException) as exc:
-        referrals.qualify_override(db_session, str(referral.id))
-    assert exc.value.status_code == 409
+    reject(db_session, referral.id, "dup")
+    with pytest.raises(ReferralProgramError) as exc:
+        qualify_override(db_session, referral.id)
+    assert exc.value.code == "referrals.program.invalid_transition"
 
-    with pytest.raises(HTTPException) as exc:
-        referrals.qualify_override(db_session, str(uuid.uuid4()))
-    assert exc.value.status_code == 404
+    with pytest.raises(ReferralProgramError) as exc:
+        qualify_override(db_session, uuid.uuid4())
+    assert exc.value.code == "referrals.program.referral_not_found"
 
     unconverted, _ = _captured_referral(db_session)
-    with pytest.raises(HTTPException) as exc:
-        referrals.qualify_override(db_session, str(unconverted.id))
-    assert exc.value.status_code == 409
-    assert "Attach the reviewed Subscriber" in exc.value.detail
+    with pytest.raises(ReferralProgramError) as exc:
+        qualify_override(db_session, unconverted.id)
+    assert exc.value.code == "referrals.program.account_attachment_required"
 
 
 def test_admin_flow_qualify_override_then_issue_reward(db_session):
@@ -293,12 +298,12 @@ def test_admin_flow_qualify_override_then_issue_reward(db_session):
     referral, referrer = _captured_referral(db_session)
     _attach_referred_account(db_session, referral)
 
-    referrals.qualify_override(db_session, str(referral.id))
+    qualify_override(db_session, referral.id)
     detail = web_referrals.detail_data(db_session, referral_id=str(referral.id))
     assert detail["row"]["can_qualify"] is False
     assert detail["row"]["can_issue"] is True
 
-    result = referrals.issue_reward(db_session, str(referral.id))
+    result = issue_reward(db_session, referral.id)
     assert result.status == "rewarded"
     assert result.reward_status == "issued"
 
@@ -387,15 +392,15 @@ def test_service_list_reward_status_filter(db_session):
     _program(db_session)
     referral, _ = _captured_referral(db_session)
     _attach_referred_account(db_session, referral)
-    referrals.qualify_override(db_session, str(referral.id))
+    qualify_override(db_session, referral.id)
 
     items = referrals.list(db_session, reward_status="pending")
     assert str(referral.id) in {str(r.id) for r in items}
     assert all(r.reward_status == "pending" for r in items)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ReferralProgramError) as exc:
         referrals.list(db_session, reward_status="bogus")
-    assert exc.value.status_code == 400
+    assert exc.value.code == "referrals.program.invalid_filter"
 
 
 # ── RBAC seeding ──────────────────────────────────────────────────

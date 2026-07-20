@@ -33,8 +33,16 @@ from app.schemas.billing import (
     AccountAdjustmentPreviewRequest,
     CreditNoteIssuePreviewRequest,
 )
+from app.services.billing.adjustments import (
+    ACCOUNT_ADJUSTMENT_SCOPE,
+    AccountAdjustmentError,
+    AccountAdjustmentOrigin,
+    StageSystemAccountAdjustmentCommand,
+    stage_system_account_adjustment,
+)
 from app.services.common import coerce_uuid, round_money
 from app.services.customer_financial_position import get_customer_financial_position
+from app.services.owner_commands import CommandContext
 
 _DEBIT_SCOPE = "prepaid_plan_change_debit"
 _CREDIT_SCOPE = "prepaid_plan_change_credit"
@@ -565,26 +573,34 @@ def prepare_immediate_prepaid_plan_change(
         return PreparedPrepaidPlanChange(decision=decision)
 
     if net_amount > 0:
-        from app.services.billing.adjustments import AccountAdjustments
-
-        adjustment_result = AccountAdjustments.confirm_system(
-            db,
-            AccountAdjustmentPreviewRequest(
-                account_id=subscription.subscriber_id,
-                category=LedgerCategory.internet_service,
-                amount=decision.ledger_amount,
-                currency=decision.currency,
-                memo=(
-                    "Prepaid plan change charge: "
-                    f"{old_offer_name} -> {target_offer.name}"
+        try:
+            adjustment_result = stage_system_account_adjustment(
+                db,
+                StageSystemAccountAdjustmentCommand(
+                    context=CommandContext.system(
+                        actor="system:prepaid_plan_changes",
+                        scope=ACCOUNT_ADJUSTMENT_SCOPE,
+                        reason="Stage an immediate prepaid plan-change debit",
+                        idempotency_key=adjustment_key,
+                    ),
+                    request=AccountAdjustmentPreviewRequest(
+                        account_id=subscription.subscriber_id,
+                        category=LedgerCategory.internet_service,
+                        amount=decision.ledger_amount,
+                        currency=decision.currency,
+                        memo=(
+                            "Prepaid plan change charge: "
+                            f"{old_offer_name} -> {target_offer.name}"
+                        ),
+                        reason="Immediate prepaid plan-change proration",
+                    ),
+                    origin=AccountAdjustmentOrigin.prepaid_plan_change,
+                    origin_ref=f"{subscription.id}:{target_offer.id}",
+                    idempotency_key=adjustment_key,
                 ),
-                reason="Immediate prepaid plan-change proration",
-            ),
-            origin="prepaid_plan_change",
-            origin_ref=f"{subscription.id}:{target_offer.id}",
-            idempotency_key=adjustment_key,
-            commit=False,
-        )
+            )
+        except AccountAdjustmentError as exc:
+            raise ValueError(exc.message) from exc
         return PreparedPrepaidPlanChange(
             decision=decision,
             account_adjustment=adjustment_result.adjustment,

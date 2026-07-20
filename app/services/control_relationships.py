@@ -191,6 +191,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
     "EnforcementHandler": HandlerControl(
         "EnforcementHandler", HandlerStage.state, 50, ("service_enforcement",)
     ),
+    "CredentialSessionProjectionHandler": HandlerControl(
+        "CredentialSessionProjectionHandler",
+        HandlerStage.state,
+        60,
+        ("credential_session_projection_invalidation",),
+    ),
     "ArrangementHandler": HandlerControl(
         "ArrangementHandler", HandlerStage.state, 20, ("payment_arrangements",)
     ),
@@ -202,6 +208,24 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
         HandlerStage.communication,
         10,
         ("customer_notifications",),
+    ),
+    "StaffInviteHandler": HandlerControl(
+        "StaffInviteHandler",
+        HandlerStage.communication,
+        20,
+        ("staff_invitation_intents",),
+    ),
+    "ResellerInviteHandler": HandlerControl(
+        "ResellerInviteHandler",
+        HandlerStage.communication,
+        30,
+        ("reseller_invitation_intents",),
+    ),
+    "PasswordRecoveryHandler": HandlerControl(
+        "PasswordRecoveryHandler",
+        HandlerStage.communication,
+        40,
+        ("password_recovery_intents",),
     ),
     "WebhookHandler": HandlerControl(
         "WebhookHandler", HandlerStage.external, 10, ("external_webhooks",)
@@ -260,10 +284,28 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         from app.services.events.types import SUBSCRIPTION_LIFECYCLE_MAP
 
         return frozenset(item.value for item in SUBSCRIPTION_LIFECYCLE_MAP)
+    if handler_name == "CredentialSessionProjectionHandler":
+        from app.services.events.handlers.credential_session_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "NotificationHandler":
         from app.services.events.handlers.notification import EVENT_NOTIFICATION_SPECS
 
         return frozenset(item.value for item in EVENT_NOTIFICATION_SPECS)
+    if handler_name == "StaffInviteHandler":
+        from app.services.events.handlers.staff_invite import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "ResellerInviteHandler":
+        from app.services.events.handlers.reseller_invite import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "PasswordRecoveryHandler":
+        from app.services.events.handlers.password_recovery import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "WebhookHandler":
         from app.services.events.handlers.webhook import EVENT_TYPE_TO_WEBHOOK
 

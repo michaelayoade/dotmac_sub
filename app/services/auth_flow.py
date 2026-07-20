@@ -8,6 +8,7 @@ import string
 import warnings
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from uuid import UUID
 
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
@@ -40,7 +41,7 @@ from app.models.rbac import (
     SystemUserPermission,
     SystemUserRole,
 )
-from app.models.subscriber import ResellerUser, Subscriber, SubscriberStatus
+from app.models.subscriber import ResellerUser, Subscriber
 from app.models.system_user import SystemUser
 from app.request_meta import client_ip
 from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
@@ -1702,243 +1703,130 @@ def _revoke_portal_sessions_for_subscriber(db: Session, subscriber_id: str) -> N
 def forgot_password_flow(
     db: Session, email: str, *, next_login_path: str | None = None
 ) -> None:
-    """
-    Handle the forgot-password flow: generate a reset token and send the email.
-    Always completes without error to prevent email enumeration.
-    """
-    from app.models.audit import AuditActorType
-    from app.services.audit_adapter import record_audit_event
-    from app.services.email import send_password_reset_email
-    from app.services.rate_limiter_adapter import allow_operation
+    """Deprecated compatibility adapter for durable password recovery."""
 
-    normalized_email = email.strip().lower()
-    decision = allow_operation(
-        f"auth:forgot-password:{normalized_email}",
-        limit=3,
-        window_seconds=900,
-    )
-    if not decision.allowed:
-        logger.info(
-            "Password reset request rate-limited for %s (retry in %ss)",
-            normalized_email,
-            decision.retry_after_seconds,
-        )
-        return
+    from app.services import credential_recovery
+    from app.services.owner_commands import CommandContext
 
-    result = request_password_reset(db, email)
-    if result:
-        record_audit_event(
-            db,
-            action="auth.password_reset_requested",
-            entity_type=result.get("principal_type") or "user_credential",
-            entity_id=result.get("principal_id"),
-            actor_type=AuditActorType.user,
-            actor_id=result.get("principal_id"),
-            metadata={"email": result["email"]},
-        )
-        send_password_reset_email(
-            db=db,
-            to_email=result["email"],
-            reset_token=result["token"],
-            person_name=result.get("subscriber_name"),
+    credential_recovery.request_password_recovery(
+        db,
+        credential_recovery.RequestPasswordRecoveryCommand(
+            context=CommandContext.system(
+                actor="service:legacy-auth-flow",
+                scope=credential_recovery.CREDENTIAL_RECOVERY_SCOPE,
+                reason="Legacy password recovery compatibility request",
+            ),
+            email=email,
             next_login_path=next_login_path,
-            expires_minutes=result.get("ttl_minutes"),
-        )
+        ),
+    )
+
+
+def _password_reset_result(capability) -> dict | None:
+    if capability is None:
+        return None
+    return {
+        "token": capability.token,
+        "email": capability.email,
+        "subscriber_name": capability.person_name,
+        "principal_type": capability.principal_type,
+        "principal_id": str(capability.principal_id),
+        "ttl_minutes": capability.ttl_minutes,
+    }
 
 
 def request_password_reset(
     db: Session, email: str, *, ttl_minutes: int | None = None
 ) -> dict | None:
-    """
-    Request a password reset for the given email.
-    Returns dict with token and person info if successful, None if email not found.
-    Does not raise an error if email doesn't exist (security best practice).
-    """
-    normalized_email = email.strip().lower()
-    # Email is non-unique contact info, so a reset-by-email request can match
-    # several customers. Only accounts that actually have a local login
-    # credential can be reset; join to it directly and, if the address is shared
-    # by more than one credentialed account, pick the most recent deterministically.
-    subscriber_rows = (
-        db.query(Subscriber, UserCredential)
-        .join(UserCredential, UserCredential.subscriber_id == Subscriber.id)
-        .filter(func.lower(Subscriber.email) == normalized_email)
-        .filter(UserCredential.provider == AuthProvider.local)
-        .filter(UserCredential.is_active.is_(True))
-        .order_by(UserCredential.created_at.desc())
-        .all()
-    )
-    if subscriber_rows:
-        if len(subscriber_rows) > 1:
-            logger.warning(
-                "Password reset for shared email matched %d credentialed accounts; "
-                "using most recent credential",
-                len(subscriber_rows),
-            )
-        subscriber, credential = subscriber_rows[0]
-        if credential:
-            effective_ttl = (
-                ttl_minutes
-                if ttl_minutes and ttl_minutes > 0
-                else _password_reset_ttl_minutes(db)
-            )
-            token = _issue_password_reset_token(
-                db,
-                str(subscriber.id),
-                "subscriber",
-                subscriber.email,
-                ttl_minutes=effective_ttl,
-            )
-            return {
-                "token": token,
-                "email": subscriber.email,
-                "subscriber_name": subscriber.display_name or subscriber.first_name,
-                "principal_type": "subscriber",
-                "principal_id": str(subscriber.id),
-                "ttl_minutes": effective_ttl,
-            }
+    """Deprecated token-only compatibility lookup for test and forced-reset code."""
 
-    system_user = (
-        db.query(SystemUser)
-        .filter(func.lower(SystemUser.email) == normalized_email)
-        .first()
+    from app.services import credential_recovery
+
+    return _password_reset_result(
+        credential_recovery.issue_reset_capability_for_email(
+            db,
+            email,
+            ttl_minutes=ttl_minutes,
+        )
     )
-    if not system_user:
-        return None
-    credential = (
-        db.query(UserCredential)
-        .filter(UserCredential.system_user_id == system_user.id)
-        .filter(UserCredential.provider == AuthProvider.local)
-        .filter(UserCredential.is_active.is_(True))
-        .first()
+
+
+def request_principal_password_reset(
+    db: Session,
+    *,
+    principal_type: str,
+    principal_id: UUID,
+    ttl_minutes: int | None = None,
+) -> dict | None:
+    """Deprecated exact-capability compatibility wrapper."""
+
+    from app.services import credential_recovery
+
+    return _password_reset_result(
+        credential_recovery.issue_exact_reset_capability(
+            db,
+            principal_type=principal_type,
+            principal_id=principal_id,
+            ttl_minutes=ttl_minutes,
+        )
     )
-    if not credential:
-        return None
-    effective_ttl = (
-        ttl_minutes
-        if ttl_minutes and ttl_minutes > 0
-        else min(_password_reset_ttl_minutes(db), SYSTEM_USER_RESET_TTL_CAP_MINUTES)
-    )
-    token = _issue_password_reset_token(
+
+
+def request_system_user_password_reset(
+    db: Session,
+    system_user_id: UUID,
+    *,
+    ttl_minutes: int | None = None,
+) -> dict | None:
+    """Deprecated exact staff-capability compatibility wrapper."""
+
+    return request_principal_password_reset(
         db,
-        str(system_user.id),
-        "system_user",
-        system_user.email,
-        ttl_minutes=effective_ttl,
+        principal_type="system_user",
+        principal_id=system_user_id,
+        ttl_minutes=ttl_minutes,
     )
-    return {
-        "token": token,
-        "email": system_user.email,
-        "subscriber_name": system_user.display_name or system_user.first_name,
-        "principal_type": "system_user",
-        "principal_id": str(system_user.id),
-        "ttl_minutes": effective_ttl,
-    }
 
 
 def reset_password(db: Session, token: str, new_password: str) -> datetime:
-    """
-    Reset password using a valid reset token.
-    Returns the timestamp when password was reset.
-    """
-    from app.models.audit import AuditActorType
-    from app.services.audit_adapter import record_audit_event
+    """Deprecated HTTP compatibility adapter for the contracted reset owner."""
 
-    min_length = password_min_length(db)
-    if len(new_password) < min_length:
+    from app.services import credential_recovery
+    from app.services.domain_errors import DomainError
+    from app.services.owner_commands import CommandContext
+
+    compatibility_db = Session(
+        bind=db.connection(),
+        autoflush=False,
+        join_transaction_mode="create_savepoint",
+    )
+    try:
+        outcome = credential_recovery.complete_password_reset(
+            compatibility_db,
+            credential_recovery.CompletePasswordResetCommand(
+                context=CommandContext.system(
+                    actor="service:legacy-auth-flow",
+                    scope=credential_recovery.CREDENTIAL_RECOVERY_SCOPE,
+                    reason="Legacy password reset compatibility redemption",
+                ),
+                token=token,
+                new_password=new_password,
+            ),
+        )
+    except DomainError as exc:
+        status_code = {
+            "auth.credential_recovery.invalid_password": 400,
+            "auth.credential_recovery.invalid_reset_capability": 401,
+            "auth.credential_recovery.credential_not_found": 404,
+        }.get(exc.code, 500)
         raise HTTPException(
-            status_code=400,
-            detail=f"Password must be at least {min_length} characters",
-        )
-
-    payload = _decode_password_reset_token(db, token)
-    principal_id = payload.get("principal_id") or payload.get("sub")
-    principal_type = payload.get("principal_type") or "subscriber"
-    email = payload.get("email")
-
-    if not principal_id or not email:
-        raise HTTPException(status_code=401, detail="Invalid reset token")
-
-    principal_uuid = coerce_uuid(principal_id)
-    if principal_type == "system_user":
-        principal = db.get(SystemUser, principal_uuid)
-        credential_query = db.query(UserCredential).filter(
-            UserCredential.system_user_id == principal_uuid
-        )
-        session_principal_filter = AuthSession.system_user_id == principal_uuid
-    else:
-        principal = db.get(Subscriber, principal_uuid)
-        credential_query = db.query(UserCredential).filter(
-            UserCredential.subscriber_id == principal_uuid
-        )
-        session_principal_filter = AuthSession.subscriber_id == principal_uuid
-    if (
-        not principal
-        or principal.email != email
-        or not getattr(principal, "is_active", False)
-    ):
-        raise HTTPException(status_code=401, detail="Invalid reset token")
-    if getattr(principal, "status", None) == SubscriberStatus.canceled:
-        raise HTTPException(status_code=401, detail="Invalid reset token")
-
-    credential = (
-        credential_query.filter(UserCredential.provider == AuthProvider.local)
-        .filter(UserCredential.is_active.is_(True))
-        .first()
-    )
-    if not credential:
-        raise HTTPException(status_code=404, detail="No credentials found")
-
-    # Single-use: a token minted before the last password change is spent.
-    # Compare at whole-second resolution (iat is an int) so a credential and
-    # token created in the same second (invite flow) don't false-reject.
-    issued_at = payload.get("iat")
-    updated_at = _as_utc(credential.password_updated_at)
-    if issued_at is not None and updated_at is not None:
-        if int(issued_at) < int(updated_at.timestamp()):
-            raise HTTPException(status_code=401, detail="Invalid reset token")
-
-    now = _now()
-    credential.password_hash = hash_password(new_password)
-    # Spend the token: the single-use check above compares iat against
-    # password_updated_at at whole-second resolution, so when the reset
-    # completes within the second the token was minted, nudge the marker
-    # one second forward so a replay of this token is rejected.
-    updated_marker = now
-    if issued_at is not None and int(now.timestamp()) <= int(issued_at):
-        updated_marker = now + timedelta(seconds=1)
-    credential.password_updated_at = updated_marker
-    credential.must_change_password = False
-    credential.failed_login_attempts = 0
-    credential.locked_until = None
-
-    revoked_count = (
-        db.query(AuthSession)
-        .filter(session_principal_filter)
-        .filter(AuthSession.status == SessionStatus.active)
-        .filter(AuthSession.revoked_at.is_(None))
-        .update(
-            {"status": SessionStatus.revoked, "revoked_at": now},
-            synchronize_session=False,
-        )
-    )
-
-    record_audit_event(
-        db,
-        action="auth.password_reset_completed",
-        entity_type=principal_type,
-        entity_id=str(principal_id),
-        actor_type=AuditActorType.user,
-        actor_id=str(principal_id),
-        metadata={"email": email, "sessions_revoked": int(revoked_count or 0)},
-        defer_until_commit=True,
-    )
-    db.commit()
-    auth_cache.invalidate_principal(principal_type, str(principal_id))
-    if principal_type != "system_user":
-        _revoke_portal_sessions_for_subscriber(db, str(principal_uuid))
-
-    return now
+            status_code=status_code,
+            detail=exc.message.rstrip("."),
+        ) from exc
+    finally:
+        compatibility_db.close()
+        db.expire_all()
+    return outcome.reset_at
 
 
 def send_email_verification(db: Session, subscriber_id: str) -> bool:

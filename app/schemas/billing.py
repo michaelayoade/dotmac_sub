@@ -1356,7 +1356,7 @@ class AccountAdjustmentPreviewRequest(BaseModel):
     account_id: UUID
     category: LedgerCategory = LedgerCategory.other
     amount: Decimal = Field(gt=0)
-    currency: str = Field(default="NGN", min_length=3, max_length=3)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     memo: str = Field(min_length=3, max_length=500)
     reason: str = Field(min_length=3, max_length=1000)
 

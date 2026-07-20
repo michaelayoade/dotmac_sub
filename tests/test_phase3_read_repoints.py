@@ -12,6 +12,7 @@ remain covered here independently.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import FastAPI
@@ -153,6 +154,12 @@ def test_me_referrals_serves_native(monkeypatch):
         "read_for_subscriber",
         lambda db, sid: {**NATIVE_REFERRALS, "sid": sid},
     )
+    monkeypatch.setattr(
+        referrals_service, "ensure_referral_code", lambda db, command: None
+    )
+    monkeypatch.setattr(
+        me_api.db_session_adapter, "release_read_transaction", lambda db: None
+    )
     out = me_api.my_referrals(db=None, principal=principal)
     assert out["src"] == "native"
     assert out["sid"] == principal["subscriber_id"]
@@ -187,11 +194,14 @@ def test_me_refer_a_friend_uses_native_owner(monkeypatch):
     principal = _subscriber_principal()
     captured = {}
 
-    def native_refer(db, sid, **kw):
-        captured["sid"] = sid
-        return {"id": "r1", "status": "pending", "message": "Referral submitted"}
+    def native_refer(db, command):
+        captured["sid"] = str(command.referrer_subscriber_id)
+        return SimpleNamespace(referral_id="r1", status="pending")
 
-    monkeypatch.setattr(referrals_service.referrals, "refer_a_friend", native_refer)
+    monkeypatch.setattr(referrals_service, "refer_friend", native_refer)
+    monkeypatch.setattr(
+        me_api.db_session_adapter, "release_read_transaction", lambda db: None
+    )
     out = me_api.my_refer_a_friend(
         payload=ReferAFriendRequest(email="friend@example.com"),
         db=None,
@@ -206,14 +216,19 @@ def test_web_refer_post_uses_native_owner(db_session):
     app.include_router(web_referrals.router)
     app.dependency_overrides[get_db] = lambda: db_session
     client = TestClient(app)
+    subscriber_id = uuid.uuid4()
     with (
         patch(
             "app.web.customer.referrals.get_current_customer_from_request",
-            return_value={"subscriber_id": "s1"},
+            return_value={"subscriber_id": str(subscriber_id)},
         ),
         patch(
-            "app.web.customer.referrals.referrals_service.referrals.refer_a_friend",
-            return_value={"id": "r2", "status": "pending"},
+            "app.web.customer.referrals.optional_customer_subscriber_id",
+            return_value=subscriber_id,
+        ),
+        patch(
+            "app.web.customer.referrals.referrals_service.refer_friend",
+            return_value=SimpleNamespace(referral_id=uuid.uuid4(), status="pending"),
         ) as refer,
     ):
         r = client.post(

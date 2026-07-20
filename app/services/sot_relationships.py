@@ -7,16 +7,26 @@ can use it as an architectural map while each domain is migrated incrementally.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
+from graphlib import CycleError, TopologicalSorter
 
-
-@dataclass(frozen=True)
-class SOTService:
-    name: str
-    module: str
-    owns: tuple[str, ...]
-    depends_on: tuple[str, ...] = ()
-    notes: str | None = None
+from app.services.sot_manifest import (
+    AuthorityInput,
+    AuthorityKind,
+    AuthorityMigrationState,
+    ConcernContract,
+    ErrorContract,
+    EventContract,
+    MigrationContract,
+    OwnerRole,
+    ProjectionContract,
+    ServiceContract,
+    SOTService,
+    TransactionContract,
+    TransactionMode,
+    contract_validation_errors,
+)
 
 
 @dataclass(frozen=True)
@@ -60,7 +70,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "reviewed SubscriberContact relationship projection",
                     "reviewed SubscriberContact source-field contact-point projection",
                 ),
-                depends_on=("auth.rbac", "auth.permission_gate"),
+                depends_on=("auth.subscriber_assignments", "auth.permission_gate"),
                 notes=(
                     "One native owner keeps identity, roles, descriptive "
                     "relationships, memberships, and contact evidence coherent. "
@@ -158,7 +168,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "reseller and organization membership context audit",
                     "FieldVendorUser vendor context debt classification",
                 ),
-                depends_on=("party.registry", "auth.rbac", "auth.permission_gate"),
+                depends_on=(
+                    "party.registry",
+                    "auth.subscriber_assignments",
+                    "auth.permission_gate",
+                ),
                 notes=(
                     "Reports aggregate schema, principal-binding, membership-"
                     "context, and field-vendor-user counts without identity values. "
@@ -214,6 +228,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "Subscriber account creation",
                     "transaction-neutral Subscriber account initialization",
+                    "Reseller record creation",
+                    "transaction-neutral Reseller record initialization",
                 ),
                 depends_on=(
                     "access.subscription_lifecycle",
@@ -222,7 +238,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "Cross-domain coordinators may prepare an account through "
                     "this owner, but new/cut-over callers must not construct "
-                    "Subscriber rows or decide account lifecycle state themselves. "
+                    "Subscriber or Reseller rows or decide account lifecycle "
+                    "state themselves. "
                     "Existing direct writers remain shrink-only migration debt."
                 ),
             ),
@@ -438,11 +455,218 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "exact account-adjustment ledger links",
                     "previewed account-adjustment reversal evidence",
                 ),
-                depends_on=("financial.ledger", "customer.financial_position"),
+                depends_on=(
+                    "financial.ledger",
+                    "customer.financial_position",
+                    "customer.accounts",
+                    "control.settings_spec",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
                 notes=(
                     "This owner accepts debits only. Customer credits remain "
                     "owned by financial.credit_notes, and account adjustments "
                     "do not decide service-access state."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="prepaid account-debit eligibility and preview",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical Subscriber account state",
+                                "canonical append-only ledger state",
+                                "resolved customer financial position",
+                                "billing default-currency setting",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="locked account-debit confirmation",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "account-adjustment command evidence",
+                                "canonical Subscriber account state",
+                                "canonical append-only ledger state",
+                                "resolved customer financial position",
+                                "billing default-currency setting",
+                            ),
+                            canonical_writer="financial.account_adjustments",
+                        ),
+                        ConcernContract(
+                            name="account-adjustment idempotency and audit evidence",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "account-adjustment command evidence",
+                                "canonical Subscriber account state",
+                                "canonical append-only ledger state",
+                            ),
+                            canonical_writer="financial.account_adjustments",
+                        ),
+                        ConcernContract(
+                            name="exact account-adjustment ledger links",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "account-adjustment command evidence",
+                                "canonical append-only ledger state",
+                            ),
+                            canonical_writer="financial.account_adjustments",
+                        ),
+                        ConcernContract(
+                            name="previewed account-adjustment reversal evidence",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "account-adjustment command evidence",
+                                "canonical Subscriber account state",
+                                "canonical append-only ledger state",
+                                "resolved customer financial position",
+                            ),
+                            canonical_writer="financial.account_adjustments",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="account-adjustment command evidence",
+                            owner="financial.account_adjustments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "typed command context, confirmed preview fingerprint, "
+                                "and origin-scoped idempotency key"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Subscriber account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="subscribers account identity",
+                        ),
+                        AuthorityInput(
+                            name="canonical append-only ledger state",
+                            owner="financial.ledger",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="ledger_entries and structural reversal links",
+                        ),
+                        AuthorityInput(
+                            name="resolved customer financial position",
+                            owner="customer.financial_position",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "prepaid availability, receivables, and "
+                                "collection-blocking balance resolver"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="billing default-currency setting",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="billing.default_currency",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Public debit and reversal commands enter one "
+                            "manifest-verified owner transaction. Explicit nested "
+                            "staging collaborators flush only inside approved plan-"
+                            "change, add-on, or renewal coordinator transactions."
+                        ),
+                        locking=(
+                            "Debit confirmation locks the Subscriber account before "
+                            "re-preview and append. Reversal locks the account, "
+                            "AccountAdjustment, and original ledger entry in that order."
+                        ),
+                        idempotency=(
+                            "Database uniqueness scopes debit and reversal keys by "
+                            "origin; exact account, preview, effective-date, and "
+                            "structural ledger evidence are revalidated on replay."
+                        ),
+                        retries=(
+                            "Exact replay is safe. Only write_conflict is retryable "
+                            "after the owner rolls back; stale previews require a new "
+                            "preview and insufficient funding requires new source state."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.account_adjustments.invalid_command",
+                            "financial.account_adjustments.invalid_configuration",
+                            "financial.account_adjustments.account_not_found",
+                            "financial.account_adjustments.adjustment_not_found",
+                            "financial.account_adjustments.insufficient_funding",
+                            "financial.account_adjustments.idempotency_conflict",
+                            "financial.account_adjustments.stale_preview",
+                            "financial.account_adjustments.already_reversed",
+                            "financial.account_adjustments.incomplete_evidence",
+                            "financial.account_adjustments.write_conflict",
+                            "financial.account_adjustments.active_caller_transaction",
+                            "financial.account_adjustments.command_contract_violation",
+                            "financial.account_adjustments.invalid_command_context",
+                            "financial.account_adjustments.nested_owner_command",
+                            "financial.account_adjustments.nested_transaction_completion",
+                        ),
+                        mapping_owner="API and enclosing financial coordinator adapters",
+                        retryable_codes=(
+                            "financial.account_adjustments.write_conflict",
+                        ),
+                        fail_closed_on=(
+                            "stale or mismatched preview",
+                            "insufficient prepaid funding",
+                            "ambiguous idempotency evidence",
+                            "incomplete or inconsistent structural ledger evidence",
+                            "active caller transaction",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "account_adjustment.confirmed",
+                            "account_adjustment.reversed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "PII-free versioned payloads retain aggregate, account, "
+                            "money, origin, exact ledger, and command evidence fields."
+                        ),
+                        replay=(
+                            "Idempotent command replay emits no duplicate event; the "
+                            "durable dispatcher retries each staged event."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "generic ledger API plus plan-change and add-on debit paths"
+                        ),
+                        new_owner="financial.account_adjustments",
+                        verification=(
+                            "The billing alignment audit recorded zero historical "
+                            "adjustment-debit drift; structural evidence inspection and "
+                            "focused replay, stale-preview, funding, and reversal tests "
+                            "remain the cutover proof."
+                        ),
+                        cutover_gate=(
+                            "All application debits use a public command or an approved "
+                            "nested staging collaborator and carry exact ledger evidence."
+                        ),
+                        fallback_retirement=(
+                            "Generic ledger posting/reversal stays gated; direct "
+                            "AccountAdjustment construction and legacy commit flags are "
+                            "forbidden by architecture tests."
+                        ),
+                    ),
+                    steward="finance operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/CODING_STANDARD.md",
+                        "docs/audits/BILLING_ALIGNMENT_RUN_2026-07-12.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_account_adjustment_evidence.py",
+                        "tests/architecture/test_account_adjustment_boundary.py",
+                        "tests/architecture/test_financial_action_boundaries.py",
+                        "tests/architecture/test_financial_ownership.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -1657,7 +1881,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.network.radius_sessions",
                 owns=(
                     "online-now session state",
-                    "primary NAS session",
+                    "active-session NAS observation evidence",
                     "bounded historical NAS evidence",
                 ),
                 depends_on=("network.identity",),
@@ -1734,6 +1958,173 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "refreshed_at, and prunes rows whose source device is gone. "
                     "Readers never write it; they request a reconcile rather than "
                     "maintaining a parallel derivation path."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="device_projections materialised table",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical device identity",
+                                "monitoring inventory observations",
+                                "resolved operational device state",
+                            ),
+                            canonical_writer="network.device_projection",
+                        ),
+                        ConcernContract(
+                            name="unified cross-type device row (OLT/core/ONT/CPE)",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical device identity",
+                                "monitoring inventory observations",
+                            ),
+                            canonical_writer="network.device_projection",
+                        ),
+                        ConcernContract(
+                            name="projected operational status and freshness",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "resolved operational device state",
+                                "monitoring inventory observations",
+                            ),
+                            canonical_writer="network.device_projection",
+                        ),
+                        ConcernContract(
+                            name="device projection orphan pruning",
+                            role=OwnerRole.RECONCILER,
+                            input_names=("canonical device identity",),
+                            canonical_writer="network.device_projection",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical device identity",
+                            owner="network.identity",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "OLTDevice, NetworkDevice, OntUnit, and CpeDevice "
+                                "natural identities"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="monitoring inventory observations",
+                            owner="network.monitoring_inventory",
+                            kind=AuthorityKind.OBSERVATION,
+                            source=(
+                                "active device inventory, address, vendor, model, "
+                                "and last-seen facts consumed by collect_devices"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="resolved operational device state",
+                            owner="network.device_state",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "collect_devices operational status and reason "
+                                "derivation"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "reconcile_device_projections enters the verified "
+                            "owner-command boundary on a transaction-free session; "
+                            "the projection and outbox event commit atomically "
+                            "before return."
+                        ),
+                        locking=(
+                            "A PostgreSQL transaction advisory lock serializes full "
+                            "rebuilds; uq_device_projection_source arbitrates each "
+                            "device_type/source_id natural key."
+                        ),
+                        idempotency=(
+                            "The natural-key upsert and orphan-pruning pass converges "
+                            "to the authoritative input set; one Celery delivery "
+                            "keeps its task-derived command/idempotency key across "
+                            "retries without duplicating rows."
+                        ),
+                        retries=(
+                            "The task retries SQLAlchemy OperationalError up to three "
+                            "times with bounded exponential backoff and a fresh "
+                            "session; a later scheduled pass repairs stale state."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "network.device_projection.invalid_command",
+                            "network.device_projection.invalid_command_context",
+                            "network.device_projection.command_contract_violation",
+                            "network.device_projection.nested_owner_command",
+                            "network.device_projection.active_caller_transaction",
+                            "network.device_projection.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.tasks.device_projection",
+                        fail_closed_on=(
+                            "invalid command metadata",
+                            "active caller transaction",
+                            "nested command or transaction completion",
+                            "manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("device_projection.reconciled",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Additive payload evolution within schema version 1; "
+                            "breaking changes require a new version."
+                        ),
+                        replay=(
+                            "Event-store delivery is retryable; consumers key side "
+                            "effects by event_id and treat reconciliation counts as "
+                            "immutable evidence."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="device_projections",
+                            input_names=(
+                                "canonical device identity",
+                                "monitoring inventory observations",
+                                "resolved operational device state",
+                            ),
+                            writer="network.device_projection",
+                            freshness=(
+                                "Celery beat targets a 60-second rebuild interval; "
+                                "every row carries reconciled refreshed_at."
+                            ),
+                            stale_behavior=(
+                                "Readers may show the last committed projection and "
+                                "its refreshed_at; they never synthesize or write a "
+                                "replacement row."
+                            ),
+                            drift_signal=(
+                                "Reconcile logs inserted, updated, and pruned counts; "
+                                "latest_refreshed_at exposes projection age."
+                            ),
+                            rebuild_operation=(
+                                "app.services.device_projection_reconcile."
+                                "reconcile_device_projections"
+                            ),
+                            repair_owner="network.device_projection",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="network.device_projection",
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_owner_commands.py",
+                        "tests/test_device_projection_reconcile.py",
+                        "tests/test_device_projection_task.py",
+                        "tests/architecture/test_owner_command_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -2044,8 +2435,79 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="sessions.radius_resolution",
                 module="app.services.network.radius_sessions",
-                owns=("customer online-now resolution", "primary NAS session"),
+                owns=(
+                    "customer online-now resolution",
+                    "primary NAS session resolution",
+                ),
                 depends_on=("sessions.radius_reconciliation", "network.identity"),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="customer online-now resolution",
+                            role=OwnerRole.RESOLVER,
+                            input_names=("active RADIUS session projection",),
+                        ),
+                        ConcernContract(
+                            name="primary NAS session resolution",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "active RADIUS session projection",
+                                "network identity registry",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="active RADIUS session projection",
+                            owner="sessions.radius_reconciliation",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="radius_active_sessions",
+                        ),
+                        AuthorityInput(
+                            name="network identity registry",
+                            owner="network.identity",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="NetworkDevice and NAS identity mappings",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller creates and closes the session; resolver "
+                            "performs no writes or transaction completion."
+                        ),
+                        locking=(
+                            "No row lock; the result reflects database visibility "
+                            "at query time."
+                        ),
+                        idempotency=(
+                            "The same subscriber, limit, and visible input snapshot "
+                            "produce the same ordered resolution."
+                        ),
+                        retries=(
+                            "Adapters may retry transient read failures; the resolver "
+                            "has no side effects."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(),
+                        mapping_owner="web, API, task, and service adapters",
+                        fail_closed_on=("invalid subscriber identifier",),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.NATIVE,
+                        new_owner="sessions.radius_resolution",
+                    ),
+                    steward="network operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md",
+                    ),
+                    test_refs=(
+                        "tests/test_network_sot_services.py",
+                        "tests/test_sot_relationships.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="sessions.enforcement",
@@ -2859,12 +3321,533 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "route permission dependencies",
                     "request principal permission checks",
                 ),
-                depends_on=("auth.rbac",),
+                depends_on=(
+                    "auth.rbac_catalog",
+                    "auth.subscriber_assignments",
+                ),
             ),
             SOTService(
-                name="auth.rbac",
-                module="app.services.rbac",
-                owns=("roles", "permissions", "role/user assignments"),
+                name="auth.subscriber_assignments",
+                module="app.services.subscriber_assignments",
+                owns=("subscriber role and direct-permission assignments",),
+                depends_on=(
+                    "auth.rbac_catalog",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "This is the only application and seed writer for "
+                    "subscriber_roles and subscriber_permissions. Public "
+                    "commands own their complete transaction; reseller "
+                    "onboarding and seed workflows use only flush-only "
+                    "collaborators inside their coordinator transaction."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=("subscriber role and direct-permission assignments"),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authorized subscriber assignment principal",
+                                "active role and permission catalog",
+                                "canonical subscriber assignment state",
+                            ),
+                            canonical_writer="auth.subscriber_assignments",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authorized subscriber assignment principal",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=("rbac:assign evidence carried in CommandContext"),
+                        ),
+                        AuthorityInput(
+                            name="active role and permission catalog",
+                            owner="auth.rbac_catalog",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active roles and active UI-assignable permissions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscriber assignment state",
+                            owner="auth.subscriber_assignments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="subscriber_roles and subscriber_permissions",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each public assignment command enters "
+                            "execute_owner_command on a transaction-free session; "
+                            "the grants, audit evidence, and versioned event commit "
+                            "or roll back together. Reseller onboarding and seed "
+                            "collaborators flush only."
+                        ),
+                        locking=(
+                            "Target subscribers, active catalog references, and "
+                            "existing grants are selected FOR UPDATE. Unique "
+                            "constraints arbitrate concurrent duplicate grants."
+                        ),
+                        idempotency=(
+                            "Duplicate grant and desired-state replacement "
+                            "commands converge without parallel writes; adapter "
+                            "intent keys are stored only as SHA-256 evidence."
+                        ),
+                        retries=(
+                            "Adapters may retry a failed desired-state command "
+                            "with the same intent key. Invalid scope, inactive "
+                            "catalog, and conflict failures require changed input."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.subscriber_assignments.invalid_command",
+                            "auth.subscriber_assignments.invalid_scope",
+                            "auth.subscriber_assignments.subscriber_not_found",
+                            "auth.subscriber_assignments.role_not_found",
+                            "auth.subscriber_assignments.permission_not_found",
+                            "auth.subscriber_assignments.role_grant_not_found",
+                            "auth.subscriber_assignments.permission_grant_not_found",
+                            "auth.subscriber_assignments.assignment_conflict",
+                            "auth.subscriber_assignments.invalid_command_context",
+                            "auth.subscriber_assignments.command_contract_violation",
+                            "auth.subscriber_assignments.nested_owner_command",
+                            "auth.subscriber_assignments.active_caller_transaction",
+                            (
+                                "auth.subscriber_assignments."
+                                "nested_transaction_completion"
+                            ),
+                        ),
+                        mapping_owner=("app.api.rbac and app.web.admin.resellers"),
+                        fail_closed_on=(
+                            "missing rbac:assign evidence",
+                            "inactive or non-assignable catalog references",
+                            "invalid region or reseller grant scope",
+                            "concurrent assignment conflicts",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("subscriber.assignments_changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and contains subscriber, role, "
+                            "scope, and permission identifiers but no PII or raw "
+                            "idempotency key."
+                        ),
+                        replay=(
+                            "Events are immutable assignment-change evidence. "
+                            "Canonical assignment and catalog tables remain the "
+                            "rebuild inputs."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.rbac subscriber assignment CRUD, "
+                            "reseller onboarding role writes, and direct "
+                            "scripts.seed.seed_rbac subscriber grant writes"
+                        ),
+                        new_owner="auth.subscriber_assignments",
+                        verification=(
+                            "Focused atomicity, scope, catalog-safety, API, "
+                            "reseller, seed, cache, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every application and seed subscriber assignment "
+                            "write delegates to auth.subscriber_assignments."
+                        ),
+                        fallback_retirement=(
+                            "The legacy app.services.rbac module and all direct "
+                            "subscriber assignment writers are removed."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_subscriber_assignments.py",
+                        ("tests/architecture/test_subscriber_assignment_boundary.py"),
+                    ),
+                ),
+            ),
+            SOTService(
+                name="auth.rbac_catalog",
+                module="app.services.rbac_catalog",
+                owns=(
+                    "role catalog and role-permission policy",
+                    "permission catalog",
+                ),
+                depends_on=("events.dispatcher", "observability.audit_log"),
+                notes=(
+                    "This is the only application and seed writer for roles, "
+                    "permissions, and role_permissions. Catalog identities are "
+                    "case-normalized and protected by functional unique indexes. "
+                    "Assigned identities cannot be renamed or deactivated, and "
+                    "non-assignable permissions may be granted only to admin."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="role catalog and role-permission policy",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authorized RBAC catalog principal",
+                                "canonical role and role-permission catalog",
+                                "system-user role grant references",
+                                "subscriber role grant references",
+                            ),
+                            canonical_writer="auth.rbac_catalog",
+                        ),
+                        ConcernContract(
+                            name="permission catalog",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authorized RBAC catalog principal",
+                                "canonical permission catalog",
+                                "system-user permission grant references",
+                                "subscriber permission grant references",
+                            ),
+                            canonical_writer="auth.rbac_catalog",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authorized RBAC catalog principal",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "rbac role/permission write or delete scope "
+                                "evidence carried in CommandContext"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical role and role-permission catalog",
+                            owner="auth.rbac_catalog",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="roles and role_permissions",
+                        ),
+                        AuthorityInput(
+                            name="canonical permission catalog",
+                            owner="auth.rbac_catalog",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="permissions",
+                        ),
+                        AuthorityInput(
+                            name="system-user role grant references",
+                            owner="auth.system_user_assignments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="system_user_roles references used by catalog safety policy",
+                        ),
+                        AuthorityInput(
+                            name="subscriber role grant references",
+                            owner="auth.subscriber_assignments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="subscriber_roles references used by catalog safety policy",
+                        ),
+                        AuthorityInput(
+                            name="system-user permission grant references",
+                            owner="auth.system_user_assignments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "system_user_permissions references used by "
+                                "catalog identity and deactivation safety policy"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="subscriber permission grant references",
+                            owner="auth.subscriber_assignments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "subscriber_permissions references used by "
+                                "catalog identity and deactivation safety policy"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each public catalog command enters "
+                            "execute_owner_command on a transaction-free session; "
+                            "the catalog row, complete role-permission policy, "
+                            "audit evidence, and versioned event commit or roll "
+                            "back together. Seed collaborators flush only."
+                        ),
+                        locking=(
+                            "Existing catalog rows and relationship sets are "
+                            "selected FOR UPDATE. Case-normalized PostgreSQL unique "
+                            "indexes arbitrate concurrent natural-key creation, "
+                            "while grant-reference checks fail closed before rename "
+                            "or deactivation."
+                        ),
+                        idempotency=(
+                            "Role-permission replacement and seed convergence use "
+                            "desired sets; duplicate grants are no-ops. Adapter "
+                            "intent keys are stored only as SHA-256 evidence."
+                        ),
+                        retries=(
+                            "Adapters may retry failed desired-state commands with "
+                            "the same intent key. Validation, protected catalog, "
+                            "and in-use failures require changed authoritative input."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.rbac_catalog.invalid_command",
+                            "auth.rbac_catalog.invalid_role_name",
+                            "auth.rbac_catalog.invalid_permission_key",
+                            "auth.rbac_catalog.invalid_permissions",
+                            "auth.rbac_catalog.role_not_found",
+                            "auth.rbac_catalog.permission_not_found",
+                            "auth.rbac_catalog.role_permission_not_found",
+                            "auth.rbac_catalog.role_conflict",
+                            "auth.rbac_catalog.permission_conflict",
+                            "auth.rbac_catalog.catalog_conflict",
+                            "auth.rbac_catalog.role_in_use",
+                            "auth.rbac_catalog.permission_in_use",
+                            "auth.rbac_catalog.protected_role",
+                            "auth.rbac_catalog.protected_permission",
+                            "auth.rbac_catalog.invalid_command_context",
+                            "auth.rbac_catalog.command_contract_violation",
+                            "auth.rbac_catalog.nested_owner_command",
+                            "auth.rbac_catalog.active_caller_transaction",
+                            "auth.rbac_catalog.nested_transaction_completion",
+                        ),
+                        mapping_owner=("app.api.rbac and app.web.admin.system"),
+                        fail_closed_on=(
+                            "missing catalog authorization evidence",
+                            "case-normalized catalog collisions",
+                            "rename or deactivation of assigned identities",
+                            "protected admin role or permission changes",
+                            "non-assignable permission grants outside admin",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "rbac.role_catalog_changed",
+                            "rbac.permission_catalog_changed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and contains authorization "
+                            "identifiers but no PII or raw idempotency key."
+                        ),
+                        replay=(
+                            "Events are immutable policy-change evidence. Canonical "
+                            "catalog tables and checked-in seed desired sets remain "
+                            "the rebuild inputs."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.rbac catalog CRUD, "
+                            "app.services.web_system_role_forms, and direct "
+                            "scripts.seed.seed_rbac catalog writers"
+                        ),
+                        new_owner="auth.rbac_catalog",
+                        verification=(
+                            "Focused atomicity, normalization, protected-catalog, "
+                            "API/web adapter, seed, migration, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every application and seed catalog write delegates to "
+                            "auth.rbac_catalog and subscriber grant references "
+                            "are owned by auth.subscriber_assignments."
+                        ),
+                        fallback_retirement=(
+                            "Multi-commit role forms and legacy role, permission, "
+                            "and role-permission CRUD writers are removed."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_rbac_catalog_owner.py",
+                        "tests/architecture/test_rbac_catalog_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="auth.system_user_assignments",
+                module="app.services.system_user_assignments",
+                owns=(
+                    "system-user role and direct-permission assignments",
+                    "source-scoped managed system-user role convergence",
+                ),
+                depends_on=(
+                    "auth.rbac_catalog",
+                    "auth.permission_gate",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "This is the only application writer for system_user_roles and "
+                    "system_user_permissions. Local replacement preserves grants "
+                    "owned by ERP or another source. Every role convergence locks "
+                    "the active admin role before checking the final-active-admin "
+                    "invariant. Public administrative replacement owns its complete "
+                    "transaction; staff provisioning uses only flush-only "
+                    "source-scoped collaborators inside its coordinator transaction."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=("system-user role and direct-permission assignments"),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "authorized system-user assignment principal",
+                                "active role and permission catalog",
+                                "canonical system-user assignment state",
+                            ),
+                            canonical_writer="auth.system_user_assignments",
+                        ),
+                        ConcernContract(
+                            name=("source-scoped managed system-user role convergence"),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "active role and permission catalog",
+                                "canonical system-user assignment state",
+                            ),
+                            canonical_writer="auth.system_user_assignments",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authorized system-user assignment principal",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "rbac:assign authorization evidence in the typed "
+                                "CommandContext"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active role and permission catalog",
+                            owner="auth.rbac_catalog",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active roles and active UI-assignable permissions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical system-user assignment state",
+                            owner="auth.system_user_assignments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="system_user_roles and system_user_permissions",
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "The public replacement command enters "
+                            "execute_owner_command on a transaction-free session; "
+                            "roles, direct permissions, audit, and event evidence "
+                            "commit or roll back together. Collaborator methods "
+                            "flush but never complete a coordinator transaction."
+                        ),
+                        locking=(
+                            "The target principal and existing grants are selected "
+                            "FOR UPDATE. Every role change locks the active admin "
+                            "role row before evaluating the final-active-admin "
+                            "invariant, serializing competing removals and disables."
+                        ),
+                        idempotency=(
+                            "Each source converges only its own global role grants; "
+                            "direct permissions converge to the requested set. "
+                            "Repeated desired state is a no-op and adapters carry a "
+                            "stable intent key recorded only as a digest."
+                        ),
+                        retries=(
+                            "Adapters may retry failed commands with the same intent "
+                            "key. Validation and final-admin failures are not "
+                            "retryable without a changed authoritative input."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.system_user_assignments.invalid_command",
+                            "auth.system_user_assignments.invalid_roles",
+                            "auth.system_user_assignments.invalid_permissions",
+                            "auth.system_user_assignments.system_user_not_found",
+                            "auth.system_user_assignments.last_admin_required",
+                            "auth.system_user_assignments.invalid_command_context",
+                            "auth.system_user_assignments.command_contract_violation",
+                            "auth.system_user_assignments.nested_owner_command",
+                            "auth.system_user_assignments.active_caller_transaction",
+                            "auth.system_user_assignments.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.web.admin.system",
+                        fail_closed_on=(
+                            "missing assignment authorization evidence",
+                            "inactive or unknown roles",
+                            "inactive or non-assignable direct permissions",
+                            "removal or deactivation of the final active admin",
+                            "active caller transaction or nested completion",
+                            "manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("system_user.assignments_changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and contains identifiers and "
+                            "authorization keys but no raw idempotency key or PII."
+                        ),
+                        replay=(
+                            "Events are immutable decision evidence; authoritative "
+                            "assignment tables remain repairable by replaying the "
+                            "source-specific desired grant command."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.web_system_user_edit, "
+                            "app.services.web_system_user_mutations, and legacy "
+                            "app.services.rbac system-user grant helpers"
+                        ),
+                        new_owner="auth.system_user_assignments",
+                        verification=(
+                            "Focused atomicity, source preservation, final-admin, "
+                            "adapter, and architecture boundary tests."
+                        ),
+                        cutover_gate=(
+                            "All application-level system-user assignment writes "
+                            "delegate to this owner and managed roles are read-only "
+                            "in the local administrative editor."
+                        ),
+                        fallback_retirement=(
+                            "Profile edits no longer write grants or active state; "
+                            "legacy create and direct assignment mutation helpers "
+                            "are removed."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_system_user_assignments.py",
+                        "tests/architecture/test_system_user_assignment_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="auth.token_signing",
@@ -2880,18 +3863,263 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
-                name="auth.customer_credential_enrollment",
-                module="app.services.customer_credential_enrollment",
+                name="auth.credential_recovery",
+                module="app.services.credential_recovery",
                 owns=(
-                    "referral-created customer local credential enrollment",
-                    "credential enrollment capability purpose claims and lifetime",
-                    "single-use enrollment and account email verification consequence",
+                    "password recovery request and delivery intent",
+                    "password reset credential transition",
+                    "credential recovery session projection invalidation",
                 ),
                 depends_on=(
                     "auth.token_signing",
+                    "communications.intents",
+                    "communications.ephemeral_actions",
+                    "control.settings_spec",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Recovery requests persist only PII-safe event context. "
+                    "The communication consequence revalidates an exact local "
+                    "principal and mints the bearer only at delivery time. "
+                    "Capability redemption is the only password-reset writer "
+                    "and atomically changes credentials, revokes database "
+                    "sessions, stages audit evidence, and emits an event."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="password recovery request and delivery intent",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "credential recovery command evidence",
+                                "canonical recoverable principal state",
+                                "credential recovery policy settings",
+                                "durable recovery delivery boundary",
+                            ),
+                            canonical_writer="auth.credential_recovery",
+                        ),
+                        ConcernContract(
+                            name="password reset credential transition",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "credential recovery command evidence",
+                                "canonical recoverable principal state",
+                                "credential recovery policy settings",
+                                "verified recovery capability envelope",
+                            ),
+                            canonical_writer="auth.credential_recovery",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "credential recovery session projection invalidation"
+                            ),
+                            role=OwnerRole.RECONCILER,
+                            input_names=("canonical recoverable principal state",),
+                            canonical_writer="auth.credential_recovery",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="credential recovery command evidence",
+                            owner="auth.credential_recovery",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed CommandContext carrying public-auth or "
+                                "authorized-administrator actor, scope, reason, "
+                                "correlation, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical recoverable principal state",
+                            owner="auth.credential_recovery",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active Subscriber, SystemUser, or ResellerUser "
+                                "identity and its active local user_credential, "
+                                "password marker, and auth_sessions"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="credential recovery policy settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "declared password minimum and recovery lifetime "
+                                "settings plus the owner-defined request rate policy"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="durable recovery delivery boundary",
+                            owner="communications.intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "deduplicated communication intent and notification "
+                                "outbox state created from the request event"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="verified recovery capability envelope",
+                            owner="auth.token_signing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "signature and expiry verified password_reset "
+                                "claims minted for one exact principal"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each public request or redemption enters "
+                            "execute_owner_command on a transaction-free adapter "
+                            "session. Request audit and outbox event, or credential "
+                            "change, session revocation, audit, and completion "
+                            "event commit or roll back together."
+                        ),
+                        locking=(
+                            "Redemption selects the exact active principal and "
+                            "local credential FOR UPDATE before comparing the "
+                            "single-use password marker. Request rate limiting "
+                            "precedes principal lookup."
+                        ),
+                        idempotency=(
+                            "Each accepted request has one immutable event id and "
+                            "its communication intent deduplicates on that id. A "
+                            "redeemed capability is spent by password_updated_at, "
+                            "so replay fails closed."
+                        ),
+                        retries=(
+                            "Rolled-back commands may be retried with the same "
+                            "intent evidence. Invalid or spent capabilities and "
+                            "invalid passwords require changed input; event and "
+                            "notification delivery retry independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.credential_recovery.invalid_command",
+                            "auth.credential_recovery.invalid_password",
+                            "auth.credential_recovery.invalid_reset_capability",
+                            "auth.credential_recovery.credential_not_found",
+                            ("auth.credential_recovery.invalid_command_context"),
+                            ("auth.credential_recovery.command_contract_violation"),
+                            "auth.credential_recovery.nested_owner_command",
+                            "auth.credential_recovery.active_caller_transaction",
+                            ("auth.credential_recovery.nested_transaction_completion"),
+                        ),
+                        mapping_owner=(
+                            "app.api.auth_flow, app.services.web_auth, and portal "
+                            "or administrative web adapters"
+                        ),
+                        fail_closed_on=(
+                            "invalid, expired, or spent capability",
+                            "principal or recipient drift",
+                            "inactive or missing local credential",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "password_recovery.requested",
+                            "password_recovery.completed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 contains identifiers, correlation evidence, "
+                            "an email digest, and safe redirect context but never "
+                            "raw email, password, hash, or bearer capability."
+                        ),
+                        replay=(
+                            "Request-event replay converges on one communication "
+                            "intent by event id. Completion events are immutable "
+                            "evidence; credential state remains authoritative."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name=(
+                                "recovery-invalidated authentication session "
+                                "projections"
+                            ),
+                            input_names=("canonical recoverable principal state",),
+                            writer="auth.credential_recovery",
+                            freshness=(
+                                "Completion-event dispatch invalidates auth and "
+                                "portal session projections immediately after the "
+                                "credential transaction commits."
+                            ),
+                            stale_behavior=(
+                                "The event handler attempt remains failed and "
+                                "retriable; durable auth_sessions revocation stays "
+                                "authoritative while projection repair is pending."
+                            ),
+                            drift_signal=(
+                                "A failed credential-session projection handler "
+                                "attempt on the password_recovery.completed event."
+                            ),
+                            rebuild_operation=(
+                                "Replay password_recovery.completed for the exact "
+                                "principal to idempotently invalidate auth cache and "
+                                "revoke customer or reseller portal sessions."
+                            ),
+                            repair_owner="auth.credential_recovery",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.auth_flow forgot_password_flow, "
+                            "request_password_reset, and reset_password plus "
+                            "synchronous web and administrative email helpers"
+                        ),
+                        new_owner="auth.credential_recovery",
+                        verification=(
+                            "Focused request, materialization, redemption, replay, "
+                            "session-revocation, adapter, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Public API, shared web, customer, reseller, admin, "
+                            "staff-invite, and reseller-invite paths call only the "
+                            "contracted owner or exact in-memory materializer."
+                        ),
+                        fallback_retirement=(
+                            "Synchronous recovery email delivery, persisted bearer "
+                            "content, adapter-owned credential mutation, service "
+                            "HTTP exceptions, and service commits are removed."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_credential_recovery.py",
+                        "tests/architecture/test_credential_recovery_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="auth.customer_credential_enrollment",
+                module="app.services.customer_credential_enrollment",
+                owns=(
+                    "credential enrollment delivery request",
+                    "referral-created customer local credential enrollment",
+                    "credential enrollment capability purpose claims and lifetime",
+                    "single-use enrollment and account email verification consequence",
+                    "credential enrollment authentication cache projection",
+                ),
+                depends_on=(
+                    "auth.token_signing",
+                    "communications.intents",
                     "customer.accounts",
                     "referrals.account_conversion",
                     "communications.ephemeral_actions",
+                    "control.settings_spec",
+                    "events.dispatcher",
                     "observability.audit_log",
                 ),
                 notes=(
@@ -2901,12 +4129,664 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "Party contact verification, and account/subscription state "
                     "remain with their existing owners."
                 ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="credential enrollment delivery request",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "credential enrollment command evidence",
+                                "canonical referral account context",
+                                "canonical customer credential state",
+                                "credential enrollment policy settings",
+                                "durable enrollment delivery intent",
+                            ),
+                            canonical_writer="auth.customer_credential_enrollment",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "referral-created customer local credential enrollment"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "credential enrollment command evidence",
+                                "canonical referral account context",
+                                "canonical customer credential state",
+                                "credential enrollment policy settings",
+                                "verified enrollment capability envelope",
+                            ),
+                            canonical_writer="auth.customer_credential_enrollment",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "credential enrollment capability purpose claims "
+                                "and lifetime"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical referral account context",
+                                "canonical customer credential state",
+                                "credential enrollment policy settings",
+                                "verified enrollment capability envelope",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "single-use enrollment and account email "
+                                "verification consequence"
+                            ),
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "credential enrollment command evidence",
+                                "canonical customer credential state",
+                                "verified enrollment capability envelope",
+                            ),
+                            canonical_writer="auth.customer_credential_enrollment",
+                        ),
+                        ConcernContract(
+                            name=(
+                                "credential enrollment authentication cache projection"
+                            ),
+                            role=OwnerRole.RECONCILER,
+                            input_names=("canonical customer credential state",),
+                            canonical_writer="auth.customer_credential_enrollment",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="credential enrollment command evidence",
+                            owner="auth.customer_credential_enrollment",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed CommandContext carrying the public referral "
+                                "or capability actor, scope, reason, command, "
+                                "correlation, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical referral account context",
+                            owner="referrals.account_conversion",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active Referral, referred Party and Lead binding, "
+                                "and the exact converted Subscriber identifier"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical customer credential state",
+                            owner="auth.customer_credential_enrollment",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active converted Subscriber identity, email and "
+                                "email_verified state plus its local user_credential"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="credential enrollment policy settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "database-authoritative password minimum, user invite "
+                                "lifetime, credential enrollment request limit, and "
+                                "request window settings"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="verified enrollment capability envelope",
+                            owner="auth.token_signing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "signature and expiry verified referral enrollment "
+                                "claims for one exact referral, Party, Lead, "
+                                "Subscriber, and email digest"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="durable enrollment delivery intent",
+                            owner="communications.intents",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "referral-deduplicated communication intent and "
+                                "notification outbox with a non-secret ephemeral "
+                                "action descriptor"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.OWNER_MANAGED,
+                        boundary=(
+                            "Each request or redemption enters "
+                            "execute_owner_command on a transaction-free adapter "
+                            "session. Request intent, audit, and event, or local "
+                            "credential, Subscriber email verification, audit, and "
+                            "completion event commit or roll back together."
+                        ),
+                        locking=(
+                            "Requests and redemption lock the exact Referral, Lead, "
+                            "and Subscriber in canonical order. Redemption rechecks "
+                            "the absence of a local credential; the normalized local "
+                            "username unique index arbitrates cross-principal races."
+                        ),
+                        idempotency=(
+                            "A referral has one communication intent dedupe key. "
+                            "Delivery retries remint the bearer from canonical "
+                            "context. Credential existence spends every outstanding "
+                            "capability, so replay fails closed."
+                        ),
+                        retries=(
+                            "Rolled-back commands may retry after transient database "
+                            "failures. Rate-limited requests return a typed outcome; "
+                            "delivery and cache projection retry independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.customer_credential_enrollment.invalid_command",
+                            (
+                                "auth.customer_credential_enrollment."
+                                "invalid_configuration"
+                            ),
+                            "auth.customer_credential_enrollment.context_not_found",
+                            "auth.customer_credential_enrollment.stale_context",
+                            "auth.customer_credential_enrollment.inactive_account",
+                            "auth.customer_credential_enrollment.invalid_capability",
+                            "auth.customer_credential_enrollment.invalid_password",
+                            "auth.customer_credential_enrollment.invalid_username",
+                            (
+                                "auth.customer_credential_enrollment."
+                                "username_unavailable"
+                            ),
+                            (
+                                "auth.customer_credential_enrollment."
+                                "invalid_command_context"
+                            ),
+                            (
+                                "auth.customer_credential_enrollment."
+                                "command_contract_violation"
+                            ),
+                            (
+                                "auth.customer_credential_enrollment."
+                                "nested_owner_command"
+                            ),
+                            (
+                                "auth.customer_credential_enrollment."
+                                "active_caller_transaction"
+                            ),
+                            (
+                                "auth.customer_credential_enrollment."
+                                "nested_transaction_completion"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "app.api.crm_referrals, app.api.auth_flow, and "
+                            "app.services.web_customer_auth adapters"
+                        ),
+                        fail_closed_on=(
+                            "invalid, expired, or spent capability",
+                            "referral, Party, Lead, Subscriber, or recipient drift",
+                            "inactive account or existing local credential",
+                            "username collision",
+                            "missing or invalid canonical policy configuration",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "customer_credential_enrollment.requested",
+                            "customer_credential_enrollment.completed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 contains canonical identifiers, command and "
+                            "correlation evidence, delivery outcome, and an email "
+                            "digest but never raw email, password, hash, rendered "
+                            "content, or bearer capability."
+                        ),
+                        replay=(
+                            "Request replay converges on the referral-deduplicated "
+                            "communication intent. Completion replay leaves the "
+                            "existing credential authoritative and repairs its auth "
+                            "cache projection idempotently."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="enrolled customer authentication cache",
+                            input_names=("canonical customer credential state",),
+                            writer="auth.customer_credential_enrollment",
+                            freshness=(
+                                "Completion-event dispatch invalidates the exact "
+                                "subscriber authentication cache immediately after "
+                                "the credential transaction commits."
+                            ),
+                            stale_behavior=(
+                                "The handler attempt remains failed and retriable; "
+                                "the committed credential and Subscriber email "
+                                "verification remain authoritative."
+                            ),
+                            drift_signal=(
+                                "A failed CredentialSessionProjectionHandler attempt "
+                                "on customer_credential_enrollment.completed."
+                            ),
+                            rebuild_operation=(
+                                "Replay customer_credential_enrollment.completed for "
+                                "the exact subscriber to invalidate its auth cache."
+                            ),
+                            repair_owner="auth.customer_credential_enrollment",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "uncontracted request_referral_enrollment and "
+                            "complete_referral_enrollment service functions with "
+                            "helper commits, nested transactions, transport-coded "
+                            "errors, and best-effort cache invalidation"
+                        ),
+                        new_owner="auth.customer_credential_enrollment",
+                        verification=(
+                            "Focused request, suppression, dedupe, materialization, "
+                            "redemption, replay, drift, event, projection, adapter, "
+                            "and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Referral signup, public auth API, and customer portal "
+                            "form submit only typed commands on transaction-free "
+                            "sessions; materialization remains transport-only."
+                        ),
+                        fallback_retirement=(
+                            "Service commits, savepoints, status-coded domain errors, "
+                            "adapter keyword mutation calls, direct best-effort cache "
+                            "invalidation, and duplicate delivery intents are removed."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/REFERRAL_CREDENTIAL_ENROLLMENT.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_referral_credential_enrollment.py",
+                        (
+                            "tests/architecture/"
+                            "test_customer_credential_enrollment_boundary.py"
+                        ),
+                    ),
+                ),
             ),
             SOTService(
                 name="auth.staff_provisioning",
                 module="app.services.staff_provisioning",
                 owns=("staff account provisioning", "staff identity bootstrap"),
-                depends_on=("auth.rbac",),
+                depends_on=(
+                    "auth.rbac_catalog",
+                    "auth.system_user_assignments",
+                    "auth.permission_gate",
+                    "communications.intents",
+                    "communications.ephemeral_actions",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "ERP HR commands enter one verified coordinator transaction. "
+                    "This owner writes staff identity and credential bootstrap, "
+                    "delegates managed grants to auth.system_user_assignments, "
+                    "stages audit and "
+                    "versioned events atomically, and leaves invite delivery to a "
+                    "deduplicated communication consequence. Invite capabilities "
+                    "are minted only at transport time and are never stored in the "
+                    "event or notification outbox."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="staff account provisioning",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "ERP HR staff lifecycle request",
+                                "authorized RBAC assignment principal",
+                                "active role catalog",
+                                "managed role grant state",
+                                "canonical staff identity and credential state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="staff identity bootstrap",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "ERP HR staff lifecycle request",
+                                "canonical staff identity and credential state",
+                            ),
+                            canonical_writer="auth.staff_provisioning",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="ERP HR staff lifecycle request",
+                            owner="external:dotmac_erp",
+                            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                            source=(
+                                "typed provision, managed-role, and active-state "
+                                "commands received by app.api.staff_sync"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authorized RBAC assignment principal",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "rbac:assign authorization result carried in "
+                                "CommandContext actor and scope evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="active role catalog",
+                            owner="auth.rbac_catalog",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="active roles",
+                        ),
+                        AuthorityInput(
+                            name="managed role grant state",
+                            owner="auth.system_user_assignments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "source-scoped rows in system_user_roles and the "
+                                "final-active-admin invariant"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical staff identity and credential state",
+                            owner="auth.staff_provisioning",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "system_users and staff-bound local user_credentials"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each public staff write enters execute_owner_command "
+                            "on a transaction-free adapter session; identity, "
+                            "credentials, RBAC grants, session revocation, audit, "
+                            "and the outbox event commit together before return."
+                        ),
+                        locking=(
+                            "A PostgreSQL advisory transaction lock serializes "
+                            "provisioning by normalized email; existing principals "
+                            "are selected FOR UPDATE and database unique constraints "
+                            "arbitrate identity and grant keys."
+                        ),
+                        idempotency=(
+                            "Email is the provision natural key; managed roles and "
+                            "active state converge to requested sets. Adapters carry "
+                            "a stable intent key, and invite expansion deduplicates "
+                            "on the immutable provisioning event id."
+                        ),
+                        retries=(
+                            "Adapters may retry a failed request with the same "
+                            "idempotency key. Domain validation is not retryable; "
+                            "event-store delivery retries consequences independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.staff_provisioning.invalid_command",
+                            "auth.staff_provisioning.unknown_roles",
+                            "auth.staff_provisioning.staff_account_not_found",
+                            "auth.staff_provisioning.identity_conflict",
+                            "auth.system_user_assignments.last_admin_required",
+                            "auth.staff_provisioning.invalid_command_context",
+                            "auth.staff_provisioning.command_contract_violation",
+                            "auth.staff_provisioning.nested_owner_command",
+                            "auth.staff_provisioning.active_caller_transaction",
+                            "auth.staff_provisioning.nested_transaction_completion",
+                        ),
+                        mapping_owner="app.api.staff_sync",
+                        fail_closed_on=(
+                            "missing authorization evidence",
+                            "unknown or inactive roles",
+                            "identity conflict",
+                            "active caller transaction",
+                            "nested command or transaction completion",
+                            "manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "staff_account.provisioned",
+                            "staff_account.roles_changed",
+                            "staff_account.activated",
+                            "staff_account.deactivated",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and PII-safe; breaking payload "
+                            "changes require a new schema version."
+                        ),
+                        replay=(
+                            "State events are immutable evidence. Staff invitation "
+                            "intent expansion is idempotent by event_id and mints a "
+                            "fresh short-lived capability only at delivery time."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.web_system_user_mutations and the legacy "
+                            "multi-commit staff provisioning path"
+                        ),
+                        new_owner="auth.staff_provisioning",
+                        verification=(
+                            "Focused API, transaction, event, audit, RBAC, and "
+                            "ephemeral-delivery tests plus architecture guards."
+                        ),
+                        cutover_gate=(
+                            "All staff-sync write routes call only typed owner "
+                            "commands and contain no persistence mutation."
+                        ),
+                        fallback_retirement=(
+                            "Staff sync no longer calls web_system_user_mutations "
+                            "or synchronous email delivery."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_api_staff_sync.py",
+                        "tests/test_staff_provisioning_owner.py",
+                        "tests/architecture/test_staff_provisioning_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="auth.reseller_onboarding",
+                module="app.services.reseller_onboarding",
+                owns=("reseller portal principal onboarding",),
+                depends_on=(
+                    "customer.accounts",
+                    "auth.subscriber_assignments",
+                    "auth.permission_gate",
+                    "communications.intents",
+                    "communications.ephemeral_actions",
+                    "control.feature_registry",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "Administrative reseller onboarding enters one verified "
+                    "coordinator transaction. Canonical reseller and fallback "
+                    "Subscriber initialization, portal identity and credential "
+                    "bootstrap, assignment-owner grants, audit, and events commit "
+                    "atomically. Invitations are deduplicated event consequences; "
+                    "reset capabilities are minted only at transport time for the "
+                    "exact principal and never persisted in the outbox."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="reseller portal principal onboarding",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authorized reseller onboarding principal",
+                                "canonical reseller and subscriber account state",
+                                "canonical subscriber assignment state",
+                                "reseller principal cutover gate",
+                                "canonical reseller onboarding state",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authorized reseller onboarding principal",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "reseller:write and, when needed, rbac:assign "
+                                "evidence carried in correlated CommandContexts"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical reseller and subscriber account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "resellers, subscribers, and transaction-neutral "
+                                "canonical initialization collaborators"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscriber assignment state",
+                            owner="auth.subscriber_assignments",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="subscriber_roles and active role catalog references",
+                        ),
+                        AuthorityInput(
+                            name="reseller principal cutover gate",
+                            owner="control.feature_registry",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="reseller_user_principal_enabled feature setting",
+                        ),
+                        AuthorityInput(
+                            name="canonical reseller onboarding state",
+                            owner="auth.reseller_onboarding",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "reseller_users and reseller-bound local "
+                                "user_credentials"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each public onboarding command enters "
+                            "execute_owner_command on a transaction-free adapter "
+                            "session; every record, grant, audit event, and outbox "
+                            "event commits or rolls back together."
+                        ),
+                        locking=(
+                            "Existing resellers and active role references are "
+                            "selected FOR UPDATE. PostgreSQL advisory transaction "
+                            "locks serialize normalized email and username keys, "
+                            "with database constraints arbitrating remaining races."
+                        ),
+                        idempotency=(
+                            "Adapters carry stable intent keys as hashed evidence. "
+                            "Identity conflicts fail closed, assignment grants "
+                            "converge, and invite expansion deduplicates by event id."
+                        ),
+                        retries=(
+                            "Adapters may retry a rolled-back command with the same "
+                            "intent key. Validation and identity conflicts require "
+                            "changed input; event delivery retries independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "auth.reseller_onboarding.invalid_command",
+                            (
+                                "auth.reseller_onboarding."
+                                "assignment_authorization_required"
+                            ),
+                            "auth.reseller_onboarding.identity_conflict",
+                            "auth.reseller_onboarding.reseller_not_found",
+                            "auth.reseller_onboarding.inactive_reseller",
+                            "auth.reseller_onboarding.role_not_found",
+                            "auth.reseller_onboarding.unsupported_role_target",
+                            ("auth.reseller_onboarding.invalid_command_context"),
+                            ("auth.reseller_onboarding.command_contract_violation"),
+                            "auth.reseller_onboarding.nested_owner_command",
+                            "auth.reseller_onboarding.active_caller_transaction",
+                            ("auth.reseller_onboarding.nested_transaction_completion"),
+                        ),
+                        mapping_owner="app.web.admin.resellers",
+                        fail_closed_on=(
+                            "missing or mismatched authorization evidence",
+                            "inactive reseller or role",
+                            "identity collision",
+                            "unsupported first-class principal role assignment",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "reseller.created",
+                            "reseller_user.provisioned",
+                            "subscriber.created",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 onboarding events contain identifiers, "
+                            "role names, and an email digest but no PII, password, "
+                            "or reset capability."
+                        ),
+                        replay=(
+                            "Events are immutable evidence. Invitation expansion "
+                            "is idempotent by event id and revalidates the exact "
+                            "canonical principal before minting a capability."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.web_admin_resellers and "
+                            "app.services.reseller_portal multi-commit onboarding"
+                        ),
+                        new_owner="auth.reseller_onboarding",
+                        verification=(
+                            "Focused atomicity, delivery, reset, adapter, manifest, "
+                            "and architecture-boundary tests."
+                        ),
+                        cutover_gate=(
+                            "Admin reseller creation and add-user routes call only "
+                            "typed coordinator commands."
+                        ),
+                        fallback_retirement=(
+                            "Compensating deletion, direct onboarding commits, and "
+                            "synchronous invite delivery are removed."
+                        ),
+                    ),
+                    steward="platform security",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_reseller_onboarding.py",
+                        "tests/architecture/test_reseller_onboarding_boundary.py",
+                    ),
+                ),
             ),
         ),
         entrypoints=(
@@ -3956,20 +5836,308 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="referrals.program",
                 module="app.services.referrals",
                 owns=(
-                    "Party-first Refer & Earn capture",
-                    "reviewed Referral to Subscriber account conversion",
-                    "referral qualification and reward decisions",
+                    "Party-first Refer & Earn capture policy",
+                    "canonical Referral program record",
+                    "Referral Subscriber attachment record",
+                    "referral qualification and reward policy",
+                    "atomic referral program transition orchestration",
                 ),
                 depends_on=(
+                    "customer.accounts",
                     "party.registry",
                     "sales.lead_lifecycle",
                     "access.subscription_lifecycle",
                     "financial.credit_notes",
+                    "control.settings_spec",
+                    "events.dispatcher",
+                    "observability.audit_log",
+                    "communications.event_policy",
                 ),
                 notes=(
-                    "Contact observations never establish identity or attach an "
-                    "account. New capture creates no Subscriber and stores no "
-                    "contact PII in Referral metadata or Lead origin."
+                    "Typed commands lock canonical Referral, ReferralCode, and "
+                    "Subscriber rows, call transaction-neutral Party, Lead, and "
+                    "credit-note collaborators, and stage PII-free audit/events "
+                    "before one commit. Contact observations never establish "
+                    "identity or attach an account."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="Party-first Refer & Earn capture policy",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "referral program policy settings",
+                                "canonical referrer account state",
+                                "canonical Party identity and reachability facts",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="canonical Referral program record",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "referral program command evidence",
+                                "referral program policy settings",
+                                "canonical referrer account state",
+                                "canonical Party identity and reachability facts",
+                                "canonical attributed Lead state",
+                            ),
+                            canonical_writer="referrals.program",
+                        ),
+                        ConcernContract(
+                            name="Referral Subscriber attachment record",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical Referral program record",
+                                "canonical referred account state",
+                                "canonical Party identity and reachability facts",
+                                "canonical attributed Lead state",
+                            ),
+                            canonical_writer="referrals.program",
+                        ),
+                        ConcernContract(
+                            name="referral qualification and reward policy",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical Referral program record",
+                                "referral program policy settings",
+                                "canonical subscriber activation state",
+                                "canonical referral reward credit evidence",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="atomic referral program transition orchestration",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "referral program command evidence",
+                                "canonical Referral program record",
+                                "referral program policy settings",
+                                "canonical referrer account state",
+                                "canonical referred account state",
+                                "canonical Party identity and reachability facts",
+                                "canonical attributed Lead state",
+                                "canonical subscriber activation state",
+                                "canonical referral reward credit evidence",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="referral program command evidence",
+                            owner="referrals.program",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed CommandContext carrying actor, scope, reason, "
+                                "command, correlation, causation, and idempotency evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Referral program record",
+                            owner="referrals.program",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active ReferralCode and Referral rows with Party, "
+                                "Lead, Subscriber, lifecycle, reward snapshot, and "
+                                "credit-link evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="referral program policy settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "database-authoritative enablement, reward amount and "
+                                "currency, qualification window, approval mode, and "
+                                "share-base settings in the subscriber domain"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical referrer account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="the exact Subscriber that owns the active referral code",
+                        ),
+                        AuthorityInput(
+                            name="canonical referred account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the exact reviewed Subscriber selected by conversion "
+                                "or subscriber lifecycle evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Party identity and reachability facts",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "quarantined Person Party and unverified contact-point "
+                                "observations; contacts are risk inputs, never identity keys"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical attributed Lead state",
+                            owner="sales.lead_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Party-bound Lead, immutable referral origin, and exact "
+                                "reviewed Subscriber attachment evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical subscriber activation state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "derived active Subscriber status or an exact active "
+                                "Subscription observed from lifecycle events"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical referral reward credit evidence",
+                            owner="financial.credit_notes",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "owner-previewed issued CreditNote, exact legacy-compatible "
+                                "referral reference, and funding-ledger link"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each code, capture, qualification, rejection, or reward "
+                            "command enters execute_owner_command on a transaction-free "
+                            "adapter session. Referral state, collaborators, audit, and "
+                            "events commit or roll back together."
+                        ),
+                        locking=(
+                            "Code issuance locks the Subscriber; capture locks the exact "
+                            "ReferralCode before retry comparison; transitions lock the "
+                            "Referral before Subscriber or financial account state. "
+                            "Database uniqueness arbitrates generated-code collisions."
+                        ),
+                        idempotency=(
+                            "One active code per locked Subscriber, same-code plus exact "
+                            "normalized contact-set capture replay, monotonic lifecycle "
+                            "states, and the legacy referral:<UUID> credit reference "
+                            "return stable outcomes without duplicate evidence or money."
+                        ),
+                        retries=(
+                            "Rolled-back commands may retry with the same intent key. "
+                            "Generated-code or serialization conflicts are retryable; "
+                            "identity, lifecycle, policy, and financial conflicts require "
+                            "review. Event delivery retries independently by event_id."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "referrals.program.invalid_command",
+                            "referrals.program.invalid_configuration",
+                            "referrals.program.program_disabled",
+                            "referrals.program.subscriber_not_found",
+                            "referrals.program.referral_not_found",
+                            "referrals.program.code_not_found",
+                            "referrals.program.contact_required",
+                            "referrals.program.self_referral",
+                            "referrals.program.existing_customer",
+                            "referrals.program.incomplete_context",
+                            "referrals.program.account_conflict",
+                            "referrals.program.account_attachment_required",
+                            "referrals.program.invalid_transition",
+                            "referrals.program.invalid_reward",
+                            "referrals.program.incomplete_reward_evidence",
+                            "referrals.program.financial_conflict",
+                            "referrals.program.collaboration_conflict",
+                            "referrals.program.idempotency_conflict",
+                            "referrals.program.invalid_filter",
+                            "referrals.program.code_generation_exhausted",
+                            "referrals.program.write_conflict",
+                            "referrals.program.invalid_command_context",
+                            "referrals.program.command_contract_violation",
+                            "referrals.program.nested_owner_command",
+                            "referrals.program.active_caller_transaction",
+                            "referrals.program.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "app.api.crm_referrals, app.api.me, "
+                            "app.web.admin.crm_referrals, app.web.customer.referrals, "
+                            "and app.services.events.handlers.referral adapters"
+                        ),
+                        retryable_codes=(
+                            "referrals.program.code_generation_exhausted",
+                            "referrals.program.write_conflict",
+                        ),
+                        fail_closed_on=(
+                            "missing or invalid canonical program settings",
+                            "ambiguous identity or known self/existing-customer contact",
+                            "incomplete Party, Lead, Subscriber, or reward evidence",
+                            "invalid lifecycle transition or issued-credit conflict",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "referral_code.issued",
+                            "referral.captured",
+                            "referral.subscriber_attached",
+                            "referral.qualified",
+                            "referral.expired",
+                            "referral.rejected",
+                            "referral.reward_issued",
+                            "referral.reward_reconciled",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 contains canonical UUIDs, lifecycle/reward "
+                            "outcome, bounded financial evidence, and command tracing. "
+                            "It contains no name, email, phone, address, notes, reason "
+                            "text, referral code, or bearer capability."
+                        ),
+                        replay=(
+                            "Command replay emits no duplicate transition event. "
+                            "The reward-issued event resolves through the canonical "
+                            "notification template/channel policy and communication "
+                            "intents deduplicate each event and channel."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "CRM referral mutation and an uncontracted service that "
+                            "mixed HTTP errors, helper commits, direct push transport, "
+                            "raw runtime environment fallback, and keyword mutations"
+                        ),
+                        new_owner="referrals.program",
+                        verification=(
+                            "Focused code, capture, identity-risk, attachment, "
+                            "qualification, reward, rollback, idempotency, audit, event, "
+                            "adapter, policy, manifest, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Staff, public, customer API/web, and lifecycle-event writes "
+                            "construct typed owner commands on transaction-free sessions."
+                        ),
+                        fallback_retirement=(
+                            "CRM/write-through authority, service HTTP/commit/rollback, "
+                            "direct push delivery, raw share-base environment reads, "
+                            "and public keyword mutation entry points are removed."
+                        ),
+                    ),
+                    steward="customer operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/PARTY_FIRST_REFERRAL_CAPTURE.md",
+                        "docs/REFERRAL_ACCOUNT_CONVERSION.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_referrals_native.py",
+                        "tests/test_admin_referrals_web.py",
+                        "tests/test_customer_portal_referrals.py",
+                        "tests/architecture/test_referrals_program_boundary.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -3978,6 +6146,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "stable Referral Party Lead conversion context validation",
                     "atomic referral account creation and adjudication orchestration",
+                    "public referral signup capability purpose claims and lifetime",
                 ),
                 depends_on=(
                     "customer.accounts",
@@ -3985,12 +6154,246 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "sales.lead_lifecycle",
                     "referrals.program",
                     "auth.token_signing",
+                    "control.settings_spec",
+                    "events.dispatcher",
+                    "observability.audit_log",
                 ),
                 notes=(
-                    "The coordinator carries exact UUID context under a row lock "
-                    "and mints the expiring public signup capability through the "
-                    "auth signing owner. It never selects identity by name, email, "
-                    "phone, or other contact observations."
+                    "Typed public and staff commands enter one verified coordinator "
+                    "transaction. The owner locks and revalidates exact UUID context, "
+                    "calls transaction-neutral record-owner collaborators, and stages "
+                    "PII-free audit and events before one commit. Public capability "
+                    "lifetime resolves only through the settings owner. Identity is "
+                    "never selected by contact observations."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name=(
+                                "stable Referral Party Lead conversion context "
+                                "validation"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical Referral conversion record",
+                                "canonical referred Party identity",
+                                "canonical attributed Lead state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "atomic referral account creation and adjudication "
+                                "orchestration"
+                            ),
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "referral account conversion command evidence",
+                                "canonical Referral conversion record",
+                                "canonical referred Party identity",
+                                "canonical attributed Lead state",
+                                "canonical Subscriber account state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "public referral signup capability purpose claims "
+                                "and lifetime"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical Referral conversion record",
+                                "referral signup capability policy settings",
+                                "verified public signup capability envelope",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="referral account conversion command evidence",
+                            owner="referrals.account_conversion",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed CommandContext carrying actor, scope, reason, "
+                                "command, correlation, causation, and idempotency "
+                                "evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Referral conversion record",
+                            owner="referrals.program",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active Referral Party, Lead, referrer, attached "
+                                "Subscriber, status, and complete binding evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical referred Party identity",
+                            owner="party.registry",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the exact active or quarantined Party row and its "
+                                "canonical Subscriber binding"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical attributed Lead state",
+                            owner="sales.lead_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "the exact Party-bound Lead and its canonical "
+                                "Subscriber attachment evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical Subscriber account state",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "transaction-neutral account initialization and the "
+                                "exact existing or newly prepared Subscriber"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="referral signup capability policy settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "database-authoritative bounded referral signup "
+                                "context expiry in the subscriber settings domain"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="verified public signup capability envelope",
+                            owner="auth.token_signing",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "configured signing key and algorithm verification "
+                                "for exact purpose, version, UUID, issued-at, and "
+                                "expiry claims"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each create or attach command enters "
+                            "execute_owner_command on a transaction-free adapter "
+                            "session. Subscriber preparation, Party binding, Lead "
+                            "and Referral attachment, audit, subscriber.created, and "
+                            "referral_account.converted commit or roll back together."
+                        ),
+                        locking=(
+                            "The exact Referral, Party, Lead, and any existing "
+                            "Subscriber are selected FOR UPDATE in canonical order. "
+                            "Referral serialization and database identity constraints "
+                            "arbitrate concurrent account creation and attachment."
+                        ),
+                        idempotency=(
+                            "The Referral row is the natural conversion key. An exact "
+                            "replay returns its already attached Subscriber without a "
+                            "second account, audit row, or conversion event; a "
+                            "different account or Party fails closed."
+                        ),
+                        retries=(
+                            "Adapters may retry a rolled-back command with the same "
+                            "intent key after transient database failure. Canonical "
+                            "context conflicts require review; outbox delivery retries "
+                            "independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "referrals.account_conversion.invalid_command",
+                            "referrals.account_conversion.invalid_configuration",
+                            "referrals.account_conversion.invalid_capability",
+                            "referrals.account_conversion.context_not_found",
+                            "referrals.account_conversion.incomplete_context",
+                            "referrals.account_conversion.stale_context",
+                            "referrals.account_conversion.context_not_convertible",
+                            "referrals.account_conversion.subscriber_not_found",
+                            "referrals.account_conversion.account_conflict",
+                            "referrals.account_conversion.self_referral",
+                            ("referrals.account_conversion.invalid_command_context"),
+                            ("referrals.account_conversion.command_contract_violation"),
+                            "referrals.account_conversion.nested_owner_command",
+                            ("referrals.account_conversion.active_caller_transaction"),
+                            (
+                                "referrals.account_conversion."
+                                "nested_transaction_completion"
+                            ),
+                        ),
+                        mapping_owner=(
+                            "app.api.crm_referrals and "
+                            "app.web.admin.crm_referrals adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing or altered Referral, Party, or Lead context",
+                            "incomplete binding evidence",
+                            "different Party, Subscriber, or self-referral",
+                            "invalid or expired public capability",
+                            "missing or invalid canonical lifetime policy",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "subscriber.created",
+                            "referral_account.converted",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 contains canonical UUIDs, conversion outcome, "
+                            "and command/correlation evidence only. It never contains "
+                            "name, email, phone, address, reason text, or bearer "
+                            "capability."
+                        ),
+                        replay=(
+                            "Events are immutable committed evidence. Consumers "
+                            "deduplicate by event_id; command replay converges on the "
+                            "Referral's canonical attached Subscriber."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "uncontracted keyword service functions using savepoints, "
+                            "helper commits, status-coded errors, and adapter-owned "
+                            "transaction handoff"
+                        ),
+                        new_owner="referrals.account_conversion",
+                        verification=(
+                            "Focused create, attach, public capability, stale-context, "
+                            "self-referral, idempotency, rollback, event, audit, "
+                            "adapter, policy, manifest, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Public API, staff API, and admin web conversion surfaces "
+                            "construct only typed owner commands on transaction-free "
+                            "sessions."
+                        ),
+                        fallback_retirement=(
+                            "Service commits, savepoints, FastAPI errors, keyword "
+                            "mutation entry points, hardcoded capability lifetime, and "
+                            "post-conversion adapter transaction completion are removed."
+                        ),
+                    ),
+                    steward="customer operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/REFERRAL_ACCOUNT_CONVERSION.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_referral_account_conversion.py",
+                        "tests/test_referral_self_service_signup.py",
+                        (
+                            "tests/architecture/"
+                            "test_referral_account_conversion_boundary.py"
+                        ),
+                    ),
                 ),
             ),
         ),
@@ -4015,6 +6418,85 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
     ),
 )
+
+
+def all_services() -> tuple[SOTService, ...]:
+    """Return registered services in domain and dependency declaration order."""
+
+    return tuple(
+        service for domain in DOMAIN_SOT_RELATIONSHIPS for service in domain.services
+    )
+
+
+def registry_validation_errors() -> tuple[str, ...]:
+    """Return structural errors that make ownership resolution ambiguous."""
+
+    errors: list[str] = []
+    services = all_services()
+
+    duplicate_domains = sorted(
+        name
+        for name, count in Counter(
+            domain.domain.strip().casefold() for domain in DOMAIN_SOT_RELATIONSHIPS
+        ).items()
+        if count > 1
+    )
+    errors.extend(f"duplicate domain name: {name}" for name in duplicate_domains)
+
+    duplicate_services = sorted(
+        name
+        for name, count in Counter(
+            service.name.strip().casefold() for service in services
+        ).items()
+        if count > 1
+    )
+    errors.extend(f"duplicate service name: {name}" for name in duplicate_services)
+
+    concern_owners: dict[str, list[str]] = {}
+    for service in services:
+        if not service.name.strip():
+            errors.append("service has an empty name")
+        if not service.module.strip():
+            errors.append(f"service {service.name!r} has an empty module")
+        if not service.owns:
+            errors.append(f"service {service.name!r} has no owned concerns")
+        for concern in service.owns:
+            normalized = concern.strip().casefold()
+            if not normalized:
+                errors.append(f"service {service.name!r} has an empty concern")
+                continue
+            concern_owners.setdefault(normalized, []).append(service.name)
+
+    errors.extend(
+        f"duplicate exact concern {concern!r}: {', '.join(sorted(owners))}"
+        for concern, owners in sorted(concern_owners.items())
+        if len(owners) > 1
+    )
+
+    service_names = {service.name for service in services}
+    for service in services:
+        duplicate_dependencies = sorted(
+            name for name, count in Counter(service.depends_on).items() if count > 1
+        )
+        errors.extend(
+            f"service {service.name!r} repeats dependency {dependency!r}"
+            for dependency in duplicate_dependencies
+        )
+        errors.extend(
+            f"service {service.name!r} has unknown dependency {dependency!r}"
+            for dependency in service.depends_on
+            if dependency not in service_names
+        )
+        errors.extend(contract_validation_errors(service, service_names=service_names))
+
+    dependency_graph = {service.name: set(service.depends_on) for service in services}
+    try:
+        tuple(TopologicalSorter(dependency_graph).static_order())
+    except CycleError as exc:
+        cycle = " -> ".join(str(item) for item in exc.args[1])
+        errors.append(f"service dependency cycle: {cycle}")
+
+    return tuple(sorted(errors))
 
 
 def domain_order() -> list[str]:
@@ -4044,12 +6526,23 @@ def dependencies_for(service_name: str) -> tuple[str, ...]:
     raise KeyError(service_name)
 
 
+def service_relationship(service_name: str) -> SOTService:
+    """Return one exactly named service from the canonical registry."""
+
+    for service in all_services():
+        if service.name == service_name:
+            return service
+    raise KeyError(service_name)
+
+
 def owning_service_for(concern: str) -> SOTService | None:
+    """Return the owner of one exact, normalized concern string."""
+
     needle = concern.strip().lower()
     if not needle:
         return None
     for domain in DOMAIN_SOT_RELATIONSHIPS:
         for service in domain.services:
-            if any(needle in owned.lower() for owned in service.owns):
+            if any(needle == owned.strip().lower() for owned in service.owns):
                 return service
     return None

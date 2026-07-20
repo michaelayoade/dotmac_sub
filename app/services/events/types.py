@@ -91,9 +91,10 @@ class EventType(enum.Enum):
     quote_accepted = "quote.accepted"
     sales_order_paid = "sales_order.paid"
 
-    # Network events (4)
+    # Network events (5)
     device_offline = "device.offline"
     device_online = "device.online"
+    device_projection_reconciled = "device_projection.reconciled"
     session_started = "session.started"
     session_ended = "session.ended"
 
@@ -153,10 +154,51 @@ class EventType(enum.Enum):
     customer_ticket_created = "customer.ticket_created"
     customer_password_changed = "customer.password_changed"  # noqa: S105
 
-    # Reseller events (3)
+    # Reseller events (5)
+    reseller_created = "reseller.created"
+    reseller_user_provisioned = "reseller_user.provisioned"
     reseller_login = "reseller.login"
     reseller_logout = "reseller.logout"
     reseller_impersonated = "reseller.impersonated"
+
+    # Staff and subscriber identity/authorization lifecycle (6)
+    staff_account_provisioned = "staff_account.provisioned"
+    staff_account_roles_changed = "staff_account.roles_changed"
+    staff_account_activated = "staff_account.activated"
+    staff_account_deactivated = "staff_account.deactivated"
+    system_user_assignments_changed = "system_user.assignments_changed"
+    subscriber_assignments_changed = "subscriber.assignments_changed"
+
+    # Credential recovery lifecycle (2)
+    password_recovery_requested = "password_recovery.requested"
+    password_recovery_completed = "password_recovery.completed"
+
+    # Referral-created customer credential enrollment lifecycle (2)
+    customer_credential_enrollment_requested = (
+        "customer_credential_enrollment.requested"
+    )
+    customer_credential_enrollment_completed = (
+        "customer_credential_enrollment.completed"
+    )
+
+    # Referral program lifecycle (7) and account conversion lifecycle (1)
+    referral_code_issued = "referral_code.issued"
+    referral_captured = "referral.captured"
+    referral_subscriber_attached = "referral.subscriber_attached"
+    referral_qualified = "referral.qualified"
+    referral_expired = "referral.expired"
+    referral_rejected = "referral.rejected"
+    referral_reward_issued = "referral.reward_issued"
+    referral_reward_reconciled = "referral.reward_reconciled"
+    referral_account_converted = "referral_account.converted"
+
+    # Account-adjustment financial evidence lifecycle (2)
+    account_adjustment_confirmed = "account_adjustment.confirmed"
+    account_adjustment_reversed = "account_adjustment.reversed"
+
+    # RBAC catalog events (2)
+    rbac_role_catalog_changed = "rbac.role_catalog_changed"
+    rbac_permission_catalog_changed = "rbac.permission_catalog_changed"
 
     # NAS events (7)
     nas_device_created = "nas_device.created"

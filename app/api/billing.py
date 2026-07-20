@@ -1,6 +1,8 @@
 import logging
 from datetime import datetime
 from decimal import Decimal
+from typing import Never
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
@@ -145,7 +147,11 @@ from app.services import billing as billing_service
 from app.services import billing_automation as billing_automation_service
 from app.services import customer_portal_flow_payments as customer_payments
 from app.services.auth_dependencies import require_permission, require_user_auth
+from app.services.billing import adjustments as account_adjustment_service
 from app.services.customer_context import require_customer_account_id
+from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 from app.services.sync_feeds import SYNC_FEED_MAX_PAGE_SIZE
 
 router = APIRouter()
@@ -2258,6 +2264,53 @@ def _financial_actor(principal: dict) -> tuple[AuditActorType, str | None]:
     return actor_type, str(principal.get("principal_id") or "") or None
 
 
+def _account_adjustment_error(exc: DomainError) -> Never:
+    suffix = exc.code.removeprefix("financial.account_adjustments.")
+    status_code = {
+        "invalid_command": status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "invalid_configuration": status.HTTP_503_SERVICE_UNAVAILABLE,
+        "account_not_found": status.HTTP_404_NOT_FOUND,
+        "adjustment_not_found": status.HTTP_404_NOT_FOUND,
+        "insufficient_funding": status.HTTP_402_PAYMENT_REQUIRED,
+        "idempotency_conflict": status.HTTP_409_CONFLICT,
+        "stale_preview": status.HTTP_409_CONFLICT,
+        "already_reversed": status.HTTP_409_CONFLICT,
+        "incomplete_evidence": status.HTTP_409_CONFLICT,
+        "write_conflict": status.HTTP_409_CONFLICT,
+        "active_caller_transaction": status.HTTP_409_CONFLICT,
+        "nested_owner_command": status.HTTP_409_CONFLICT,
+        "nested_transaction_completion": status.HTTP_409_CONFLICT,
+        "command_contract_violation": status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "invalid_command_context": status.HTTP_500_INTERNAL_SERVER_ERROR,
+    }.get(suffix, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    detail = (
+        exc.message
+        if exc.code.startswith("financial.account_adjustments.")
+        else "Account-adjustment command failed."
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _account_adjustment_context(
+    principal: dict,
+    *,
+    reason: str,
+    idempotency_key: str,
+) -> CommandContext:
+    actor_type, actor_id = _financial_actor(principal)
+    if actor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Financial principal identity is incomplete.",
+        )
+    return CommandContext.system(
+        actor=f"{actor_type.value}:{actor_id}",
+        scope=account_adjustment_service.ACCOUNT_ADJUSTMENT_SCOPE,
+        reason=reason,
+        idempotency_key=idempotency_key,
+    )
+
+
 @router.post(
     "/account-adjustments/preview",
     response_model=AccountAdjustmentPreviewRead,
@@ -2269,7 +2322,13 @@ def preview_account_adjustment(
     principal: dict = Depends(require_permission("billing:ledger:write")),
 ):
     del principal
-    return billing_service.account_adjustments.preview(db, payload).as_dict()
+    try:
+        return account_adjustment_service.preview_account_adjustment(
+            db,
+            account_adjustment_service.PreviewAccountAdjustmentQuery(request=payload),
+        ).as_dict()
+    except DomainError as exc:
+        _account_adjustment_error(exc)
 
 
 @router.post(
@@ -2283,13 +2342,22 @@ def confirm_account_adjustment(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_permission("billing:ledger:write")),
 ):
-    actor_type, actor_id = _financial_actor(principal)
-    return billing_service.account_adjustments.confirm(
-        db,
-        payload,
-        actor_type=actor_type,
-        actor_id=actor_id,
-    ).adjustment
+    context = _account_adjustment_context(
+        principal,
+        reason="Operator confirmed an account debit preview",
+        idempotency_key=payload.idempotency_key,
+    )
+    try:
+        db_session_adapter.release_read_transaction(db)
+        return account_adjustment_service.confirm_account_adjustment(
+            db,
+            account_adjustment_service.ConfirmAccountAdjustmentCommand(
+                context=context,
+                confirmation=payload,
+            ),
+        ).adjustment
+    except DomainError as exc:
+        _account_adjustment_error(exc)
 
 
 @router.post(
@@ -2304,9 +2372,21 @@ def preview_account_adjustment_reversal(
     principal: dict = Depends(require_permission("billing:ledger:write")),
 ):
     del principal
-    return billing_service.account_adjustments.preview_reversal(
-        db, adjustment_id, payload
-    ).as_dict()
+    try:
+        return account_adjustment_service.preview_account_adjustment_reversal(
+            db,
+            account_adjustment_service.PreviewAccountAdjustmentReversalQuery(
+                adjustment_id=UUID(adjustment_id),
+                request=payload,
+            ),
+        ).as_dict()
+    except (ValueError, DomainError) as exc:
+        if isinstance(exc, DomainError):
+            _account_adjustment_error(exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid account-adjustment ID.",
+        ) from exc
 
 
 @router.post(
@@ -2320,14 +2400,29 @@ def confirm_account_adjustment_reversal(
     db: Session = Depends(get_db),
     principal: dict = Depends(require_permission("billing:ledger:write")),
 ):
-    actor_type, actor_id = _financial_actor(principal)
-    return billing_service.account_adjustments.confirm_reversal(
-        db,
-        adjustment_id,
-        payload,
-        actor_type=actor_type,
-        actor_id=actor_id,
-    ).adjustment
+    context = _account_adjustment_context(
+        principal,
+        reason="Operator confirmed an account-debit reversal preview",
+        idempotency_key=payload.idempotency_key,
+    )
+    try:
+        resolved_adjustment_id = UUID(adjustment_id)
+        db_session_adapter.release_read_transaction(db)
+        return account_adjustment_service.reverse_account_adjustment(
+            db,
+            account_adjustment_service.ReverseAccountAdjustmentCommand(
+                context=context,
+                adjustment_id=resolved_adjustment_id,
+                confirmation=payload,
+            ),
+        ).adjustment
+    except (ValueError, DomainError) as exc:
+        if isinstance(exc, DomainError):
+            _account_adjustment_error(exc)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid account-adjustment ID.",
+        ) from exc
 
 
 @router.post(

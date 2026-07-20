@@ -44,7 +44,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "events.dispatcher",
     )
     assert sot_relationships.dependencies_for("party.registry") == (
-        "auth.rbac",
+        "auth.subscriber_assignments",
         "auth.permission_gate",
     )
     assert sot_relationships.dependencies_for("party.identity_audit") == (
@@ -71,7 +71,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("party.principal_context_audit") == (
         "party.registry",
-        "auth.rbac",
+        "auth.subscriber_assignments",
         "auth.permission_gate",
     )
     assert sot_relationships.dependencies_for("party.contact_inbox_audit") == (
@@ -104,10 +104,15 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "support.ticket_lifecycle",
     )
     assert sot_relationships.dependencies_for("referrals.program") == (
+        "customer.accounts",
         "party.registry",
         "sales.lead_lifecycle",
         "access.subscription_lifecycle",
         "financial.credit_notes",
+        "control.settings_spec",
+        "events.dispatcher",
+        "observability.audit_log",
+        "communications.event_policy",
     )
     assert sot_relationships.dependencies_for("referrals.account_conversion") == (
         "customer.accounts",
@@ -115,6 +120,9 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "sales.lead_lifecycle",
         "referrals.program",
         "auth.token_signing",
+        "control.settings_spec",
+        "events.dispatcher",
+        "observability.audit_log",
     )
     lead_origin = sot_relationships.owning_service_for(
         "immutable structured Lead origin capture"
@@ -131,11 +139,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert referral_audit is not None
     assert referral_audit.name == "customer.lifecycle_audit"
-    referral_conversion = sot_relationships.owning_service_for(
-        "reviewed Referral to Subscriber account conversion"
+    referral_attachment = sot_relationships.owning_service_for(
+        "Referral Subscriber attachment record"
     )
-    assert referral_conversion is not None
-    assert referral_conversion.name == "referrals.program"
+    assert referral_attachment is not None
+    assert referral_attachment.name == "referrals.program"
     account_orchestration = sot_relationships.owning_service_for(
         "atomic referral account creation and adjudication orchestration"
     )
@@ -160,9 +168,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "auth.customer_credential_enrollment"
     ) == (
         "auth.token_signing",
+        "communications.intents",
         "customer.accounts",
         "referrals.account_conversion",
         "communications.ephemeral_actions",
+        "control.settings_spec",
+        "events.dispatcher",
         "observability.audit_log",
     )
     cleanup_worklist = sot_relationships.owning_service_for(
@@ -495,6 +506,10 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     assert sot_relationships.dependencies_for("financial.account_adjustments") == (
         "financial.ledger",
         "customer.financial_position",
+        "customer.accounts",
+        "control.settings_spec",
+        "events.dispatcher",
+        "observability.audit_log",
     )
     assert sot_relationships.dependencies_for(
         "financial.import_payment_batch_reversals"

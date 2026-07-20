@@ -39,7 +39,6 @@ env 3 app/services/push.py
 env 1 app/services/radius_population.py
 env 5 app/services/radius_probe.py
 env 1 app/services/radius_reconciliation.py
-env 1 app/services/referrals.py
 env 1 app/services/scheduler_config.py
 env 2 app/services/session_store.py
 env 1 app/services/sms.py

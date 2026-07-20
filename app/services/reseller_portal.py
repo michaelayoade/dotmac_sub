@@ -247,50 +247,6 @@ def reseller_id_for_subscriber(db: Session, subscriber_id: str) -> str | None:
     return str(reseller_user.reseller_id)
 
 
-def create_reseller_user_principal(
-    db: Session,
-    *,
-    reseller_id: str,
-    username: str,
-    password: str,
-    email: str | None = None,
-    full_name: str | None = None,
-    must_change_password: bool = False,
-) -> ResellerUser:
-    """Create a first-class reseller portal login (Layer 3).
-
-    A ``ResellerUser`` identity plus its local ``UserCredential`` — no backing
-    Subscriber. Used by reseller onboarding (post-cutover) and by the backfill
-    that repoints existing reseller credentials. The login only authenticates
-    when ``RESELLER_USER_PRINCIPAL_ENABLED`` is on.
-    """
-    from datetime import UTC, datetime
-
-    from app.models.auth import AuthProvider, UserCredential
-
-    reseller_user = ResellerUser(
-        reseller_id=coerce_uuid(reseller_id),
-        email=email,
-        full_name=full_name,
-        is_active=True,
-    )
-    db.add(reseller_user)
-    db.flush()
-    credential = UserCredential(
-        reseller_user_id=reseller_user.id,
-        provider=AuthProvider.local,
-        username=username,
-        password_hash=auth_flow_service.hash_password(password),
-        must_change_password=must_change_password,
-        password_updated_at=datetime.now(UTC),
-        is_active=True,
-    )
-    db.add(credential)
-    db.commit()
-    db.refresh(reseller_user)
-    return reseller_user
-
-
 def _create_session(
     username: str,
     reseller_id: str,
@@ -471,14 +427,24 @@ def _reseller_session_revoked(session: dict) -> bool:
 
 
 def revoke_reseller_sessions_for_subscriber(
-    subscriber_id: object, db: Session | None = None
+    subscriber_id: object,
+    db: Session | None = None,
+    *,
+    require_durable: bool = False,
 ) -> None:
     """Invalidate every existing reseller portal session for a subscriber."""
-    revoke_reseller_sessions_for_principal(subscriber_id, db=db)
+    revoke_reseller_sessions_for_principal(
+        subscriber_id,
+        db=db,
+        require_durable=require_durable,
+    )
 
 
 def revoke_reseller_sessions_for_principal(
-    principal_id: object, db: Session | None = None
+    principal_id: object,
+    db: Session | None = None,
+    *,
+    require_durable: bool = False,
 ) -> None:
     """Invalidate every existing reseller portal session for a principal."""
     ttl = max(
@@ -487,7 +453,11 @@ def revoke_reseller_sessions_for_principal(
         _absolute_ttl_seconds(db),
     )
     set_session_revocation_epoch(
-        _RESELLER_SESSION_PREFIX, str(principal_id), ttl, _RESELLER_SESSION_EPOCHS
+        _RESELLER_SESSION_PREFIX,
+        str(principal_id),
+        ttl,
+        _RESELLER_SESSION_EPOCHS,
+        require_durable=require_durable,
     )
 
 

@@ -77,7 +77,7 @@ be restated in durable domain language here or in the owning design document.
 
 Architecture liveness is checked in both directions. Every declared owner must
 have a real application/operator caller, and every new service module with a
-persistence-like mutation must name a declared owner. The 279 existing
+persistence-like mutation must name a declared owner. The 269 existing
 undeclared writer-like modules are an explicit shrink-only migration baseline,
 not approved parallel writers; resolving an owner or removing its write requires
 deleting the baseline entry. Adding an entry requires an explicit ownership
@@ -88,6 +88,52 @@ audit-event writer, `control.settings_bootstrap` as the startup
 default-materialization owner, and `secrets.settings_migration` as the live
 OpenBao settings migration boundary. Bootstrap writes defaults through
 `control.domain_settings`; it does not create a second runtime settings writer.
+
+<!-- BEGIN GENERATED SOT MANIFEST -->
+## Contracted Ownership Manifest
+
+This section is generated from the typed contracts in
+`app/services/sot_relationships.py`. Edit the registry and regenerate;
+do not hand-edit these rows.
+
+| Service | Concern | Role | Authoritative inputs | Transaction | Migration | Steward | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `financial.account_adjustments` | prepaid account-debit eligibility and preview | `policy` | canonical Subscriber account state ← `customer.accounts`<br>canonical append-only ledger state ← `financial.ledger`<br>resolved customer financial position ← `customer.financial_position`<br>billing default-currency setting ← `control.settings_spec` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/audits/BILLING_ALIGNMENT_RUN_2026-07-12.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_account_adjustment_evidence.py`<br>`tests/architecture/test_account_adjustment_boundary.py`<br>`tests/architecture/test_financial_action_boundaries.py`<br>`tests/architecture/test_financial_ownership.py` |
+| `financial.account_adjustments` | locked account-debit confirmation | `command_writer` | account-adjustment command evidence ← `financial.account_adjustments`<br>canonical Subscriber account state ← `customer.accounts`<br>canonical append-only ledger state ← `financial.ledger`<br>resolved customer financial position ← `customer.financial_position`<br>billing default-currency setting ← `control.settings_spec` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/audits/BILLING_ALIGNMENT_RUN_2026-07-12.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_account_adjustment_evidence.py`<br>`tests/architecture/test_account_adjustment_boundary.py`<br>`tests/architecture/test_financial_action_boundaries.py`<br>`tests/architecture/test_financial_ownership.py` |
+| `financial.account_adjustments` | account-adjustment idempotency and audit evidence | `authoritative_record` | account-adjustment command evidence ← `financial.account_adjustments`<br>canonical Subscriber account state ← `customer.accounts`<br>canonical append-only ledger state ← `financial.ledger` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/audits/BILLING_ALIGNMENT_RUN_2026-07-12.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_account_adjustment_evidence.py`<br>`tests/architecture/test_account_adjustment_boundary.py`<br>`tests/architecture/test_financial_action_boundaries.py`<br>`tests/architecture/test_financial_ownership.py` |
+| `financial.account_adjustments` | exact account-adjustment ledger links | `authoritative_record` | account-adjustment command evidence ← `financial.account_adjustments`<br>canonical append-only ledger state ← `financial.ledger` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/audits/BILLING_ALIGNMENT_RUN_2026-07-12.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_account_adjustment_evidence.py`<br>`tests/architecture/test_account_adjustment_boundary.py`<br>`tests/architecture/test_financial_action_boundaries.py`<br>`tests/architecture/test_financial_ownership.py` |
+| `financial.account_adjustments` | previewed account-adjustment reversal evidence | `command_writer` | account-adjustment command evidence ← `financial.account_adjustments`<br>canonical Subscriber account state ← `customer.accounts`<br>canonical append-only ledger state ← `financial.ledger`<br>resolved customer financial position ← `customer.financial_position` | `owner_managed` | `complete` | finance operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/CODING_STANDARD.md`<br>`docs/audits/BILLING_ALIGNMENT_RUN_2026-07-12.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_account_adjustment_evidence.py`<br>`tests/architecture/test_account_adjustment_boundary.py`<br>`tests/architecture/test_financial_action_boundaries.py`<br>`tests/architecture/test_financial_ownership.py` |
+| `network.device_projection` | device_projections materialised table | `projection_writer` | canonical device identity ← `network.identity`<br>monitoring inventory observations ← `network.monitoring_inventory`<br>resolved operational device state ← `network.device_state` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_owner_commands.py`<br>`tests/test_device_projection_reconcile.py`<br>`tests/test_device_projection_task.py`<br>`tests/architecture/test_owner_command_boundary.py` |
+| `network.device_projection` | unified cross-type device row (OLT/core/ONT/CPE) | `projection_writer` | canonical device identity ← `network.identity`<br>monitoring inventory observations ← `network.monitoring_inventory` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_owner_commands.py`<br>`tests/test_device_projection_reconcile.py`<br>`tests/test_device_projection_task.py`<br>`tests/architecture/test_owner_command_boundary.py` |
+| `network.device_projection` | projected operational status and freshness | `projection_writer` | resolved operational device state ← `network.device_state`<br>monitoring inventory observations ← `network.monitoring_inventory` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_owner_commands.py`<br>`tests/test_device_projection_reconcile.py`<br>`tests/test_device_projection_task.py`<br>`tests/architecture/test_owner_command_boundary.py` |
+| `network.device_projection` | device projection orphan pruning | `reconciler` | canonical device identity ← `network.identity` | `owner_managed` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_owner_commands.py`<br>`tests/test_device_projection_reconcile.py`<br>`tests/test_device_projection_task.py`<br>`tests/architecture/test_owner_command_boundary.py` |
+| `sessions.radius_resolution` | customer online-now resolution | `resolver` | active RADIUS session projection ← `sessions.radius_reconciliation` | `read_only` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md`<br>`tests/test_network_sot_services.py`<br>`tests/test_sot_relationships.py` |
+| `sessions.radius_resolution` | primary NAS session resolution | `resolver` | active RADIUS session projection ← `sessions.radius_reconciliation`<br>network identity registry ← `network.identity` | `read_only` | `native` | network operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/DASHBOARD_OVERVIEW_PAGE_CONTRACT.md`<br>`tests/test_network_sot_services.py`<br>`tests/test_sot_relationships.py` |
+| `auth.subscriber_assignments` | subscriber role and direct-permission assignments | `command_writer` | authorized subscriber assignment principal ← `auth.permission_gate`<br>active role and permission catalog ← `auth.rbac_catalog`<br>canonical subscriber assignment state ← `auth.subscriber_assignments` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_subscriber_assignments.py`<br>`tests/architecture/test_subscriber_assignment_boundary.py` |
+| `auth.rbac_catalog` | role catalog and role-permission policy | `command_writer` | authorized RBAC catalog principal ← `auth.permission_gate`<br>canonical role and role-permission catalog ← `auth.rbac_catalog`<br>system-user role grant references ← `auth.system_user_assignments`<br>subscriber role grant references ← `auth.subscriber_assignments` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_rbac_catalog_owner.py`<br>`tests/architecture/test_rbac_catalog_boundary.py` |
+| `auth.rbac_catalog` | permission catalog | `command_writer` | authorized RBAC catalog principal ← `auth.permission_gate`<br>canonical permission catalog ← `auth.rbac_catalog`<br>system-user permission grant references ← `auth.system_user_assignments`<br>subscriber permission grant references ← `auth.subscriber_assignments` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_rbac_catalog_owner.py`<br>`tests/architecture/test_rbac_catalog_boundary.py` |
+| `auth.system_user_assignments` | system-user role and direct-permission assignments | `command_writer` | authorized system-user assignment principal ← `auth.permission_gate`<br>active role and permission catalog ← `auth.rbac_catalog`<br>canonical system-user assignment state ← `auth.system_user_assignments` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_system_user_assignments.py`<br>`tests/architecture/test_system_user_assignment_boundary.py` |
+| `auth.system_user_assignments` | source-scoped managed system-user role convergence | `command_writer` | active role and permission catalog ← `auth.rbac_catalog`<br>canonical system-user assignment state ← `auth.system_user_assignments` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_system_user_assignments.py`<br>`tests/architecture/test_system_user_assignment_boundary.py` |
+| `auth.credential_recovery` | password recovery request and delivery intent | `command_writer` | credential recovery command evidence ← `auth.credential_recovery`<br>canonical recoverable principal state ← `auth.credential_recovery`<br>credential recovery policy settings ← `control.settings_spec`<br>durable recovery delivery boundary ← `communications.intents` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_credential_recovery.py`<br>`tests/architecture/test_credential_recovery_boundary.py` |
+| `auth.credential_recovery` | password reset credential transition | `command_writer` | credential recovery command evidence ← `auth.credential_recovery`<br>canonical recoverable principal state ← `auth.credential_recovery`<br>credential recovery policy settings ← `control.settings_spec`<br>verified recovery capability envelope ← `auth.token_signing` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_credential_recovery.py`<br>`tests/architecture/test_credential_recovery_boundary.py` |
+| `auth.credential_recovery` | credential recovery session projection invalidation | `reconciler` | canonical recoverable principal state ← `auth.credential_recovery` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_credential_recovery.py`<br>`tests/architecture/test_credential_recovery_boundary.py` |
+| `auth.customer_credential_enrollment` | credential enrollment delivery request | `command_writer` | credential enrollment command evidence ← `auth.customer_credential_enrollment`<br>canonical referral account context ← `referrals.account_conversion`<br>canonical customer credential state ← `auth.customer_credential_enrollment`<br>credential enrollment policy settings ← `control.settings_spec`<br>durable enrollment delivery intent ← `communications.intents` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/REFERRAL_CREDENTIAL_ENROLLMENT.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referral_credential_enrollment.py`<br>`tests/architecture/test_customer_credential_enrollment_boundary.py` |
+| `auth.customer_credential_enrollment` | referral-created customer local credential enrollment | `command_writer` | credential enrollment command evidence ← `auth.customer_credential_enrollment`<br>canonical referral account context ← `referrals.account_conversion`<br>canonical customer credential state ← `auth.customer_credential_enrollment`<br>credential enrollment policy settings ← `control.settings_spec`<br>verified enrollment capability envelope ← `auth.token_signing` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/REFERRAL_CREDENTIAL_ENROLLMENT.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referral_credential_enrollment.py`<br>`tests/architecture/test_customer_credential_enrollment_boundary.py` |
+| `auth.customer_credential_enrollment` | credential enrollment capability purpose claims and lifetime | `policy` | canonical referral account context ← `referrals.account_conversion`<br>canonical customer credential state ← `auth.customer_credential_enrollment`<br>credential enrollment policy settings ← `control.settings_spec`<br>verified enrollment capability envelope ← `auth.token_signing` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/REFERRAL_CREDENTIAL_ENROLLMENT.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referral_credential_enrollment.py`<br>`tests/architecture/test_customer_credential_enrollment_boundary.py` |
+| `auth.customer_credential_enrollment` | single-use enrollment and account email verification consequence | `command_writer` | credential enrollment command evidence ← `auth.customer_credential_enrollment`<br>canonical customer credential state ← `auth.customer_credential_enrollment`<br>verified enrollment capability envelope ← `auth.token_signing` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/REFERRAL_CREDENTIAL_ENROLLMENT.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referral_credential_enrollment.py`<br>`tests/architecture/test_customer_credential_enrollment_boundary.py` |
+| `auth.customer_credential_enrollment` | credential enrollment authentication cache projection | `reconciler` | canonical customer credential state ← `auth.customer_credential_enrollment` | `owner_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/REFERRAL_CREDENTIAL_ENROLLMENT.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referral_credential_enrollment.py`<br>`tests/architecture/test_customer_credential_enrollment_boundary.py` |
+| `auth.staff_provisioning` | staff account provisioning | `application_coordinator` | ERP HR staff lifecycle request ← `external:dotmac_erp`<br>authorized RBAC assignment principal ← `auth.permission_gate`<br>active role catalog ← `auth.rbac_catalog`<br>managed role grant state ← `auth.system_user_assignments`<br>canonical staff identity and credential state ← `auth.staff_provisioning` | `coordinator_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_api_staff_sync.py`<br>`tests/test_staff_provisioning_owner.py`<br>`tests/architecture/test_staff_provisioning_boundary.py` |
+| `auth.staff_provisioning` | staff identity bootstrap | `command_writer` | ERP HR staff lifecycle request ← `external:dotmac_erp`<br>canonical staff identity and credential state ← `auth.staff_provisioning` | `coordinator_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_api_staff_sync.py`<br>`tests/test_staff_provisioning_owner.py`<br>`tests/architecture/test_staff_provisioning_boundary.py` |
+| `auth.reseller_onboarding` | reseller portal principal onboarding | `application_coordinator` | authorized reseller onboarding principal ← `auth.permission_gate`<br>canonical reseller and subscriber account state ← `customer.accounts`<br>canonical subscriber assignment state ← `auth.subscriber_assignments`<br>reseller principal cutover gate ← `control.feature_registry`<br>canonical reseller onboarding state ← `auth.reseller_onboarding` | `coordinator_managed` | `complete` | platform security | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_reseller_onboarding.py`<br>`tests/architecture/test_reseller_onboarding_boundary.py` |
+| `referrals.program` | Party-first Refer & Earn capture policy | `policy` | referral program policy settings ← `control.settings_spec`<br>canonical referrer account state ← `customer.accounts`<br>canonical Party identity and reachability facts ← `party.registry` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/PARTY_FIRST_REFERRAL_CAPTURE.md`<br>`docs/REFERRAL_ACCOUNT_CONVERSION.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referrals_native.py`<br>`tests/test_admin_referrals_web.py`<br>`tests/test_customer_portal_referrals.py`<br>`tests/architecture/test_referrals_program_boundary.py` |
+| `referrals.program` | canonical Referral program record | `authoritative_record` | referral program command evidence ← `referrals.program`<br>referral program policy settings ← `control.settings_spec`<br>canonical referrer account state ← `customer.accounts`<br>canonical Party identity and reachability facts ← `party.registry`<br>canonical attributed Lead state ← `sales.lead_lifecycle` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/PARTY_FIRST_REFERRAL_CAPTURE.md`<br>`docs/REFERRAL_ACCOUNT_CONVERSION.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referrals_native.py`<br>`tests/test_admin_referrals_web.py`<br>`tests/test_customer_portal_referrals.py`<br>`tests/architecture/test_referrals_program_boundary.py` |
+| `referrals.program` | Referral Subscriber attachment record | `authoritative_record` | canonical Referral program record ← `referrals.program`<br>canonical referred account state ← `customer.accounts`<br>canonical Party identity and reachability facts ← `party.registry`<br>canonical attributed Lead state ← `sales.lead_lifecycle` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/PARTY_FIRST_REFERRAL_CAPTURE.md`<br>`docs/REFERRAL_ACCOUNT_CONVERSION.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referrals_native.py`<br>`tests/test_admin_referrals_web.py`<br>`tests/test_customer_portal_referrals.py`<br>`tests/architecture/test_referrals_program_boundary.py` |
+| `referrals.program` | referral qualification and reward policy | `policy` | canonical Referral program record ← `referrals.program`<br>referral program policy settings ← `control.settings_spec`<br>canonical subscriber activation state ← `access.subscription_lifecycle`<br>canonical referral reward credit evidence ← `financial.credit_notes` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/PARTY_FIRST_REFERRAL_CAPTURE.md`<br>`docs/REFERRAL_ACCOUNT_CONVERSION.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referrals_native.py`<br>`tests/test_admin_referrals_web.py`<br>`tests/test_customer_portal_referrals.py`<br>`tests/architecture/test_referrals_program_boundary.py` |
+| `referrals.program` | atomic referral program transition orchestration | `application_coordinator` | referral program command evidence ← `referrals.program`<br>canonical Referral program record ← `referrals.program`<br>referral program policy settings ← `control.settings_spec`<br>canonical referrer account state ← `customer.accounts`<br>canonical referred account state ← `customer.accounts`<br>canonical Party identity and reachability facts ← `party.registry`<br>canonical attributed Lead state ← `sales.lead_lifecycle`<br>canonical subscriber activation state ← `access.subscription_lifecycle`<br>canonical referral reward credit evidence ← `financial.credit_notes` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/PARTY_FIRST_REFERRAL_CAPTURE.md`<br>`docs/REFERRAL_ACCOUNT_CONVERSION.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referrals_native.py`<br>`tests/test_admin_referrals_web.py`<br>`tests/test_customer_portal_referrals.py`<br>`tests/architecture/test_referrals_program_boundary.py` |
+| `referrals.account_conversion` | stable Referral Party Lead conversion context validation | `policy` | canonical Referral conversion record ← `referrals.program`<br>canonical referred Party identity ← `party.registry`<br>canonical attributed Lead state ← `sales.lead_lifecycle` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/REFERRAL_ACCOUNT_CONVERSION.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referral_account_conversion.py`<br>`tests/test_referral_self_service_signup.py`<br>`tests/architecture/test_referral_account_conversion_boundary.py` |
+| `referrals.account_conversion` | atomic referral account creation and adjudication orchestration | `application_coordinator` | referral account conversion command evidence ← `referrals.account_conversion`<br>canonical Referral conversion record ← `referrals.program`<br>canonical referred Party identity ← `party.registry`<br>canonical attributed Lead state ← `sales.lead_lifecycle`<br>canonical Subscriber account state ← `customer.accounts` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/REFERRAL_ACCOUNT_CONVERSION.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referral_account_conversion.py`<br>`tests/test_referral_self_service_signup.py`<br>`tests/architecture/test_referral_account_conversion_boundary.py` |
+| `referrals.account_conversion` | public referral signup capability purpose claims and lifetime | `policy` | canonical Referral conversion record ← `referrals.program`<br>referral signup capability policy settings ← `control.settings_spec`<br>verified public signup capability envelope ← `auth.token_signing` | `coordinator_managed` | `complete` | customer operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/REFERRAL_ACCOUNT_CONVERSION.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`docs/designs/SOT_CODING_STANDARDS_REFACTOR.md`<br>`tests/test_referral_account_conversion.py`<br>`tests/test_referral_self_service_signup.py`<br>`tests/architecture/test_referral_account_conversion_boundary.py` |
+<!-- END GENERATED SOT MANIFEST -->
 
 ## Party Identity, Roles, and Relationships
 
@@ -103,7 +149,7 @@ The read-only cleanup contract is `docs/PARTY_IDENTITY_CLEANUP_AUDIT.md`.
 3. directional descriptive relationships between parties, which never grant
    authorization;
 4. a person's explicit organization context and bounded access scope, with
-   authorization still resolved through `auth.rbac` and
+   authorization still resolved through `auth.subscriber_assignments` and
    `auth.permission_gate`; and
 5. normalized reachability, provider/account scope, immutable social subject
    identity, verification, and consent evidence.
@@ -235,13 +281,27 @@ person-level attribution authority. The complete boundary and cutover gates
 are `docs/PARTY_CUSTOMER_LIFECYCLE.md`.
 
 Migration 356 applies that boundary to Refer & Earn. `referrals.program` owns
-capture, exact-Party account conversion, qualification, and reward decisions.
+capture policy, the canonical ReferralCode/Referral and exact-Party
+account-attachment records, qualification/reward policy, and typed atomic
+program transitions; `referrals.account_conversion` owns the cross-domain
+conversion command.
 It asks `party.registry` to create quarantined identity/reachability facts and
 `sales.lead_lifecycle` to create the Lead and immutable referral origin. New
 capture creates no Subscriber and duplicates no contact PII into Referral
 metadata. Account attachment requires exact reviewed Party equality; contact
 matching cannot qualify or relink a referral. The detailed contract is
 `docs/PARTY_FIRST_REFERRAL_CAPTURE.md`.
+
+Every program mutation now enters one manifest-verified owner transaction.
+Code issuance locks the Subscriber, capture locks the active ReferralCode, and
+transitions lock the Referral before Subscriber or financial state. Reward
+issuance delegates monetary evidence to `financial.credit_notes` using the
+legacy-compatible referral reference, so existing credit evidence repairs the
+Referral link without paying twice. PII-free versioned events are staged with
+the transition. Reward notification is a deduplicated consequence resolved by
+the canonical notification template/channel policy, never an in-service push.
+Program settings, including the share-base URL, resolve only through
+`control.settings_spec`.
 
 Referral customer reads/writes are permanently native. The prior referral
 read/write controls, CRM referral mutation, mirror write-through, and scheduled
@@ -250,24 +310,29 @@ compatibility evidence, is not an active SOT owner, and cannot feed native
 referral decisions. The signed legacy webhook route and old Celery names are
 no-op tombstones that absorb queued traffic without database or network work.
 
-Referral signup and operator account adjudication resolve through
-`referrals.account_conversion`. Its stable context is the canonical
+Referral signup and operator account adjudication resolve through typed commands
+owned by `referrals.account_conversion`. Its stable context is the canonical
 Referral/Party/Lead UUID triple already stored by migration 356, so account
 conversion adds no parallel table or migration. The coordinator locks and
-revalidates that context, asks `customer.accounts` to prepare a Subscriber,
-then delegates Party binding, Lead attachment, and Referral attachment to their
-existing owners before one commit. A stale context, different Party/account,
-or self-referral is refused; contact values never select identity. The detailed
+revalidates the exact Referral, Party, Lead, and selected Subscriber, asks
+`customer.accounts` to prepare a new Subscriber when needed, then delegates
+Party binding, Lead attachment, and Referral attachment to transaction-neutral
+owner collaborators. Account, bindings, PII-free audit, and versioned events
+commit or roll back together. A stale context, different Party/account, or
+self-referral is refused; contact values never select identity. The detailed
 contract is `docs/REFERRAL_ACCOUNT_CONVERSION.md`.
 
-Public capture carries that context forward as a 24-hour signed, PII-free
-capability. `auth.token_signing` owns configured signing-key/algorithm
-resolution and the cryptographic envelope; `referrals.account_conversion` owns
-purpose, claims, lifetime, and canonical revalidation. Public signup exposes no
-lifecycle, reseller, billing, verification, numbering, or permission controls.
-It also cannot set marketing consent outside the communication-eligibility
-owner. The token proves capture continuity only and does not verify identity
-or authorize contact matching.
+Public capture carries that context forward as a signed, PII-free capability.
+`auth.token_signing` owns configured signing-key/algorithm resolution and the
+cryptographic envelope; `referrals.account_conversion` owns purpose, claims,
+canonical revalidation, and the lifetime decision. The lifetime resolves only
+from the bounded, database-authoritative
+`subscriber.referral_signup_context_expiry_minutes` setting; its default and
+bounds live only in `control.settings_spec`.
+Public signup exposes no lifecycle, reseller, billing, verification, numbering,
+or permission controls. It also cannot set marketing consent outside the
+communication-eligibility owner. The token proves capture continuity only and
+does not verify identity or authorize contact matching.
 
 After account creation, `auth.customer_credential_enrollment` owns the separate
 credential handoff. It creates no random or placeholder password. It sends a
@@ -480,6 +545,12 @@ Account adjustments and add-on purchase debits use one evidenced contract:
   consequence as distinct preview fields. Confirmation locks the account,
   recomputes the preview, rejects stale or unfunded requests, records
   idempotency and actor audit evidence, and links one decision to one exact debit.
+  Direct API confirmations enter typed owner commands on transaction-free
+  sessions. Plan-change, add-on, and renewal owners use separately named typed
+  staging collaborators that flush only inside their wider transaction; no
+  caller selects a commit mode. An omitted request currency resolves only from
+  `control.settings_spec`'s `billing.default_currency`; the owner carries no
+  parallel currency default.
 - Credit boundary: the adjustment contract is debit-only. Customer credits,
   including the credit side of a prepaid plan change, remain documents owned by
   `financial.credit_notes`; callers cannot use a generic adjustment as a second
@@ -493,10 +564,19 @@ Account adjustments and add-on purchase debits use one evidenced contract:
   is separately previewed and confirmed, preserves the original category,
   records audit/idempotency evidence, and structurally points its exact credit to
   the debit it reverses. It does not promise restoration or mutate access state.
+- Evidence and event boundary: successful non-replay debit and reversal
+  commands stage PII-free `account_adjustment.confirmed` or
+  `account_adjustment.reversed` events with the exact ledger link. Structural
+  evidence inspection compares every decision row with its linked append-only
+  ledger rows and fails closed on mismatches. The billing alignment audit found
+  zero historical adjustment-debit drift, so no inferred monetary backfill is
+  authorized; any future mismatch requires reviewed finance evidence rather
+  than amount, date, or memo matching.
 - Cutover gate: generic ledger writes/reversals remain disabled; plan-change and
   add-on paths contain no direct debit writer; stale preview, insufficient
-  funding, idempotent replay, exact debit/reversal links, audit, architecture,
-  API, and mobile contract tests must remain green.
+  funding, idempotent replay, exact debit/reversal links, audit/event atomicity,
+  drift inspection, architecture, API, and mobile contract tests must remain
+  green.
 
 Immediate plan changes use the same evidenced wrapper contract:
 
@@ -1998,7 +2078,9 @@ writers are retired; historical rows remain readable evidence.
    core/border root. It emits typed gaps and one combined evidence hash. Live
    RADIUS NAS remains a separate observation and never supplies a missing
    authoritative hop.
-31. `network.radius_sessions`: resolves online-now state from active sessions.
+31. `network.radius_sessions`: resolves online-now state and active-session NAS
+   observation evidence from authoritative active-session facts. It does not
+   decide which session is primary for a customer-facing use case.
 32. `network.ont_runtime_status`: owns Huawei bulk ONT status observations, the
    Huawei OLT pollability predicate, and admission of those poll tasks. Scheduled
    sweeps and stale inventory reads request the same retry-safe infrastructure
@@ -2170,8 +2252,8 @@ Dependency order:
 1. `sessions.radius_reconciliation`: is the canonical writer of the
    `radius_active_sessions` projection; it reconciles external `radacct` open
    sessions and prunes dead rows.
-2. `sessions.radius_resolution`: answers online-now and primary-session
-   questions for customers/subscribers.
+2. `sessions.radius_resolution`: owns customer/subscriber online-now and
+   primary-NAS-session resolution over the active-session observations.
 3. `sessions.enforcement`: owns CoA, disconnect, and session refresh outcomes
    after billing/access/FUP state changes.
 
@@ -2419,21 +2501,71 @@ shadow verification before cutover.
 
 Authorization:
 
-1. `auth.rbac`: owns roles, permissions, and assignments.
-2. `auth.permission_gate`: owns request/route permission dependencies.
-3. `auth.token_signing`: owns configured JWT key/algorithm resolution and the
+1. `auth.rbac_catalog`: is the only application and seed writer for roles,
+   permissions, and role-permission policy. Catalog identities are normalized
+   lowercase identifiers with database-enforced case/whitespace uniqueness.
+   Assigned identities cannot be renamed or deactivated, and non-assignable
+   permissions are protected admin policy.
+2. `auth.subscriber_assignments`: is the only application and seed writer for
+   `subscriber_roles` and `subscriber_permissions`. Public commands own the
+   grant, audit, event, and cache-invalidation boundary; reseller onboarding
+   and seed workflows use flush-only owner collaborators. Role grants are
+   global or explicitly scoped to one region/reseller, while direct permissions
+   must reference active UI-assignable catalog entries.
+3. `auth.permission_gate`: owns request/route permission dependencies.
+4. `auth.system_user_assignments`: is the only application writer for
+   `system_user_roles` and `system_user_permissions`. Local and ERP HR role
+   sources converge independently, managed grants are read-only in local
+   administration, and every admin-role removal or deactivation locks the
+   canonical admin role before enforcing the final-active-admin invariant.
+5. `auth.token_signing`: owns configured JWT key/algorithm resolution and the
    cryptographic envelope for typed capability tokens. Calling domains own
    purpose, claims, duration, and consequences.
-4. `auth.staff_provisioning`: owns staff account bootstrap.
-5. `auth.customer_credential_enrollment`: owns purpose-bound local credential
+6. `auth.staff_provisioning`: coordinates ERP HR and administrative staff
+   lifecycle commands and
+   is the canonical writer for `SystemUser` identity plus initial local
+   credential bootstrap. Each write runs in one verified coordinator
+   transaction with assignment-owner managed grants, audit evidence, session
+   revocation, and the versioned outbox event. Provisioning events contain a
+   user UUID and email digest, never the email or a bearer token. The
+   `StaffInviteHandler` creates one communication intent per event; the worker
+   revalidates the exact active principal and mints the short-lived password
+   capability immediately before transport.
+7. `auth.reseller_onboarding`: coordinates administrative reseller record and
+   portal-principal creation. Canonical reseller/subscriber initialization,
+   credential bootstrap, reseller link, assignment-owner grants, audit, and
+   versioned events commit atomically. Its event consequence persists only the
+   exact principal identifiers and an email digest; delivery revalidates that
+   binding before minting the short-lived reset capability in memory. The
+   legacy subscriber-backed mode remains an explicit feature-gated principal
+   representation, not a parallel transaction or delivery path.
+8. `auth.credential_recovery`: owns public and exact-principal password recovery
+   request policy, purpose-bound reset claims and lifetime, durable delivery
+   intent, and the credential transition. Request events and notifications
+   persist identifiers, an email digest, and safe redirect context but never an
+   email body or bearer. Delivery revalidates the exact active local principal
+   and mints the bearer only in memory at transport time. Redemption locks the
+   principal and credential and atomically replaces the password, spends the
+   capability, revokes database sessions, and stages PII-safe audit and event
+   evidence. The completion-event projection handler is the one idempotent repair
+   path for auth-cache invalidation and customer/reseller portal-session
+   revocation. API and web adapters own transport error mapping.
+9. `auth.customer_credential_enrollment`: owns purpose-bound local credential
    enrollment for referral-created customer accounts and the atomic
    Subscriber-email verification consequence. It creates no placeholder
    credential and owns no Party or subscription lifecycle state. It submits a
    non-secret action to `communications.ephemeral_actions`; token issuance and
-   email rendering occur only at the worker transport boundary.
+   email rendering occur only at the worker transport boundary. Password,
+   capability-lifetime, and request-rate policy resolve through
+   `control.settings_spec`; the request/credential/audit/event transaction is
+   owner-managed, and completion-event replay is the only authentication-cache
+   repair path.
 
 Rule: routes declare permissions and business services receive an authorized
-principal. RBAC mutation stays inside RBAC services.
+principal. RBAC mutation stays inside RBAC services. Staff-sync, reseller admin,
+and credential-recovery adapters carry the authorized actor and applicable
+scope as command evidence and never write principals, credentials, roles,
+sessions, audit rows, events, or notifications.
 Every literal route permission must exist in the seed catalogue; the
 architecture parity test makes an absent, therefore ungrantable, permission a
 build failure. The effective-state projection reads roles and grants only.
@@ -2566,8 +2698,9 @@ outcome; they do not embed their own geocode lookups or spatial write logic.
 1. `sales.orders`: owns sales order lifecycle.
 2. `sales.selfserve`: owns the self-serve quote and signup flow.
 3. `sales.service`: owns sales service operations.
-4. `referrals.program`: owns Party-first Refer & Earn capture, reviewed account
-   conversion, qualification, and reward decisions.
+4. `referrals.program`: owns Party-first capture policy, canonical ReferralCode,
+   Referral and exact-Party account-attachment records, qualification/reward
+   policy, and atomic program transition orchestration.
 5. `referrals.account_conversion`: owns exact Referral/Party/Lead context
    validation, the bounded public-signup capability contract, and atomic
    account-creation/adjudication orchestration.

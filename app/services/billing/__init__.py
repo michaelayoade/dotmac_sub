@@ -26,7 +26,6 @@ from app.services.billing._common import (
     _validate_payment_linkages,
     _validate_payment_provider,
 )
-from app.services.billing.adjustments import AccountAdjustments
 from app.services.billing.billing_accounts import BillingAccounts
 from app.services.billing.consolidated_payments import (
     ConsolidatedCreditAllocations,
@@ -88,7 +87,6 @@ consolidated_credit_allocations = ConsolidatedCreditAllocations()
 consolidated_payment_refunds = ConsolidatedPaymentRefunds()
 consolidated_payment_reversals = ConsolidatedPaymentReversals()
 consolidated_payment_return_reconciliations = ConsolidatedPaymentReturnReconciliations()
-account_adjustments = AccountAdjustments()
 
 __all__ = [
     # Classes
@@ -98,7 +96,6 @@ __all__ = [
     "ConsolidatedPaymentRefunds",
     "ConsolidatedPaymentReturnReconciliations",
     "ConsolidatedPaymentReversals",
-    "AccountAdjustments",
     "Invoices",
     "InvoiceLines",
     "CreditNotes",
@@ -147,7 +144,6 @@ __all__ = [
     "consolidated_payment_refunds",
     "consolidated_payment_return_reconciliations",
     "consolidated_payment_reversals",
-    "account_adjustments",
     "billing_reporting",
     # Helper functions (for billing_automation compatibility)
     "_validate_account",

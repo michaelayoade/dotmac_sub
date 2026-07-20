@@ -370,11 +370,11 @@ def test_customer_mfa_submit_creates_customer_session(
 def test_customer_forgot_password_submit_uses_shared_flow(monkeypatch, db_session):
     from unittest.mock import MagicMock
 
-    forgot_flow = MagicMock()
+    recovery_request = MagicMock()
     monkeypatch.setattr(
-        web_customer_auth_service.auth_flow_service,
-        "forgot_password_flow",
-        forgot_flow,
+        web_customer_auth_service.credential_recovery,
+        "request_password_recovery",
+        recovery_request,
     )
 
     response = web_customer_auth_service.customer_forgot_password_submit(
@@ -383,11 +383,11 @@ def test_customer_forgot_password_submit_uses_shared_flow(monkeypatch, db_sessio
 
     assert response.status_code == 200
     assert "Check your email" in response.body.decode()
-    forgot_flow.assert_called_once_with(
-        db_session,
-        "customer@example.com",
-        next_login_path="/portal/auth/login?next=/portal/dashboard",
-    )
+    recovery_request.assert_called_once()
+    called_db, command = recovery_request.call_args.args
+    assert called_db is db_session
+    assert command.email == "customer@example.com"
+    assert command.next_login_path == "/portal/auth/login?next=/portal/dashboard"
 
 
 def test_customer_forgot_password_page_renders_form(monkeypatch, db_session):
