@@ -1,7 +1,7 @@
 """Work-order headers and their field-execution activity.
 
-Sub owns work orders. ``public_id`` is the identity; ``project_id`` is the
-native project relationship; ``crm_work_order_id`` is nullable import
+Sub owns work orders. ``public_id`` is the identity; ``project_id`` and
+``origin_ticket_id`` are native relationships; ``crm_work_order_id`` is nullable import
 provenance and is NULL for natively created work orders; ``crm_project_id`` is
 legacy project provenance and never a native join key. Field activity (worklogs, notes,
 attachments, materials, movements, fiber tests, chat, job events) hangs off
@@ -59,6 +59,14 @@ class WorkOrder(Base):
         nullable=True,
         index=True,
     )
+    # Native support provenance. A ticket can explicitly issue many work orders;
+    # CRM ticket identifiers remain import provenance in ``crm_ticket_id``.
+    origin_ticket_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_tickets.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     # The work-order command owner is the sole writer for this policy. Vendor
     # project verification consumes it but never changes it.
     requires_as_built_evidence: Mapped[bool] = mapped_column(
@@ -111,6 +119,7 @@ class WorkOrder(Base):
     )
 
     project = relationship("Project", back_populates="work_orders")
+    origin_ticket = relationship("Ticket", foreign_keys=[origin_ticket_id])
 
 
 class WorkOrderSyncState(Base):

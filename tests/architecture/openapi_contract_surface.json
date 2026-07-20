@@ -10041,6 +10041,20 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/support/tickets/{ticket_id}/work-orders": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:ticket_id!",
+    "query:limit",
+    "query:offset"
+   ],
+   "request": null,
+   "responses": {
+    "200": "eb4c5bc1d2b3",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/support/tickets/{ticket_lookup}": {
    "params": [
     "header:authorization",
@@ -17187,6 +17201,20 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/support/tickets/{ticket_id}/work-orders": {
+   "params": [
+    "header:Idempotency-Key!",
+    "header:X-Request-ID",
+    "header:authorization",
+    "header:x-api-key",
+    "path:ticket_id!"
+   ],
+   "request": "385a085de43f",
+   "responses": {
+    "201": "2cc039f4544e",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/tables/{table_key}/columns": {
    "params": [
     "header:authorization",
@@ -19149,6 +19177,7 @@
   "TicketSlaEventRead": "c059a611173c",
   "TicketSlaEventUpdate": "f43daca466d0",
   "TicketUpdate": "2a276a5390e8",
+  "TicketWorkOrderIssueRequest": "c7149ecaedad",
   "TokenResponse": "b55a164b5612",
   "TopUserEntry": "a8f50c81e200",
   "TopupEligibleInvoice": "f867f52b262b",
@@ -19236,7 +19265,7 @@
   "WorkOrderAssignmentQueueRead": "2043f86a49b8",
   "WorkOrderAssignmentQueueUpdate": "86e75cac9b5d",
   "WorkOrderHeaderCreate": "6a58278e05c5",
-  "WorkOrderHeaderRead": "a905b254518f",
+  "WorkOrderHeaderRead": "40a557294996",
   "WorkOrderHeaderUpdate": "8d09a8e94bd1",
   "WorkOrderItem": "b6dbc9731a93",
   "WorkqueueItemRead": "0b2d2a93452e",

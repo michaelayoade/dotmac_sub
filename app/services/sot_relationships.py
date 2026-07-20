@@ -2602,6 +2602,27 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="support.ticket_work_order_handoff",
+                module="app.services.ticket_work_order_handoff",
+                owns=(
+                    "ticket-to-work-order issuance eligibility",
+                    "native ticket-to-work-order provenance",
+                    "field-outcome projection onto the ticket timeline",
+                ),
+                depends_on=(
+                    "support.ticket_lifecycle",
+                    "operations.work_order_commands",
+                    "observability.audit_log",
+                ),
+                notes=(
+                    "An active member of the ticket's assigned team explicitly "
+                    "issues each field scope. A ticket may issue many work orders "
+                    "through WorkOrder.origin_ticket_id. Tags and ticket metadata "
+                    "carry no issuance authority. Field completion records an "
+                    "internal timeline fact and never closes the ticket."
+                ),
+            ),
+            SOTService(
                 name="support.ticket_bulk_commands",
                 module="app.services.web_support_ticket_bulk",
                 owns=(
@@ -2619,7 +2640,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 notes=(
                     "Execution delegates each eligible mutation to "
                     "app.services.support.Tickets.update through Tickets.bulk_update "
-                    "so SLA, automation, assignment, work-order, notification, "
+                    "so SLA, automation, assignment, notification, "
                     "event, audit, and workqueue consequences have one owner."
                 ),
             ),
@@ -2763,6 +2784,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "operations.work_orders",
                     "operations.work_order_status",
                     "control.domain_settings",
+                    "support.ticket_work_order_handoff",
                 ),
                 notes=(
                     "Authenticated field job detail projects the same completion "
