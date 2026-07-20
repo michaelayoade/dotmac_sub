@@ -554,6 +554,35 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.collection_accounts",
+                module="app.services.billing.collection_accounts",
+                owns=(
+                    "collection-account identity and lifecycle",
+                    "Dotmac receiving-account payment details",
+                    "derived receiving-account last-four projection",
+                    "customer bank-destination presentment order",
+                    "external collection-account accounting mapping",
+                ),
+                notes=(
+                    "Portal, reseller, API, invoice, settings, proof, and "
+                    "attribution adapters carry this identity and never maintain "
+                    "parallel bank-detail copies. Legacy settings are only a "
+                    "frozen rollback snapshot during A1 verification."
+                ),
+            ),
+            SOTService(
+                name="financial.payment_routing",
+                module="app.services.payment_routing",
+                owns=(
+                    "health-aware customer gateway eligibility",
+                    "ordered customer gateway presentment policy",
+                ),
+                notes=(
+                    "Payment channels classify recorded settlement and never "
+                    "replace this provider-health-aware presentment owner."
+                ),
+            ),
+            SOTService(
                 name="financial.payments",
                 module="app.services.billing.payments",
                 owns=(

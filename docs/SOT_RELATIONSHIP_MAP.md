@@ -498,6 +498,19 @@ detailed security and delivery boundary is
    records idempotency and actor audit evidence, and structurally links the
    command result to its exact ledger transaction(s). Financial settlement may
    request access reconciliation, but it never promises restoration itself.
+23. `financial.collection_accounts`
+   (`app.services.billing.collection_accounts`) owns Dotmac receiving-account
+   identity, full customer-presented bank details, derived last-four digits,
+   active lifecycle, external accounting mapping, and explicit presentment
+   order. Portal, reseller, API, invoice, settings UI, payment-proof, and
+   attribution adapters carry its identity; they do not maintain bank-detail
+   copies. `financial.payment_routing` separately owns health-aware gateway
+   ordering. `payment_channels` and `payment_channel_accounts` classify where
+   recorded money arrived and never become the gateway-presentment policy.
+   Legacy direct-transfer and company-info bank settings are a temporary frozen
+   rollback snapshot during A1 verification, not a runtime fallback, and are
+   deleted at the contract gate. `accounting_code` fields are external mappings,
+   not a Sub chart of accounts or ledger.
 
 Account adjustments and add-on purchase debits use one evidenced contract:
 

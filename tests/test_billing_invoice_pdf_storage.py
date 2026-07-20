@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import sessionmaker
 
-from app.models.billing import InvoicePdfExport, InvoicePdfExportStatus
+from app.models.billing import (
+    CollectionAccount,
+    CollectionAccountType,
+    InvoicePdfExport,
+    InvoicePdfExportStatus,
+)
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.stored_file import StoredFile
 from app.models.subscription_engine import SettingValueType
@@ -271,49 +275,54 @@ def test_render_invoice_html_includes_branding_and_company_info(
     assert "company-copy" not in html
 
 
-def test_direct_bank_transfer_config_preserves_sort_code(db_session):
-    web_system_config_service.save_direct_bank_transfer_config(
-        db_session,
-        {
-            "direct_bank_transfer_enabled": "true",
-            "direct_bank_transfer_instructions": "Use invoice number as reference.",
-            "account_id": ["account-1"],
-            "account_enabled": ["account-1"],
-            "account_bank_name": ["Dotmac Bank"],
-            "account_account_name": ["Dotmac Technologies Ltd"],
-            "account_account_number": ["0123456789"],
-            "account_sort_code": ["12-34-56"],
-        },
+def test_direct_bank_transfer_context_surfaces_owned_accounts(db_session):
+    """The admin page shows the owner's accounts, read-only.
+
+    Sort code used to round-trip through the settings blob this page wrote. It
+    now lives on `collection_accounts`, edited via the collection-accounts CRUD,
+    and this page only displays it so staff can see what customers will be told.
+    """
+    db_session.add(
+        CollectionAccount(
+            name="Dotmac Bank Transfer Account",
+            account_type=CollectionAccountType.bank,
+            bank_name="Dotmac Bank",
+            account_name="Dotmac Technologies Ltd",
+            account_number="0123456789",
+            account_last4="6789",
+            sort_code="12-34-56",
+            currency="NGN",
+            is_active=True,
+        )
     )
+    db_session.commit()
 
     context = web_system_config_service.get_direct_bank_transfer_context(db_session)
 
-    account = context["direct_bank_transfer_accounts"][0]
+    account = context["collection_accounts"][0]
+    assert account["bank_name"] == "Dotmac Bank"
+    assert account["account_number"] == "0123456789"
     assert account["sort_code"] == "12-34-56"
-    assert (
-        context["direct_bank_transfer"]["direct_bank_transfer_sort_code"] == "12-34-56"
-    )
+    assert context["collection_accounts_url"] == "/admin/billing/collection-accounts"
 
 
 def test_invoice_detail_context_includes_bank_details(db_session, subscriber_account):
     invoice = _invoice(db_session, subscriber_account)
+    # Bank details come from `collection_accounts`, the owner. They previously
+    # came from the `direct_bank_transfer_accounts` settings blob, which was one
+    # of four copies of the same fact and could name a different account from the
+    # one the portal offered the same customer.
     db_session.add(
-        DomainSetting(
-            domain=SettingDomain.billing,
-            key="direct_bank_transfer_accounts",
-            value_text=json.dumps(
-                [
-                    {
-                        "id": "invoice-bank",
-                        "enabled": "true",
-                        "bank_name": "Dotmac Bank",
-                        "account_name": "Dotmac Technologies Ltd",
-                        "account_number": "0123456789",
-                        "sort_code": "12-34-56",
-                    }
-                ]
-            ),
-            value_type=SettingValueType.string,
+        CollectionAccount(
+            name="Dotmac Bank Invoice Account",
+            account_type=CollectionAccountType.bank,
+            bank_name="Dotmac Bank",
+            account_name="Dotmac Technologies Ltd",
+            account_number="0123456789",
+            account_last4="6789",
+            sort_code="12-34-56",
+            currency="NGN",
+            is_active=True,
         )
     )
     db_session.commit()
@@ -334,23 +343,21 @@ def test_invoice_detail_context_includes_bank_details(db_session, subscriber_acc
 
 def test_render_invoice_outputs_bank_details(db_session, subscriber_account):
     invoice = _invoice(db_session, subscriber_account)
+    # Bank details come from `collection_accounts`, the owner. They previously
+    # came from the `direct_bank_transfer_accounts` settings blob, which was one
+    # of four copies of the same fact and could name a different account from the
+    # one the portal offered the same customer.
     db_session.add(
-        DomainSetting(
-            domain=SettingDomain.billing,
-            key="direct_bank_transfer_accounts",
-            value_text=json.dumps(
-                [
-                    {
-                        "id": "invoice-bank",
-                        "enabled": "true",
-                        "bank_name": "Dotmac Bank",
-                        "account_name": "Dotmac Technologies Ltd",
-                        "account_number": "0123456789",
-                        "sort_code": "12-34-56",
-                    }
-                ]
-            ),
-            value_type=SettingValueType.string,
+        CollectionAccount(
+            name="Dotmac Bank Invoice Account",
+            account_type=CollectionAccountType.bank,
+            bank_name="Dotmac Bank",
+            account_name="Dotmac Technologies Ltd",
+            account_number="0123456789",
+            account_last4="6789",
+            sort_code="12-34-56",
+            currency="NGN",
+            is_active=True,
         )
     )
     db_session.commit()

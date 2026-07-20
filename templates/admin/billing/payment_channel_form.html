@@ -85,6 +85,12 @@
                           class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ channel.fee_rules | tojson if channel.fee_rules else '' }}</textarea>
             </div>
             <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">External Accounting Code</label>
+                <input type="text" name="accounting_code" maxlength="64" value="{{ channel.accounting_code or '' }}" placeholder="Optional accounting mapping"
+                       class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-mono text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <p class="mt-1 text-xs text-slate-500">Mapping only; the accounting system owns the GL account.</p>
+            </div>
+            <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Notes</label>
                 <input type="text" name="notes" value="{{ channel.notes or '' }}"
                        class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
