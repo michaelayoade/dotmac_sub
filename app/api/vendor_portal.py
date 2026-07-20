@@ -38,11 +38,20 @@ from app.services.vendor_portal_operations import (
     UpdateVendorQuoteLineCommand,
     vendor_portal_operations,
 )
-from app.services.vendor_purchase_invoices import vendor_purchase_invoices
+from app.services.vendor_purchase_invoices import (
+    AddVendorPurchaseInvoiceLineCommand,
+    CreateVendorPurchaseInvoiceCommand,
+    DeleteVendorPurchaseInvoiceLineCommand,
+    UpdateVendorPurchaseInvoiceCommand,
+    UpdateVendorPurchaseInvoiceLineCommand,
+    UploadVendorPurchaseInvoiceAttachmentCommand,
+    vendor_purchase_invoices,
+)
 from app.services.vendor_submission_proposals import (
     ConfirmVendorSubmissionCommand,
     confirm_submission,
     issue_as_built_submission,
+    issue_purchase_invoice_submission,
     issue_quote_submission,
 )
 
@@ -84,6 +93,10 @@ def _vendor_http_error(exc: DomainError) -> HTTPException:
         "invalid_as_built_route",
         "invalid_payload",
         "invalid_proposal",
+        "empty_attachment",
+        "invalid_attachment",
+        "invoice_number_required",
+        "invoice_line_required",
     }:
         status_code = 422
     elif suffix in {
@@ -97,6 +110,9 @@ def _vendor_http_error(exc: DomainError) -> HTTPException:
         "stale_proposal",
         "missing_result_evidence",
         "active_caller_transaction",
+        "invoice_not_editable",
+        "invoice_number_conflict",
+        "submitted_quote_required",
     }:
         status_code = 409
     else:
@@ -405,11 +421,21 @@ def create_purchase_invoice(
     context: dict = Depends(require_native_vendor_context),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.create(
-        db,
-        payload,
-        vendor_id=_vendor_id(context),
-        created_by_system_user_id=str(context["principal_id"]),
+    vendor_id = _vendor_id(context)
+    command_context = _command_context(
+        context, scope=vendor_id, reason="vendor_purchase_invoice_creation"
+    )
+    db_session_adapter.release_read_transaction(db)
+    return _vendor_call(
+        lambda: vendor_purchase_invoices.create(
+            db,
+            CreateVendorPurchaseInvoiceCommand(
+                context=command_context,
+                payload=payload,
+                vendor_id=vendor_id,
+                created_by_system_user_id=str(context["principal_id"]),
+            ),
+        )
     )
 
 
@@ -431,8 +457,21 @@ def update_purchase_invoice(
     context: dict = Depends(require_native_vendor_context),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.update(
-        db, invoice_id, payload, vendor_id=_vendor_id(context)
+    vendor_id = _vendor_id(context)
+    command_context = _command_context(
+        context, scope=vendor_id, reason="vendor_purchase_invoice_update"
+    )
+    db_session_adapter.release_read_transaction(db)
+    return _vendor_call(
+        lambda: vendor_purchase_invoices.update(
+            db,
+            UpdateVendorPurchaseInvoiceCommand(
+                context=command_context,
+                invoice_id=invoice_id,
+                payload=payload,
+                vendor_id=vendor_id,
+            ),
+        )
     )
 
 
@@ -447,8 +486,21 @@ def add_purchase_invoice_line(
     context: dict = Depends(require_native_vendor_context),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.add_line(
-        db, invoice_id, payload, vendor_id=_vendor_id(context)
+    vendor_id = _vendor_id(context)
+    command_context = _command_context(
+        context, scope=vendor_id, reason="vendor_purchase_invoice_line_addition"
+    )
+    db_session_adapter.release_read_transaction(db)
+    return _vendor_call(
+        lambda: vendor_purchase_invoices.add_line(
+            db,
+            AddVendorPurchaseInvoiceLineCommand(
+                context=command_context,
+                invoice_id=invoice_id,
+                payload=payload,
+                vendor_id=vendor_id,
+            ),
+        )
     )
 
 
@@ -463,8 +515,22 @@ def update_purchase_invoice_line(
     context: dict = Depends(require_native_vendor_context),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.update_line(
-        db, invoice_id, line_id, payload, vendor_id=_vendor_id(context)
+    vendor_id = _vendor_id(context)
+    command_context = _command_context(
+        context, scope=vendor_id, reason="vendor_purchase_invoice_line_update"
+    )
+    db_session_adapter.release_read_transaction(db)
+    return _vendor_call(
+        lambda: vendor_purchase_invoices.update_line(
+            db,
+            UpdateVendorPurchaseInvoiceLineCommand(
+                context=command_context,
+                invoice_id=invoice_id,
+                line_id=line_id,
+                payload=payload,
+                vendor_id=vendor_id,
+            ),
+        )
     )
 
 
@@ -478,8 +544,21 @@ def delete_purchase_invoice_line(
     context: dict = Depends(require_native_vendor_context),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.delete_line(
-        db, invoice_id, line_id, vendor_id=_vendor_id(context)
+    vendor_id = _vendor_id(context)
+    command_context = _command_context(
+        context, scope=vendor_id, reason="vendor_purchase_invoice_line_deletion"
+    )
+    db_session_adapter.release_read_transaction(db)
+    return _vendor_call(
+        lambda: vendor_purchase_invoices.delete_line(
+            db,
+            DeleteVendorPurchaseInvoiceLineCommand(
+                context=command_context,
+                invoice_id=invoice_id,
+                line_id=line_id,
+                vendor_id=vendor_id,
+            ),
+        )
     )
 
 
@@ -494,13 +573,23 @@ async def upload_purchase_invoice_attachment(
     db: Session = Depends(get_db),
 ):
     content = await attachment.read()
-    return vendor_purchase_invoices.upload_attachment(
-        db,
-        invoice_id,
-        vendor_id=_vendor_id(context),
-        file_name=attachment.filename or "invoice.pdf",
-        content_type=attachment.content_type,
-        content=content,
+    vendor_id = _vendor_id(context)
+    command_context = _command_context(
+        context, scope=vendor_id, reason="vendor_purchase_invoice_attachment_upload"
+    )
+    db_session_adapter.release_read_transaction(db)
+    return _vendor_call(
+        lambda: vendor_purchase_invoices.upload_attachment(
+            db,
+            UploadVendorPurchaseInvoiceAttachmentCommand(
+                context=command_context,
+                invoice_id=invoice_id,
+                vendor_id=vendor_id,
+                file_name=attachment.filename or "invoice.pdf",
+                content_type=attachment.content_type,
+                content=content,
+            ),
+        )
     )
 
 
@@ -524,13 +613,17 @@ def download_purchase_invoice_attachment(
 
 @router.post(
     "/purchase-invoices/{invoice_id}/submit",
-    response_model=VendorPurchaseInvoiceRead,
 )
 def submit_purchase_invoice(
     invoice_id: str,
     context: dict = Depends(require_native_vendor_context),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.submit(
-        db, invoice_id, vendor_id=_vendor_id(context)
+    return _vendor_call(
+        lambda: issue_purchase_invoice_submission(
+            db,
+            invoice_id=invoice_id,
+            vendor_id=_vendor_id(context),
+            user_id=str(context["principal_id"]),
+        )
     )

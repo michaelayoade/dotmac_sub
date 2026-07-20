@@ -32,7 +32,12 @@ from app.services.vendor_portal_operations import (
     CreateVendorQuoteCommand,
     vendor_portal_operations,
 )
-from app.services.vendor_purchase_invoices import vendor_purchase_invoices
+from app.services.vendor_purchase_invoices import (
+    AddVendorPurchaseInvoiceLineCommand,
+    CreateVendorPurchaseInvoiceCommand,
+    UploadVendorPurchaseInvoiceAttachmentCommand,
+    vendor_purchase_invoices,
+)
 from app.services.vendor_routes_api import build_project_route_geojson
 from app.services.vendor_submission_proposals import (
     ConfirmVendorSubmissionCommand,
@@ -71,6 +76,14 @@ def _submission_http_error(exc: DomainError) -> HTTPException:
         "quote_line_required": 422,
         "as_built_evidence_required": 422,
         "invalid_as_built_route": 422,
+        "invoice_not_found": 404,
+        "invoice_not_editable": 409,
+        "invoice_number_conflict": 409,
+        "empty_attachment": 422,
+        "invalid_attachment": 422,
+        "invoice_number_required": 422,
+        "invoice_line_required": 422,
+        "submitted_quote_required": 409,
     }.get(suffix, 500)
     return HTTPException(status_code=status_code, detail=exc.message)
 
@@ -381,15 +394,25 @@ def vendor_create_invoice(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    vendor_purchase_invoices.create(
-        db,
-        VendorPurchaseInvoiceCreate(
-            project_id=coerce_uuid(project_id),
-            invoice_number=invoice_number,
-            tax_rate_percent=tax_rate_percent,
-        ),
-        vendor_id=str(context["native_vendor_id"]),
-        created_by_system_user_id=str(auth["principal_id"]),
+    vendor_id = str(context["native_vendor_id"])
+    command_context = _command_context(
+        auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_creation"
+    )
+    db_session_adapter.release_read_transaction(db)
+    _submission_call(
+        lambda: vendor_purchase_invoices.create(
+            db,
+            CreateVendorPurchaseInvoiceCommand(
+                context=command_context,
+                payload=VendorPurchaseInvoiceCreate(
+                    project_id=coerce_uuid(project_id),
+                    invoice_number=invoice_number,
+                    tax_rate_percent=tax_rate_percent,
+                ),
+                vendor_id=vendor_id,
+                created_by_system_user_id=str(auth["principal_id"]),
+            ),
+        )
     )
     return _redirect(project_id, "Invoice created")
 
@@ -406,16 +429,26 @@ def vendor_add_invoice_line(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    vendor_purchase_invoices.add_line(
-        db,
-        invoice_id,
-        VendorPurchaseInvoiceLineCreate(
-            item_type=item_type,
-            description=description,
-            quantity=quantity,
-            unit_price=unit_price,
-        ),
-        vendor_id=str(context["native_vendor_id"]),
+    vendor_id = str(context["native_vendor_id"])
+    command_context = _command_context(
+        auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_line_addition"
+    )
+    db_session_adapter.release_read_transaction(db)
+    _submission_call(
+        lambda: vendor_purchase_invoices.add_line(
+            db,
+            AddVendorPurchaseInvoiceLineCommand(
+                context=command_context,
+                invoice_id=invoice_id,
+                payload=VendorPurchaseInvoiceLineCreate(
+                    item_type=item_type,
+                    description=description,
+                    quantity=quantity,
+                    unit_price=unit_price,
+                ),
+                vendor_id=vendor_id,
+            ),
+        )
     )
     return _redirect(project_id, "Invoice line added")
 
@@ -429,13 +462,24 @@ async def vendor_upload_invoice_attachment(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db)
-    vendor_purchase_invoices.upload_attachment(
-        db,
-        invoice_id,
-        vendor_id=str(context["native_vendor_id"]),
-        file_name=attachment.filename or "invoice.pdf",
-        content_type=attachment.content_type,
-        content=await attachment.read(),
+    vendor_id = str(context["native_vendor_id"])
+    command_context = _command_context(
+        auth, vendor_id=vendor_id, reason="vendor_purchase_invoice_attachment_upload"
+    )
+    content = await attachment.read()
+    db_session_adapter.release_read_transaction(db)
+    _submission_call(
+        lambda: vendor_purchase_invoices.upload_attachment(
+            db,
+            UploadVendorPurchaseInvoiceAttachmentCommand(
+                context=command_context,
+                invoice_id=invoice_id,
+                vendor_id=vendor_id,
+                file_name=attachment.filename or "invoice.pdf",
+                content_type=attachment.content_type,
+                content=content,
+            ),
+        )
     )
     return _redirect(project_id, "Attachment uploaded")
 

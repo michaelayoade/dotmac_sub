@@ -36,7 +36,10 @@ from app.services.vendor_portal_operations import (
     ReviewVendorQuoteCommand,
     vendor_portal_operations,
 )
-from app.services.vendor_purchase_invoices import vendor_purchase_invoices
+from app.services.vendor_purchase_invoices import (
+    ReviewVendorPurchaseInvoiceCommand,
+    vendor_purchase_invoices,
+)
 
 router = APIRouter(prefix="/manager", tags=["field-manager"])
 
@@ -92,6 +95,17 @@ def _vendor_review_context(auth: dict, *, quote_id: str) -> CommandContext:
 def _vendor_quote_error(exc: DomainError) -> HTTPException:
     status_code = 404 if exc.code.endswith("not_found") else 409
     return HTTPException(status_code=status_code, detail=exc.message)
+
+
+def _invoice_review_context(auth: dict, *, invoice_id: str) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=str(auth["principal_id"]),
+        scope=invoice_id,
+        reason="field_manager_vendor_purchase_invoice_review",
+    )
 
 
 @router.get("/me", response_model=FieldManagerMeResponse)
@@ -386,12 +400,21 @@ def field_manager_approve_vendor_purchase_invoice(
     auth: dict = Depends(_purchase_invoice_write),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.approve(
-        db,
-        invoice_id,
-        reviewer_system_user_id=str(auth["principal_id"]),
-        review_notes=payload.review_notes,
-    )
+    context = _invoice_review_context(auth, invoice_id=invoice_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return vendor_purchase_invoices.review(
+            db,
+            ReviewVendorPurchaseInvoiceCommand(
+                context=context,
+                invoice_id=invoice_id,
+                reviewer_system_user_id=str(auth["principal_id"]),
+                approve=True,
+                review_notes=payload.review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _vendor_quote_error(exc) from exc
 
 
 @router.post(
@@ -404,12 +427,21 @@ def field_manager_reject_vendor_purchase_invoice(
     auth: dict = Depends(_purchase_invoice_write),
     db: Session = Depends(get_db),
 ):
-    return vendor_purchase_invoices.reject(
-        db,
-        invoice_id,
-        reviewer_system_user_id=str(auth["principal_id"]),
-        review_notes=payload.review_notes,
-    )
+    context = _invoice_review_context(auth, invoice_id=invoice_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        return vendor_purchase_invoices.review(
+            db,
+            ReviewVendorPurchaseInvoiceCommand(
+                context=context,
+                invoice_id=invoice_id,
+                reviewer_system_user_id=str(auth["principal_id"]),
+                approve=False,
+                review_notes=payload.review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _vendor_quote_error(exc) from exc
 
 
 @router.post("/vendor-quotes/{quote_id}/approve")

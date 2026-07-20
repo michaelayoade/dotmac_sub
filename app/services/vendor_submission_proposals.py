@@ -40,7 +40,10 @@ from app.services.vendor_project_lifecycle import (
     preview_project_lifecycle,
     stage_project_transition,
 )
-from app.services.vendor_purchase_invoices import vendor_purchase_invoices
+from app.services.vendor_purchase_invoices import (
+    StageVendorPurchaseInvoiceSubmission,
+    vendor_purchase_invoices,
+)
 
 _TOKEN_TYPE = "vendor_submission_confirmation"
 _TOKEN_ISSUER = "dotmac_sub.vendor_submission_proposals"
@@ -393,11 +396,13 @@ def confirm_submission(
                 ),
             )
         elif submission_type == "purchase_invoice":
-            result = vendor_purchase_invoices.submit(
+            result = vendor_purchase_invoices.stage_submission(
                 session,
-                target_id,
-                vendor_id=command.vendor_id,
-                commit=False,
+                StageVendorPurchaseInvoiceSubmission(
+                    context=command.context,
+                    invoice_id=target_id,
+                    vendor_id=command.vendor_id,
+                ),
             )
         elif submission_type == "as_built":
             if as_built_payload is None:

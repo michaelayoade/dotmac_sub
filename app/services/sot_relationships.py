@@ -3914,10 +3914,348 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="operations.vendor_purchase_invoices",
                 module="app.services.vendor_purchase_invoices",
                 owns=(
-                    "vendor purchase-invoice lifecycle",
+                    "vendor purchase-invoice read and action projections",
+                    "vendor purchase-invoice mutation coordination",
                     "purchase-invoice submission eligibility and financial preview",
                 ),
-                depends_on=("operations.vendor_project_lifecycle",),
+                depends_on=(
+                    "auth.permission_gate",
+                    "control.settings_spec",
+                    "operations.vendor_project_lifecycle",
+                    "operations.vendor_purchase_invoice_records",
+                ),
+                notes=(
+                    "This service owns purchase-invoice queries, action policy, and "
+                    "typed public-command coordination. Canonical invoice writers "
+                    "participate in its transaction or the signed confirmation "
+                    "coordinator's transaction."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor purchase-invoice read and action projections",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical vendor purchase-invoice records",
+                                "canonical installation-project lifecycle state",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor purchase-invoice mutation coordination",
+                            role=OwnerRole.APPLICATION_COORDINATOR,
+                            input_names=(
+                                "authenticated purchase-invoice command context",
+                                "canonical vendor purchase-invoice records",
+                                "canonical installation-project lifecycle state",
+                                "purchase-invoice currency policy",
+                                "purchase-invoice mutation protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name=(
+                                "purchase-invoice submission eligibility and "
+                                "financial preview"
+                            ),
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "canonical vendor purchase-invoice records",
+                                "canonical installation-project lifecycle state",
+                                "purchase-invoice mutation protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="authenticated purchase-invoice command context",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "authenticated principal, vendor scope, reason, command, "
+                                "and correlation identifiers"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical vendor purchase-invoice records",
+                            owner="operations.vendor_purchase_invoice_records",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "VendorPurchaseInvoice, active line-item, attachment link, "
+                                "review, and ERP request evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical installation-project lifecycle state",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active InstallationProject assignment, eligible vendor "
+                                "quote, and ERP purchase-order reference"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="purchase-invoice currency policy",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="billing.default_currency unless the command supplies one",
+                        ),
+                        AuthorityInput(
+                            name="purchase-invoice mutation protocol",
+                            owner="operations.vendor_purchase_invoices",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "editable, submittable, reviewable, attachment, invoice "
+                                "number, and amount invariants"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.COORDINATOR_MANAGED,
+                        boundary=(
+                            "Each typed public purchase-invoice command enters one "
+                            "verified coordinator transaction and invokes record staging."
+                        ),
+                        locking=(
+                            "Commands lock the vendor, InstallationProject, and invoice "
+                            "aggregate needed by their uniqueness or state decision."
+                        ),
+                        idempotency=(
+                            "Creation replays to the active project/vendor invoice; signed "
+                            "submission uses confirmation jti evidence and review requires "
+                            "the exact source status."
+                        ),
+                        retries=(
+                            "Policy rejections are terminal. Database or object-transport "
+                            "failures retry the complete typed command with its context."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_purchase_invoices.invoice_not_found",
+                            "operations.vendor_purchase_invoices.invoice_line_not_found",
+                            "operations.vendor_purchase_invoices.attachment_not_found",
+                            "operations.vendor_purchase_invoices.project_not_found",
+                            "operations.vendor_purchase_invoices.invoice_not_editable",
+                            "operations.vendor_purchase_invoices.invoice_not_reviewable",
+                            "operations.vendor_purchase_invoices.invoice_number_required",
+                            "operations.vendor_purchase_invoices.invoice_number_conflict",
+                            "operations.vendor_purchase_invoices.submitted_quote_required",
+                            "operations.vendor_purchase_invoices.invoice_line_required",
+                            "operations.vendor_purchase_invoices.empty_attachment",
+                            "operations.vendor_purchase_invoices.invalid_attachment",
+                            "operations.vendor_purchase_invoices.invalid_write_evidence",
+                            "operations.vendor_purchase_invoices.invalid_command_context",
+                            "operations.vendor_purchase_invoices.command_contract_violation",
+                            "operations.vendor_purchase_invoices.nested_owner_command",
+                            "operations.vendor_purchase_invoices.active_caller_transaction",
+                            "operations.vendor_purchase_invoices.nested_transaction_completion",
+                        ),
+                        mapping_owner=(
+                            "app.api.vendor_portal, app.api.field.manager, "
+                            "app.web.vendor_portal, and app.web.admin.vendor_operations"
+                        ),
+                        fail_closed_on=(
+                            "missing or mismatched invoice, project, vendor, or line",
+                            "duplicate invoice number or invalid source status",
+                            "missing eligible quote, line, attachment, or currency evidence",
+                            "active caller transaction or manifest mismatch",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "transport-coded purchase-invoice service methods with direct "
+                            "commits, rollback recovery, and generic attribute mutation"
+                        ),
+                        new_owner="operations.vendor_purchase_invoices",
+                        verification=(
+                            "Typed-command, currency-setting, signed-submit, transaction, "
+                            "adapter, participant, event, and rollback tests."
+                        ),
+                        cutover_gate=(
+                            "Every public mutation adapter passes a typed command on a "
+                            "clean session and direct submit returns a signed proposal."
+                        ),
+                        fallback_retirement=(
+                            "Service HTTP exceptions, direct commit/rollback, generic "
+                            "setattr, direct submit, and split approval/enqueue paths are "
+                            "removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_phase5_vendor_purchase_invoices.py",
+                        "tests/test_vendor_submission_proposals.py",
+                        "tests/architecture/test_vendor_purchase_invoice_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_purchase_invoice_records",
+                module="app.services.vendor_purchase_invoice_records",
+                owns=(
+                    "vendor purchase-invoice lifecycle",
+                    "vendor purchase-invoice line-item lifecycle",
+                    "purchase-invoice attachment and ERP request evidence",
+                ),
+                depends_on=(
+                    "events.dispatcher",
+                    "operations.vendor_project_lifecycle",
+                ),
+                notes=(
+                    "Canonical invoice record writers are non-public participants of "
+                    "the purchase-invoice and signed-confirmation coordinators."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor purchase-invoice lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "validated purchase-invoice transition",
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer=(
+                                "operations.vendor_purchase_invoice_records"
+                            ),
+                        ),
+                        ConcernContract(
+                            name="vendor purchase-invoice line-item lifecycle",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "validated purchase-invoice transition",
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer=(
+                                "operations.vendor_purchase_invoice_records"
+                            ),
+                        ),
+                        ConcernContract(
+                            name="purchase-invoice attachment and ERP request evidence",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "validated purchase-invoice transition",
+                                "canonical installation-project lifecycle state",
+                            ),
+                            canonical_writer=(
+                                "operations.vendor_purchase_invoice_records"
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="validated purchase-invoice transition",
+                            owner="operations.vendor_purchase_invoices",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed invoice command or signed-confirmation command "
+                                "after owner policy and principal validation"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical installation-project lifecycle state",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked InstallationProject assignment, quote eligibility, "
+                                "and ERP purchase-order reference"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The invoice or signed-submission coordinator owns the root "
+                            "transaction; record writers stage rows, outbox evidence, and "
+                            "events and flush."
+                        ),
+                        locking=(
+                            "Writers lock vendor, project, and invoice aggregates before "
+                            "uniqueness checks, eligibility decisions, or mutations."
+                        ),
+                        idempotency=(
+                            "Project/vendor creation returns the existing active invoice; "
+                            "content-addressed object keys and outbox idempotency keys make "
+                            "whole-command retry safe."
+                        ),
+                        retries=(
+                            "The named coordinator retries the complete command; record "
+                            "participants never retry or complete transactions."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_purchase_invoices.invoice_not_found",
+                            "operations.vendor_purchase_invoices.invoice_line_not_found",
+                            "operations.vendor_purchase_invoices.project_not_found",
+                            "operations.vendor_purchase_invoices.invoice_not_editable",
+                            "operations.vendor_purchase_invoices.invoice_not_reviewable",
+                            "operations.vendor_purchase_invoices.invoice_number_required",
+                            "operations.vendor_purchase_invoices.invoice_number_conflict",
+                            "operations.vendor_purchase_invoices.submitted_quote_required",
+                            "operations.vendor_purchase_invoices.invoice_line_required",
+                            "operations.vendor_purchase_invoices.empty_attachment",
+                            "operations.vendor_purchase_invoices.invalid_attachment",
+                            "operations.vendor_purchase_invoices.invalid_write_evidence",
+                        ),
+                        mapping_owner=(
+                            "operations.vendor_purchase_invoices and "
+                            "operations.vendor_submission_confirmation"
+                        ),
+                        fail_closed_on=(
+                            "missing or mismatched invoice, project, vendor, or line",
+                            "duplicate invoice number or invalid source status",
+                            "missing quote, line, currency, or attachment evidence",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("vendor_purchase_invoice.changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and carries action, invoice, project, "
+                            "vendor, status, command, and correlation identifiers."
+                        ),
+                        replay=(
+                            "Canonical invoice, line, attachment-link, review, and ERP "
+                            "outbox rows rebuild current state; events retain transition "
+                            "evidence."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.vendor_purchase_invoices methods that wrote rows, "
+                            "files, reviews, and ERP requests while completing transactions"
+                        ),
+                        new_owner="operations.vendor_purchase_invoice_records",
+                        verification=(
+                            "Single-writer, lock, event, staged-file, atomic ERP enqueue, "
+                            "participant caller, and rollback tests."
+                        ),
+                        cutover_gate=(
+                            "Only typed invoice commands and signed confirmation call "
+                            "record staging paths."
+                        ),
+                        fallback_retirement=(
+                            "Direct adapter staging calls, helper commits/rollbacks, and "
+                            "pre-commit physical attachment deletion are removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_phase5_vendor_purchase_invoices.py",
+                        "tests/test_vendor_submission_proposals.py",
+                        "tests/architecture/test_vendor_purchase_invoice_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="operations.vendor_submission_confirmation",

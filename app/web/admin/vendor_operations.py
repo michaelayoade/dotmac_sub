@@ -16,7 +16,10 @@ from app.services.vendor_portal_operations import (
     ReviewVendorQuoteCommand,
     vendor_portal_operations,
 )
-from app.services.vendor_purchase_invoices import vendor_purchase_invoices
+from app.services.vendor_purchase_invoices import (
+    ReviewVendorPurchaseInvoiceCommand,
+    vendor_purchase_invoices,
+)
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vendors/operations", tags=["web-admin-vendor-operations"])
@@ -49,6 +52,17 @@ def _review_context(request: Request, *, quote_id: str) -> CommandContext:
         actor=_actor(request),
         scope=quote_id,
         reason="vendor_quote_review",
+    )
+
+
+def _invoice_review_context(request: Request, *, invoice_id: str) -> CommandContext:
+    command_id = uuid4()
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=_actor(request),
+        scope=invoice_id,
+        reason="vendor_purchase_invoice_review",
     )
 
 
@@ -136,12 +150,21 @@ def approve_vendor_invoice(
     _auth: dict = Depends(_write),
     db: Session = Depends(get_db),
 ):
-    vendor_purchase_invoices.approve(
-        db,
-        invoice_id,
-        reviewer_system_user_id=_actor(request),
-        review_notes=review_notes,
-    )
+    context = _invoice_review_context(request, invoice_id=invoice_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_purchase_invoices.review(
+            db,
+            ReviewVendorPurchaseInvoiceCommand(
+                context=context,
+                invoice_id=invoice_id,
+                reviewer_system_user_id=_actor(request),
+                approve=True,
+                review_notes=review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)
 
 
@@ -153,10 +176,19 @@ def request_vendor_invoice_revision(
     _auth: dict = Depends(_write),
     db: Session = Depends(get_db),
 ):
-    vendor_purchase_invoices.reject(
-        db,
-        invoice_id,
-        reviewer_system_user_id=_actor(request),
-        review_notes=review_notes,
-    )
+    context = _invoice_review_context(request, invoice_id=invoice_id)
+    db_session_adapter.release_read_transaction(db)
+    try:
+        vendor_purchase_invoices.review(
+            db,
+            ReviewVendorPurchaseInvoiceCommand(
+                context=context,
+                invoice_id=invoice_id,
+                reviewer_system_user_id=_actor(request),
+                approve=False,
+                review_notes=review_notes,
+            ),
+        )
+    except DomainError as exc:
+        raise _quote_error(exc) from exc
     return RedirectResponse("/admin/vendors/operations", status_code=303)

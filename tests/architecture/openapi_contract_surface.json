@@ -17472,7 +17472,7 @@
    ],
    "request": null,
    "responses": {
-    "200": "0cfbd3a6004c",
+    "200": "a2431939694c",
     "422": "a11c9d9b2af8"
    }
   },
@@ -19250,7 +19250,7 @@
   "VendorCapabilityCreate": "5bda8a17f6b0",
   "VendorCapabilityRead": "910c9e5aaf0a",
   "VendorCapabilityUpdate": "1530a7cc897f",
-  "VendorPurchaseInvoiceCreate": "a9c1281152d8",
+  "VendorPurchaseInvoiceCreate": "19fbbc4e1285",
   "VendorPurchaseInvoiceLineCreate": "2587fe7016e4",
   "VendorPurchaseInvoiceLineRead": "e57b8e825f4f",
   "VendorPurchaseInvoiceLineUpdate": "cd8eaead795e",

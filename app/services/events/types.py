@@ -88,6 +88,7 @@ class EventType(enum.Enum):
     vendor_project_started = "vendor_project.started"
     vendor_project_completed = "vendor_project.completed"
     vendor_quote_changed = "vendor_quote.changed"
+    vendor_purchase_invoice_changed = "vendor_purchase_invoice.changed"
     vendor_route_revision_changed = "vendor_route_revision.changed"
     vendor_as_built_submitted = "vendor_as_built.submitted"
     vendor_submission_confirmed = "vendor_submission.confirmed"
