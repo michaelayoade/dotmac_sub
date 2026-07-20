@@ -1,7 +1,7 @@
 """Add canonical capability-bound event subscriptions and deliveries.
 
-Revision ID: 375_integration_delivery
-Revises: 374_integration_capability_sync
+Revision ID: 378_integration_delivery
+Revises: 377_integration_capability_sync
 """
 
 import sqlalchemy as sa
@@ -9,8 +9,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "375_integration_delivery"
-down_revision = "374_integration_capability_sync"
+revision = "378_integration_delivery"
+down_revision = "377_integration_capability_sync"
 branch_labels = None
 depends_on = None
 

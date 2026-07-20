@@ -112,7 +112,7 @@ def test_active_migrations_do_not_extend_retired_integration_types() -> None:
 
     assert not offenders, (
         "Active migrations must not depend on the retired webhook enum; "
-        f"revision 377 owns cleanup of deployed legacy objects: {offenders}"
+        f"revision 380 owns cleanup of deployed legacy objects: {offenders}"
     )
 
 
@@ -120,8 +120,8 @@ def test_deployed_legacy_constraint_cleanup_is_idempotent() -> None:
     cleanup_statements = {
         node.value
         for revision in (
-            "374_integration_capability_sync.py",
-            "377_integration_platform_cutover.py",
+            "377_integration_capability_sync.py",
+            "380_integration_platform_cutover.py",
         )
         for node in ast.walk(
             ast.parse(_read(ACTIVE_MIGRATIONS / revision), filename=revision)

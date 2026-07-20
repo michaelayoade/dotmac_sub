@@ -214,15 +214,15 @@ def test_ambiguous_delivery_requires_reconciliation_before_replay(db_session) ->
 def test_delivery_migration_is_linear_and_contains_no_compatibility_columns() -> None:
     path = (
         Path(__file__).resolve().parents[1]
-        / "alembic/versions/375_integration_delivery.py"
+        / "alembic/versions/378_integration_delivery.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_374", path)
+    spec = importlib.util.spec_from_file_location("migration_378", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    assert module.revision == "375_integration_delivery"
-    assert module.down_revision == "374_integration_capability_sync"
+    assert module.revision == "378_integration_delivery"
+    assert module.down_revision == "377_integration_capability_sync"
     source = path.read_text(encoding="utf-8")
     assert "integration_event_subscriptions" in source
     assert "integration_deliveries" in source

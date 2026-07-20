@@ -2723,7 +2723,7 @@ Authority cutover is complete for the platform-managed first-party paths:
 | ERP | Direct ERP transport clients | `dotmac.erp` typed capabilities | Complete; ERP remains observation/transport only |
 | Payments | Direct Paystack/Flutterwave services and payment-specific webhook dead letters | Typed payment capabilities plus `integration.inbox` | Complete; billing owners alone decide financial state |
 
-Migration `377_integration_platform_cutover` removes the retired tables,
+Migration `380_integration_platform_cutover` removes the retired tables,
 columns, settings, and enums and has no downgrade path. Disabling or correcting
 the current binding is the recovery mechanism; retired transports are not a
 fallback.

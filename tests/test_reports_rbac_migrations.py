@@ -66,11 +66,11 @@ def test_reports_permission_migrations_form_the_single_head_chain():
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["377_integration_platform_cutover"]
+    assert script.get_heads() == ["380_integration_platform_cutover"]
     assert retire.revision in {
         item.revision
         for item in script.iterate_revisions(
-            "377_integration_platform_cutover", retire.revision, inclusive=True
+            "380_integration_platform_cutover", retire.revision, inclusive=True
         )
     }
 

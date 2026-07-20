@@ -117,15 +117,15 @@ def test_capability_sync_fails_closed_until_connection_validation(
 def test_capability_sync_migration_is_linear_and_contains_no_secret_material() -> None:
     path = (
         Path(__file__).resolve().parents[1]
-        / "alembic/versions/374_integration_capability_sync.py"
+        / "alembic/versions/377_integration_capability_sync.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_373", path)
+    spec = importlib.util.spec_from_file_location("migration_377", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    assert module.revision == "374_integration_capability_sync"
-    assert module.down_revision == "373_integration_platform_foundation"
+    assert module.revision == "377_integration_capability_sync"
+    assert module.down_revision == "376_integration_platform_foundation"
     source = path.read_text(encoding="utf-8")
     assert "integration_checkpoints" in source
     assert "capability_binding_id" in source

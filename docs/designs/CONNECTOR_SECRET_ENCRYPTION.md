@@ -70,5 +70,5 @@ re-exposes the secret ones. Covered by `tests/test_connector_header_masking.py`.
 ## Completed siblings
 
 - **Integration hooks** — the model, executable hook service, and secret-bearing
-  configuration were removed by `377_integration_platform_cutover`; outbound
+  configuration were removed by `380_integration_platform_cutover`; outbound
   HTTP delivery now uses installation-bound secret references.

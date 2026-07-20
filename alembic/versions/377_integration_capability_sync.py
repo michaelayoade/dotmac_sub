@@ -1,7 +1,7 @@
 """Bind integration sync jobs and runs to versioned capabilities.
 
-Revision ID: 374_integration_capability_sync
-Revises: 373_integration_platform_foundation
+Revision ID: 377_integration_capability_sync
+Revises: 376_integration_platform_foundation
 """
 
 import sqlalchemy as sa
@@ -9,8 +9,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "374_integration_capability_sync"
-down_revision = "373_integration_platform_foundation"
+revision = "377_integration_capability_sync"
+down_revision = "376_integration_platform_foundation"
 branch_labels = None
 depends_on = None
 
