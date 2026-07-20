@@ -327,6 +327,9 @@ class WorkOrderHeaderRead(WorkOrderHeaderBase):
 
     id: UUID
     public_id: str
+    # Native support provenance is read-only at generic dispatch boundaries.
+    # Only the ticket handoff owner can establish this relationship.
+    origin_ticket_id: UUID | None = None
     # Root-only CRM provenance reference; NULL for native rows.
     crm_work_order_id: str | None = None
     work_order_created_at: datetime | None = None

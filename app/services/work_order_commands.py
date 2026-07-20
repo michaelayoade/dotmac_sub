@@ -29,6 +29,7 @@ from app.models.dispatch import (
 )
 from app.models.project import Project
 from app.models.subscriber import Subscriber
+from app.models.support import Ticket
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
@@ -301,6 +302,7 @@ class WorkOrderCommands:
         request_id: str | None = None,
         idempotency_key: str | None = None,
         owner_metadata: dict[str, Any] | None = None,
+        origin_ticket_id: object | None = None,
         commit: bool = True,
     ) -> WorkOrder:
         data = _data(payload)
@@ -335,6 +337,22 @@ class WorkOrderCommands:
                 data["project_id"],
                 subscriber_id=data["subscriber_id"],
             )
+        normalized_origin_ticket_id: uuid.UUID | None = None
+        if origin_ticket_id is not None:
+            normalized_origin_ticket_id = coerce_uuid(origin_ticket_id)
+            ticket = db.get(Ticket, normalized_origin_ticket_id)
+            if ticket is None or not ticket.is_active:
+                raise WorkOrderCommandError(
+                    "origin_ticket_not_found",
+                    "Origin ticket not found",
+                    kind="not_found",
+                )
+            if ticket.subscriber_id != data["subscriber_id"]:
+                raise WorkOrderCommandError(
+                    "origin_ticket_subscriber_mismatch",
+                    "Work order and origin ticket must belong to the same subscriber",
+                    kind="invalid",
+                )
 
         supplied_metadata = dict(data.pop("metadata_", None) or {})
         supplied_metadata.pop("fiber_field_verification_plan", None)
@@ -347,7 +365,12 @@ class WorkOrderCommands:
             )
         supplied_metadata.update(owned_metadata)
         command_fingerprint = _fingerprint(
-            {"public_id": public_id, **data, "metadata": supplied_metadata}
+            {
+                "public_id": public_id,
+                **data,
+                "origin_ticket_id": normalized_origin_ticket_id,
+                "metadata": supplied_metadata,
+            }
         )
         existing = (
             db.query(WorkOrder).filter(WorkOrder.public_id == public_id).one_or_none()
@@ -369,6 +392,7 @@ class WorkOrderCommands:
             # Native work orders have no CRM provenance. Compatibility output
             # derives from public_id at the read boundary.
             metadata_=metadata,
+            origin_ticket_id=normalized_origin_ticket_id,
             work_order_created_at=data.get("work_order_created_at"),
             **data,
         )
@@ -387,6 +411,9 @@ class WorkOrderCommands:
                         "public_id": row.public_id,
                         "status": row.status,
                         "subscriber_id": str(row.subscriber_id),
+                        "origin_ticket_id": str(row.origin_ticket_id)
+                        if row.origin_ticket_id
+                        else None,
                     },
                 },
             )
