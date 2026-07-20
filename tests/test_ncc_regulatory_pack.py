@@ -145,7 +145,7 @@ def test_staff_section_degrades_when_erp_unconfigured(db_session):
         side_effect=ValueError("DotMac ERP is not configured"),
     ):
         section = ncc_regulatory_pack.staff_section(db_session)
-    assert section == {"available": False, "error": "dotmac_erp is not configured"}
+    assert section == {"available": False, "error": "back-office source unavailable"}
 
 
 # ── ③F financials ───────────────────────────────────────────────────────────

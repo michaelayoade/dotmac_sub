@@ -18,6 +18,7 @@ from app.models.dispatch import (
 )
 from app.models.project import Project
 from app.models.subscriber import Subscriber
+from app.models.support import Ticket
 from app.models.work_order import WorkOrder
 from app.schemas.dispatch import (
     WorkOrderAssignmentQueueCreate,
@@ -326,12 +327,28 @@ def list_page(
     queue_status = _queue_status_by_work_order(db, [row for row, _ in rows])
     project_options = _project_options(db)
     project_labels = {item["id"]: item["label"] for item in project_options}
+    origin_ticket_ids = {
+        row.origin_ticket_id for row, _subscriber in rows if row.origin_ticket_id
+    }
+    origin_tickets = (
+        {
+            ticket.id: ticket
+            for ticket in db.query(Ticket)
+            .filter(Ticket.id.in_(origin_ticket_ids))
+            .all()
+        }
+        if origin_ticket_ids
+        else {}
+    )
     items = [
         {
             "work_order": row,
             "subscriber": subscriber,
             "subscriber_label": _subscriber_label(subscriber),
             "project_label": project_labels.get(str(row.project_id)),
+            "origin_ticket": origin_tickets.get(row.origin_ticket_id)
+            if row.origin_ticket_id
+            else None,
             "queue_status": queue_status.get(str(row.id)),
             "actions": {"queue": _queue_action(row)},
         }

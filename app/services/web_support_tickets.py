@@ -1290,12 +1290,21 @@ def render_tickets_csv(
     return buffer.getvalue()
 
 
-def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
+def build_ticket_detail_context(
+    db: Session,
+    *,
+    ticket_lookup: str,
+    actor_id: str | None = None,
+) -> dict:
+    from uuid import uuid4
+
+    from app.services import ticket_work_order_handoff
     from app.services.audit_helpers import build_audit_activities
 
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
+    linked_work_orders = ticket_work_order_handoff.list_for_ticket(db, ticket.id)
     comments = support_service.ticket_comments.list(
         db, str(ticket.id), limit=500, offset=0
     )
@@ -1369,4 +1378,9 @@ def build_ticket_detail_context(db: Session, *, ticket_lookup: str) -> dict:
             or support_ticket_settings_service.status_is_merged(ticket.status)
         ),
         "identity_resolution": _identity_resolution_summary(ticket),
+        "linked_work_orders": linked_work_orders,
+        "issue_work_order_action": ticket_work_order_handoff.issue_action(
+            db, ticket, actor_id=actor_id
+        ),
+        "work_order_idempotency_key": uuid4().hex,
     }

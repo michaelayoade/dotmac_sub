@@ -192,6 +192,9 @@
                     <td class="px-5 py-4 align-top">
                         <div class="font-semibold text-slate-900 dark:text-white">{{ wo.title }}</div>
                         <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ wo.public_id }}</div>
+                        {% if item.origin_ticket %}
+                        <a href="/admin/support/tickets/{{ item.origin_ticket.id }}" class="mt-1 inline-block text-xs font-semibold text-amber-700 hover:underline dark:text-amber-300">From ticket {{ item.origin_ticket.number or item.origin_ticket.id }}</a>
+                        {% endif %}
                         <div class="mt-2 flex flex-wrap gap-2">
                             {{ wo_status(wo.status) }}
                             {% if item.queue_status %}{{ status_badge(item.queue_status|replace('_', ' ')|title, variant="info") }}{% endif %}

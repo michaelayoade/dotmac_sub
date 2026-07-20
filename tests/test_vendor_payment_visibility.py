@@ -50,7 +50,7 @@ def _invoice(db_session) -> VendorPurchaseInvoice:
     install = InstallationProject(
         project_id=project.id,
         assigned_vendor_id=vendor.id,
-        erp_purchase_order_id="PO-2026-0042",
+        procurement_order_reference="PO-2026-0042",
     )
     db_session.add(install)
     db_session.flush()
@@ -61,10 +61,11 @@ def _invoice(db_session) -> VendorPurchaseInvoice:
         status=VendorPurchaseInvoiceStatus.approved.value,
         currency="NGN",
         total=Decimal("100000.00"),
-        erp_purchase_invoice_id=str(uuid4()),
+        payables_system="dotmac_erp",
+        payables_document_reference=str(uuid4()),
         # Creation response snapshot: deliberately not payment evidence.
-        erp_purchase_invoice_creation_status="draft",
-        erp_purchase_invoice_status=None,
+        payables_document_status="draft",
+        payment_status=None,
     )
     db_session.add(invoice)
     db_session.commit()
@@ -74,7 +75,7 @@ def _invoice(db_session) -> VendorPurchaseInvoice:
 def _response(invoice: VendorPurchaseInvoice, *, status: str = "partially_paid"):
     return {
         "source_invoice_id": str(invoice.id),
-        "purchase_invoice_id": invoice.erp_purchase_invoice_id,
+        "purchase_invoice_id": invoice.payables_document_reference,
         "invoice_number": "PINV-2026-0042",
         "status": status,
         "currency": "NGN",
@@ -102,12 +103,12 @@ def test_refresher_projects_reconciled_erp_observation_idempotently(db_session):
     db_session.refresh(invoice)
 
     assert first == {"processed": 1, "observed": 1, "changed": 1, "errors": []}
-    assert invoice.erp_purchase_invoice_status == "partially_paid"
-    assert invoice.erp_purchase_invoice_total_amount == Decimal("100000.000000")
-    assert invoice.erp_purchase_invoice_amount_paid == Decimal("40000.000000")
-    assert invoice.erp_purchase_invoice_balance_due == Decimal("60000.000000")
-    assert _as_utc(invoice.erp_purchase_invoice_status_observed_at) == observed_at
-    assert invoice.erp_purchase_invoice_status_error is None
+    assert invoice.payment_status == "partially_paid"
+    assert invoice.payment_total_amount == Decimal("100000.000000")
+    assert invoice.payment_amount_paid == Decimal("40000.000000")
+    assert invoice.payment_balance_due == Decimal("60000.000000")
+    assert _as_utc(invoice.payment_observed_at) == observed_at
+    assert invoice.payment_observation_error is None
 
     second = refresh_purchase_invoice_statuses(
         db_session,
@@ -138,9 +139,9 @@ def test_refresh_failure_retains_last_good_observation(db_session):
     assert result["observed"] == 0
     assert result["changed"] == 0
     assert result["errors"] == [f"{invoice.id}: ERP unavailable"]
-    assert invoice.erp_purchase_invoice_status == "partially_paid"
-    assert _as_utc(invoice.erp_purchase_invoice_status_observed_at) == observed_at
-    assert invoice.erp_purchase_invoice_status_error == "ERP unavailable"
+    assert invoice.payment_status == "partially_paid"
+    assert _as_utc(invoice.payment_observed_at) == observed_at
+    assert invoice.payment_observation_error == "ERP unavailable"
 
 
 def test_invalid_erp_observation_is_rejected_without_overwriting_last_good(db_session):
@@ -164,9 +165,9 @@ def test_invalid_erp_observation_is_rejected_without_overwriting_last_good(db_se
     assert result["observed"] == 0
     assert result["changed"] == 0
     assert "currency does not match" in result["errors"][0]
-    assert current.erp_purchase_invoice_status == "partially_paid"
-    assert current.erp_purchase_invoice_amount_paid == Decimal("40000.000000")
-    assert current.erp_purchase_invoice_status_error == (
+    assert current.payment_status == "partially_paid"
+    assert current.payment_amount_paid == Decimal("40000.000000")
+    assert current.payment_observation_error == (
         "ERP payment observation currency does not match"
     )
 
@@ -186,16 +187,16 @@ def test_creation_replay_cannot_overwrite_refreshed_payment_status(db_session):
             id="replayed-create",
             entity_id=invoice.id,
             erp_response={
-                "purchase_invoice_id": invoice.erp_purchase_invoice_id,
+                "purchase_invoice_id": invoice.payables_document_reference,
                 "status": "draft",
             },
         ),
     )
     current = db_session.get(VendorPurchaseInvoice, invoice.id)
 
-    assert current.erp_purchase_invoice_creation_status == "draft"
-    assert current.erp_purchase_invoice_status == "paid"
-    assert current.erp_purchase_invoice_amount_paid == Decimal("100000.000000")
+    assert current.payables_document_status == "draft"
+    assert current.payment_status == "paid"
+    assert current.payment_amount_paid == Decimal("100000.000000")
 
 
 def test_client_uses_source_invoice_status_contract() -> None:
@@ -213,18 +214,15 @@ def test_client_uses_source_invoice_status_contract() -> None:
 def _projection_row(**overrides):
     values = {
         "currency": "NGN",
-        "erp_purchase_invoice_id": "erp-1",
-        "erp_purchase_invoice_status": "paid",
-        "erp_purchase_invoice_total_amount": Decimal("100000"),
-        "erp_purchase_invoice_amount_paid": Decimal("100000"),
-        "erp_purchase_invoice_balance_due": Decimal("0"),
-        "erp_purchase_invoice_status_observed_at": datetime(
-            2026, 7, 20, 12, 0, tzinfo=UTC
-        ),
-        "erp_purchase_invoice_status_source_updated_at": datetime(
-            2026, 7, 20, 11, 55, tzinfo=UTC
-        ),
-        "erp_purchase_invoice_status_error": None,
+        "payables_system": "dotmac_erp",
+        "payables_document_reference": "erp-1",
+        "payment_status": "paid",
+        "payment_total_amount": Decimal("100000"),
+        "payment_amount_paid": Decimal("100000"),
+        "payment_balance_due": Decimal("0"),
+        "payment_observed_at": datetime(2026, 7, 20, 12, 0, tzinfo=UTC),
+        "payment_source_updated_at": datetime(2026, 7, 20, 11, 55, tzinfo=UTC),
+        "payment_observation_error": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -238,7 +236,7 @@ def test_projection_distinguishes_current_stale_and_unobserved_state() -> None:
     assert current.amount_paid.value == Decimal("100000")
 
     stale = project_vendor_payment_status(
-        _projection_row(erp_purchase_invoice_status_error="ERP unavailable"),
+        _projection_row(payment_observation_error="ERP unavailable"),
         now=now,
     )
     assert stale.status.kind is StateKind.stale
@@ -246,11 +244,11 @@ def test_projection_distinguishes_current_stale_and_unobserved_state() -> None:
 
     unobserved = project_vendor_payment_status(
         _projection_row(
-            erp_purchase_invoice_status="draft",
-            erp_purchase_invoice_status_observed_at=None,
-            erp_purchase_invoice_total_amount=None,
-            erp_purchase_invoice_amount_paid=None,
-            erp_purchase_invoice_balance_due=None,
+            payment_status="draft",
+            payment_observed_at=None,
+            payment_total_amount=None,
+            payment_amount_paid=None,
+            payment_balance_due=None,
         ),
         now=now,
     )
@@ -260,7 +258,7 @@ def test_projection_distinguishes_current_stale_and_unobserved_state() -> None:
 
 def test_vendor_template_and_sot_use_only_refreshed_payment_observation() -> None:
     assert "invoice.payment.status.is_present" in TEMPLATE
-    assert "invoice.erp_purchase_invoice_status" not in TEMPLATE
+    assert "invoice.payment_status" not in TEMPLATE
     assert "Observed" in TEMPLATE
     assert "GET /api/v1/sync/sub/purchase-invoices/{source_invoice_id}" in SOT
     assert "never proves paid or unpaid state" in SOT

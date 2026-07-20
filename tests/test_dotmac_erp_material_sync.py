@@ -30,9 +30,10 @@ from app.models.field_material import (
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
+from app.services import backoffice
 from app.services.dotmac_erp import material_sync, outbox
 from app.services.field.material_requests import field_material_requests
-from app.services.integrations.connectors.dotmac_erp import ERP_OUTBOX_CAPABILITY
+from app.services.integrations.backoffice_contracts import ERP_OUTBOX_CAPABILITY
 from tests.integration_platform_helpers import enable_erp_capability
 
 # ---------------------------------------------------------------------------
@@ -131,7 +132,8 @@ def _make_approved_request(db, *, crm_work_order_id="wo-mat") -> FieldMaterialRe
     """Create → submit → approve a request via the real service.
 
     Enqueue behavior is determined by recorded ownership and an enabled typed
-    capability; tests establish those contracts before calling this helper.
+    capability. A missing capability is recorded for reconciliation and does
+    not reverse the Sub-owned approval.
     """
     crm_person_id = f"crm-tech-{uuid4().hex[:8]}"
     user = _user(db)
@@ -262,6 +264,10 @@ def _outbox_rows(db, request) -> list[FieldErpSyncEvent]:
 def test_approve_does_not_enqueue_before_ownership_cutover(db_session):
     request = _make_approved_request(db_session)
     assert _outbox_rows(db_session, request) == []
+    assert not any(
+        event.get("event") == "backoffice_delivery_pending"
+        for event in (request.metadata_ or {}).get("manager_events", [])
+    )
 
 
 def test_approve_enqueues_with_owner_and_enabled_capability(db_session):
@@ -279,7 +285,7 @@ def test_approve_enqueues_with_owner_and_enabled_capability(db_session):
     assert row.payload["request_type"] == "ISSUE"
 
 
-def test_approval_and_outbox_enqueue_are_atomic(db_session, monkeypatch):
+def test_adapter_failure_does_not_reverse_sub_approval(db_session, monkeypatch):
     request = _make_approved_request(db_session)
     request.status = "submitted"
     request.approved_at = None
@@ -290,39 +296,31 @@ def test_approval_and_outbox_enqueue_are_atomic(db_session, monkeypatch):
     def fail_enqueue(*args, **kwargs):
         raise RuntimeError("outbox unavailable")
 
-    monkeypatch.setattr(material_sync, "enqueue_material_request", fail_enqueue)
-
-    import pytest
-
-    savepoint = db_session.begin_nested()
-    with pytest.raises(RuntimeError, match="outbox unavailable"):
-        field_material_requests.approve(db_session, str(request.id))
-
-    savepoint.rollback()
+    monkeypatch.setattr(backoffice, "enqueue_material_support", fail_enqueue)
+    field_material_requests.approve(db_session, str(request.id))
     db_session.expire_all()
     persisted = db_session.get(FieldMaterialRequest, request.id)
-    assert persisted.status == "submitted"
-    assert persisted.approved_at is None
+    assert persisted.status == "approved"
+    assert persisted.approved_at is not None
+    assert (persisted.metadata_ or {})["manager_events"][-1]["event"] == (
+        "backoffice_delivery_pending"
+    )
     assert _outbox_rows(db_session, persisted) == []
 
 
-def test_approval_fails_closed_when_cutover_owner_has_sync_disabled(db_session):
+def test_approval_survives_when_provider_capability_is_disabled(db_session):
     request = _make_approved_request(db_session)
     request.status = "submitted"
     request.approved_at = None
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
     db_session.commit()
 
-    import pytest
-    from fastapi import HTTPException
-
-    savepoint = db_session.begin_nested()
-    with pytest.raises(HTTPException) as exc_info:
-        field_material_requests.approve(db_session, str(request.id))
-
-    assert exc_info.value.status_code == 503
-    assert "approval cannot be recorded" in str(exc_info.value.detail)
-    savepoint.rollback()
+    result = field_material_requests.approve(db_session, str(request.id))
+    assert result["status"] == "approved"
+    assert _outbox_rows(db_session, request) == []
+    assert (request.metadata_ or {})["manager_events"][-1]["event"] == (
+        "backoffice_delivery_pending"
+    )
 
 
 def test_reenqueue_reuses_the_same_outbox_row(db_session):
@@ -357,8 +355,8 @@ def test_delivery_accepted_writes_erp_fields_back(db_session):
 
     db_session.refresh(request)
     assert result.accepted == 1
-    assert request.erp_material_request_id == "ERP-MR-1"
-    assert request.erp_material_status == "issued"
+    assert request.support_reference == "ERP-MR-1"
+    assert request.support_status == "issued"
     assert request.status == "fulfilled"
     assert request.fulfilled_at is not None
     allocation = db_session.query(FieldWorkOrderMaterial).one()
@@ -377,7 +375,7 @@ def test_delivery_fulfilled_maps_terminal_status(db_session):
     outbox.deliver_pending(db_session, client=client)
 
     db_session.refresh(request)
-    assert request.erp_material_status == "fulfilled"
+    assert request.support_status == "fulfilled"
     assert request.status == "fulfilled"
     assert request.fulfilled_at is not None
 
@@ -394,7 +392,7 @@ def test_delivery_rejected_records_erp_status(db_session):
     row = _outbox_rows(db_session, request)[0]
     assert result.rejected == 1
     assert row.status == FieldErpSyncStatus.rejected.value
-    assert request.erp_material_status == "rejected"
+    assert request.support_status == "rejected"
     assert request.status == "canceled"
 
 
@@ -416,7 +414,7 @@ def test_delivery_refused_when_flow_owned_by_crm(db_session):
     db_session.refresh(request)
     assert result.skipped_not_owned == 1
     assert client.posts == []
-    assert request.erp_material_request_id is None
+    assert request.support_reference is None
     row = _outbox_rows(db_session, request)[0]
     assert row.status == FieldErpSyncStatus.pending.value
     assert row.attempts == 0
@@ -434,7 +432,7 @@ def test_local_issue_is_blocked_after_material_flow_cutover(db_session):
         field_material_requests.issue(db_session, str(request.id))
 
     assert exc_info.value.status_code == 409
-    assert "ERP owns material issue" in str(exc_info.value.detail)
+    assert "back-office system owns material issue" in str(exc_info.value.detail)
 
 
 # ---------------------------------------------------------------------------
@@ -444,8 +442,9 @@ def test_local_issue_is_blocked_after_material_flow_cutover(db_session):
 
 def test_refresh_updates_status_for_in_flight_request(db_session):
     request = _make_approved_request(db_session)
-    request.erp_material_request_id = "ERP-MR-9"
-    request.erp_material_status = "issued"
+    request.support_system = "dotmac_erp"
+    request.support_reference = "ERP-MR-9"
+    request.support_status = "issued"
     request.status = "issued"
     db_session.commit()
 
@@ -458,7 +457,7 @@ def test_refresh_updates_status_for_in_flight_request(db_session):
     assert result["processed"] == 1
     assert result["updated"] == 1
     assert client.status_calls == [str(request.id)]
-    assert request.erp_material_status == "fulfilled"
+    assert request.support_status == "fulfilled"
     assert request.status == "fulfilled"
 
 
@@ -467,7 +466,8 @@ def test_refresh_skips_unsynced_and_terminal_requests(db_session):
     unsynced = _make_approved_request(db_session, crm_work_order_id="wo-a")
     # Synced but already fulfilled (terminal) → excluded from the in-flight poll.
     fulfilled = _make_approved_request(db_session, crm_work_order_id="wo-b")
-    fulfilled.erp_material_request_id = "ERP-DONE"
+    fulfilled.support_system = "dotmac_erp"
+    fulfilled.support_reference = "ERP-DONE"
     fulfilled.status = "fulfilled"
     db_session.commit()
 
@@ -476,4 +476,4 @@ def test_refresh_skips_unsynced_and_terminal_requests(db_session):
 
     assert result["processed"] == 0
     assert client.status_calls == []
-    assert unsynced.erp_material_request_id is None
+    assert unsynced.support_reference is None

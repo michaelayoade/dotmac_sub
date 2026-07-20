@@ -72,7 +72,7 @@ def _build_erp_sync_ownership(db) -> dict[str, object]:
     """
     try:
         from app.models.field_erp_sync import SyncFlowOwner, get_flow_ownership
-        from app.services.integrations.connectors.dotmac_erp import (
+        from app.services.integrations.backoffice_contracts import (
             ERP_OUTBOX_CAPABILITY,
         )
         from app.services.integrations.erp_capability import capability_enabled
