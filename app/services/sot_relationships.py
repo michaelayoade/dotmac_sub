@@ -659,9 +659,13 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "payment-proof review lifecycle",
                     "proof-backed payment request",
+                    "payment-proof reviewer notification request lifecycle",
                     "withholding-tax receivable source records",
                 ),
-                depends_on=("financial.payments",),
+                depends_on=(
+                    "financial.payments",
+                    "communications.staff_notifications",
+                ),
             ),
             SOTService(
                 name="financial.tax_accounting",
@@ -2357,10 +2361,32 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="operations.sla_escalation",
+                module="app.services.operational_escalation",
+                owns=(
+                    "operational SLA event policy lifecycle",
+                    "event-scoped escalation timing and channel policy",
+                    "operational escalation event and delivery planning",
+                    "operational escalation acknowledgement and cancellation",
+                ),
+                notes=(
+                    "Operational domains emit named facts. Operators configure "
+                    "entity type, event key, levels, delays and delivery channels "
+                    "in the admin UI; domain services do not embed SLA timings."
+                ),
+            ),
+            SOTService(
                 name="communications.staff_notifications",
                 module="app.services.staff_notifications",
-                owns=("admin/staff notification creation",),
-                depends_on=("communications.notification_service",),
+                owns=(
+                    "admin/staff notification creation",
+                    "permission-targeted staff notification audience resolution",
+                    "staff review inbox materialization",
+                ),
+                depends_on=(
+                    "communications.notification_service",
+                    "operations.sla_escalation",
+                ),
             ),
             SOTService(
                 name="communications.campaigns",
@@ -2463,6 +2489,26 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         domain="runtime_infrastructure",
         services=(
             SOTService(
+                name="runtime.realtime_projection",
+                module="app.services.realtime_platform",
+                owns=(
+                    "versioned real-time event envelope",
+                    "Redis topic naming and best-effort publication",
+                    "shared WebSocket and SSE delivery semantics",
+                    "reconnect and no-replay refresh contract",
+                ),
+                depends_on=("auth.permission_gate",),
+                notes=(
+                    "Real-time events are non-durable projections after an "
+                    "owning domain commits state. Redis pub/sub is at-most-once; "
+                    "clients refetch canonical read models after reconnect or "
+                    "reset. Client-selected topics are authorized by "
+                    "app.services.realtime_subscriptions; workqueue topics are "
+                    "derived by its scope owner. WebSocket and SSE modules are "
+                    "transport adapters only."
+                ),
+            ),
+            SOTService(
                 name="runtime.db_sessions",
                 module="app.services.db_session_adapter",
                 owns=(
@@ -2506,13 +2552,16 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         entrypoints=(
             "app.tasks.*",
             "app.main",
+            "app.websocket.*",
+            "app.api.workqueue",
             "app.services.scheduler_config",
             "app.web.admin.system",
         ),
         rule=(
-            "Infrastructure tasks use shared DB/session/lock and heartbeat "
-            "helpers; polling writes observations while network/device resolvers "
-            "interpret state."
+            "Real-time delivery projects already-committed state and never "
+            "becomes a decision owner or durable event log. Infrastructure "
+            "tasks use shared DB/session/lock and heartbeat helpers; polling "
+            "writes observations while network/device resolvers interpret state."
         ),
     ),
     DomainSOT(
@@ -2593,12 +2642,28 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "operator-visible ticket status subset",
                     "ticket priority and type options",
-                    "ticket routing and SLA policy",
+                    "ticket routing and priority/type SLA target policy",
                 ),
                 depends_on=("support.ticket_lifecycle",),
                 notes=(
                     "Configured status choices are constrained to the lifecycle "
-                    "vocabulary and do not own semantic colors or tones."
+                    "vocabulary and do not own semantic colors or tones. Every "
+                    "ticket SLA target is operator-managed in the ticket settings UI."
+                ),
+            ),
+            SOTService(
+                name="support.ticket_sla_clock",
+                module="app.services.sla_assignment",
+                owns=(
+                    "ticket SLA policy assignment",
+                    "ticket SLA clock lifecycle",
+                    "ticket SLA breach records",
+                    "ticket SLA breach event emission",
+                ),
+                depends_on=(
+                    "support.ticket_lifecycle",
+                    "support.ticket_configuration",
+                    "operations.sla_escalation",
                 ),
             ),
             SOTService(

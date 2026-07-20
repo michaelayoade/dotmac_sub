@@ -51,13 +51,9 @@ def test_reports_permission_migrations_form_the_single_head_chain():
         "as_built_review_chain",
         "374_as_built_review_evidence.py",
     )
-    work_order_evidence = _load(
+    current = _load(
         "work_order_evidence_policy_chain",
         "375_work_order_evidence_policy.py",
-    )
-    current = _load(
-        "replaceable_backoffice_boundary_chain",
-        "381_replaceable_backoffice_boundary.py",
     )
 
     assert granular.down_revision == "369_vendor_lifecycle_evidence"
@@ -65,18 +61,18 @@ def test_reports_permission_migrations_form_the_single_head_chain():
     assert vendor_payment.down_revision == retire.revision
     assert vendor_review.down_revision == vendor_payment.revision
     assert as_built_review.down_revision == vendor_review.revision
-    assert work_order_evidence.down_revision == as_built_review.revision
-    assert current.down_revision == "380_integration_platform_cutover"
+    assert current.down_revision == as_built_review.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [current.revision]
+    # Single-headed with the reports chain in the head's ancestry; asserting
+    # the exact head breaks on every migration added after it.
+    heads = script.get_heads()
+    assert len(heads) == 1
     assert retire.revision in {
         item.revision
-        for item in script.iterate_revisions(
-            current.revision, retire.revision, inclusive=True
-        )
+        for item in script.iterate_revisions(heads[0], retire.revision, inclusive=True)
     }
 
 

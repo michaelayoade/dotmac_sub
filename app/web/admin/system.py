@@ -4369,6 +4369,9 @@ def ticket_settings_page(request: Request, db: Session = Depends(get_db)):
             db
         ),
         "sla_policy": support_ticket_settings_service.sla_policy(db),
+        "ticket_type_sla_policy": support_ticket_settings_service.ticket_type_sla_policy(
+            db
+        ),
         "staff_options": staff_options,
         "assignment_rules": support_ticket_settings_service.list_assignment_rules(db),
         "assignment_strategies": ["round_robin", "least_loaded"],
@@ -4420,6 +4423,8 @@ def ticket_settings_update(
     sla_response_hours = form.getlist("sla_response_hours")
     sla_resolution_hours = form.getlist("sla_resolution_hours")
     sla_aging_hours = form.getlist("sla_aging_hours")
+    sla_ticket_types = form.getlist("sla_ticket_types")
+    sla_ticket_type_resolution_hours = form.getlist("sla_ticket_type_resolution_hours")
     errors: list[str] = []
     try:
         support_ticket_settings_service.update_options(
@@ -4444,6 +4449,8 @@ def ticket_settings_update(
             sla_response_hours=sla_response_hours,
             sla_resolution_hours=sla_resolution_hours,
             sla_aging_hours=sla_aging_hours,
+            sla_ticket_types=sla_ticket_types,
+            sla_ticket_type_resolution_hours=sla_ticket_type_resolution_hours,
         )
         return RedirectResponse(
             url="/admin/system/ticket-settings?saved=1", status_code=303
@@ -4486,6 +4493,9 @@ def ticket_settings_update(
                     db
                 ),
                 "sla_policy": support_ticket_settings_service.sla_policy(db),
+                "ticket_type_sla_policy": support_ticket_settings_service.ticket_type_sla_policy(
+                    db
+                ),
                 "staff_options": support_service.list_assignment_people(db),
                 "assignment_rules": support_ticket_settings_service.list_assignment_rules(
                     db

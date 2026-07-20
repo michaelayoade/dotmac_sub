@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.operational_escalation import (
     OperationalDeliveryStatus,
+    OperationalEntityType,
     OperationalEscalationDelivery,
     OperationalEscalationEvent,
     OperationalEscalationPolicy,
@@ -26,6 +30,180 @@ DEFAULT_ESCALATION_PARTICIPANTS = {
     OperationalParticipantType.team,
     OperationalParticipantType.duty_role,
 }
+SEVERITY_RANK = {
+    "info": 0,
+    "low": 1,
+    "minor": 1,
+    "warning": 2,
+    "medium": 2,
+    "moderate": 2,
+    "high": 3,
+    "major": 3,
+    "critical": 4,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class SlaEventDefinition:
+    """A business event that can emit a UI-configured SLA escalation."""
+
+    trigger: str
+    entity_type: str
+    label: str
+    description: str
+
+
+@dataclass(frozen=True, slots=True)
+class SlaEmissionResult:
+    """Events and deliveries materialized for one observed operational fact."""
+
+    policy_count: int
+    events: tuple[OperationalEscalationEvent, ...]
+    deliveries: tuple[OperationalEscalationDelivery, ...]
+
+
+OPERATIONAL_ENTITY_TYPES = (
+    OperationalEntityType.outage,
+    OperationalEntityType.ticket,
+    OperationalEntityType.work_order,
+    OperationalEntityType.project,
+    OperationalEntityType.project_task,
+    OperationalEntityType.inbox_conversation,
+    OperationalEntityType.subscriber,
+    OperationalEntityType.network_device,
+    OperationalEntityType.site,
+    OperationalEntityType.payment_incident,
+    OperationalEntityType.payment_proof,
+    OperationalEntityType.provisioning_failure,
+)
+
+KNOWN_SLA_EVENT_DEFINITIONS = (
+    SlaEventDefinition(
+        trigger="payment_proof.review_requested",
+        entity_type=OperationalEntityType.payment_proof,
+        label="Payment proof awaiting review",
+        description=(
+            "Escalates an unresolved bank-transfer receipt to staff who can verify "
+            "payment proofs. The initial work item always appears in their inbox."
+        ),
+    ),
+    SlaEventDefinition(
+        trigger="ticket.sla_breached",
+        entity_type=OperationalEntityType.ticket,
+        label="Ticket SLA breached",
+        description="Escalates a support ticket after its configured SLA clock breaches.",
+    ),
+    SlaEventDefinition(
+        trigger="project_task.sla_breached",
+        entity_type=OperationalEntityType.project_task,
+        label="Project task SLA breached",
+        description="Escalates a project task after its configured due clock breaches.",
+    ),
+    SlaEventDefinition(
+        trigger="outage.created",
+        entity_type=OperationalEntityType.outage,
+        label="Outage created",
+        description="Escalates a newly detected outage to its operational audience.",
+    ),
+    SlaEventDefinition(
+        trigger="outage.confirmed",
+        entity_type=OperationalEntityType.outage,
+        label="Outage confirmed",
+        description="Escalates an outage after an operator confirms it.",
+    ),
+)
+
+
+def validate_sla_event(*, entity_type: str, trigger: str) -> tuple[str, str]:
+    """Validate operator-owned policy keys without closing the event registry."""
+    normalized_entity_type = entity_type.strip().lower()
+    normalized_trigger = trigger.strip().lower()
+    if normalized_entity_type not in OPERATIONAL_ENTITY_TYPES:
+        raise ValueError(f"Unsupported operational entity type: {entity_type}")
+    if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+", normalized_trigger):
+        raise ValueError(
+            "Event key must use dotted lower-case names, for example ticket.unowned"
+        )
+    if len(normalized_trigger) > 80:
+        raise ValueError("Event key must be 80 characters or fewer")
+    if normalized_trigger.split(".", 1)[0] != normalized_entity_type:
+        raise ValueError("Event key prefix must match the operational entity type")
+    known = next(
+        (
+            definition
+            for definition in KNOWN_SLA_EVENT_DEFINITIONS
+            if definition.trigger == normalized_trigger
+        ),
+        None,
+    )
+    if known is not None and known.entity_type != normalized_entity_type:
+        raise ValueError(
+            f"{normalized_trigger} belongs to operational entity {known.entity_type}"
+        )
+    return normalized_entity_type, normalized_trigger
+
+
+def matching_policies(
+    db: Session,
+    *,
+    entity_type: str,
+    trigger: str,
+    severity: str | None = None,
+    affected_customer_count: int | None = None,
+) -> list[OperationalEscalationPolicy]:
+    """Return active UI-owned policies for one emitted business event."""
+    policies = list(
+        db.query(OperationalEscalationPolicy)
+        .filter(OperationalEscalationPolicy.is_active.is_(True))
+        .filter(
+            or_(
+                OperationalEscalationPolicy.entity_type == entity_type,
+                OperationalEscalationPolicy.entity_type.is_(None),
+            )
+        )
+        .filter(
+            or_(
+                OperationalEscalationPolicy.trigger == trigger,
+                OperationalEscalationPolicy.trigger.is_(None),
+            )
+        )
+        .order_by(
+            OperationalEscalationPolicy.level.asc(),
+            OperationalEscalationPolicy.created_at.asc(),
+        )
+        .all()
+    )
+    return [
+        policy
+        for policy in policies
+        if policy_matches_event(
+            policy,
+            severity=severity,
+            affected_customer_count=affected_customer_count,
+        )
+    ]
+
+
+def policy_matches_event(
+    policy: OperationalEscalationPolicy,
+    *,
+    severity: str | None,
+    affected_customer_count: int | None,
+) -> bool:
+    """Apply UI-configured observation thresholds to an emitted event."""
+    if policy.min_severity:
+        if severity is None:
+            return False
+        actual = severity.strip().lower()
+        minimum = policy.min_severity.strip().lower()
+        if SEVERITY_RANK.get(actual, -1) < SEVERITY_RANK.get(minimum, -1):
+            return False
+    if policy.min_affected_customers is not None:
+        if affected_customer_count is None:
+            return False
+        if affected_customer_count < policy.min_affected_customers:
+            return False
+    return True
 
 
 def _entity_id(value: str | UUID) -> str:
@@ -239,9 +417,10 @@ def create_policy(
     *,
     name: str,
     entity_type: str | None = None,
+    trigger: str | None = None,
     level: int = 1,
     channels: list[str] | None = None,
-    cooldown_seconds: int = 1800,
+    cooldown_seconds: int = 0,
     scope_type: str | None = None,
     scope_id: str | None = None,
     min_severity: str | None = None,
@@ -256,6 +435,7 @@ def create_policy(
     policy = OperationalEscalationPolicy(
         name=name,
         entity_type=entity_type,
+        trigger=trigger,
         scope_type=scope_type,
         scope_id=scope_id,
         level=level,
@@ -273,6 +453,69 @@ def create_policy(
     db.add(policy)
     db.flush()
     return policy
+
+
+def update_policy(
+    db: Session,
+    policy: OperationalEscalationPolicy,
+    *,
+    name: str,
+    entity_type: str,
+    trigger: str,
+    level: int,
+    channels: list[str],
+    min_severity: str | None,
+    min_affected_customers: int | None,
+    unresolved_after_seconds: int,
+    metadata: dict | None,
+    is_active: bool,
+) -> OperationalEscalationPolicy:
+    """Canonical mutation boundary for an operational SLA policy."""
+    policy.name = name
+    policy.entity_type = entity_type
+    policy.trigger = trigger
+    policy.level = level
+    policy.channels = channels
+    policy.min_severity = min_severity
+    policy.min_affected_customers = min_affected_customers
+    policy.unresolved_after_seconds = unresolved_after_seconds
+    policy.cooldown_seconds = 0
+    policy.metadata_ = metadata
+    policy.is_active = is_active
+    db.flush()
+    return policy
+
+
+def commit_policy(
+    db: Session,
+    policy: OperationalEscalationPolicy,
+    *,
+    is_active: bool | None = None,
+) -> OperationalEscalationPolicy:
+    """Commit a policy mutation through the canonical owner."""
+    if is_active is not None:
+        policy.is_active = is_active
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+def deactivate_policy(
+    db: Session,
+    policy: OperationalEscalationPolicy,
+) -> OperationalEscalationPolicy:
+    """Deactivate an SLA policy without deleting its historical identity."""
+    policy.is_active = False
+    db.flush()
+    return policy
+
+
+def deactivate_policy_committed(
+    db: Session,
+    policy: OperationalEscalationPolicy,
+) -> OperationalEscalationPolicy:
+    deactivate_policy(db, policy)
+    return commit_policy(db, policy)
 
 
 def record_event(
@@ -302,6 +545,96 @@ def record_event(
     db.add(event)
     db.flush()
     return event
+
+
+def record_event_once(
+    db: Session,
+    *,
+    entity_type: str,
+    entity_id: str | UUID,
+    trigger: str,
+    policy: OperationalEscalationPolicy,
+    severity: str | None = None,
+    affected_customer_count: int | None = None,
+    metadata: dict | None = None,
+    triggered_at: datetime | None = None,
+) -> OperationalEscalationEvent:
+    """Materialize one open event for an entity, trigger, and policy."""
+    existing = (
+        db.query(OperationalEscalationEvent)
+        .filter(OperationalEscalationEvent.entity_type == entity_type)
+        .filter(OperationalEscalationEvent.entity_id == _entity_id(entity_id))
+        .filter(OperationalEscalationEvent.policy_id == policy.id)
+        .filter(OperationalEscalationEvent.trigger == trigger)
+        .filter(
+            OperationalEscalationEvent.status.in_(
+                (
+                    OperationalEscalationStatus.open,
+                    OperationalEscalationStatus.acknowledged,
+                )
+            )
+        )
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
+    return record_event(
+        db,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        trigger=trigger,
+        policy_id=policy.id,
+        level=policy.level,
+        severity=severity,
+        affected_customer_count=affected_customer_count,
+        metadata=metadata,
+        triggered_at=triggered_at,
+    )
+
+
+def emit_sla_event(
+    db: Session,
+    *,
+    entity_type: str,
+    entity_id: str | UUID,
+    trigger: str,
+    severity: str | None = None,
+    affected_customer_count: int | None = None,
+    metadata: dict | None = None,
+    triggered_at: datetime | None = None,
+    policies: list[OperationalEscalationPolicy] | None = None,
+) -> SlaEmissionResult:
+    """Apply configured policies to a fact emitted by an operational owner."""
+    active_policies = policies
+    if active_policies is None:
+        active_policies = matching_policies(
+            db,
+            entity_type=entity_type,
+            trigger=trigger,
+            severity=severity,
+            affected_customer_count=affected_customer_count,
+        )
+    events: list[OperationalEscalationEvent] = []
+    deliveries: list[OperationalEscalationDelivery] = []
+    for policy in active_policies:
+        event = record_event_once(
+            db,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            trigger=trigger,
+            policy=policy,
+            severity=severity,
+            affected_customer_count=affected_customer_count,
+            metadata=metadata,
+            triggered_at=triggered_at,
+        )
+        events.append(event)
+        deliveries.extend(plan_policy_deliveries(db, event=event, policy=policy))
+    return SlaEmissionResult(
+        policy_count=len(active_policies),
+        events=tuple(events),
+        deliveries=tuple(deliveries),
+    )
 
 
 def plan_delivery(
@@ -366,6 +699,7 @@ def plan_policy_deliveries(
         return []
 
     deliveries: list[OperationalEscalationDelivery] = []
+    escalation_delay_seconds = max(active_policy.unresolved_after_seconds or 0, 0)
     for channel_rule in _policy_channel_rules(active_policy):
         channel = channel_rule["channel"]
         recipient_groups = set(channel_rule.get("recipients") or ["owners", "watchers"])
@@ -386,7 +720,7 @@ def plan_policy_deliveries(
                         recipient_type=owner.owner_type,
                         recipient_id=_owner_recipient_id(owner),
                         owner_id=owner.id,
-                        cooldown_seconds=active_policy.cooldown_seconds,
+                        cooldown_seconds=escalation_delay_seconds,
                         metadata={"policy_id": str(active_policy.id)},
                     )
                 )
@@ -422,7 +756,7 @@ def plan_policy_deliveries(
                         recipient_id=recipient_id,
                         recipient_address=recipient_address,
                         watcher_id=watcher.id,
-                        cooldown_seconds=active_policy.cooldown_seconds,
+                        cooldown_seconds=escalation_delay_seconds,
                         metadata={"policy_id": str(active_policy.id)},
                     )
                 )
@@ -440,7 +774,7 @@ def plan_policy_deliveries(
                         channel=channel,
                         recipient_type=OperationalParticipantType.subscriber,
                         recipient_id=subscriber_id,
-                        cooldown_seconds=active_policy.cooldown_seconds,
+                        cooldown_seconds=escalation_delay_seconds,
                         metadata={"policy_id": str(active_policy.id)},
                     )
                 )
@@ -458,7 +792,7 @@ def plan_policy_deliveries(
                         channel=channel,
                         recipient_type=OperationalParticipantType.reseller,
                         recipient_id=reseller_id,
-                        cooldown_seconds=active_policy.cooldown_seconds,
+                        cooldown_seconds=escalation_delay_seconds,
                         metadata={"policy_id": str(active_policy.id)},
                     )
                 )
@@ -650,17 +984,20 @@ def cancel_entity_events(
     *,
     entity_type: str,
     entity_id: str | UUID,
+    trigger: str | None = None,
     reason: str | None = None,
     canceled_at: datetime | None = None,
 ) -> list[OperationalEscalationEvent]:
     now = canceled_at or datetime.now(UTC)
-    events = (
+    query = (
         db.query(OperationalEscalationEvent)
         .filter(OperationalEscalationEvent.entity_type == entity_type)
         .filter(OperationalEscalationEvent.entity_id == _entity_id(entity_id))
         .filter(OperationalEscalationEvent.status == OperationalEscalationStatus.open)
-        .all()
     )
+    if trigger:
+        query = query.filter(OperationalEscalationEvent.trigger == trigger)
+    events = query.all()
     for event in events:
         event.status = OperationalEscalationStatus.canceled
         event.resolved_at = now

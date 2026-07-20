@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
+from app.config import settings
 from app.logging import get_logger
+from app.services.realtime_platform import (
+    REDIS_CHANNEL_PREFIX,
+    RealtimeEvent,
+    build_event,
+    parse_event,
+    principal_topic,
+    publish_event,
+    redis_channel,
+)
 from app.websocket.events import EventType, WebSocketEvent
 
 logger = get_logger(__name__)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-CHANNEL_PREFIX = "inbox_ws:"
+REDIS_URL = settings.redis_url
+CHANNEL_PREFIX = REDIS_CHANNEL_PREFIX
 
 
 def _mask_redis_url(url: str) -> str:
@@ -33,23 +41,23 @@ def _mask_redis_url(url: str) -> str:
 
 
 class ConnectionManager:
-    """
-    Manages WebSocket connections with Redis pub/sub for horizontal scaling.
+    """WebSocket projection adapter over the shared real-time broker.
 
-    Local connection pool: user_id -> [WebSocket]
-    Conversation subscriptions: conversation_id -> set[user_id]
+    Subscriptions are per socket, not per principal. This prevents a user's
+    inbox and workqueue sockets from receiving each other's topic streams.
     """
 
     def __init__(self):
-        self._connections: dict[str, list[WebSocket]] = {}
-        self._subscriptions: dict[str, set[str]] = {}
+        self._connections: dict[str, set[WebSocket]] = {}
+        self._subscriptions: dict[str, set[WebSocket]] = {}
+        self._socket_owners: dict[WebSocket, str] = {}
         self._redis_client = None
         self._pubsub = None
         self._listener_task: asyncio.Task | None = None
         self._running = False
 
     async def connect(self):
-        """Initialize Redis connection and start listener."""
+        """Initialize the Redis subscriber used for cross-instance fan-out."""
         try:
             import redis.asyncio as aioredis
 
@@ -65,7 +73,7 @@ class ConnectionManager:
             logger.warning("websocket_manager_redis_failed error=%s", exc)
 
     async def disconnect(self):
-        """Cleanup Redis connection and stop listener."""
+        """Cleanup Redis resources and stop the listener."""
         self._running = False
         if self._listener_task:
             self._listener_task.cancel()
@@ -75,177 +83,150 @@ class ConnectionManager:
                 pass
         if self._pubsub:
             await self._pubsub.punsubscribe()
-            await self._pubsub.close()
+            await self._pubsub.aclose()
         if self._redis_client:
-            await self._redis_client.close()
+            await self._redis_client.aclose()
         logger.info("websocket_manager_disconnected")
 
     async def _redis_listener(self):
-        """Listen for messages from Redis pub/sub and dispatch to local connections."""
         try:
             while self._running:
                 message = await self._pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=1.0
+                    ignore_subscribe_messages=True,
+                    timeout=1.0,
                 )
                 if message and message["type"] == "pmessage":
-                    channel = message["channel"]
-                    data = message["data"]
-                    await self._handle_redis_message(channel, data)
+                    await self._handle_redis_message(
+                        str(message["channel"]), message["data"]
+                    )
         except asyncio.CancelledError:
             pass
         except Exception as exc:
             logger.error("websocket_redis_listener_error error=%s", exc)
+        finally:
+            self._running = False
 
-    async def _handle_redis_message(self, channel: str, data: str):
-        """Process incoming Redis message and dispatch to local connections."""
+    async def _handle_redis_message(self, channel: str, data: str | bytes):
+        """Reject malformed or channel/topic-confused broker messages."""
         try:
-            payload = json.loads(data)
-            conversation_id = payload.get("conversation_id")
-            event_data = payload.get("event")
-
-            if conversation_id and event_data:
-                await self._dispatch_to_subscribers(conversation_id, event_data)
+            event = parse_event(data)
+            if channel != redis_channel(event.topic):
+                logger.warning(
+                    "websocket_channel_topic_mismatch channel=%s topic=%s",
+                    channel,
+                    event.topic,
+                )
+                return
+            await self._dispatch_to_subscribers(event)
         except Exception as exc:
             logger.warning("websocket_redis_message_error error=%s", exc)
 
-    async def _dispatch_to_subscribers(self, conversation_id: str, event_data: dict):
-        """Send event to all users subscribed to a conversation."""
-        user_ids = self._subscriptions.get(conversation_id, set())
+    async def _dispatch_to_subscribers(self, event: RealtimeEvent):
+        for websocket in list(self._subscriptions.get(event.topic, set())):
+            try:
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json(event.model_dump(mode="json"))
+            except Exception:
+                self._remove_connection(websocket)
 
-        for user_id in list(user_ids):
-            websockets = self._connections.get(user_id, [])
-            for ws in list(websockets):
-                try:
-                    if ws.client_state == WebSocketState.CONNECTED:
-                        await ws.send_json(event_data)
-                except Exception:
-                    self._remove_connection(user_id, ws)
-
-    async def register_connection(self, user_id: str, websocket: WebSocket):
-        """Register a new WebSocket connection for a user."""
-        if user_id not in self._connections:
-            self._connections[user_id] = []
-        self._connections[user_id].append(websocket)
+    async def register_connection(
+        self,
+        user_id: str,
+        websocket: WebSocket,
+        *,
+        topics: tuple[str, ...] = (),
+        ready_data: dict | None = None,
+    ) -> None:
+        self._connections.setdefault(user_id, set()).add(websocket)
+        self._socket_owners[websocket] = user_id
+        self.subscribe_topic(websocket, principal_topic(user_id))
+        for topic in topics:
+            self.subscribe_topic(websocket, topic)
         logger.debug("websocket_registered user_id=%s", user_id)
 
-        # Send connection acknowledgment
-        ack_event = WebSocketEvent(
-            event=EventType.CONNECTION_ACK,
-            data={"user_id": user_id, "status": "connected"},
+        data = {"user_id": user_id, "status": "connected", **(ready_data or {})}
+        ack = build_event(
+            "realtime:connection",
+            EventType.CONNECTION_ACK,
+            data,
+            refresh_required=True,
         )
-        await websocket.send_json(ack_event.model_dump(mode="json"))
+        await websocket.send_json(ack.model_dump(mode="json"))
 
     async def unregister_connection(self, user_id: str, websocket: WebSocket):
-        """Remove a WebSocket connection."""
-        self._remove_connection(user_id, websocket)
+        del user_id  # ownership is recorded at registration
+        self._remove_connection(websocket)
 
-    def _remove_connection(self, user_id: str, websocket: WebSocket):
-        """Internal method to remove a connection and clean up subscriptions."""
-        if user_id in self._connections:
-            if websocket in self._connections[user_id]:
-                self._connections[user_id].remove(websocket)
-            if not self._connections[user_id]:
-                del self._connections[user_id]
+    def _remove_connection(self, websocket: WebSocket):
+        user_id = self._socket_owners.pop(websocket, None)
+        if user_id is not None:
+            connections = self._connections.get(user_id, set())
+            connections.discard(websocket)
+            if not connections:
+                self._connections.pop(user_id, None)
 
-        # Clean up user from all subscriptions if no more connections
-        if user_id not in self._connections:
-            for conv_id in list(self._subscriptions.keys()):
-                self._subscriptions[conv_id].discard(user_id)
-                if not self._subscriptions[conv_id]:
-                    del self._subscriptions[conv_id]
-
+        for topic in list(self._subscriptions):
+            sockets = self._subscriptions[topic]
+            sockets.discard(websocket)
+            if not sockets:
+                del self._subscriptions[topic]
         logger.debug("websocket_unregistered user_id=%s", user_id)
 
-    def subscribe_conversation(self, user_id: str, conversation_id: str):
-        """Subscribe a user to conversation updates."""
-        if conversation_id not in self._subscriptions:
-            self._subscriptions[conversation_id] = set()
-        self._subscriptions[conversation_id].add(user_id)
-        logger.debug(
-            "websocket_subscribed user_id=%s conversation_id=%s",
-            user_id,
-            conversation_id,
-        )
+    def subscribe_topic(self, websocket: WebSocket, topic: str):
+        if websocket not in self._socket_owners:
+            raise ValueError("WebSocket must be registered before subscribing")
+        self._subscriptions.setdefault(topic, set()).add(websocket)
+        logger.debug("websocket_subscribed topic=%s", topic)
 
-    def unsubscribe_conversation(self, user_id: str, conversation_id: str):
-        """Unsubscribe a user from conversation updates."""
-        if conversation_id in self._subscriptions:
-            self._subscriptions[conversation_id].discard(user_id)
-            if not self._subscriptions[conversation_id]:
-                del self._subscriptions[conversation_id]
-        logger.debug(
-            "websocket_unsubscribed user_id=%s conversation_id=%s",
-            user_id,
-            conversation_id,
+    def unsubscribe_topic(self, websocket: WebSocket, topic: str):
+        sockets = self._subscriptions.get(topic)
+        if sockets is not None:
+            sockets.discard(websocket)
+            if not sockets:
+                del self._subscriptions[topic]
+        logger.debug("websocket_unsubscribed topic=%s", topic)
+
+    async def broadcast_to_topic(self, topic: str, event: WebSocketEvent):
+        realtime_event = build_event(
+            topic,
+            event.event,
+            event.data,
+            refresh_required=True,
+            timestamp=event.timestamp,
         )
+        published = await asyncio.to_thread(publish_event, realtime_event)
+        # With a running subscriber Redis echoes the event exactly once. When
+        # Redis or this listener is unavailable, preserve same-instance UX.
+        if not published or not self._running:
+            await self._dispatch_to_subscribers(realtime_event)
 
     async def broadcast_to_conversation(
         self, conversation_id: str, event: WebSocketEvent
     ):
-        """Broadcast an event to all subscribers of a conversation via Redis."""
-        event_data = event.model_dump(mode="json")
+        from app.services.realtime_platform import conversation_topic
 
-        # Publish to Redis for cross-instance delivery
-        if self._redis_client:
-            try:
-                payload = json.dumps(
-                    {"conversation_id": conversation_id, "event": event_data}
-                )
-                await self._redis_client.publish(
-                    f"{CHANNEL_PREFIX}{conversation_id}", payload
-                )
-            except Exception as exc:
-                logger.warning("websocket_broadcast_redis_error error=%s", exc)
-
-        # Also dispatch locally for same-instance delivery
-        await self._dispatch_to_subscribers(conversation_id, event_data)
-
-    # The routing key above is really a *topic*: conversation ids are one kind,
-    # workqueue channels (``workqueue:user:…``) are another. These aliases let
-    # non-inbox features share the transport without pretending to be a
-    # conversation.
-    def subscribe_topic(self, user_id: str, topic: str):
-        """Subscribe a user to any topic."""
-        self.subscribe_conversation(user_id, topic)
-
-    def unsubscribe_topic(self, user_id: str, topic: str):
-        """Unsubscribe a user from any topic."""
-        self.unsubscribe_conversation(user_id, topic)
-
-    async def broadcast_to_topic(self, topic: str, event: WebSocketEvent):
-        """Broadcast an event to every subscriber of a topic (via Redis)."""
-        await self.broadcast_to_conversation(topic, event)
+        await self.broadcast_to_topic(conversation_topic(conversation_id), event)
 
     async def broadcast_to_user(self, user_id: str, event: WebSocketEvent):
-        """Send event directly to a specific user's connections."""
-        event_data = event.model_dump(mode="json")
-        websockets = self._connections.get(user_id, [])
-
-        for ws in list(websockets):
-            try:
-                if ws.client_state == WebSocketState.CONNECTED:
-                    await ws.send_json(event_data)
-            except Exception:
-                self._remove_connection(user_id, ws)
+        await self.broadcast_to_topic(principal_topic(user_id), event)
 
     async def send_heartbeat(self, user_id: str, websocket: WebSocket):
-        """Send heartbeat response to a specific connection."""
-        heartbeat = WebSocketEvent(
-            event=EventType.HEARTBEAT,
-            data={"status": "ok"},
+        heartbeat = build_event(
+            "realtime:connection",
+            EventType.HEARTBEAT,
+            {"status": "ok", "user_id": user_id},
+            refresh_required=False,
         )
         try:
             await websocket.send_json(heartbeat.model_dump(mode="json"))
         except Exception:
-            self._remove_connection(user_id, websocket)
+            self._remove_connection(websocket)
 
 
-# Singleton instance
 _manager: ConnectionManager | None = None
 
 
 def get_connection_manager() -> ConnectionManager:
-    """Get the singleton ConnectionManager instance."""
     global _manager
     if _manager is None:
         _manager = ConnectionManager()

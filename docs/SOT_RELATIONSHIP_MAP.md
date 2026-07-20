@@ -311,8 +311,11 @@ detailed security and delivery boundary is
 3. `financial.tax_configuration` owns configurable tax-rate records and their
    active lifecycle. Inclusive, exclusive, or exempt treatment belongs to the
    invoice/credit-note line, not to a second tax-rate vocabulary.
-4. `financial.payment_proofs` owns proof review and creation of the source WHT
-   receivable when a reseller pays net cash against a gross obligation.
+4. `financial.payment_proofs` owns proof review, creation of the source WHT
+   receivable when a reseller pays net cash against a gross obligation, and the
+   decision that a submitted proof requires confirmation. It requests one
+   reviewer work item from `communications.staff_notifications`; it does not
+   select staff recipients or construct inbox/delivery rows.
 5. `financial.tax_accounting` owns tax-report meaning, periods, currency
    separation, issued-output-tax and credit-note adjustment projection, net
    output-tax liability, WHT-receivable projection and lifecycle, its immutable
@@ -1683,8 +1686,29 @@ in forms, or rotate key material directly.
    lifetime, and consequences. The worker must not persist or log rendered
    bearer content or exception text that may contain it.
 6. Notification service owns notification rows and delivery lifecycle.
-7. Staff notification service owns internal/admin notification creation.
-8. `communications.customer_read_state` owns customer notification read/unread
+7. `operations.sla_escalation` owns operational SLA policy lifecycle,
+   event-scoped escalation planning, and escalation acknowledgement/cancellation.
+   Every operational domain emits named facts into this owner. Operators configure
+   entity type, event key, escalation level, unresolved delay, channels, active
+   state, and applicable severity/impact conditions at
+   `/admin/notifications/sla-policies`. Policies cover tickets, work orders,
+   outages, projects and project tasks, inbox conversations, provisioning failures, network
+   devices/sites, subscribers, payment incidents, and payment proofs. A domain
+   service may not embed a fallback SLA duration or channel list. When no active
+   policy matches, the owner invents neither a deadline nor an escalation.
+8. Staff notification service owns internal/admin notification creation,
+   permission-targeted staff audience resolution, and materialization of review
+   requests into the assigned admin notification inbox. For payment proofs it
+   resolves active system users who effectively hold `billing:proof:verify`
+   (including active admin and wildcard grants) and creates one clickable unread
+   inbox item per reviewer. It projects those reviewers as the event audience for
+   `operations.sla_escalation`; only the active UI policy decides whether and when
+   email, WhatsApp, SMS, push, web, Nextcloud Talk, or webhook escalation occurs.
+   The financial owner closes the shared request and cancels pending escalation
+   when it verifies or rejects the proof. Opening an inbox item is scoped to its
+   assigned system user; the target action performs its own domain permission
+   check again.
+9. `communications.customer_read_state` owns customer notification read/unread
    state and unread counts across the web portal and mobile app. Subscriber
    metadata is its bounded persistence mechanism; `/me/notifications` projects
    that state, and `/me/notifications/read` is the self-scoped mutation
@@ -2267,21 +2291,33 @@ session writer.
 
 Dependency order:
 
-1. `runtime.db_sessions`: owns background DB session lifecycle and advisory lock
+1. `runtime.realtime_projection` (`app.services.realtime_platform`) owns the
+   versioned real-time envelope, Redis topic naming, best-effort publication,
+   and the shared WebSocket/SSE reconnect contract. It projects only
+   already-committed domain state. Redis pub/sub is at-most-once and has no
+   replay; clients refetch canonical read models on connect, reconnect, or a
+   `realtime.reset` event. `app.services.realtime_subscriptions` authorizes
+   client-selected conversation and operation topics, while the workqueue
+   scope owner derives workqueue topics server-side. WebSocket and SSE handlers
+   are transport adapters, never domain decision owners. The complete contract
+   is `docs/REALTIME_PLATFORM.md`.
+2. `runtime.db_sessions`: owns background DB session lifecycle and advisory lock
    safety.
-2. `runtime.task_idempotency`: owns duplicate suppression and stale task
+3. `runtime.task_idempotency`: owns duplicate suppression and stale task
    execution rows.
-3. `runtime.task_heartbeat`: owns task success/skip heartbeat signals.
-4. `runtime.infrastructure_polling`: owns shared native reachability observations
+4. `runtime.task_heartbeat`: owns task success/skip heartbeat signals.
+5. `runtime.infrastructure_polling`: owns shared native reachability observations
    and the generic network-device pollability predicate. Domain-specific
    collectors such as Huawei ONT runtime status depend on these polling
    mechanics while owning their own observation and eligibility contracts.
-5. `runtime.infrastructure_health`: owns dependency health checks for
+6. `runtime.infrastructure_health`: owns dependency health checks for
    Postgres, Redis, VictoriaMetrics, Celery, and related infrastructure.
 
-Rule: tasks should use shared DB-session, lock, idempotency, and heartbeat
-helpers. Infrastructure pollers write observations only; network/device SOT
-services interpret state for customer impact, alerts, and SLA.
+Rule: real-time transports project state only; durable cross-team consumption
+uses the event store/outbox. Tasks should use shared DB-session, lock,
+idempotency, and heartbeat helpers. Infrastructure pollers write observations
+only; network/device SOT services interpret state for customer impact, alerts,
+and SLA.
 
 ## Provisioning Operations
 
@@ -2433,12 +2469,20 @@ reinterpret its presentation.
 
 ## Support Control Plane
 
-1. `support.tickets` owns ticket lifecycle, assignment, comments, SLA events,
-   and satisfaction state.
+1. `support.tickets` owns ticket lifecycle, assignment, comments, and
+   satisfaction state.
+2. `support.ticket_configuration` owns the operator-managed priority and ticket-
+   type SLA targets shown at `/admin/system/ticket-settings`. Ticket types have
+   no fixed code default: zero or no override falls through to the configured
+   priority target.
+3. `support.ticket_sla_clock` owns ticket SLA clocks and breach facts. A breach
+   emits `ticket.sla_breached` to `operations.sla_escalation`; only its active UI
+   policy selects the escalation delay, level, audience channels, and conditions.
 
 Rule: support routes and jobs translate requests and delegate ticket decisions
 to `app.services.support`. Events and notifications are consequences requested
-by that owner, not alternate ticket writers.
+by that owner, not alternate ticket writers. SLA durations and escalation
+channels must not be embedded in support code.
 
 ## Customer Data Completeness
 
