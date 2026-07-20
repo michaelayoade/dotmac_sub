@@ -125,6 +125,35 @@ def repair_purchase_invoice_sync() -> dict:
         return repair(db)
 
 
+@celery_app.task(name="app.tasks.dotmac_erp_outbox.refresh_purchase_invoice_statuses")
+def refresh_purchase_invoice_statuses() -> dict:
+    """Poll ERP for current vendor supplier-invoice settlement observations."""
+    from app.metrics import observe_job
+
+    start = time.monotonic()
+    status = "success"
+    logger.info("REFRESH_PURCHASE_INVOICE_STATUSES_START")
+    results: dict[str, object] = {}
+    try:
+        from app.db import task_session
+        from app.services.dotmac_erp.purchase_invoice_sync import (
+            refresh_purchase_invoice_statuses as refresh,
+        )
+
+        with task_session() as db:
+            results = refresh(db)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        observe_job(
+            "refresh_purchase_invoice_statuses", status, time.monotonic() - start
+        )
+
+    logger.info("REFRESH_PURCHASE_INVOICE_STATUSES_COMPLETE %s", results)
+    return results
+
+
 @celery_app.task(name="app.tasks.dotmac_erp_outbox.sync_erp_operational_domains")
 def sync_erp_operational_domains() -> dict:
     """Push native project, ticket and work-order context to ERP."""

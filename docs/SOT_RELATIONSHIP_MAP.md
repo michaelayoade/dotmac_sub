@@ -3,6 +3,13 @@
 This document names the service layers that should own decisions. Web/API
 routes and Celery tasks should be thin wrappers around these services.
 
+HTTP is an adapter, not a service dependency. Domain and application services
+must not import FastAPI/Starlette request, response, or exception types and must
+not raise `HTTPException`. Owners return domain values or transport-neutral
+errors with stable codes/context; HTTP routes translate those outcomes. Tasks,
+webhooks, commands, and reconcilers call the same owners without inheriting HTTP
+semantics.
+
 The executable registry is `app/services/sot_relationships.py`. When a domain
 is harmonised, add or update its service boundary there and cover it with tests
 before migrating more callers.
@@ -2336,12 +2343,18 @@ Dependency order:
    writing route evidence from the template.
 9. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
-   ERP owns accounts-payable settlement. The local
-   `erp_purchase_invoice_status` is currently only the ERP creation-response
-   snapshot; it is not a refreshed payment projection and must not be labelled
-   as "Paid" or "Awaiting payment" in Sub. Vendor payment visibility requires a
-   dedicated ERP read contract plus an idempotent Sub refresher that records
-   status and observation time before the portal may render it.
+   ERP owns accounts-payable settlement. Its dedicated
+   `GET /api/v1/sync/sub/purchase-invoices/{source_invoice_id}` contract returns
+   the organization-scoped supplier-invoice status and reconciled amounts.
+   `integration.vendor_purchase_invoice_erp_projection` is the only writer for
+   Sub's timestamped local observation. It validates source identity, ERP
+   identity, currency, and amount reconciliation, rechecks the link under lock,
+   and retains the last good observation on failure. The vendor read owner
+   renders payment only from that observed state through `StateValue`; the ERP
+   creation response is preserved separately in
+   `erp_purchase_invoice_creation_status`, never proves paid or unpaid state,
+   and cannot overwrite the refreshed status during replay. Stale or unavailable
+   observations remain visibly distinct.
 10. `operations.vendor_submission_confirmation` (implemented by
    `app.services.vendor_submission_proposals`) owns the short-lived signed
    confirmation proposal, stale-preview comparison, idempotency reservation,

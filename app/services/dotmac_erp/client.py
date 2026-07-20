@@ -417,6 +417,13 @@ class DotMacERPClient:
             expected_status_codes={200, 201},
         )
 
+    def get_purchase_invoice_status(self, source_invoice_id: str) -> dict | None:
+        """Read ERP's current AP settlement state for a Sub invoice."""
+        try:
+            return self.get(f"/api/v1/sync/sub/purchase-invoices/{source_invoice_id}")
+        except DotMacERPNotFoundError:
+            return None
+
     def upload_purchase_invoice_attachment(
         self,
         purchase_invoice_id: str,
