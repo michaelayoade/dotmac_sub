@@ -1,3 +1,4 @@
+import hashlib
 import importlib
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -75,6 +76,41 @@ def test_paystack_verification_preserves_gross_fee_and_metadata(
     assert transaction.amount == Decimal("19200.51")
     assert transaction.provider_fee == Decimal("388.01")
     assert transaction.metadata == {"invoice_id": "invoice-1"}
+
+
+def test_verified_provider_settlement_fingerprints_fit_database_columns(
+    db_session, subscriber
+):
+    provider = _provider(db_session)
+    external_id = "paystack-fingerprint-length-1"
+
+    result = billing_service.payments.record_verified_provider_settlement(
+        db_session,
+        account_id=subscriber.id,
+        provider_id=provider.id,
+        external_id=external_id,
+        gross_amount=Decimal("1020.00"),
+        provider_fee=Decimal("20.00"),
+        net_amount=Decimal("1000.00"),
+        currency="NGN",
+        memo="Paystack verified settlement fingerprint test",
+    )
+
+    fingerprint = hashlib.sha256(f"{provider.id}:{external_id}".encode()).hexdigest()
+    payment_fingerprint_length = (
+        Payment.__table__.c.creation_preview_fingerprint.type.length
+    )
+    settlement_fingerprint_length = (
+        PaymentSettlement.__table__.c.preview_fingerprint.type.length
+    )
+    settlement_key_length = PaymentSettlement.__table__.c.idempotency_key.type.length
+
+    assert result.payment.creation_preview_fingerprint == fingerprint
+    assert result.settlement.preview_fingerprint == fingerprint
+    assert result.settlement.idempotency_key == f"provider-settlement-{fingerprint}"
+    assert len(fingerprint) <= payment_fingerprint_length
+    assert len(fingerprint) <= settlement_fingerprint_length
+    assert len(result.settlement.idempotency_key) <= settlement_key_length
 
 
 def test_verified_provider_money_is_recorded_before_successful_allocation(
