@@ -112,7 +112,7 @@ def test_active_migrations_do_not_extend_retired_integration_types() -> None:
 
     assert not offenders, (
         "Active migrations must not depend on the retired webhook enum; "
-        f"revision 377 owns cleanup of deployed legacy objects: {offenders}"
+        f"revision 380 owns cleanup of deployed legacy objects: {offenders}"
     )
 
 

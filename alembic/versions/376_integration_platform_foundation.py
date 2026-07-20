@@ -4,7 +4,7 @@ This migration establishes the replacement control plane directly. It does not
 store compatibility pointers to the retired connector configuration system.
 
 Revision ID: 376_integration_platform_foundation
-Revises: 372_vendor_payment_projection
+Revises: 375_work_order_evidence_policy
 """
 
 from __future__ import annotations

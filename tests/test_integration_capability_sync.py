@@ -119,7 +119,7 @@ def test_capability_sync_migration_is_linear_and_contains_no_secret_material() -
         Path(__file__).resolve().parents[1]
         / "alembic/versions/377_integration_capability_sync.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_373", path)
+    spec = importlib.util.spec_from_file_location("migration_377", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

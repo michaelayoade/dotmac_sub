@@ -216,7 +216,7 @@ def test_delivery_migration_is_linear_and_contains_no_compatibility_columns() ->
         Path(__file__).resolve().parents[1]
         / "alembic/versions/378_integration_delivery.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_374", path)
+    spec = importlib.util.spec_from_file_location("migration_378", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

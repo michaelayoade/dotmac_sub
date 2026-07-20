@@ -240,7 +240,7 @@ def test_foundation_migration_is_linear_and_additive() -> None:
         Path(__file__).resolve().parents[1]
         / "alembic/versions/376_integration_platform_foundation.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_373", path)
+    spec = importlib.util.spec_from_file_location("migration_376", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -267,7 +267,7 @@ def test_cutover_migration_is_linear_destructive_and_irreversible() -> None:
         Path(__file__).resolve().parents[1]
         / "alembic/versions/380_integration_platform_cutover.py"
     )
-    spec = importlib.util.spec_from_file_location("migration_376", path)
+    spec = importlib.util.spec_from_file_location("migration_380", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
