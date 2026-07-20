@@ -212,6 +212,21 @@ class FieldTransitions:
             longitude,
             event_payload,
         )
+        if event_value in {"complete", "unable_to_complete"}:
+            # The handoff projection shares this transaction: field outcome
+            # evidence and the official ticket timeline cannot drift apart.
+            db.flush()
+            from app.services import ticket_work_order_handoff
+
+            ticket_work_order_handoff.stage_field_outcome(
+                db,
+                work_order=row,
+                field_event_id=event_row.id,
+                event=event_value,
+                occurred_at=occurred,
+                note=event_row.note,
+                actor_id=profile.system_user_id or profile.person_id,
+            )
         try:
             db.commit()
         except IntegrityError:

@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from app.models.project import Project
 from app.models.subscriber import Subscriber, UserType
+from app.models.support import Ticket
 from app.models.system_user import SystemUser
 from app.schemas.dispatch import TechnicianProfileCreate
 from app.services import dispatch
@@ -74,7 +75,17 @@ def test_list_page_counts_filters_and_options(db_session):
     project = Project(name="Jabi fibre build", subscriber_id=sub.id)
     db_session.add(project)
     db_session.commit()
-    web_dispatch.create_from_form(
+    ticket = Ticket(
+        number="TKT-DISPATCH-ORIGIN",
+        title="Customer outage",
+        subscriber_id=sub.id,
+        customer_account_id=sub.id,
+        status="open",
+        priority="high",
+    )
+    db_session.add(ticket)
+    db_session.flush()
+    work_order = web_dispatch.create_from_form(
         db_session,
         {
             "public_id": "sub-web-wo-1",
@@ -90,6 +101,8 @@ def test_list_page_counts_filters_and_options(db_session):
             "tags": "native, install",
         },
     )
+    work_order.origin_ticket_id = ticket.id
+    db_session.commit()
 
     page = web_dispatch.list_page(
         db_session, status="scheduled", q="Jabi", page=1, per_page=25
@@ -100,6 +113,7 @@ def test_list_page_counts_filters_and_options(db_session):
     assert page["items"][0]["work_order"].public_id == "sub-web-wo-1"
     assert page["items"][0]["subscriber_label"]
     assert page["items"][0]["project_label"] == "Jabi fibre build"
+    assert page["items"][0]["origin_ticket"].id == ticket.id
     assert page["items"][0]["work_order"].requires_as_built_evidence is False
     assert page["status_filter"] == "scheduled"
     assert page["subscriber_options"]
