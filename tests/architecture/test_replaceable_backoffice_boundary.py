@@ -86,6 +86,19 @@ def test_migration_backfills_provenance_and_scopes_legacy_references() -> None:
     assert "SET external_system = 'erpnext'" in migration
 
 
+def test_historical_invoice_migration_tolerates_current_squashed_schema() -> None:
+    invoice_migration = (
+        ROOT / "alembic/versions/256_vendor_purchase_invoices.py"
+    ).read_text()
+    payment_migration = (
+        ROOT / "alembic/versions/372_vendor_purchase_invoice_payment_projection.py"
+    ).read_text()
+
+    assert "def _has_columns" in invoice_migration
+    assert 'if _has_columns("vendor_purchase_invoices", columns)' in invoice_migration
+    assert 'if "erp_purchase_invoice_status" in _columns' in payment_migration
+
+
 def test_checked_in_boundary_declares_replaceable_independent_products() -> None:
     boundary = " ".join(
         (ROOT / "docs/BACKOFFICE_INTEGRATION_BOUNDARY.md").read_text().split()

@@ -34,8 +34,23 @@ def _unique_constraints(table: str) -> set[str]:
 
 def _rename_column(table: str, old: str, new: str) -> None:
     columns = _columns(table)
-    if old in columns and new not in columns:
+    if old not in columns:
+        return
+    if new not in columns:
         op.alter_column(table, old, new_column_name=new)
+        return
+
+    # Revision 001 creates fresh databases from current ORM metadata. A later
+    # historical migration can therefore add the legacy name beside the
+    # provider-neutral column before this revision runs. Preserve any legacy
+    # value that is not yet projected, then remove the duplicate old column.
+    projection = sa.table(table, sa.column(old), sa.column(new))
+    op.execute(
+        projection.update()
+        .where(projection.c[new].is_(None))
+        .values({new: projection.c[old]})
+    )
+    op.drop_column(table, old)
 
 
 def _add_string(table: str, column: str, length: int) -> None:
