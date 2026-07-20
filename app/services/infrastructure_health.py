@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from app.config import settings
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -66,7 +68,7 @@ def _skipped_health_checks() -> set[str]:
     though the configured staging dependencies are fine. Production keeps the
     current behaviour because the default is an empty set.
     """
-    raw = os.getenv("INFRASTRUCTURE_HEALTH_SKIP_CHECKS", "")
+    raw = settings.infrastructure_health_skip_checks
     requested = {
         item.strip().lower().replace("-", "_")
         for item in raw.split(",")

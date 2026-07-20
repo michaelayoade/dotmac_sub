@@ -39,13 +39,17 @@ def _grant_keys(connection, table, holder_column: str, holder_id: str) -> set[st
 def test_reports_permission_migrations_form_the_single_head_chain():
     granular = _load("reports_granular_chain", "370_reports_granular_permissions.py")
     retire = _load("reports_retire_chain", "371_retire_coarse_reports_permissions.py")
+    dashboard_index = _load(
+        "dashboard_index_chain", "372_dashboard_device_metrics_index.py"
+    )
 
     assert granular.down_revision == "369_vendor_lifecycle_evidence"
     assert retire.down_revision == granular.revision
+    assert dashboard_index.down_revision == retire.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [retire.revision]
+    assert ScriptDirectory.from_config(config).get_heads() == [dashboard_index.revision]
 
 
 def test_upgrade_and_rollback_preserve_role_and_direct_grants(monkeypatch):

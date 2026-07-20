@@ -500,12 +500,9 @@ def _startup_preflight() -> None:
 
 
 def _prewarm_admin_dashboard() -> None:
-    if os.getenv("DASHBOARD_PREWARM_ENABLED", "false").lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
+    from app.config import settings
+
+    if not settings.dashboard_prewarm_enabled:
         return
     from app.services import web_admin_dashboard
 

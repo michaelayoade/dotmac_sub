@@ -1,7 +1,6 @@
 """Service helpers for admin dashboard routes."""
 
 import logging
-import os
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from threading import Lock, Thread
@@ -12,6 +11,7 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.schemas.status_presentation import StatusTone
 from app.services import admin_alerts as admin_alerts_service
@@ -48,23 +48,21 @@ templates = Jinja2Templates(directory="templates")
 # In-process cache for the main /admin/dashboard global context.
 # Contains SQLAlchemy ORM rows (recent_activity, recent_subscribers, active_alarms)
 # that can't be JSON-serialized to Redis, hence the in-process cache.
-_DASHBOARD_GLOBAL_TTL_SECONDS = float(
-    os.getenv("DASHBOARD_GLOBAL_CACHE_TTL_SECONDS", "60")
-)
+_DASHBOARD_GLOBAL_TTL_SECONDS = settings.dashboard_global_cache_ttl_seconds
 _dashboard_global_lock = Lock()
 _dashboard_global_cached_at = 0.0
 _dashboard_global_cache: dict[str, object] | None = None
 _dashboard_global_refreshing = False
-_DASHBOARD_GLOBAL_STALE_WHILE_REVALIDATE = os.getenv(
-    "DASHBOARD_GLOBAL_STALE_WHILE_REVALIDATE", "false"
-).lower() in {"1", "true", "yes", "on"}
+_DASHBOARD_GLOBAL_STALE_WHILE_REVALIDATE = (
+    settings.dashboard_global_stale_while_revalidate
+)
 _DASHBOARD_GLOBAL_MAX_STALE_SECONDS = max(
     _DASHBOARD_GLOBAL_TTL_SECONDS,
-    float(os.getenv("DASHBOARD_GLOBAL_MAX_STALE_SECONDS", "900")),
+    settings.dashboard_global_max_stale_seconds,
 )
 
 _DASHBOARD_INFRASTRUCTURE_TTL_SECONDS = max(
-    5.0, float(os.getenv("DASHBOARD_INFRASTRUCTURE_CACHE_TTL_SECONDS", "60"))
+    5.0, settings.dashboard_infrastructure_cache_ttl_seconds
 )
 _dashboard_infrastructure_lock = Lock()
 _dashboard_infrastructure_cached_at = 0.0
