@@ -596,7 +596,7 @@ def _batch_reconstructed_positions(
     schedule, or an unmodelled plan decision are returned in ``incomplete`` and
     must not become an automated repair worklist.
     """
-    from app.models.catalog import Subscription
+    from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
     from app.models.event_store import EventStore
     from app.models.service_extension import (
         ServiceExtension,
@@ -1157,6 +1157,38 @@ def _batch_reconstructed_positions(
     ).all()
     for native_account_id in native_service_accounts:
         incomplete[str(native_account_id)].add("native_service_decision_not_replayed")
+
+    # A pre-handoff subscription with no legacy service identifier is not a
+    # native service merely because the identifier is NULL. It needs a retained
+    # source-service row mapped to the subscription; otherwise the replay has no
+    # paid-through schedule and must fail closed. This catches migration gaps
+    # without misclassifying genuine post-handoff services above.
+    source_subscription_exists = (
+        select(final_services.c.splynx_service_id)
+        .where(final_services.c.subscription_id == Subscription.id)
+        .exists()
+    )
+    pre_handoff_source_gaps = db.scalars(
+        select(Subscription.subscriber_id).where(
+            Subscription.subscriber_id.in_(replay_ids),
+            Subscription.billing_mode == BillingMode.prepaid,
+            Subscription.status.in_(
+                [
+                    SubscriptionStatus.active,
+                    SubscriptionStatus.suspended,
+                    SubscriptionStatus.pending,
+                    SubscriptionStatus.blocked,
+                ]
+            ),
+            Subscription.splynx_service_id.is_(None),
+            Subscription.created_at < LEGACY_FINANCIAL_REPLAY_AT,
+            ~source_subscription_exists,
+        )
+    ).all()
+    for source_gap_account_id in pre_handoff_source_gaps:
+        incomplete[str(source_gap_account_id)].add(
+            "pre_handoff_service_without_source_evidence"
+        )
 
     plan_event_types = {
         "subscription.activated",

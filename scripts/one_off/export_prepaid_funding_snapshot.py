@@ -12,7 +12,13 @@ consequence follows:
 * enforcement services apply profile, activation, shield, health, and lifecycle
   policy from config-owned inputs.
 
-The export is complete-or-error. A reviewed action packet may resolve only the
+The default export is complete-or-error. An explicitly requested cohort-scoped
+cutover may instead seal only accounts with complete replay evidence and bind
+the excluded account IDs and reason codes into the same signed blocker
+manifest. Those accounts remain funding-quarantined at runtime: they are not
+assigned a guessed balance and cannot receive a new money-based access action.
+
+A reviewed action packet may resolve only the
 exact ``source_service_without_paid_through_period`` blocker set as "never
 paid; due immediately". The packet hash is bound into the signed source label,
 opening funding remains unchanged, and every other blocker still prevents an
@@ -41,7 +47,9 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.services import display_format
-from app.services.prepaid_enforcement_planner import candidate_prepaid_account_ids
+from app.services.prepaid_enforcement_planner import (
+    candidate_prepaid_funding_account_ids,
+)
 from app.services.prepaid_funding_attestation import (
     RECONSTRUCTION_MANIFEST_SCHEMA,
     candidate_cohort_sha256,
@@ -113,12 +121,38 @@ class FundingSnapshotExport:
     def ready(self) -> bool:
         return not (self.incomplete or self.missing_baseline)
 
-    def funding_payload(self) -> dict[str, Any]:
-        if not self.ready:
+    @property
+    def quarantined_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(set(self.incomplete) | set(self.missing_baseline)))
+
+    @property
+    def enforceable_ids(self) -> tuple[str, ...]:
+        quarantined = set(self.quarantined_ids)
+        return tuple(
+            account_id
+            for account_id in self.candidate_ids
+            if account_id not in quarantined
+        )
+
+    @property
+    def subset_ready(self) -> bool:
+        return bool(self.enforceable_ids) and all(
+            account_id in self.positions for account_id in self.enforceable_ids
+        )
+
+    def funding_payload(
+        self, *, allow_quarantined_subset: bool = False
+    ) -> dict[str, Any]:
+        if not self.ready and not (
+            allow_quarantined_subset and self.subset_ready
+        ):
             raise ValueError(
                 "funding reconstruction is blocked by incomplete provenance"
             )
         blocker_manifest = self.blocker_manifest_payload()
+        account_ids = (
+            self.candidate_ids if self.ready else self.enforceable_ids
+        )
         return {
             "schema": RECONSTRUCTION_MANIFEST_SCHEMA,
             "source": self.source,
@@ -127,14 +161,14 @@ class FundingSnapshotExport:
             "candidate_accounts": len(self.candidate_ids),
             "candidate_cohort_sha256": blocker_manifest["candidate_cohort_sha256"],
             "blocker_manifest_sha256": _payload_sha256(blocker_manifest),
-            "blocker_count": len(blocker_manifest["blockers"]),
+            "blocker_count": len(self.quarantined_ids),
             "blocker_manifest": blocker_manifest,
             "accounts": [
                 {
                     "account_id": account_id,
                     "available_balance": _money(self.positions[account_id]),
                 }
-                for account_id in self.candidate_ids
+                for account_id in account_ids
             ],
         }
 
@@ -143,9 +177,12 @@ class FundingSnapshotExport:
         *,
         private_key_pem: str,
         signed_at: datetime | None = None,
+        allow_quarantined_subset: bool = False,
     ) -> dict[str, Any]:
         return sign_prepaid_funding_manifest(
-            self.funding_payload(),
+            self.funding_payload(
+                allow_quarantined_subset=allow_quarantined_subset
+            ),
             private_key_pem=private_key_pem,
             signed_at=signed_at,
         )
@@ -190,8 +227,11 @@ class FundingSnapshotExport:
             "captured_at": self.captured_at.isoformat().replace("+00:00", "Z"),
             "currency": self.currency,
             "ready": self.ready,
+            "subset_ready": self.subset_ready,
             "candidate_accounts": len(self.candidate_ids),
             "reconstructed_accounts": len(self.positions),
+            "enforceable_accounts": len(self.enforceable_ids),
+            "quarantined_accounts": len(self.quarantined_ids),
             "blocker_counts": {
                 "incomplete_replay": len(self.incomplete),
                 "missing_source_baseline": len(self.missing_baseline),
@@ -223,7 +263,10 @@ def build_prepaid_funding_snapshot(
         raise ValueError("source label must not be empty")
 
     candidate_ids = tuple(
-        sorted((str(value) for value in candidate_prepaid_account_ids(db)), key=str)
+        sorted(
+            (str(value) for value in candidate_prepaid_funding_account_ids(db)),
+            key=str,
+        )
     )
     replay = _batch_reconstructed_positions(
         db,
@@ -408,6 +451,14 @@ def main() -> int:
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
+        "--allow-quarantined-subset",
+        action="store_true",
+        help=(
+            "seal only accounts with complete replay evidence and bind the "
+            "excluded cohort into the signed blocker manifest"
+        ),
+    )
+    parser.add_argument(
         "--statement-timeout-ms",
         type=int,
         default=60000,
@@ -454,11 +505,14 @@ def main() -> int:
         )
         if args.blockers_out is not None:
             _write_json(args.blockers_out, diagnostics, overwrite=args.overwrite)
-        if not export.ready:
+        if not export.ready and not (
+            args.allow_quarantined_subset and export.subset_ready
+        ):
             print("BLOCKED - no sealed funding reconstruction was written")
             return 2
         sealed = export.sealed_funding_payload(
             private_key_pem=_resolve_signing_key(args.signing_key_ref),
+            allow_quarantined_subset=args.allow_quarantined_subset,
         )
         _write_json(args.out, sealed, overwrite=args.overwrite)
         print(f"Sealed funding reconstruction written: {args.out}")

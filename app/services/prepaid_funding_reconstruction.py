@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -54,6 +55,7 @@ class ReconstructionManifest:
     position_at: datetime
     currency: str
     rows: tuple[ReconstructionRow, ...]
+    quarantined_account_ids: tuple[UUID, ...]
     candidate_cohort_sha256: str
     blocker_manifest_sha256: str
     manifest_sha256: str
@@ -90,6 +92,9 @@ class ReconstructionPreview:
             "blocker_manifest_sha256": self.manifest.blocker_manifest_sha256,
             "candidate_cohort_sha256": self.manifest.candidate_cohort_sha256,
             "account_count": len(self.manifest.rows),
+            "quarantined_account_count": len(
+                self.manifest.quarantined_account_ids
+            ),
             "total_amount": f"{self.total_amount:.2f}",
             "create_count": self.create_count,
             "replace_count": self.replace_count,
@@ -161,6 +166,8 @@ def _normalized_manifest_payload(
     position_at: datetime,
     currency: str,
     rows: tuple[ReconstructionRow, ...],
+    candidate_count: int,
+    blocker_count: int,
     candidate_hash: str,
     blocker_hash: str,
 ) -> dict[str, Any]:
@@ -169,10 +176,10 @@ def _normalized_manifest_payload(
         "source": source,
         "position_at": position_at.isoformat().replace("+00:00", "Z"),
         "currency": currency,
-        "candidate_accounts": len(rows),
+        "candidate_accounts": candidate_count,
         "candidate_cohort_sha256": candidate_hash,
         "blocker_manifest_sha256": blocker_hash,
-        "blocker_count": 0,
+        "blocker_count": blocker_count,
         "accounts": [
             {
                 "account_id": str(row.account_id),
@@ -237,23 +244,16 @@ def parse_reconstruction_manifest(payload: dict[str, Any]) -> ReconstructionMani
         )
     rows = tuple(sorted(by_account.values(), key=lambda row: str(row.account_id)))
     candidate_count = payload.get("candidate_accounts")
-    if type(candidate_count) is not int or candidate_count != len(rows):
+    if type(candidate_count) is not int or candidate_count < len(rows):
         raise PrepaidFundingReconstructionError(
-            "reconstruction candidate count does not match account rows"
+            "reconstruction candidate count cannot be smaller than account rows"
         )
     blocker_count = payload.get("blocker_count")
-    if type(blocker_count) is not int or blocker_count != 0:
+    if type(blocker_count) is not int or blocker_count < 0:
         raise PrepaidFundingReconstructionError(
-            "reconstruction manifest must attest zero blockers"
+            "reconstruction blocker count must be a non-negative integer"
         )
     candidate_hash = str(payload.get("candidate_cohort_sha256") or "").strip().lower()
-    expected_candidate_hash = candidate_cohort_sha256(
-        [str(row.account_id) for row in rows]
-    )
-    if candidate_hash != expected_candidate_hash:
-        raise PrepaidFundingReconstructionError(
-            "reconstruction candidate cohort hash does not match account rows"
-        )
     blocker_hash = str(payload.get("blocker_manifest_sha256") or "").strip().lower()
     if len(blocker_hash) != 64 or any(
         character not in "0123456789abcdef" for character in blocker_hash
@@ -295,15 +295,58 @@ def parse_reconstruction_manifest(payload: dict[str, Any]) -> ReconstructionMani
         raise PrepaidFundingReconstructionError(
             "unsupported prepaid reconstruction blocker manifest schema"
         )
-    if blocker_manifest.get("blockers") != []:
+    blocker_rows = blocker_manifest.get("blockers")
+    if not isinstance(blocker_rows, list):
         raise PrepaidFundingReconstructionError(
-            "reconstruction blocker manifest must be clean"
+            "reconstruction blocker manifest blockers must be a list"
+        )
+    quarantined: set[UUID] = set()
+    seen_blockers: set[tuple[UUID, str]] = set()
+    for item in blocker_rows:
+        if not isinstance(item, dict) or set(item) != {"account_id", "reason"}:
+            raise PrepaidFundingReconstructionError(
+                "reconstruction blocker rows are incomplete or unexpected"
+            )
+        account_id = coerce_uuid(item.get("account_id"))
+        reason = str(item.get("reason") or "").strip()
+        if not reason or len(reason) > 120:
+            raise PrepaidFundingReconstructionError(
+                "reconstruction blocker reason is invalid"
+            )
+        key = (account_id, reason)
+        if key in seen_blockers:
+            raise PrepaidFundingReconstructionError(
+                "reconstruction blocker row is duplicated"
+            )
+        seen_blockers.add(key)
+        quarantined.add(account_id)
+    row_ids = {row.account_id for row in rows}
+    if row_ids & quarantined:
+        raise PrepaidFundingReconstructionError(
+            "reconstruction account cannot be both materialized and quarantined"
+        )
+    if blocker_count != len(quarantined):
+        raise PrepaidFundingReconstructionError(
+            "reconstruction blocker count does not match quarantined accounts"
+        )
+    if candidate_count != len(row_ids | quarantined):
+        raise PrepaidFundingReconstructionError(
+            "reconstruction candidate count does not match materialized and "
+            "quarantined accounts"
+        )
+    expected_candidate_hash = candidate_cohort_sha256(
+        [str(account_id) for account_id in row_ids | quarantined]
+    )
+    if candidate_hash != expected_candidate_hash:
+        raise PrepaidFundingReconstructionError(
+            "reconstruction candidate cohort hash does not match materialized "
+            "and quarantined accounts"
         )
     if (
         blocker_manifest.get("source") != source
         or blocker_manifest.get("captured_at") != payload.get("captured_at")
         or blocker_manifest.get("currency") != currency
-        or blocker_manifest.get("candidate_accounts") != len(rows)
+        or blocker_manifest.get("candidate_accounts") != candidate_count
         or blocker_manifest.get("candidate_cohort_sha256") != candidate_hash
     ):
         raise PrepaidFundingReconstructionError(
@@ -326,6 +369,8 @@ def parse_reconstruction_manifest(payload: dict[str, Any]) -> ReconstructionMani
         position_at=position_at,
         currency=currency,
         rows=rows,
+        candidate_count=candidate_count,
+        blocker_count=blocker_count,
         candidate_hash=candidate_hash,
         blocker_hash=blocker_hash,
     )
@@ -337,6 +382,7 @@ def parse_reconstruction_manifest(payload: dict[str, Any]) -> ReconstructionMani
         position_at=position_at,
         currency=currency,
         rows=rows,
+        quarantined_account_ids=tuple(sorted(quarantined, key=str)),
         candidate_cohort_sha256=candidate_hash,
         blocker_manifest_sha256=blocker_hash,
         manifest_sha256=digest,
@@ -374,27 +420,30 @@ def preview_prepaid_funding_reconstruction(
     )
     manifest = parse_reconstruction_manifest(manifest_payload)
     row_ids = {row.account_id for row in manifest.rows}
+    manifest_account_ids = row_ids | set(manifest.quarantined_account_ids)
     blockers: list[str] = []
     expected = {coerce_uuid(value) for value in expected_account_ids}
     if not expected:
         blockers.append("reconstruction_expected_cohort_empty")
     blockers.extend(
         f"missing_reconstruction_account:{account_id}"
-        for account_id in sorted(expected - row_ids, key=str)
+        for account_id in sorted(expected - manifest_account_ids, key=str)
     )
     blockers.extend(
         f"unexpected_reconstruction_account:{account_id}"
-        for account_id in sorted(row_ids - expected, key=str)
+        for account_id in sorted(manifest_account_ids - expected, key=str)
     )
     effective_now = _as_utc(now or datetime.now(UTC))
     if manifest.position_at > effective_now:
         blockers.append("reconstruction_position_in_future")
     existing_accounts = set(
-        db.scalars(select(Subscriber.id).where(Subscriber.id.in_(row_ids))).all()
+        db.scalars(
+            select(Subscriber.id).where(Subscriber.id.in_(manifest_account_ids))
+        ).all()
     )
     blockers.extend(
         f"reconstruction_account_not_found:{account_id}"
-        for account_id in sorted(row_ids - existing_accounts, key=str)
+        for account_id in sorted(manifest_account_ids - existing_accounts, key=str)
     )
     active = _active_baselines(db, row_ids, manifest.currency)
     create_count = 0
@@ -562,6 +611,44 @@ def authority_cutover_batch(
             PrepaidFundingReconstructionBatch.is_authority_cutover.is_(True)
         )
     )
+
+
+def prepaid_funding_quarantined_account_ids(
+    db: Session,
+    account_ids: Iterable[object],
+    *,
+    currency: str | None = None,
+) -> set[UUID]:
+    """Return legacy accounts deliberately excluded from funding enforcement.
+
+    A post-cutover account legitimately starts from zero and therefore needs no
+    opening baseline. A legacy account without an active reviewed baseline is
+    never assigned zero or a legacy fallback: it remains visible as funding
+    unavailable and receives no new money-based access consequence.
+    """
+    ids = {coerce_uuid(value) for value in account_ids}
+    if not ids:
+        return set()
+    cutover = authority_cutover_batch(db)
+    if cutover is None:
+        return set(ids)
+    unit = _currency(currency or default_prepaid_funding_currency(db))
+    baseline_ids = set(_active_baselines(db, ids, unit))
+    accounts = {
+        account.id: account.created_at
+        for account in db.scalars(
+            select(Subscriber).where(Subscriber.id.in_(ids))
+        ).all()
+    }
+    cutover_position = _stored_utc(cutover.position_at)
+    quarantined = set(ids) - set(accounts)
+    for account_id, created_at in accounts.items():
+        if account_id in baseline_ids:
+            continue
+        account_start = _stored_utc(created_at)
+        if account_start <= cutover_position:
+            quarantined.add(account_id)
+    return quarantined
 
 
 def verified_prepaid_funding_balances(

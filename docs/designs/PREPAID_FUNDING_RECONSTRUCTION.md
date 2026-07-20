@@ -17,13 +17,17 @@ Splynx transactions, subscriber deposit fields, audit tables, exports, and bank
 statements are evidence sources. None is a runtime balance source. There is no
 configuration switch, shadow reader, or legacy fallback after materialization.
 
-Materialization accepts only one Ed25519-sealed, full-cohort manifest emitted
-by the audit exporter after a clean replay. The reconstruction owner verifies
+Materialization accepts only one Ed25519-sealed, exact-cohort manifest emitted
+by the audit exporter after replay. The default remains complete-or-error. An
+explicit cohort-scoped cutover may materialize the verified rows while binding
+every excluded account and reason into the same signed blocker manifest. The
+reconstruction owner verifies
 the signature against the config-owned
 `billing.prepaid_reconstruction_attestation_public_key_ref`; that setting must
 be an OpenBao reference. Unsigned JSON, plaintext/environment trust-key
-fallbacks, a non-zero blocker set, changed cohort content, and a second seal for
-an already-recorded semantic manifest all fail closed.
+fallbacks, an unbound exclusion, changed cohort content, overlap between a
+materialized and quarantined account, and a second seal for an already-recorded
+semantic manifest all fail closed.
 
 The configured `billing.default_currency` supplies the currency unit. Amounts
 from different currencies are never minimized, summed, or compared.
@@ -41,11 +45,13 @@ payment or adjustment from disappearing behind an already sealed baseline.
 - `scripts/one_off/billing_alignment_audit.py` reconstructs observations in an
   isolated audit restore and quarantines incomplete replay.
 - `scripts/one_off/export_prepaid_funding_snapshot.py` emits and signs a
-  complete-or-error, currency-typed manifest for the exact prepaid cohort. Its
+  complete-or-error, currency-typed manifest for the exact prepaid funding
+  cohort. `--allow-quarantined-subset` is the only partial-cutover path and
+  keeps the full cohort plus excluded IDs/reasons under one signature. Its
   Ed25519 private key is resolved from an audit-only OpenBao path supplied by
   `--signing-key-ref`; the application must not have read access to that path.
 - `financial.prepaid_funding_reconstruction` verifies the sealed manifest and
-  its embedded clean blocker manifest, stores the semantic/full-payload/seal/
+  its embedded blocker manifest, stores the semantic/full-payload/seal/
   blocker/cohort hashes and signer fingerprint with the reviewed batch, stores
   one active baseline per account/currency, and owns later append-only
   supersession.
@@ -64,10 +70,20 @@ payment or adjustment from disappearing behind an already sealed baseline.
 
 ## Completeness and missing evidence
 
-The first materialization must match the exact non-empty prepaid candidate
-cohort. Missing accounts, extra accounts, unknown subscribers, future-dated
-positions, duplicate rows, unsupported currency, and unreviewed content hashes
-block the whole batch. Partial authority is forbidden.
+The first materialization must match the exact non-empty prepaid funding
+candidate cohort. That cohort is narrower than enforcement repair: it requires
+an aligned prepaid account, at least one collectible prepaid service, and no
+collectible service with another billing mode. Timer/lock cleanup inputs remain
+visible to the enforcement reconciler but never receive an opening balance just
+to repair stale state.
+
+Missing accounts, extra accounts, unknown subscribers, future-dated positions,
+duplicate rows, unsupported currency, unreviewed content hashes, or an
+unrecorded exclusion block the batch. Cohort-scoped authority is permitted only
+when the signed artifact partitions the exact candidate set into materialized
+and quarantined IDs. Quarantined accounts have no guessed balance, remain
+unavailable to customer balance surfaces, and receive no new money-based
+suspend or restore action until a reviewed supersession materializes them.
 
 The funding artifact contains reconstructed available balances only. Required
 balance, grace, activation, warning, scheduling, and suspension behavior remain
@@ -214,14 +230,20 @@ invokes the payment owner itself.
      --source REVIEWED_SOURCE_LABEL \
      --out /approved/prepaid-funding-sealed.json \
      --blockers-out /approved/prepaid-funding-blockers.json \
+     --allow-quarantined-subset \
      --signing-key-ref bao://secret/audit/prepaid-reconstruction-signer#private_key_pem
    ```
 
-   Adjudicate its hash-bound blocker manifest, perform the resulting owner
-   actions, and rerun until clean; do not coerce unknown balances to zero.
+   Adjudicate its hash-bound blocker manifest and perform the resulting owner
+   actions. If immediate cohort-scoped cutover is approved, retain unresolved
+   accounts in the signed quarantine; never coerce unknown balances to zero.
 3. Review the normalized manifest SHA-256, sealed-payload SHA-256, signer
    fingerprint, blocker/cohort hashes, account count, total, currency,
    timestamp, source label, and external evidence packet.
+   Seal, review, dry-run, and materialize in one controlled operating window.
+   The materializer recomputes the live funding cohort and rejects any account
+   added to or removed from it after sealing; cohort drift requires a fresh
+   export, review, and signature, never an override of the mismatch.
 4. Deploy the prepaid funding reconstruction migration after the current
    Alembic head while the old application remains stopped or on its prior
    release.
@@ -244,8 +266,9 @@ invokes the payment owner itself.
      --confirm-final-cutover MATERIALIZE_VERIFIED_PREPAID_FUNDING
    ```
 
-7. Start the new application and verify the full cohort against the reviewed
-   positions plus post-baseline native events. The prepaid enforcement control,
+7. Start the new application and verify the materialized cohort against the
+   reviewed positions plus post-baseline native events, and verify that the
+   signed quarantine receives no money-based action. The prepaid enforcement control,
    activation timestamp, and zero-day grace remain explicit configuration, but
    cutover adds no initial grace or shadow period: when configured active, the
    owner enforces immediately.

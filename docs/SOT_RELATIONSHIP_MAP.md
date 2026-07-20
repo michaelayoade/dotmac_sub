@@ -331,8 +331,12 @@ detailed security and delivery boundary is
    `financial.prepaid_funding_reconstruction`: one reviewed opening position at
    the final authority-cutover timestamp plus canonical native events strictly
    after that timestamp. There is no Splynx/legacy fallback or authority toggle.
-   The opening-position manifest is full-cohort, blocker-free, and Ed25519
-   sealed against an OpenBao-owned public trust reference before materialization.
+   The opening-position manifest covers the exact funding cohort and is
+   Ed25519 sealed against an OpenBao-owned public trust reference before
+   materialization. Its default is blocker-free. An explicitly approved partial
+   cutover binds verified rows and every quarantined account/reason under the
+   same signature; quarantined accounts receive neither a guessed balance nor a
+   money-based access consequence.
    A pre-cutover account without an approved opening balance fails closed; an
    account created after cutover starts at zero and accumulates native events.
    Customer statements and scalar funding previews use that reviewed position
@@ -361,7 +365,7 @@ detailed security and delivery boundary is
    warn/suspend/restore plan consumed by both dry-run and execution. It consumes
    the funding decision from `financial.access_resolution`; it does not create
    another balance or threshold rule. Migration first materializes a named,
-   timestamped, reviewed full-cohort opening position through
+   timestamped, reviewed funding-cohort opening position through
    `financial.prepaid_funding_reconstruction` (for example, from the Splynx
    cutover position plus proven native events). Splynx exports and bank
    statements may close migration evidence, but their rows and narrations are
@@ -371,8 +375,11 @@ detailed security and delivery boundary is
    Activation does not reset an older low-balance timer. A resolved zero-day
    grace policy is actionable on the first eligible sweep; an explicit nonzero
    account or policy-set grace remains authoritative. Supplied snapshots are
-   complete-or-error for that cohort and never fill missing accounts from a
-   different balance source.
+   complete-or-error by default. A partial cutover must cryptographically
+   partition the exact funding cohort into materialized and quarantined IDs and
+   never fill either set from a different balance source. The broader repair
+   cohort may clear stale prepaid timers/locks on non-prepaid or service-less
+   accounts without creating a funding baseline.
    A reviewed never-paid decision may resolve only an exact hash-bound
    `source_service_without_paid_through_period` cohort: it preserves the source
    opening balance, makes the service due immediately, and is bound into the
@@ -406,7 +413,7 @@ detailed security and delivery boundary is
    and recurring revenue uses the MRR-countable basis. Report/web layers
    compose these reads and own presentation only.
 11. `financial.prepaid_enforcement_readiness` owns the activation prerequisite.
-   After the signed full-cohort opening position is materialized, it records one
+   After the signed funding-cohort opening position is materialized, it records one
    fresh plan from Sub's live currency-bound funding owner for the exact
    owner-selected cohort. It accepts no alternate funding input. Before the
    first sweep seals activation, any cohort, policy, live-funding decision, or
@@ -1073,6 +1080,12 @@ evidenced owner contract:
   affordability threshold. The archived Splynx mirror is migration evidence,
   never a runtime fallback. Reason-scoped repair follows the reason owner: an
   ``overdue`` lock is never judged by the prepaid affordability resolver.
+  Ledger projections require both `is_active` and `affects_customer_position`.
+  Those fields are deliberately orthogonal: `is_active` follows the source
+  artifact lifecycle, while `affects_customer_position` prevents structural,
+  cutover, and correction evidence from duplicating document or opening-baseline
+  value. Neither field may be inferred from or mechanically rewritten from the
+  other.
 - Transport boundary: `invoice.overdue` is observation only. Notifications,
   throttle, suspension, and rejection come from the configured dunning step.
   `payment.received` always asks the owner to reconcile and contains no local
