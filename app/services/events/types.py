@@ -60,6 +60,9 @@ class EventType(enum.Enum):
     # Billing - Payment arrangement events (1)
     arrangement_defaulted = "arrangement.defaulted"
 
+    # Prepaid enforcement control-state evidence
+    prepaid_enforcement_timer_changed = "prepaid_enforcement.timer_changed"
+
     # Billing - Outage compensation (1)
     service_extended = "billing.service_extended"
 
@@ -69,6 +72,7 @@ class EventType(enum.Enum):
     usage_exhausted = "usage.exhausted"
     usage_topped_up = "usage.topped_up"
     addon_expiring = "usage.addon_expiring"
+    fup_runtime_state_changed = "fup.runtime_state_changed"
 
     # Operations - Provisioning events (3)
     provisioning_started = "provisioning.started"

@@ -47,6 +47,7 @@ class TransactionMode(StrEnum):
 
     NOT_APPLICABLE = "not_applicable"
     READ_ONLY = "read_only"
+    PARTICIPANT = "participant"
     OWNER_MANAGED = "owner_managed"
     COORDINATOR_MANAGED = "coordinator_managed"
 
@@ -310,6 +311,7 @@ def contract_validation_errors(
         )
     if roles & _TRANSACTIONAL_WRITER_ROLES:
         if transaction.mode not in {
+            TransactionMode.PARTICIPANT,
             TransactionMode.OWNER_MANAGED,
             TransactionMode.COORDINATOR_MANAGED,
         }:
@@ -317,7 +319,16 @@ def contract_validation_errors(
                 f"service {service.name!r} has a writer/coordinator role but "
                 f"transaction mode is {transaction.mode.value!r}"
             )
+        if (
+            OwnerRole.APPLICATION_COORDINATOR in roles
+            and transaction.mode is TransactionMode.PARTICIPANT
+        ):
+            errors.append(
+                f"service {service.name!r} application coordinator cannot use "
+                "participant transaction mode"
+            )
     elif transaction.mode in {
+        TransactionMode.PARTICIPANT,
         TransactionMode.OWNER_MANAGED,
         TransactionMode.COORDINATOR_MANAGED,
     }:

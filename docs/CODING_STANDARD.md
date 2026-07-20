@@ -136,6 +136,14 @@ Infrastructure session helpers may close or release a read transaction, but
 they must not become business writers and must be registered as infrastructure
 owners when they perform persistence.
 
+A contracted canonical writer may use manifest transaction mode `participant`
+only when it is a non-public collaborator of named command/coordinator owners.
+Participant writers lock their own records, stage their state and event evidence,
+and use `flush()` only. They cannot be called directly by routes, tasks, webhooks,
+or CLI adapters, and they cannot initiate or complete a transaction. This mode
+records nested ownership explicitly; it is not a compatibility path for an
+adapter-owned transaction.
+
 ## 4. Concurrency and idempotency
 
 Every retryable or externally triggered command defines:

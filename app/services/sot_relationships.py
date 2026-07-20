@@ -967,10 +967,148 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "prepaid deactivation timer state",
                     "funded and terminal prepaid timer cleanup",
                 ),
+                depends_on=("events.dispatcher",),
                 notes=(
                     "Writes prepared timer observations and cleanup requests in "
                     "the caller transaction. It owns no eligibility, threshold, "
                     "grace, suspension, restoration, or commit decision."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="prepaid low-balance timer state",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "resolved prepaid enforcement transition",
+                                "canonical prepaid enforcement timers",
+                            ),
+                            canonical_writer="financial.prepaid_enforcement_state",
+                        ),
+                        ConcernContract(
+                            name="prepaid deactivation timer state",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "resolved prepaid enforcement transition",
+                                "canonical prepaid enforcement timers",
+                            ),
+                            canonical_writer="financial.prepaid_enforcement_state",
+                        ),
+                        ConcernContract(
+                            name="funded and terminal prepaid timer cleanup",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "resolved prepaid enforcement transition",
+                                "resolved account lifecycle transition",
+                                "canonical prepaid enforcement timers",
+                            ),
+                            canonical_writer="financial.prepaid_enforcement_state",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="resolved prepaid enforcement transition",
+                            owner="financial.prepaid_enforcement",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked prepaid enforcement plan and successful "
+                                "suspend, restore, or funding consequence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="resolved account lifecycle transition",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="terminal account status derived from subscription facts",
+                        ),
+                        AuthorityInput(
+                            name="canonical prepaid enforcement timers",
+                            owner="financial.prepaid_enforcement_state",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "Subscriber.prepaid_low_balance_at and "
+                                "Subscriber.prepaid_deactivation_at"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "Only contracted enforcement and lifecycle owners call "
+                            "the participant. It locks the Subscriber row and "
+                            "flushes timer plus event evidence without committing."
+                        ),
+                        locking=(
+                            "Every transition selects the canonical Subscriber row "
+                            "FOR UPDATE before inspecting or changing timer state."
+                        ),
+                        idempotency=(
+                            "Arm and deactivation preserve the first timestamp; "
+                            "equivalent repeats and already-clear cleanup are no-ops."
+                        ),
+                        retries=(
+                            "The surrounding owner retries its complete transaction; "
+                            "the participant never retries or commits independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.prepaid_enforcement_state.invalid_account_id",
+                            "financial.prepaid_enforcement_state.account_not_found",
+                        ),
+                        mapping_owner=(
+                            "financial.prepaid_enforcement and "
+                            "access.subscription_lifecycle coordinators"
+                        ),
+                        fail_closed_on=(
+                            "malformed or missing canonical account",
+                            "unlocked or ambiguous timer state",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("prepaid_enforcement.timer_changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and contains only the account "
+                            "identifier and transition vocabulary."
+                        ),
+                        replay=(
+                            "Equivalent commands are no-ops. Current timer fields "
+                            "are authoritative; events retain transition evidence."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "collections and account-lifecycle call sites mutating "
+                            "Subscriber prepaid timer fields directly"
+                        ),
+                        new_owner="financial.prepaid_enforcement_state",
+                        verification=(
+                            "Focused state, sweep, lifecycle, atomic-event, and "
+                            "single-writer architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Every prepaid timer transition calls the locked, "
+                            "flush-only participant from a named owner."
+                        ),
+                        fallback_retirement=(
+                            "Direct prepaid timer assignments outside the owner and "
+                            "silent missing-account behavior are removed."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/designs/PREPAID_FUNDING_RECONSTRUCTION.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_prepaid_enforcement_state_owner.py",
+                        "tests/architecture/test_prepaid_enforcement_state_boundary.py",
+                        "tests/test_prepaid_balance_sweep.py",
+                        "tests/test_account_lifecycle.py",
+                    ),
                 ),
             ),
             SOTService(
@@ -5045,10 +5183,165 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 name="access.fup_runtime_state",
                 module="app.services.fup_state",
                 owns=("FUP per-subscription runtime state rows",),
-                depends_on=(),
+                depends_on=("events.dispatcher",),
                 notes=(
                     "State store only: get/apply/clear/list. Decisions live in "
                     "the rule engine and the enforcement sweep."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="FUP per-subscription runtime state rows",
+                            role=OwnerRole.PROJECTION_WRITER,
+                            input_names=(
+                                "canonical subscription offer state",
+                                "resolved FUP enforcement consequence",
+                                "applied access consequence evidence",
+                            ),
+                            canonical_writer="access.fup_runtime_state",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical subscription offer state",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscription.id and Subscription.offer_id",
+                        ),
+                        AuthorityInput(
+                            name="resolved FUP enforcement consequence",
+                            owner="access.fup_enforcement_sweep",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "rule, action, cap-reset, and evaluation-time "
+                                "evidence from the FUP sweep"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="applied access consequence evidence",
+                            owner="access.session_enforcement",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "successfully applied throttle, block, suspend, "
+                                "restore, or reset consequence"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "FUP enforcement owners pass a typed transition. The "
+                            "participant locks the Subscription and FupState rows, "
+                            "then flushes state and event evidence without commit."
+                        ),
+                        locking=(
+                            "The canonical Subscription row serializes creation and "
+                            "the FupState row is selected FOR UPDATE before change."
+                        ),
+                        idempotency=(
+                            "An exact typed transition replay is a no-op; clear is a "
+                            "no-op when the runtime projection is already neutral."
+                        ),
+                        retries=(
+                            "The surrounding enforcement owner retries the complete "
+                            "consequence transaction; the participant never retries "
+                            "or commits independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "access.fup_runtime_state.invalid_subscription_id",
+                            "access.fup_runtime_state.invalid_evaluated_at",
+                            "access.fup_runtime_state.invalid_cap_resets_at",
+                            "access.fup_runtime_state.invalid_before",
+                            "access.fup_runtime_state.invalid_event_evidence",
+                            "access.fup_runtime_state.subscription_not_found",
+                            "access.fup_runtime_state.offer_required",
+                            "access.fup_runtime_state.offer_mismatch",
+                            "access.fup_runtime_state.state_offer_mismatch",
+                        ),
+                        mapping_owner=(
+                            "access.fup_enforcement_sweep and enforcement event "
+                            "consequence owners"
+                        ),
+                        fail_closed_on=(
+                            "missing or mismatched subscription/offer identity",
+                            "naive evaluation or reset time",
+                            "runtime state persistence failure",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=("fup.runtime_state_changed",),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and contains subscription, offer, "
+                            "transition, and action vocabulary without usage values."
+                        ),
+                        replay=(
+                            "Exact transition replay is idempotent. The current row "
+                            "is rebuilt from subscription, rule, usage, and applied "
+                            "access consequence evidence."
+                        ),
+                    ),
+                    projections=(
+                        ProjectionContract(
+                            name="current per-subscription FUP enforcement posture",
+                            input_names=(
+                                "canonical subscription offer state",
+                                "resolved FUP enforcement consequence",
+                                "applied access consequence evidence",
+                            ),
+                            writer="access.fup_runtime_state",
+                            freshness="FupState.last_evaluated_at",
+                            stale_behavior=(
+                                "Never relax access from stale state; expose the stale "
+                                "projection and request enforcement reconciliation."
+                            ),
+                            drift_signal=(
+                                "Compare runtime action/profile/reset evidence with "
+                                "canonical rules, usage window, access locks, and "
+                                "RADIUS projection."
+                            ),
+                            rebuild_operation=(
+                                "Run the scoped FUP enforcement reconciliation for "
+                                "the subscription and reapply or clear exact state."
+                            ),
+                            repair_owner="access.fup_enforcement_sweep",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "event-handler and sweep-local free-form FupState writes "
+                            "with implicit wall-clock time"
+                        ),
+                        new_owner="access.fup_runtime_state",
+                        verification=(
+                            "Typed transition, locking, idempotency, atomic-event, "
+                            "reset, lift, sweep, and single-writer tests."
+                        ),
+                        cutover_gate=(
+                            "All FupState mutations pass typed commands with owner-"
+                            "supplied evaluation time through the participant."
+                        ),
+                        fallback_retirement=(
+                            "Free-form state mutation, implicit datetime.now, silent "
+                            "offer mismatch, and parallel FupState writers are removed."
+                        ),
+                    ),
+                    steward="network access",
+                    design_refs=(
+                        "docs/designs/FUP_CONSUMPTION_WINDOWS.md",
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_fup_runtime_state_owner.py",
+                        "tests/architecture/test_fup_runtime_state_boundary.py",
+                        "tests/test_fup_lift_enforcement.py",
+                        "tests/test_fup_evaluate_commits.py",
+                    ),
                 ),
             ),
             SOTService(

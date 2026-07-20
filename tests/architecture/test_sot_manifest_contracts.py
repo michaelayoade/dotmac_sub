@@ -13,6 +13,7 @@ from app.services.sot_manifest import (
     AuthorityMigrationState,
     ConcernContract,
     ErrorContract,
+    EventContract,
     MigrationContract,
     OwnerRole,
     ServiceContract,
@@ -160,4 +161,63 @@ def test_state_writer_contract_requires_transaction_errors_and_events() -> None:
     )
     assert any(
         "omits owner-command boundary error codes" in error for error in managed_errors
+    )
+
+
+def test_participant_writer_declares_nested_atomicity_without_public_executor_errors():
+    service = SOTService(
+        name="example.writer",
+        module="app.services.example",
+        owns=("example authoritative state",),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="example authoritative state",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=("example source",),
+                    canonical_writer="example.writer",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="example source",
+                    owner="example.source",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="example_records",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary="Named coordinators own the surrounding transaction.",
+                locking="The participant locks its authoritative row.",
+                idempotency="Equivalent state is a no-op.",
+                retries="The coordinator retries the complete command.",
+            ),
+            errors=ErrorContract(
+                domain_codes=("example.writer.invalid_input",),
+                mapping_owner="named coordinators",
+            ),
+            events=EventContract(
+                event_types=("example.state_changed",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="Version 1 is additive.",
+                replay="Rebuild from example_records.",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="example.writer",
+            ),
+            steward="example team",
+            design_refs=("docs/example.md",),
+            test_refs=("tests/test_example.py",),
+        ),
+    )
+
+    assert (
+        contract_validation_errors(
+            service,
+            service_names={"example.source", "example.writer", "events.dispatcher"},
+        )
+        == ()
     )

@@ -55,6 +55,12 @@ domain helpers may query, add, delete, execute domain SQL, and flush within the
 owner's transaction, but cannot complete it. Event delivery remains owned by
 `events.dispatcher` after the atomic commit.
 
+The typed manifest represents a canonical nested writer with transaction mode
+`participant`. A participant is callable only by contracted owners or
+coordinators, locks its own authoritative records, stages its domain event in the
+same caller transaction, and never enters the public owner-command executor.
+Adapters cannot call participant writers directly.
+
 ## Consequences
 
 Transaction ownership is executable and tied to the canonical manifest. A

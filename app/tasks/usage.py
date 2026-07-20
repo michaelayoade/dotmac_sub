@@ -190,7 +190,11 @@ def lift_expired_fup_enforcement() -> dict[str, int]:
         pending = fup_state.list_pending_reset(session, now)
         for state in pending:
             try:
-                result = lift_fup_enforcement(session, str(state.subscription_id))
+                result = lift_fup_enforcement(
+                    session,
+                    str(state.subscription_id),
+                    evaluated_at=now,
+                )
                 if result.get("lifted"):
                     lifted += 1
                 session.commit()

@@ -2,10 +2,23 @@
 
 import logging
 
+from sqlalchemy.orm import Session
+
+from app.models.fup_state import FupState
+from app.services import fup_state as fup_state_service
 from app.services.db_session_adapter import db_session_adapter
+from app.services.fup_state import ApplyFupRuntimeState
 
 logger = logging.getLogger(__name__)
 SessionLocal = db_session_adapter.create_session
+
+
+def stage_fup_runtime_state(
+    db: Session,
+    command: ApplyFupRuntimeState,
+) -> FupState:
+    """Delegate one typed state projection inside the enforcement transaction."""
+    return fup_state_service.fup_state.apply_action(db, command)
 
 
 def _fup_should_enforce(
@@ -67,7 +80,6 @@ def run_fup_evaluation(
     from app.services.events import emit_event
     from app.services.events.types import EventType
     from app.services.fup import evaluate_rules
-    from app.services.fup_state import fup_state
     from app.services.usage import _parse_warning_thresholds
 
     session = SessionLocal()
@@ -159,14 +171,14 @@ def run_fup_evaluation(
             processed += 1
 
             # Check if FUP state needs reset (period boundary crossed)
-            state = fup_state.get(session, str(sub.id))
+            state = fup_state_service.fup_state.get(session, str(sub.id))
             if state and state.cap_resets_at and now >= state.cap_resets_at:
                 # Lift the actual enforcement (RADIUS profile / address-list
                 # block / suspension), not just the state row — otherwise the
                 # subscriber stays throttled/blocked forever past the reset.
                 from app.services.enforcement import lift_fup_enforcement
 
-                lift_fup_enforcement(session, str(sub.id))
+                lift_fup_enforcement(session, str(sub.id), evaluated_at=now)
                 reset += 1
                 logger.info("Lifted FUP enforcement for subscription %s", sub.id)
                 session.commit()
@@ -363,13 +375,20 @@ def run_fup_evaluation(
                 if ratios:
                     ratio, r = max(ratios, key=lambda x: x[0])
                     if warn_ratio <= ratio < 1.0:
-                        fup_state.apply_action(
+                        stage_fup_runtime_state(
                             session,
-                            str(sub.id),
-                            offer_id=str(sub.offer_id),
-                            rule_id=r.get("rule_id"),
-                            action_status=FupActionStatus.notified,
-                            notes="approaching fup limit",
+                            ApplyFupRuntimeState(
+                                subscription_id=sub.id,
+                                offer_id=sub.offer_id,
+                                rule_id=(
+                                    uuid.UUID(str(r["rule_id"]))
+                                    if r.get("rule_id")
+                                    else None
+                                ),
+                                action_status=FupActionStatus.notified,
+                                evaluated_at=now,
+                                notes="approaching fup limit",
+                            ),
                         )
                         pending_notifs.append(
                             {

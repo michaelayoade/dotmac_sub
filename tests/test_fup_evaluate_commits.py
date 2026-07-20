@@ -10,7 +10,7 @@ session-scoped so committing real fixture data would leak across tests.
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 from uuid import uuid4
 
 
@@ -126,7 +126,7 @@ def test_lifts_existing_fup_state_after_cap_reset_even_if_not_active():
 
     assert result["processed"] == 1
     assert result["reset"] == 1
-    mock_lift.assert_called_once_with(session, str(sub.id))
+    mock_lift.assert_called_once_with(session, str(sub.id), evaluated_at=ANY)
     session.close.assert_called_once()
 
 
