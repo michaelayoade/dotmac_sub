@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import HTTPException
 from jose import JWTError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -23,10 +22,8 @@ from sqlalchemy.orm import Session
 from app.models.idempotency import IdempotencyKey
 from app.schemas.vendor_portal import VendorAsBuiltCreate
 from app.services import context_signing
-from app.services.vendor_portal_operations import (
-    VendorProjectLifecycleError,
-    vendor_portal_operations,
-)
+from app.services.vendor_portal_errors import VendorPortalOperationError
+from app.services.vendor_portal_operations import vendor_portal_operations
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 
 _TOKEN_TYPE = "vendor_submission_confirmation"
@@ -40,17 +37,6 @@ _SCOPES = {
     "project_start": "vendor_project_start",
     "project_complete": "vendor_project_complete",
 }
-
-
-def _lifecycle_http_error(exc: VendorProjectLifecycleError) -> HTTPException:
-    status_code = {
-        "not_found": 404,
-        "not_assigned": 403,
-        "unsupported_action": 400,
-        "actor_required": 400,
-        "invalid_transition": 409,
-    }.get(exc.code, 409)
-    return HTTPException(status_code=status_code, detail=exc.message)
 
 
 @dataclass(frozen=True)
@@ -176,25 +162,24 @@ def issue_project_lifecycle(
     vendor_id: str,
     user_id: str,
 ) -> VendorSubmissionProposal:
-    try:
-        preview = vendor_portal_operations.preview_project_lifecycle(
-            db, project_id, vendor_id=vendor_id, action=action
-        )
-    except VendorProjectLifecycleError as exc:
-        raise _lifecycle_http_error(exc) from exc
+    preview = vendor_portal_operations.preview_project_lifecycle(
+        db, project_id, vendor_id=vendor_id, action=action
+    )
     return _issue(db, preview, vendor_id=vendor_id, user_id=user_id)
 
 
 def _decode(db: Session, token: str) -> dict[str, Any]:
     normalized = str(token or "").strip()
     if not normalized or len(normalized) > 131_072:
-        raise HTTPException(status_code=400, detail="Confirmation proposal is invalid")
+        raise VendorPortalOperationError(
+            "invalid_confirmation", "Confirmation proposal is invalid", kind="invalid"
+        )
     try:
         claims = context_signing.verify_context_token(db, normalized)
     except JWTError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="Confirmation proposal is invalid or expired; preview again",
+        raise VendorPortalOperationError(
+            "expired_confirmation",
+            "Confirmation proposal is invalid or expired; preview again",
         ) from exc
     if (
         claims.get("typ") != _TOKEN_TYPE
@@ -202,7 +187,9 @@ def _decode(db: Session, token: str) -> dict[str, Any]:
         or claims.get("ver") != _TOKEN_VERSION
         or claims.get("submission_type") not in _SCOPES
     ):
-        raise HTTPException(status_code=400, detail="Confirmation proposal is invalid")
+        raise VendorPortalOperationError(
+            "invalid_confirmation", "Confirmation proposal is invalid", kind="invalid"
+        )
     return claims
 
 
@@ -221,8 +208,9 @@ def _replay_or_reserve(
     if existing is not None:
         if existing.ref_id:
             return existing
-        raise HTTPException(
-            status_code=409, detail="This submission confirmation is already running"
+        raise VendorPortalOperationError(
+            "confirmation_in_progress",
+            "This submission confirmation is already running",
         )
     reservation = IdempotencyKey(scope=scope, key=key)
     db.add(reservation)
@@ -237,8 +225,9 @@ def _replay_or_reserve(
         )
         if replay is not None and replay.ref_id:
             return replay
-        raise HTTPException(
-            status_code=409, detail="This submission confirmation is already running"
+        raise VendorPortalOperationError(
+            "confirmation_in_progress",
+            "This submission confirmation is already running",
         ) from None
     return reservation
 
@@ -258,14 +247,18 @@ def confirm_submission(
         or str(claims.get("user_id") or "") != str(user_id)
         or str(claims.get("project_id") or "") != str(project_id)
     ):
-        raise HTTPException(
-            status_code=403, detail="Confirmation proposal belongs to another context"
+        raise VendorPortalOperationError(
+            "confirmation_context_mismatch",
+            "Confirmation proposal belongs to another context",
+            kind="forbidden",
         )
     submission_type = str(claims["submission_type"])
     scope = _SCOPES[submission_type]
     key = str(claims.get("jti") or "").strip()
     if not key:
-        raise HTTPException(status_code=400, detail="Confirmation proposal is invalid")
+        raise VendorPortalOperationError(
+            "invalid_confirmation", "Confirmation proposal is invalid", kind="invalid"
+        )
 
     prior = (
         db.query(IdempotencyKey)
@@ -302,32 +295,30 @@ def confirm_submission(
             try:
                 payload = VendorAsBuiltCreate.model_validate(claims.get("payload"))
             except (TypeError, ValueError) as exc:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Confirmation proposal payload is invalid",
+                raise VendorPortalOperationError(
+                    "invalid_confirmation_payload",
+                    "Confirmation proposal payload is invalid",
+                    kind="invalid",
                 ) from exc
             preview = vendor_portal_operations.preview_as_built_submission(
                 db, payload, vendor_id, for_update=True
             )
         else:
             action = "start" if submission_type == "project_start" else "complete"
-            try:
-                preview = vendor_portal_operations.preview_project_lifecycle(
-                    db,
-                    target_id,
-                    vendor_id=vendor_id,
-                    action=action,
-                    for_update=True,
-                )
-            except VendorProjectLifecycleError as exc:
-                raise _lifecycle_http_error(exc) from exc
+            preview = vendor_portal_operations.preview_project_lifecycle(
+                db,
+                target_id,
+                vendor_id=vendor_id,
+                action=action,
+                for_update=True,
+            )
         if not hmac.compare_digest(
             str(claims.get("state_fingerprint") or ""),
             _fingerprint(preview["state"]),
         ):
-            raise HTTPException(
-                status_code=409,
-                detail="Submission data changed after preview; review it again",
+            raise VendorPortalOperationError(
+                "stale_confirmation",
+                "Submission data changed after preview; review it again",
             )
         if submission_type == "quote":
             result = vendor_portal_operations.submit_quote(
@@ -343,18 +334,15 @@ def confirm_submission(
             )
         else:
             action = "start" if submission_type == "project_start" else "complete"
-            try:
-                result = vendor_portal_operations.transition_project(
-                    db,
-                    target_id,
-                    vendor_id=vendor_id,
-                    action=action,
-                    actor_id=user_id,
-                    actor_type="vendor_user",
-                    commit=False,
-                )
-            except VendorProjectLifecycleError as exc:
-                raise _lifecycle_http_error(exc) from exc
+            result = vendor_portal_operations.transition_project(
+                db,
+                target_id,
+                vendor_id=vendor_id,
+                action=action,
+                actor_id=user_id,
+                actor_type="vendor_user",
+                commit=False,
+            )
         reservation.ref_id = str(result.get("lifecycle_event_id") or result.get("id"))
         db.commit()
     except Exception:

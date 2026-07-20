@@ -867,6 +867,8 @@ from app.models.usage import (  # noqa: F401
 from app.models.vendor_routes import (  # noqa: F401
     AsBuiltLineItem,
     AsBuiltRoute,
+    AsBuiltRouteReviewEvent,
+    AsBuiltRouteReviewEventImmutableError,
     AsBuiltRouteStatus,
     InstallationProject,
     InstallationProjectLifecycleEvent,

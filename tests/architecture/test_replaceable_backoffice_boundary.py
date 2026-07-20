@@ -75,11 +75,11 @@ def test_external_reference_uniqueness_is_scoped_by_source_system() -> None:
 
 def test_migration_backfills_provenance_and_scopes_legacy_references() -> None:
     migration = (
-        ROOT / "alembic/versions/373_replaceable_backoffice_boundary.py"
+        ROOT / "alembic/versions/376_replaceable_backoffice_boundary.py"
     ).read_text()
 
-    assert 'revision = "373_replaceable_backoffice"' in migration
-    assert 'down_revision = "372_vendor_payment_projection"' in migration
+    assert 'revision = "376_replaceable_backoffice"' in migration
+    assert 'down_revision = "375_work_order_evidence_policy"' in migration
     assert "SET supplier_system = 'dotmac_erp'" in migration
     assert "uq_vendors_supplier_system_reference" in migration
     assert "uq_organizations_backoffice_system_reference" in migration

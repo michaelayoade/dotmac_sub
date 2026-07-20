@@ -6,7 +6,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.event_store import EventStore
 from app.models.idempotency import IdempotencyKey
@@ -26,6 +25,7 @@ from app.models.vendor_routes import (
 )
 from app.schemas.vendor_portal import VendorAsBuiltCreate, VendorAsBuiltLineCreate
 from app.services import vendor_submission_proposals
+from app.services.vendor_portal_errors import VendorPortalOperationError
 
 
 def _chain(db_session):
@@ -126,7 +126,9 @@ def test_quote_confirmation_rejects_state_changed_after_preview(db_session):
     quote.line_items[0].amount = Decimal("25000.00")
     db_session.commit()
 
-    with pytest.raises(HTTPException, match="changed after preview") as exc:
+    with pytest.raises(
+        VendorPortalOperationError, match="changed after preview"
+    ) as exc:
         vendor_submission_proposals.confirm_submission(
             db_session,
             confirmation_token=proposal.confirmation_token,
@@ -135,7 +137,7 @@ def test_quote_confirmation_rejects_state_changed_after_preview(db_session):
             project_id=str(installation.id),
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.kind == "conflict"
     assert db_session.query(IdempotencyKey).count() == 0
 
 
@@ -186,6 +188,7 @@ def test_purchase_invoice_confirmation_uses_financial_preview(db_session):
 
 def test_as_built_confirmation_uses_signed_payload_and_is_idempotent(db_session):
     installation, vendor, user = _chain(db_session)
+    installation.status = InstallationProjectStatus.in_progress.value
     db_session.commit()
     payload = VendorAsBuiltCreate(
         project_id=installation.id,
@@ -236,7 +239,7 @@ def test_confirmation_cannot_cross_vendor_principal_context(db_session):
         user_id=str(user.id),
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(VendorPortalOperationError) as exc:
         vendor_submission_proposals.confirm_submission(
             db_session,
             confirmation_token=proposal.confirmation_token,
@@ -245,7 +248,7 @@ def test_confirmation_cannot_cross_vendor_principal_context(db_session):
             project_id=str(installation.id),
         )
 
-    assert exc.value.status_code == 403
+    assert exc.value.kind == "forbidden"
 
 
 def test_project_start_confirmation_is_preview_bound_and_replay_safe(db_session):
@@ -308,7 +311,7 @@ def test_project_lifecycle_confirmation_rejects_changed_state(db_session):
     installation.status = InstallationProjectStatus.in_progress.value
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(VendorPortalOperationError) as exc:
         vendor_submission_proposals.confirm_submission(
             db_session,
             confirmation_token=proposal.confirmation_token,
@@ -317,5 +320,5 @@ def test_project_lifecycle_confirmation_rejects_changed_state(db_session):
             project_id=str(installation.id),
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.kind == "conflict"
     assert db_session.query(InstallationProjectLifecycleEvent).count() == 0

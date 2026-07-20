@@ -52,16 +52,31 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
         "migration_371_retire_coarse_reports_permissions",
     )
     assert reports_retire.down_revision == "370_reports_granular_permissions"
-    payment_projection = _load_migration(
+    vendor_payment = _load_migration(
         "372_vendor_purchase_invoice_payment_projection.py",
         "migration_372_vendor_purchase_invoice_payment_projection",
     )
-    assert payment_projection.down_revision == reports_retire.revision
-    current = _load_migration(
-        "373_replaceable_backoffice_boundary.py",
-        "migration_373_replaceable_backoffice_boundary",
+    assert vendor_payment.down_revision == reports_retire.revision
+    vendor_review = _load_migration(
+        "373_vendor_lifecycle_review_evidence.py",
+        "migration_373_vendor_lifecycle_review_evidence",
     )
-    assert current.down_revision == payment_projection.revision
+    assert vendor_review.down_revision == vendor_payment.revision
+    as_built_review = _load_migration(
+        "374_as_built_review_evidence.py",
+        "migration_374_as_built_review_evidence",
+    )
+    assert as_built_review.down_revision == vendor_review.revision
+    work_order_evidence = _load_migration(
+        "375_work_order_evidence_policy.py",
+        "migration_375_work_order_evidence_policy",
+    )
+    assert work_order_evidence.down_revision == as_built_review.revision
+    current = _load_migration(
+        "376_replaceable_backoffice_boundary.py",
+        "migration_376_replaceable_backoffice_boundary",
+    )
+    assert current.down_revision == work_order_evidence.revision
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))

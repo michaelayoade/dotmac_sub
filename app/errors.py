@@ -13,6 +13,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.services.unit_of_work import ConcurrencyConflict
+from app.services.vendor_portal_errors import VendorPortalOperationError
+from app.services.work_order_errors import WorkOrderCommandError
 from app.web.auth.dependencies import AuthenticationRequired
 from app.web.customer.branding import register_customer_portal_filters
 
@@ -262,6 +264,50 @@ def register_error_handlers(app) -> None:
                 None,
                 _request_id(request),
             ),
+        )
+
+    @app.exception_handler(VendorPortalOperationError)
+    async def vendor_portal_operation_error_handler(
+        request: Request, exc: VendorPortalOperationError
+    ):
+        """Map vendor-domain rejections only at the HTTP delivery boundary."""
+
+        status_code = {
+            "invalid": 422,
+            "forbidden": 403,
+            "not_found": 404,
+            "conflict": 409,
+        }[exc.kind]
+        if _is_html_request(request) and status_code == 422:
+            status_code = 400
+        return await _handle_http_exception(
+            request,
+            status_code,
+            exc.message
+            if _is_html_request(request)
+            else {"code": exc.code, "message": exc.message},
+        )
+
+    @app.exception_handler(WorkOrderCommandError)
+    async def work_order_command_error_handler(
+        request: Request, exc: WorkOrderCommandError
+    ):
+        """Map work-order domain rejections only at the HTTP boundary."""
+
+        status_code = {
+            "invalid": 422,
+            "forbidden": 403,
+            "not_found": 404,
+            "conflict": 409,
+        }[exc.kind]
+        if _is_html_request(request) and status_code == 422:
+            status_code = 400
+        return await _handle_http_exception(
+            request,
+            status_code,
+            exc.message
+            if _is_html_request(request)
+            else {"code": exc.code, "message": exc.message},
         )
 
     @app.exception_handler(AuthenticationRequired)

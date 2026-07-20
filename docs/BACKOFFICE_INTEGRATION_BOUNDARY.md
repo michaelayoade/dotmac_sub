@@ -51,7 +51,7 @@ new enterprise-wide integration service.
 - **New boundary:** Sub domain owners call the local port; provider-neutral
   references are scoped by source system, while `app.services.dotmac_erp` owns
   only the current wire mapping, outbox delivery, and observations.
-- **Data migration:** revision `373_replaceable_backoffice` renames legacy
+- **Data migration:** revision `376_replaceable_backoffice` renames legacy
   fields, backfills `dotmac_erp` provenance, and scopes external-reference
   uniqueness by `(source_system, reference)`. It also converts unused ERPNext
   IDs embedded in project, task, ticket, and organization models into explicit

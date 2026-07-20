@@ -20,6 +20,20 @@
     {% endif %}
   </div>
 </div>
+{% if project.lifecycle_events %}
+<section class="mb-6 rounded-md border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+  <h2 class="mb-3 text-lg font-bold">Official project timeline</h2>
+  <ol class="space-y-3">
+    {% for event in project.lifecycle_events|reverse %}
+    <li class="border-l-2 border-teal-500 pl-3 text-sm">
+      <strong>{{ event.to_status|replace('_', ' ')|title }}</strong>
+      <span class="text-slate-500">· {{ event.occurred_at | app_datetime('%d %b %Y %H:%M', 'time unavailable') }}</span>
+      {% if event.reason %}<p class="mt-1 text-slate-600 dark:text-slate-300">{{ event.reason }}</p>{% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}
 <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
   <div class="space-y-6">
     <section class="rounded-md border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
@@ -46,6 +60,20 @@
         </div>
         {% endif %}
       </div>
+      {% if project.as_built_submissions %}
+      <div class="mb-4 space-y-2">
+        {% for submission in project.as_built_submissions|reverse %}
+        <div class="rounded-md border border-slate-200 p-3 text-sm dark:border-slate-700">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <strong>Submission v{{ submission.version }}</strong>
+            <span class="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-bold uppercase text-blue-700">{{ submission.status|replace('_', ' ') }}</span>
+          </div>
+          <p class="mt-1 text-xs text-slate-500">Submitted {{ submission.submitted_at | app_datetime('%d %b %Y %H:%M', 'time unavailable') }} · {{ submission.line_item_count }} line item{{ '' if submission.line_item_count == 1 else 's' }}</p>
+          {% if submission.review_notes %}<p class="mt-2 text-sm text-slate-700 dark:text-slate-200">Staff review: {{ submission.review_notes }}</p>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
       {% if action_permitted(request, project.as_built_action) %}
       <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">Tap the map to trace the route you built, or use <strong>Add my location</strong> to drop your GPS position at each point. The proposed route is shown dashed in purple for reference.</p>
       {% else %}

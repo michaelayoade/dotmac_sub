@@ -23,8 +23,8 @@ from app.models.vendor_routes import (
     Vendor,
 )
 from app.services.ui_contracts import Action
+from app.services.vendor_portal_errors import VendorProjectLifecycleError
 from app.services.vendor_portal_operations import (
-    VendorProjectLifecycleError,
     _serialize_project,
     vendor_portal_operations,
 )

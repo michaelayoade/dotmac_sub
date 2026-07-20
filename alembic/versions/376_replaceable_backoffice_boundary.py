@@ -1,7 +1,7 @@
 """Make back-office projections provider-neutral.
 
-Revision ID: 373_replaceable_backoffice
-Revises: 372_vendor_payment_projection
+Revision ID: 376_replaceable_backoffice
+Revises: 375_work_order_evidence_policy
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "373_replaceable_backoffice"
-down_revision = "372_vendor_payment_projection"
+revision = "376_replaceable_backoffice"
+down_revision = "375_work_order_evidence_policy"
 branch_labels = None
 depends_on = None
 
