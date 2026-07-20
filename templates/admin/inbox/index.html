@@ -1,279 +1,155 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, table_head, table_row, status_badge, animation_styles %}
-{% from "components/ui/list_macros.html" import list_pagination, sort_header %}
-{% set _inbox_th = 'px-6 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500' %}
+{% from "components/ui/triage.html" import triage_shell, triage_list, pane_header, conversation_list_item %}
+{% from "components/ui/list_macros.html" import list_pagination %}
 
 {% block title %}Team Inbox - Admin{% endblock %}
 
-{% block content %}
-{{ ambient_background("cyan", "slate") }}
+{# Full-bleed, flat: drop the centered max-w container and the mesh/noise wash. #}
+{% block main_class %}overflow-hidden bg-slate-100 dark:bg-slate-950{% endblock %}
 
-<div class="relative space-y-6">
-    {% if request.query_params.get('message') %}
-    <div class="rounded-xl border px-4 py-3 text-sm {% if request.query_params.get('status') == 'error' %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800/40 dark:bg-rose-900/20 dark:text-rose-200{% else %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/40 dark:bg-emerald-900/20 dark:text-emerald-200{% endif %}">
-        {{ request.query_params.get('message') }}
-    </div>
-    {% endif %}
+{% block main_body %}
+{% call triage_shell(mode='detail' if selected else 'list') %}
 
-    {% call(content) page_header(
-        title="Team Inbox",
-        subtitle="Native customer conversations by team, status, assignment, and response need",
-        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/></svg>',
-        color="cyan",
-        color2="slate",
-        breadcrumbs=[
-            {"label": "Support", "href": "/admin/support/tickets"},
-            {"label": "Team Inbox"}
-        ]
-    ) %}
-        <a href="/admin/reports/inbox-escalations" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-            Escalations
-        </a>
-        <a href="/admin/inbox/reports/outbox-failures" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-            Outbox failures
-        </a>
-    {% endcall %}
+    {# ---------- LIST PANE ---------- #}
+    {% call triage_list() %}
+        {% call pane_header("Team Inbox", (count ~ " conversations")) %}
+            <a href="/admin/reports/inbox-escalations" title="Escalations"
+               class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            </a>
+        {% endcall %}
 
-    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        {% for metric in [
-            {"label": "Open", "value": queue_metrics.total_open, "href": "/admin/inbox?open_only=true"},
-            {"label": "Needs response", "value": queue_metrics.needs_response, "href": "/admin/inbox?needs_response=true"},
-            {"label": "Unassigned", "value": queue_metrics.unassigned_open, "href": "/admin/inbox?open_only=true&unassigned=true"},
-            {"label": "Send failed", "value": queue_metrics.failed_outbound, "href": "/admin/inbox/reports/outbox-failures"},
-            {"label": "Snoozed", "value": queue_metrics.snoozed_open, "href": "/admin/inbox?open_only=true&snoozed=true"},
-            {"label": "Muted", "value": queue_metrics.muted_open, "href": "/admin/inbox?open_only=true&muted=true"}
-        ] %}
-        {% if metric.href %}
-        <a href="{{ metric.href }}" class="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-indigo-300 hover:shadow-md dark:border-slate-700 dark:bg-slate-800 dark:hover:border-indigo-600/50">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ metric.value }}</p>
-        </a>
-        {% else %}
-        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ metric.label }}</p>
-            <p class="mt-2 text-2xl font-bold text-slate-900 dark:text-white">{{ metric.value }}</p>
+        {# compact metric chips — each is a filtered view #}
+        <div class="grid grid-cols-4 gap-px border-b border-slate-200 bg-slate-200 text-center dark:border-slate-800 dark:bg-slate-800">
+            {% for m in [
+                {"label": "Open", "value": queue_metrics.total_open, "href": "/admin/inbox?open_only=true", "tone": ""},
+                {"label": "Needs reply", "value": queue_metrics.needs_response, "href": "/admin/inbox?needs_response=true", "tone": "warning"},
+                {"label": "Unassigned", "value": queue_metrics.unassigned_open, "href": "/admin/inbox?open_only=true&unassigned=true", "tone": ""},
+                {"label": "Failed", "value": queue_metrics.failed_outbound, "href": "/admin/inbox/reports/outbox-failures", "tone": "negative"}
+            ] %}
+            <a href="{{ m.href }}" class="bg-white px-1 py-2 hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800">
+                <p class="text-lg font-bold tabular-nums {% if m.tone == 'warning' and m.value %}status-foreground status-tone-warning{% elif m.tone == 'negative' and m.value %}status-foreground status-tone-negative{% else %}text-slate-900 dark:text-white{% endif %}">{{ m.value }}</p>
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ m.label }}</p>
+            </a>
+            {% endfor %}
+        </div>
+
+        {# secondary cohorts — every triage cohort keeps a stable entry URL #}
+        <div class="flex items-center gap-4 border-b border-slate-200 px-4 py-1.5 dark:border-slate-800">
+            {% for m in [
+                {"label": "Snoozed", "value": queue_metrics.snoozed_open, "href": "/admin/inbox?open_only=true&snoozed=true"},
+                {"label": "Muted", "value": queue_metrics.muted_open, "href": "/admin/inbox?open_only=true&muted=true"}
+            ] %}
+            <a href="{{ m.href }}" class="text-[11px] font-medium text-slate-500 hover:text-accent-700 dark:text-slate-400 dark:hover:text-accent-300">{{ m.label }} <span class="tabular-nums font-semibold text-slate-700 dark:text-slate-200">{{ m.value }}</span></a>
+            {% endfor %}
+        </div>
+
+        {# filters — GET round-trips through list_query #}
+        <form method="get" action="/admin/inbox" class="border-b border-slate-200 px-3 py-2.5 dark:border-slate-800" x-data="{ more: false }">
+            <div class="flex items-center gap-2">
+                <div class="relative flex-1">
+                    <svg class="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
+                    <input type="search" name="search" value="{{ search }}" placeholder="Search conversations"
+                           class="w-full rounded-lg border-slate-300 pl-8 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                </div>
+                <button type="button" @click="more = !more" :class="more ? 'bg-accent-50 text-accent-700 dark:bg-accent-900/30 dark:text-accent-300' : 'text-slate-500'"
+                        class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-800" aria-label="More filters">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18M6 12h12M10 20h4"/></svg>
+                </button>
+            </div>
+            <div x-show="more" x-cloak class="mt-2 space-y-2">
+                <div class="grid grid-cols-2 gap-2">
+                    <select name="status" class="rounded-lg border-slate-300 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                        <option value="">All statuses</option>
+                        {% for option in status_options %}<option value="{{ option }}" {% if option == status %}selected{% endif %}>{{ option | replace('_',' ') | title }}</option>{% endfor %}
+                    </select>
+                    <select name="channel_type" class="rounded-lg border-slate-300 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                        <option value="">All channels</option>
+                        {% for option in channel_options %}<option value="{{ option }}" {% if option == channel_type %}selected{% endif %}>{{ option | replace('_',' ') | title }}</option>{% endfor %}
+                    </select>
+                    <select name="service_team_id" class="col-span-2 rounded-lg border-slate-300 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+                        <option value="">All teams</option>
+                        {% for team in service_team_options %}<option value="{{ team.id }}" {% if team.id|string == service_team_id %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
+                    </select>
+                </div>
+                <label class="inline-flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                    <input type="checkbox" name="needs_response" value="true" {% if needs_response %}checked{% endif %} class="rounded border-slate-300 text-accent-600">Needs response
+                </label>
+                <div class="flex gap-2">
+                    <button type="submit" class="flex-1 rounded-lg bg-accent-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-accent-700">Apply</button>
+                    <a href="/admin/inbox" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800">Clear</a>
+                </div>
+            </div>
+        </form>
+
+        {# conversation list — scrolls independently #}
+        <div class="flex-1 overflow-y-auto">
+            {% if rows %}
+                {% for row in rows %}{{ conversation_list_item(row, active_id=(selected.id if selected else "")) }}{% endfor %}
+            {% else %}
+                <div class="px-4 py-12 text-center">
+                    <svg class="mx-auto h-8 w-8 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/></svg>
+                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No conversations match these filters.</p>
+                </div>
+            {% endif %}
+        </div>
+
+        {% if rows %}
+        <div class="border-t border-slate-200 px-3 py-2 dark:border-slate-800">
+            {{ list_pagination(list_query, page_meta, '/admin/inbox', entity='conversations') }}
         </div>
         {% endif %}
-        {% endfor %}
-    </div>
-
-    <form method="get" action="/admin/inbox" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        {% if open_only %}<input type="hidden" name="open_only" value="true">{% endif %}
-        {% if unassigned %}<input type="hidden" name="unassigned" value="true">{% endif %}
-        <div class="grid gap-3 xl:grid-cols-[1.5fr_1fr_1fr_1fr_1fr_1fr_auto] xl:items-end">
-            <div>
-                <label for="search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search</label>
-                <input id="search" type="search" name="search" value="{{ search }}" placeholder="Subject, contact, thread, message, comment" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            </div>
-            <div>
-                <label for="service_team_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Team</label>
-                <select id="service_team_id" name="service_team_id" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">All teams</option>
-                    {% for team in service_team_options %}
-                    <option value="{{ team.id }}" {% if team.id|string == service_team_id %}selected{% endif %}>{{ team.name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
-                <select id="status" name="status" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">All statuses</option>
-                    {% for option in status_options %}
-                    <option value="{{ option }}" {% if option == status %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label for="channel_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label>
-                <select id="channel_type" name="channel_type" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">All channels</option>
-                    {% for option in channel_options %}
-                    <option value="{{ option }}" {% if option == channel_type %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label for="contact_resolution_status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Contact</label>
-                <select id="contact_resolution_status" name="contact_resolution_status" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">All contacts</option>
-                    {% for option in ['unmatched', 'ambiguous', 'suppressed_inactive', 'linked_subscriber', 'linked_reseller'] %}
-                    <option value="{{ option }}" {% if option == contact_resolution_status %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label for="priority_at_most" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Priority</label>
-                <select id="priority_at_most" name="priority_at_most" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">Any</option>
-                    {% for option in [10, 25, 50, 100] %}
-                    <option value="{{ option }}" {% if priority_at_most == option %}selected{% endif %}>{{ option }} or higher</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="flex flex-wrap gap-2">
-                <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
-                    <input type="checkbox" name="needs_response" value="true" {% if needs_response %}checked{% endif %} class="rounded border-slate-300 text-cyan-600">
-                    Needs response
-                </label>
-                <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-200">
-                    <input type="checkbox" name="snoozed" value="true" {% if snoozed is sameas true %}checked{% endif %} class="rounded border-slate-300 text-cyan-600">
-                    Snoozed
-                </label>
-                <button type="submit" class="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-800">Filter</button>
-                <a href="/admin/inbox" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
-            </div>
-        </div>
-    </form>
-
-    <div class="grid gap-4 lg:grid-cols-[1fr_22rem]">
-        <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Saved filters</p>
-            <div class="mt-2 flex flex-wrap gap-2">
-                {% for saved_filter in saved_filters %}
-                {% set f = saved_filter.filter_payload %}
-                <a href="/admin/inbox?{% for key, value in f.items() %}{% if value is sameas true %}{{ key }}=true&{% elif value is not none and value != '' %}{{ key }}={{ value }}&{% endif %}{% endfor %}" class="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">
-                    {{ saved_filter.name }}{% if saved_filter.is_shared %} · shared{% endif %}
-                </a>
-                {% else %}
-                <span class="text-sm text-slate-500 dark:text-slate-400">No saved filters.</span>
-                {% endfor %}
-            </div>
-        </div>
-        <form method="post" action="/admin/inbox/filters/save" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <label for="filter_name" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Save current view</label>
-            <input id="filter_name" name="name" placeholder="Filter name" class="mt-2 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            <input type="hidden" name="search" value="{{ search }}">
-            <input type="hidden" name="status_value" value="{{ status }}">
-            <input type="hidden" name="channel_type" value="{{ channel_type }}">
-            <input type="hidden" name="service_team_id" value="{{ service_team_id }}">
-            <input type="hidden" name="contact_resolution_status" value="{{ contact_resolution_status }}">
-            <input type="hidden" name="priority_at_most" value="{{ priority_at_most or '' }}">
-            {% if needs_response %}<input type="hidden" name="needs_response" value="true">{% endif %}
-            {% if snoozed is sameas true %}<input type="hidden" name="snoozed" value="true">{% endif %}
-            {% if open_only %}<input type="hidden" name="open_only" value="true">{% endif %}
-            {% if unassigned %}<input type="hidden" name="unassigned" value="true">{% endif %}
-            <label class="mt-2 inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-                <input type="checkbox" name="is_shared" value="true" class="rounded border-slate-300 text-cyan-600">
-                Shared
-            </label>
-            <button type="submit" class="mt-3 w-full rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200">Save filter</button>
-        </form>
-    </div>
-
-    {% call card("Conversation Queue", color="cyan", padding=False) %}
-    {% if rows %}
-    <form method="post" action="/admin/inbox/bulk">
-    <div class="flex flex-wrap items-end gap-3 border-b border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700 dark:bg-slate-900/30">
-        <div>
-            <label for="bulk_action" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Bulk action</label>
-            <select id="bulk_action" name="action" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="status">Set status</option>
-                <option value="label">Apply label</option>
-                <option value="escalate">Escalate/assign</option>
-            </select>
-        </div>
-        <div>
-            <label for="bulk_status" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</label>
-            <select id="bulk_status" name="status_value" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                {% for option in status_options %}
-                <option value="{{ option }}">{{ option | replace('_', ' ') | title }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label for="bulk_label_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Label</label>
-            <select id="bulk_label_id" name="label_id" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="">Select label</option>
-                {% for label in label_options %}
-                <option value="{{ label.id }}">{{ label.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label for="bulk_service_team_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Team</label>
-            <select id="bulk_service_team_id" name="service_team_id" class="mt-1 rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="">Select team</option>
-                {% for team in service_team_options %}
-                <option value="{{ team.id }}">{{ team.name }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label for="bulk_assigned_person_id" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Agent UUID</label>
-            <input id="bulk_assigned_person_id" name="assigned_person_id" placeholder="Optional" class="mt-1 w-40 rounded-lg border-slate-300 text-xs font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-        </div>
-        <button type="submit" class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Apply</button>
-    </div>
-    <div class="overflow-x-auto">
-        <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
-            <thead>
-                <tr class="border-b border-slate-100 bg-slate-50/80 dark:border-slate-700/50 dark:bg-slate-900/20">
-                    <th scope="col" class="{{ _inbox_th }}"></th>
-                    <th scope="col" class="{{ _inbox_th }}">Conversation</th>
-                    <th scope="col" class="{{ _inbox_th }}">Team</th>
-                    {{ sort_header(list_query, '/admin/inbox', 'last_message_at', 'Latest', entity='conversations', th_class=_inbox_th) }}
-                    <th scope="col" class="{{ _inbox_th }}">Assignment</th>
-                    <th scope="col" class="{{ _inbox_th }}">Status</th>
-                    <th scope="col" class="{{ _inbox_th }}">Action</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
-                {% for row in rows %}
-                {% call table_row(color="cyan") %}
-                <td class="w-10 px-6 py-4">
-                    <input type="checkbox" name="conversation_ids" value="{{ row.id }}" class="rounded border-slate-300 text-cyan-600">
-                </td>
-                <td class="min-w-[20rem] px-6 py-4">
-                    <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ row.subject or "(No subject)" }}</p>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ row.contact_address or "-" }}</p>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Priority {{ row.priority }}{% if row.is_muted %} · muted{% endif %}{% if row.is_snoozed %} · snoozed{% endif %}</p>
-                    {% if row.contact_resolution_status %}
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Contact: {{ row.contact_resolution_status | replace('_', ' ') | title }}</p>
-                    {% endif %}
-                    <p class="mt-1 font-mono text-[11px] text-slate-400 dark:text-slate-500">{{ row.id }}</p>
-                </td>
-                <td class="whitespace-nowrap px-6 py-4">
-                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ row.primary_service_team_name or "Unrouted" }}</p>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ row.primary_service_team_type or "-" }}</p>
-                </td>
-                <td class="min-w-[18rem] px-6 py-4">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ row.latest_message_direction or "No messages" }}</p>
-                    <p class="mt-1 line-clamp-2 text-sm text-slate-700 dark:text-slate-300">{{ row.latest_message_body or "-" }}</p>
-                    <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">{{ row.latest_message_at or row.last_message_at or "-" }}</p>
-                </td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-700 dark:text-slate-300">
-                    {% if row.active_assigned_person_id %}
-                    <span class="font-mono text-xs">{{ row.active_assigned_person_id }}</span>
-                    {% else %}
-                    <span class="text-amber-700 dark:text-amber-300">Unassigned</span>
-                    {% endif %}
-                </td>
-                <td class="whitespace-nowrap px-6 py-4">
-                    <div class="flex flex-col gap-1.5">
-                        {{ status_badge(row.status | replace('_', ' ') | title, "info", size="sm") }}
-                        {% if row.needs_response %}
-                        {{ status_badge("Needs response", "warning", size="sm") }}
-                        {% endif %}
-                        {% if row.latest_delivery_status == 'failed' %}
-                        {{ status_badge("Send failed", "danger", size="sm") }}
-                        {% endif %}
-                    </div>
-                </td>
-                <td class="whitespace-nowrap px-6 py-4">
-                    <a href="/admin/inbox/{{ row.id }}" class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Open</a>
-                </td>
-                {% endcall %}
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    </form>
-    {{ list_pagination(list_query, page_meta, '/admin/inbox', entity='conversations') }}
-    {% else %}
-    <div class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No conversations match the selected filters.</div>
-    {% endif %}
     {% endcall %}
-</div>
 
-{{ animation_styles() }}
+    {# ---------- DETAIL REGION (thread + context) ---------- #}
+    <div id="triage-detail" class="flex min-w-0 flex-1 overflow-hidden">
+        {% if selected %}
+            {% include "admin/inbox/_conversation.html" %}
+        {% else %}
+            <div class="flex flex-1 flex-col items-center justify-center px-6 text-center">
+                <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-200/70 dark:bg-slate-800">
+                    <svg class="h-7 w-7 text-slate-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8M8 14h5m8-2a9 9 0 11-4.5-7.8L21 3v5h-5"/></svg>
+                </div>
+                <h3 class="mt-3 font-display text-base font-semibold text-slate-700 dark:text-slate-200">Select a conversation</h3>
+                <p class="mt-1 max-w-xs text-sm text-slate-500 dark:text-slate-400">Pick a conversation from the queue to read the thread, reply, and see the customer’s context.</p>
+            </div>
+        {% endif %}
+    </div>
+
+{% endcall %}
+
+{# post-action feedback — semantic tone, not a hardcoded status color #}
+{% if request.query_params.get('message') %}
+<div class="pointer-events-none fixed bottom-4 left-1/2 z-50 -translate-x-1/2"
+     x-data="{ show: true }" x-show="show" x-init="setTimeout(() => show = false, 5000)" x-transition>
+    <div class="status-tone status-panel status-tone-{{ 'negative' if request.query_params.get('status') == 'error' else 'positive' }} pointer-events-auto rounded-lg border px-4 py-2.5 text-sm font-medium shadow-lg">
+        {{ request.query_params.get('message') }}
+    </div>
+</div>
+{% endif %}
+
+<script>
+(function () {
+    function scrollThread() {
+        var sc = document.querySelector('[data-thread-scroll]');
+        if (sc) sc.scrollTop = sc.scrollHeight;
+    }
+    document.addEventListener('DOMContentLoaded', scrollThread);
+    document.body.addEventListener('htmx:afterOnLoad', function (e) {
+        if (!e.detail || !e.detail.target || e.detail.target.id !== 'triage-detail') return;
+        var shell = document.querySelector('[data-triage-shell]');
+        if (shell) shell.setAttribute('data-triage-mode', 'detail');
+        document.querySelectorAll('.conversation-item[aria-current]').forEach(function (el) {
+            el.removeAttribute('aria-current');
+            el.classList.remove('bg-accent-50', 'dark:bg-accent-900/20');
+        });
+        var src = e.detail.requestConfig && e.detail.requestConfig.elt;
+        if (src && src.classList && src.classList.contains('conversation-item')) {
+            src.setAttribute('aria-current', 'true');
+            src.classList.add('bg-accent-50', 'dark:bg-accent-900/20');
+        }
+        scrollThread();
+    });
+})();
+</script>
 {% endblock %}
