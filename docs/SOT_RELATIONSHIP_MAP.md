@@ -2330,7 +2330,8 @@ Dependency order:
 3. `operations.work_order_status`: declares persisted work-order values and the
    canonical open, assignable, and terminal sets.
 4. `operations.work_order_commands`: owns native work-order creation and header
-   commands, the native `work_order.project_id` binding, the default-enabled
+   commands, the native `work_order.project_id` and internal-only
+   `work_order.origin_ticket_id` bindings, the default-enabled
    `requires_as_built_evidence` policy, assignment decisions/projection, and
    assignment-queue transitions.
    Dispatch API/web and field-manager handlers are authorization/transport
@@ -2359,7 +2360,10 @@ Dependency order:
    cross-domain worklists may show job context but cannot write work-order or
    assignment state themselves.
 6. `operations.field_completion`: owns field-job completion eligibility, evidence
-   requirements, and completion transitions.
+   requirements, and completion transitions. For work issued from a support
+   ticket it requests an atomic outcome projection from
+   `support.ticket_work_order_handoff`; that projection records evidence but
+   never resolves or closes the ticket.
 7. `operations.material_dependencies`: owns the material need and approval that
    can block a Sub service work order, then idempotently projects ERP's
    authoritative issue/refusal outcome back into that workflow. It never posts
@@ -2475,12 +2479,33 @@ reinterpret its presentation.
 3. `support.ticket_sla_clock` owns ticket SLA clocks and breach facts. A breach
    emits `ticket.sla_breached` to `operations.sla_escalation`; only its active UI
    policy selects the escalation delay, level, audience channels, and conditions.
+4. `support.ticket_work_order_handoff` owns the explicit boundary from a
+   triaged incident to field execution. A ticket must have a subscriber and an
+   active assigned service team; only an active member of that team, holding
+   both ticket-update and dispatch-write permission at the adapter, may issue a
+   work order. Each idempotency key identifies one issuance, and a ticket may
+   issue zero or many work orders. `work_order.origin_ticket_id` is the only
+   native link; `Ticket.metadata.work_order_id` and native uses of
+   `WorkOrder.crm_ticket_id` are retired. `field_visit` remains a descriptive
+   tag and has no decision authority.
+
+   Work-order creation and execution remain owned by
+   `operations.work_order_commands` and `operations.field_completion`. A
+   completed or unable-to-complete field event atomically adds an internal
+   system fact to the originating ticket timeline. Support must verify that
+   evidence and decide the incident lifecycle; work-order completion never
+   silently resolves or closes the ticket.
+
+Rule: support routes and jobs translate requests and delegate ticket decisions
+to `app.services.support`. Events and notifications are consequences requested
+by that owner, not alternate ticket writers. Ticket/work-order adapters delegate
+handoff decisions to `app.services.ticket_work_order_handoff`; tags, templates,
+automation rules, and integration transports cannot issue work orders.
 
 Rule: support routes and jobs translate requests and delegate ticket decisions
 to `app.services.support`. Events and notifications are consequences requested
 by that owner, not alternate ticket writers. SLA durations and escalation
 channels must not be embedded in support code.
-
 ## Customer Data Completeness
 
 1. `customer.data_completeness` (`app.services.subscriber_data_completeness`)

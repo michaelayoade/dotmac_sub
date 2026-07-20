@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.common import ListResponse
+from app.schemas.dispatch import WorkOrderHeaderRead
 from app.schemas.support import (
     TicketBulkUpdateRequest,
     TicketCommentCreate,
@@ -20,6 +21,7 @@ from app.schemas.support import (
     TicketSlaEventRead,
     TicketSlaEventUpdate,
     TicketUpdate,
+    TicketWorkOrderIssueRequest,
 )
 from app.schemas.team_inbox import (
     InboxConversationContactLinkRead,
@@ -40,6 +42,7 @@ from app.services import (
     team_inbox_outbound,
     team_inbox_read,
     ticket_validation,
+    ticket_work_order_handoff,
 )
 from app.services.auth_dependencies import require_permission, require_user_auth
 
@@ -180,6 +183,49 @@ def get_ticket(ticket_lookup: str, db: Session = Depends(get_db)):
 )
 def get_ticket_legacy_path(ticket_lookup: str, db: Session = Depends(get_db)):
     return support_service.tickets.get_by_lookup(db, ticket_lookup)
+
+
+@router.get(
+    "/tickets/{ticket_id}/work-orders",
+    response_model=ListResponse[WorkOrderHeaderRead],
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def list_ticket_work_orders(
+    ticket_id: UUID,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    support_service.tickets.get(db, str(ticket_id))
+    rows = ticket_work_order_handoff.list_for_ticket(
+        db, ticket_id, limit=limit, offset=offset
+    )
+    return {"items": rows, "count": len(rows), "limit": limit, "offset": offset}
+
+
+@router.post(
+    "/tickets/{ticket_id}/work-orders",
+    response_model=WorkOrderHeaderRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def issue_ticket_work_order(
+    ticket_id: UUID,
+    payload: TicketWorkOrderIssueRequest,
+    auth: dict = Depends(require_permission("operations:dispatch:write")),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    db: Session = Depends(get_db),
+):
+    return ticket_work_order_handoff.issue_work_order(
+        db,
+        ticket_id,
+        payload,
+        actor_id=_actor_id(auth),
+        auth=auth,
+        idempotency_key=idempotency_key,
+        request_id=request_id,
+    ).work_order
 
 
 @router.patch(
