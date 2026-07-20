@@ -11,6 +11,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -23,6 +24,7 @@ from sqlalchemy import select
 
 from app.db import SessionLocal, get_engine
 from app.models.domain_settings import SettingDomain
+from app.models.integration_platform import IntegrationInstallation
 from app.models.tr069 import Tr069AcsServer
 from app.services.genieacs_client import GenieACSError, create_genieacs_client
 from app.services.scheduler_config import find_unregistered_scheduled_tasks
@@ -124,16 +126,25 @@ def check_openbao() -> CheckResult:
     optional_paths = list(OPTIONAL_OPENBAO_PATHS)
     db = SessionLocal()
     try:
-        paystack_configured = any(
-            [
-                os.getenv("PAYSTACK_SECRET_KEY"),
-                os.getenv("PAYSTACK_PUBLIC_KEY"),
-                resolve_value(db, SettingDomain.billing, "paystack_secret_key"),
-                resolve_value(db, SettingDomain.billing, "paystack_public_key"),
-                resolve_value(db, SettingDomain.billing, "payment_gateway_provider")
-                == "paystack",
-            ]
-        )
+        integration_secret_roots: set[str] = set()
+        installations = db.scalars(
+            select(IntegrationInstallation).where(
+                IntegrationInstallation.state != "retired"
+            )
+        ).all()
+        for installation in installations:
+            revision = installation.current_config_revision
+            for reference in (revision.secret_refs if revision else {}).values():
+                parsed = urlparse(str(reference))
+                if parsed.scheme not in {"bao", "openbao", "vault"}:
+                    continue
+                if parsed.netloc != "secret":
+                    continue
+                path = parsed.path.lstrip("/")
+                if not path:
+                    continue
+                root, separator, _remainder = path.partition("/")
+                integration_secret_roots.add(f"{root}/" if separator else root)
         notifications_configured = any(
             [
                 os.getenv("SMTP_HOST"),
@@ -151,8 +162,7 @@ def check_openbao() -> CheckResult:
     finally:
         db.close()
 
-    if paystack_configured:
-        optional_paths.append("paystack")
+    optional_paths.extend(sorted(integration_secret_roots))
     if notifications_configured:
         optional_paths.append("notifications")
 

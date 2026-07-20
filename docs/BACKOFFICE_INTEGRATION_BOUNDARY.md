@@ -16,7 +16,9 @@ moving Sub domain authority or rewriting Sub's core services.
 2. Provider adapters translate versioned API/event contracts and own only
    transport, retry, idempotency, and provider-observation concerns.
 3. There are no cross-system database queries, database foreign keys, shared
-   ORM models, shared transactions, or required shared runtime services.
+   ORM models, shared transactions, or required cross-system runtime services.
+   Sub's integration runtime is local to Sub and selects providers through
+   versioned capability bindings.
 4. Sub stores provider-neutral references plus an explicit source-system name.
    A reference is correlation evidence, not delegated decision authority.
 5. A valid Sub state transition commits independently. Provider delivery failure
@@ -39,10 +41,11 @@ moving Sub domain authority or rewriting Sub's core services.
 | Supplier/payables document | `payables_system`, `payables_document_reference`, `payment_status` | `app.services.dotmac_erp.purchase_invoice_sync` |
 | Workforce observation | `workforce_system`, `workforce_employee_reference` | configured workforce adapter |
 
-Replacing Dotmac ERP means implementing another provider adapter behind the
-local port, migrating correlation references with an explicit cutover plan, and
-retiring the old adapter after shadow verification. It does not mean creating a
-new enterprise-wide integration service.
+Replacing Dotmac ERP means implementing the same versioned capabilities in
+another connector, selecting it with a Sub-local capability binding, migrating
+correlation references with an explicit cutover plan, and retiring the old
+connector after shadow verification. It does not mean creating a new
+enterprise-wide integration service.
 
 ## Current migration and cutover
 
@@ -51,7 +54,7 @@ new enterprise-wide integration service.
 - **New boundary:** Sub domain owners call the local port; provider-neutral
   references are scoped by source system, while `app.services.dotmac_erp` owns
   only the current wire mapping, outbox delivery, and observations.
-- **Data migration:** revision `376_replaceable_backoffice` renames legacy
+- **Data migration:** revision `381_replaceable_backoffice` renames legacy
   fields, backfills `dotmac_erp` provenance, and scopes external-reference
   uniqueness by `(source_system, reference)`. It also converts unused ERPNext
   IDs embedded in project, task, ticket, and organization models into explicit

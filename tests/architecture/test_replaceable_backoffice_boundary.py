@@ -75,11 +75,11 @@ def test_external_reference_uniqueness_is_scoped_by_source_system() -> None:
 
 def test_migration_backfills_provenance_and_scopes_legacy_references() -> None:
     migration = (
-        ROOT / "alembic/versions/376_replaceable_backoffice_boundary.py"
+        ROOT / "alembic/versions/381_replaceable_backoffice_boundary.py"
     ).read_text()
 
-    assert 'revision = "376_replaceable_backoffice"' in migration
-    assert 'down_revision = "375_work_order_evidence_policy"' in migration
+    assert 'revision = "381_replaceable_backoffice"' in migration
+    assert 'down_revision = "380_integration_platform_cutover"' in migration
     assert "SET supplier_system = 'dotmac_erp'" in migration
     assert "uq_vendors_supplier_system_reference" in migration
     assert "uq_organizations_backoffice_system_reference" in migration
@@ -114,3 +114,16 @@ def test_provider_specific_imports_are_confined_to_local_boundary() -> None:
     boundary_imports = _imports(ROOT / "app/services/backoffice.py")
 
     assert any(name.startswith("app.services.dotmac_erp") for name in boundary_imports)
+
+
+def test_backoffice_capability_resolution_does_not_pin_dotmac_erp() -> None:
+    capability_source = (
+        ROOT / "app/services/integrations/erp_capability.py"
+    ).read_text()
+
+    assert 'connector_key="dotmac.erp"' not in capability_source
+    assert "connector_key=CONNECTOR_KEY" not in capability_source
+    connector_source = (
+        ROOT / "app/services/integrations/connectors/dotmac_erp.py"
+    ).read_text()
+    assert 'ERP_OUTBOX_CAPABILITY = "' not in connector_source

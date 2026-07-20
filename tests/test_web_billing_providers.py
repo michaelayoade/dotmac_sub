@@ -12,6 +12,7 @@ from app.models.billing import (
     PaymentProviderType,
     PaymentStatus,
 )
+from app.services.integrations.runtime import ValidationResult
 from app.services.web_billing_providers import (
     build_gateway_reconciliation,
     get_failover_state,
@@ -21,6 +22,7 @@ from app.services.web_billing_providers import (
     supported_provider_type_values,
     update_failover_config,
 )
+from tests.integration_platform_helpers import enable_payment_provider
 
 
 def test_supported_provider_types_only_paystack_flutterwave():
@@ -40,12 +42,14 @@ def test_run_provider_test_paystack_success(db_session, monkeypatch):
     )
     db_session.add(provider)
     db_session.commit()
+    enable_payment_provider(db_session, "paystack")
     monkeypatch.setattr(
-        "app.services.payment_routing._setting",
-        lambda _db, key: {
-            "paystack_secret_key": "sk_test_abc123",
-            "paystack_public_key": "pk_test_abc123",
-        }.get(key),
+        "app.services.web_billing_providers.build_execution_context",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "app.services.web_billing_providers.validate_connection",
+        lambda _context: ValidationResult(valid=True),
     )
 
     result = run_provider_test(db_session, provider_type_value="paystack", mode="test")

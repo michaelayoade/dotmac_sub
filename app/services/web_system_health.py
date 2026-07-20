@@ -71,15 +71,14 @@ def _build_erp_sync_ownership(db) -> dict[str, object]:
     to CRM until explicitly cut over.
     """
     try:
-        from app.models.domain_settings import SettingDomain
         from app.models.field_erp_sync import SyncFlowOwner, get_flow_ownership
+        from app.services.integrations.backoffice_contracts import (
+            ERP_OUTBOX_CAPABILITY,
+        )
+        from app.services.integrations.erp_capability import capability_enabled
 
         ownership = get_flow_ownership(db)
-        sync_enabled = bool(
-            settings_spec.resolve_value(
-                db, SettingDomain.integration, "dotmac_erp_sync_enabled"
-            )
-        )
+        sync_enabled = capability_enabled(db, ERP_OUTBOX_CAPABILITY)
     except Exception as exc:
         logger.debug("ERP sync ownership surface unavailable", exc_info=True)
         return {

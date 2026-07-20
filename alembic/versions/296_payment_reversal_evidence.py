@@ -36,7 +36,6 @@ def upgrade() -> None:
         "ALTER TYPE paymentstatus ADD VALUE IF NOT EXISTS 'reversed' "
         "AFTER 'partially_refunded'"
     )
-    op.execute("ALTER TYPE webhookeventtype ADD VALUE IF NOT EXISTS 'payment_reversed'")
     bind = op.get_bind()
     _origin.create(bind, checkfirst=True)
     _financial_effect.create(bind, checkfirst=True)
@@ -114,4 +113,4 @@ def downgrade() -> None:
     _financial_effect.drop(op.get_bind(), checkfirst=True)
     _origin.drop(op.get_bind(), checkfirst=True)
     # PostgreSQL enum values cannot be removed safely in-place. The dormant
-    # paymentstatus/webhookeventtype values remain after downgrade.
+    # paymentstatus value remains after downgrade.

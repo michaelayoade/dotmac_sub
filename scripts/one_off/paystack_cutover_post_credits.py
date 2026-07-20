@@ -35,10 +35,18 @@ from app.models.billing import (
 from app.schemas.billing import PaymentCreate
 from app.services import billing as billing_service
 from app.services.common import round_money
+from app.services.integrations import payment_capability
 from app.services.notification_suppression import suppress_notifications
-from app.services.paystack import kobo_to_naira, verify_transaction
 
 DEFAULT_INPUT = "scratchpad/paystack_cutover_reconcile.csv"
+
+
+def verify_transaction(db: Session, reference: str) -> dict:
+    return payment_capability.verify_transaction(
+        db,
+        provider_type="paystack",
+        reference=reference,
+    )
 
 
 @dataclass(frozen=True)
@@ -130,7 +138,7 @@ def _verify_candidate(db: Session, candidate: Candidate) -> None:
             f"{candidate.reference}: currency mismatch "
             f"({currency} != {candidate.currency})"
         )
-    amount = round_money(kobo_to_naira(int(tx.get("amount") or 0)))
+    amount = round_money(payment_capability.kobo_to_naira(int(tx.get("amount") or 0)))
     if amount != round_money(candidate.amount):
         raise RuntimeError(
             f"{candidate.reference}: amount changed ({amount} != {candidate.amount})"

@@ -57,7 +57,7 @@ def test_reports_permission_migrations_form_the_single_head_chain():
     )
     current = _load(
         "replaceable_backoffice_boundary_chain",
-        "376_replaceable_backoffice_boundary.py",
+        "381_replaceable_backoffice_boundary.py",
     )
 
     assert granular.down_revision == "369_vendor_lifecycle_evidence"
@@ -66,11 +66,18 @@ def test_reports_permission_migrations_form_the_single_head_chain():
     assert vendor_review.down_revision == vendor_payment.revision
     assert as_built_review.down_revision == vendor_review.revision
     assert work_order_evidence.down_revision == as_built_review.revision
-    assert current.down_revision == work_order_evidence.revision
+    assert current.down_revision == "380_integration_platform_cutover"
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [current.revision]
+    script = ScriptDirectory.from_config(config)
+    assert script.get_heads() == [current.revision]
+    assert retire.revision in {
+        item.revision
+        for item in script.iterate_revisions(
+            current.revision, retire.revision, inclusive=True
+        )
+    }
 
 
 def test_upgrade_and_rollback_preserve_role_and_direct_grants(monkeypatch):

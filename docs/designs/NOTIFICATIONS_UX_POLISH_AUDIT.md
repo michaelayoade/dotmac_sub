@@ -117,8 +117,8 @@ operations later needs them.
   against the provider on re-enable
 - `MAX_RETRIES=3`, `SENDING_TIMEOUT_MINUTES=10` module constants (queue-age already
   a setting) (`app/tasks/notifications.py:32-33`)
-- SMS provider timeouts hardcoded `30.0` while WhatsApp reads
-  `whatsapp_api_timeout_seconds` (inconsistent) (`app/services/sms.py:86,136,184`)
+- SMS provider timeouts are hardcoded while WhatsApp uses its versioned
+  installation `timeout_seconds` (inconsistent) (`app/services/sms.py:86,136,184`)
 
 **C-3. Missing customer controls / dedupe.**
 - No quiet-hours, no dedupe/cooldown window, `NotificationRequest.idempotency_key`

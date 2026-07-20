@@ -56,7 +56,7 @@ def test_paystack_verification_preserves_gross_fee_and_metadata(
     monkeypatch, db_session
 ):
     monkeypatch.setattr(
-        "app.services.paystack.verify_transaction",
+        "app.services.integrations.payment_capability.verify_transaction",
         lambda *_args, **_kwargs: {
             "id": 6364687147,
             "status": "success",

@@ -15,7 +15,6 @@ from app.services.dotmac_erp.client import (
     DotMacERPNotFoundError,
     DotMacERPRateLimitError,
     DotMacERPTransientError,
-    build_erp_client,
 )
 
 __all__ = [
@@ -25,5 +24,4 @@ __all__ = [
     "DotMacERPNotFoundError",
     "DotMacERPRateLimitError",
     "DotMacERPTransientError",
-    "build_erp_client",
 ]

@@ -18,8 +18,6 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-DOTMAC_ERP_PROVIDER = "dotmac_erp"
-
 
 class BackofficeUnavailableError(RuntimeError):
     """The configured local back-office adapter cannot serve the request."""
@@ -85,17 +83,6 @@ class BackofficeGateway(Protocol):
     def get_ncc_staff_headcount(self) -> dict: ...
 
 
-def provider_name(db: Session) -> str:
-    """Resolve Sub's configured outbound adapter without leaking it to domains."""
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
-
-    value = settings_spec.resolve_value(
-        db, SettingDomain.integration, "backoffice_provider"
-    )
-    return str(value or DOTMAC_ERP_PROVIDER).strip().lower()
-
-
 def _flow_owned_by_sub(db: Session, flow: str) -> bool:
     # The ownership table controls which originator may enqueue each migrated
     # flow. It does not confer authority on any back-office provider.
@@ -110,15 +97,30 @@ def external_material_fulfilment_active(db: Session) -> bool:
 
 
 def build_gateway(db: Session) -> BackofficeGateway:
-    """Build the configured provider adapter for bounded read operations."""
-    provider = provider_name(db)
-    if provider == DOTMAC_ERP_PROVIDER:
-        from app.services.dotmac_erp.client import build_erp_client
+    """Build the default typed back-office capability facade.
 
-        return build_erp_client(db)
-    raise BackofficeUnavailableError(
-        f"Back-office provider '{provider}' has no installed Sub adapter"
+    Installation bindings select the provider. Domain callers never select or
+    import a product-specific connector.
+    """
+    from app.services.integrations.erp_capability import capability_client
+
+    return capability_client(db)
+
+
+def _provider_for_outbox(db: Session) -> str:
+    from app.services.integrations import installations
+    from app.services.integrations.backoffice_contracts import (
+        ERP_OUTBOX_CAPABILITY,
     )
+
+    try:
+        binding = installations.require_enabled_capability_binding(
+            db,
+            capability_id=ERP_OUTBOX_CAPABILITY,
+        )
+    except installations.InstallationError as exc:
+        raise BackofficeUnavailableError(str(exc)) from exc
+    return str(binding.installation.connector_key)
 
 
 def _enqueue_with_provider(
@@ -136,11 +138,7 @@ def _enqueue_with_provider(
     if not _flow_owned_by_sub(db, flow):
         return BackofficeEnqueueResult(status="not_owned")
 
-    provider = provider_name(db)
-    if provider != DOTMAC_ERP_PROVIDER:
-        raise BackofficeUnavailableError(
-            f"Back-office provider '{provider}' has no installed adapter for {flow}"
-        )
+    provider = _provider_for_outbox(db)
 
     event: object | None
     if flow == "expense_claim":

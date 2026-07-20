@@ -73,15 +73,23 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
     )
     assert work_order_evidence.down_revision == as_built_review.revision
     current = _load_migration(
-        "376_replaceable_backoffice_boundary.py",
-        "migration_376_replaceable_backoffice_boundary",
+        "381_replaceable_backoffice_boundary.py",
+        "migration_381_replaceable_backoffice_boundary",
     )
-    assert current.down_revision == work_order_evidence.revision
+    assert current.down_revision == "380_integration_platform_cutover"
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [current.revision]
+    # Single-headed with 375 in the head's ancestry; later revisions (e.g. the
+    # integration platform chain) may extend past it — asserting the exact
+    # head breaks on every subsequent migration.
+    heads = script.get_heads()
+    assert len(heads) == 1
+    ancestry = {
+        rev.revision for rev in script.walk_revisions(base="base", head=heads[0])
+    }
+    assert current.revision in ancestry
     legacy = script.get_revision("153_ip_assignments_subscription_owner")
     assert legacy is not None
     assert "368_merge_legacy_ip_assignments_branch" in {

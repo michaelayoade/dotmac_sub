@@ -1837,30 +1837,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "DELETE /api/v1/webhooks/endpoints/{endpoint_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:endpoint_id!"
-   ],
-   "request": null,
-   "responses": {
-    "204": "cc5fd302f9c4",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "DELETE /api/v1/webhooks/subscriptions/{subscription_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:subscription_id!"
-   ],
-   "request": null,
-   "responses": {
-    "204": "cc5fd302f9c4",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "DELETE /api/v1/wireguard/peers/{peer_id}": {
    "params": [
     "header:authorization",
@@ -3144,8 +3120,7 @@
   },
   "GET /api/v1/crm/billing-risk-source": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3155,8 +3130,7 @@
   },
   "GET /api/v1/crm/finance/payments": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3166,8 +3140,7 @@
   },
   "GET /api/v1/crm/finance/transactions": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3178,7 +3151,6 @@
   "GET /api/v1/crm/infrastructure/assets": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "query:q"
    ],
    "request": null,
@@ -3222,8 +3194,7 @@
   },
   "GET /api/v1/crm/locations": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3234,7 +3205,6 @@
   "GET /api/v1/crm/ncc/subscribers": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "query:access_capacity_gbps",
     "query:as_of",
     "query:data_usage_tb",
@@ -3252,7 +3222,6 @@
   "GET /api/v1/crm/offers": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "query:active_only",
     "query:q"
    ],
@@ -3265,7 +3234,6 @@
   "GET /api/v1/crm/outages": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "query:basestation_id",
     "query:node_id",
     "query:page",
@@ -3282,7 +3250,6 @@
   "GET /api/v1/crm/outages/impact": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "query:basestation_id",
     "query:fdh_id",
     "query:node_id",
@@ -3298,7 +3265,6 @@
   "GET /api/v1/crm/outages/{incident_id}": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:incident_id!",
     "query:limit"
    ],
@@ -3310,8 +3276,7 @@
   },
   "GET /api/v1/crm/ping": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3439,8 +3404,7 @@
   },
   "GET /api/v1/crm/service-extensions": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3451,7 +3415,6 @@
   "GET /api/v1/crm/service-extensions/{extension_id}": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:extension_id!"
    ],
    "request": null,
@@ -3462,8 +3425,7 @@
   },
   "GET /api/v1/crm/subscribers": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3473,8 +3435,7 @@
   },
   "GET /api/v1/crm/subscribers/online": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3484,8 +3445,7 @@
   },
   "GET /api/v1/crm/subscribers/search": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": null,
    "responses": {
@@ -3496,7 +3456,6 @@
   "GET /api/v1/crm/subscribers/{subscriber_id}": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:subscriber_id!"
    ],
    "request": null,
@@ -3508,7 +3467,6 @@
   "GET /api/v1/crm/subscribers/{subscriber_id}/billing": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:subscriber_id!"
    ],
    "request": null,
@@ -3520,7 +3478,6 @@
   "GET /api/v1/crm/subscribers/{subscriber_id}/service-extensions": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:subscriber_id!"
    ],
    "request": null,
@@ -3532,7 +3489,6 @@
   "GET /api/v1/crm/subscribers/{subscriber_id}/services": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:subscriber_id!"
    ],
    "request": null,
@@ -3544,7 +3500,6 @@
   "GET /api/v1/crm/subscribers/{subscriber_id}/sessions": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:subscriber_id!"
    ],
    "request": null,
@@ -3556,7 +3511,6 @@
   "GET /api/v1/crm/subscribers/{subscriber_id}/statistics": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:subscriber_id!"
    ],
    "request": null,
@@ -5022,6 +4976,75 @@
    "request": null,
    "responses": {
     "200": "cd9dbcbc3311",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/integrations/deliveries": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "query:capability_binding_id",
+    "query:limit",
+    "query:offset",
+    "query:state"
+   ],
+   "request": null,
+   "responses": {
+    "200": "e066b4177822",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/integrations/inbox": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "query:capability_binding_id",
+    "query:limit",
+    "query:offset",
+    "query:state"
+   ],
+   "request": null,
+   "responses": {
+    "200": "bced4905b2e9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/integrations/inbox/{receipt_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:receipt_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "2c7e1172648f",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/integrations/installations": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "query:connector_key",
+    "query:limit",
+    "query:offset",
+    "query:state"
+   ],
+   "request": null,
+   "responses": {
+    "200": "d7ecb5edad1e",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "GET /api/v1/integrations/installations/{installation_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "452422e866d9",
     "422": "a11c9d9b2af8"
    }
   },
@@ -7141,21 +7164,6 @@
    "request": null,
    "responses": {
     "200": "146aa0e4aa4c",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "GET /api/v1/payment-event-dead-letters": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "query:limit",
-    "query:offset",
-    "query:provider_type",
-    "query:status"
-   ],
-   "request": null,
-   "responses": {
-    "200": "07fcee5bdb02",
     "422": "a11c9d9b2af8"
    }
   },
@@ -10509,65 +10517,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "GET /api/v1/webhooks/deliveries": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "query:endpoint_id",
-    "query:event_type",
-    "query:limit",
-    "query:offset",
-    "query:order_by",
-    "query:order_dir",
-    "query:status",
-    "query:subscription_id"
-   ],
-   "request": null,
-   "responses": {
-    "200": "b4299f564b0d",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "GET /api/v1/webhooks/deliveries/{delivery_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:delivery_id!"
-   ],
-   "request": null,
-   "responses": {
-    "200": "38b50372ad0b",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "GET /api/v1/webhooks/endpoints": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "query:is_active",
-    "query:limit",
-    "query:offset",
-    "query:order_by",
-    "query:order_dir"
-   ],
-   "request": null,
-   "responses": {
-    "200": "1cbe63bd70bf",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "GET /api/v1/webhooks/endpoints/{endpoint_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:endpoint_id!"
-   ],
-   "request": null,
-   "responses": {
-    "200": "4979ffa7df50",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "GET /api/v1/webhooks/meta": {
    "params": [
     "query:hub.challenge",
@@ -10577,36 +10526,6 @@
    "request": null,
    "responses": {
     "200": "a2431939694c",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "GET /api/v1/webhooks/subscriptions": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "query:endpoint_id",
-    "query:event_type",
-    "query:is_active",
-    "query:limit",
-    "query:offset",
-    "query:order_by",
-    "query:order_dir"
-   ],
-   "request": null,
-   "responses": {
-    "200": "f031c7f0b711",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "GET /api/v1/webhooks/subscriptions/{subscription_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:subscription_id!"
-   ],
-   "request": null,
-   "responses": {
-    "200": "9b8bf43bfe76",
     "422": "a11c9d9b2af8"
    }
   },
@@ -11108,7 +11027,6 @@
   "PATCH /api/v1/crm/subscribers/{subscriber_id}/status": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "header:x-crm-actor",
     "path:subscriber_id!"
    ],
@@ -12672,42 +12590,6 @@
     "422": "a11c9d9b2af8"
    }
   },
-  "PATCH /api/v1/webhooks/deliveries/{delivery_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:delivery_id!"
-   ],
-   "request": "a25dcf1de334",
-   "responses": {
-    "200": "38b50372ad0b",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "PATCH /api/v1/webhooks/endpoints/{endpoint_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:endpoint_id!"
-   ],
-   "request": "126828d73ac6",
-   "responses": {
-    "200": "4979ffa7df50",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "PATCH /api/v1/webhooks/subscriptions/{subscription_id}": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:subscription_id!"
-   ],
-   "request": "8c331bb802dc",
-   "responses": {
-    "200": "9b8bf43bfe76",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "PATCH /api/v1/wireguard/peers/{peer_id}": {
    "params": [
     "header:authorization",
@@ -13566,8 +13448,7 @@
   },
   "POST /api/v1/crm/credits": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": "21b645b80194",
    "responses": {
@@ -13577,8 +13458,7 @@
   },
   "POST /api/v1/crm/invoices": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": "21b645b80194",
    "responses": {
@@ -13599,8 +13479,7 @@
   },
   "POST /api/v1/crm/payments": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": "21b645b80194",
    "responses": {
@@ -13716,8 +13595,7 @@
   },
   "POST /api/v1/crm/subscriptions": {
    "params": [
-    "header:X-Api-Key",
-    "header:authorization"
+    "header:X-Api-Key"
    ],
    "request": "21b645b80194",
    "responses": {
@@ -13728,7 +13606,6 @@
   "POST /api/v1/crm/subscriptions/{subscription_id}/radio-mac": {
    "params": [
     "header:X-Api-Key",
-    "header:authorization",
     "path:subscription_id!"
    ],
    "request": "21b645b80194",
@@ -14460,6 +14337,124 @@
    "request": "21f1313495dc",
    "responses": {
     "201": "cd9dbcbc3311",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/deliveries/{delivery_id}/replay": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:delivery_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "40c777895832",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/event-subscriptions": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "b7142ac008f8",
+   "responses": {
+    "201": "986727793d25",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/inbox/{receipt_id}/replay": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:receipt_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "2c7e1172648f",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/installations": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "0f62bb3a948b",
+   "responses": {
+    "201": "452422e866d9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/installations/{installation_id}/config-revisions": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": "ae23698080cd",
+   "responses": {
+    "201": "82891b8390e0",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/installations/{installation_id}/disable": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": "4df8bc5a7e3a",
+   "responses": {
+    "200": "452422e866d9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/installations/{installation_id}/quarantine": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": "4df8bc5a7e3a",
+   "responses": {
+    "200": "452422e866d9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/installations/{installation_id}/retire": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": "4df8bc5a7e3a",
+   "responses": {
+    "200": "452422e866d9",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/installations/{installation_id}/validate-connection": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "56adb0a04db0",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "POST /api/v1/integrations/installations/{installation_id}/validate-static": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:installation_id!"
+   ],
+   "request": null,
+   "responses": {
+    "200": "56adb0a04db0",
     "422": "a11c9d9b2af8"
    }
   },
@@ -15935,18 +15930,6 @@
    "request": "b6dbaf29be52",
    "responses": {
     "201": "146aa0e4aa4c",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "POST /api/v1/payment-event-dead-letters/{dead_letter_id}/replay": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key",
-    "path:dead_letter_id!"
-   ],
-   "request": null,
-   "responses": {
-    "200": "3a00922ad142",
     "422": "a11c9d9b2af8"
    }
   },
@@ -17566,13 +17549,6 @@
     "200": "35ca38bd28f3"
    }
   },
-  "POST /api/v1/webhooks/crm/referrals": {
-   "params": [],
-   "request": null,
-   "responses": {
-    "200": "3782c67bdb7d"
-   }
-  },
   "POST /api/v1/webhooks/crm/work-orders": {
    "params": [],
    "request": null,
@@ -17580,44 +17556,11 @@
     "200": "3d0c1e7872b6"
    }
   },
-  "POST /api/v1/webhooks/deliveries": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": "aa8b9d8c4b13",
-   "responses": {
-    "201": "38b50372ad0b",
-    "422": "a11c9d9b2af8"
-   }
-  },
-  "POST /api/v1/webhooks/endpoints": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": "768ce149e831",
-   "responses": {
-    "201": "4979ffa7df50",
-    "422": "a11c9d9b2af8"
-   }
-  },
   "POST /api/v1/webhooks/meta": {
    "params": [],
    "request": null,
    "responses": {
     "200": "168f30b38541"
-   }
-  },
-  "POST /api/v1/webhooks/subscriptions": {
-   "params": [
-    "header:authorization",
-    "header:x-api-key"
-   ],
-   "request": "2a6dbbb89703",
-   "responses": {
-    "201": "9b8bf43bfe76",
-    "422": "a11c9d9b2af8"
    }
   },
   "POST /api/v1/webhooks/whatsapp/meta": {
@@ -17736,6 +17679,19 @@
    "request": "0c8b6ca215ae",
    "responses": {
     "200": "86231f6d8faf",
+    "422": "a11c9d9b2af8"
+   }
+  },
+  "PUT /api/v1/integrations/installations/{installation_id}/capabilities/{capability_id}": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key",
+    "path:capability_id!",
+    "path:installation_id!"
+   ],
+   "request": "f5075f9eaa20",
+   "responses": {
+    "200": "fd1c5b6dc407",
     "422": "a11c9d9b2af8"
    }
   },
@@ -18432,17 +18388,31 @@
   "InstallAppointmentCreate": "92b473c163ab",
   "InstallAppointmentRead": "01daf8d2c86e",
   "InstallAppointmentUpdate": "28f4d5850436",
-  "IntegrationJobCreate": "50c7c211f9ff",
-  "IntegrationJobRead": "5c0a8a7463bc",
+  "IntegrationBindingState": "a3b23245dca4",
+  "IntegrationCapabilityBindingRead": "33f844e40a6c",
+  "IntegrationCapabilityBindingUpsert": "2bf2d1ce12bf",
+  "IntegrationConfigRevisionCreate": "e75592540a46",
+  "IntegrationConfigRevisionRead": "3a1a81b1762e",
+  "IntegrationDeliveryRead": "e494aa22638a",
+  "IntegrationEventSubscriptionCreate": "bcbc340a8241",
+  "IntegrationEventSubscriptionRead": "36f6a4bb06ed",
+  "IntegrationInboxRead": "b8b72174d389",
+  "IntegrationInstallationCreate": "0f838ccf01d5",
+  "IntegrationInstallationRead": "28feb10361a4",
+  "IntegrationInstallationState": "b35b7cc218c3",
+  "IntegrationJobCreate": "e09e40e35702",
+  "IntegrationJobRead": "18d3f21455fc",
   "IntegrationJobType": "95fd3ca7c853",
-  "IntegrationJobUpdate": "0c130f16196a",
+  "IntegrationJobUpdate": "fbddf4f1e78d",
+  "IntegrationLifecycleCommand": "5be315235dbd",
   "IntegrationRunRead": "0ac917af40e6",
   "IntegrationRunStatus": "cc0db9f1c430",
   "IntegrationScheduleType": "e4f9f44e67ad",
-  "IntegrationTargetCreate": "3985bfb5ddca",
-  "IntegrationTargetRead": "32cb373b311f",
+  "IntegrationTargetCreate": "3fdaa005fb52",
+  "IntegrationTargetRead": "b7788e6635b2",
   "IntegrationTargetType": "1057bdd0097d",
-  "IntegrationTargetUpdate": "22e242923821",
+  "IntegrationTargetUpdate": "906accaca660",
+  "IntegrationValidationStatus": "79f1b4c935f6",
   "InterfaceStatus": "20c251764046",
   "InvoiceBulkActionResponse": "4f4b4d0b09e5",
   "InvoiceBulkVoidRequest": "20ea34f498f7",
@@ -18616,7 +18586,6 @@
   "ListResponse_PaymentProviderRead_": "1207b871389e",
   "ListResponse_PaymentRead_": "700f84e40e96",
   "ListResponse_PaymentSyncRead_": "008dffc246a7",
-  "ListResponse_PaymentWebhookDeadLetterRead_": "ebf392624dbf",
   "ListResponse_PermissionRead_": "e9c5ba50bea7",
   "ListResponse_PipelineRead_": "c8c31b65781d",
   "ListResponse_PipelineStageRead_": "d41bafc55f36",
@@ -18680,9 +18649,6 @@
   "ListResponse_UserCredentialRead_": "deb3f29fb1bc",
   "ListResponse_VendorPurchaseInvoiceRead_": "9e603348ec06",
   "ListResponse_VlanRead_": "bc02d9fb7a40",
-  "ListResponse_WebhookDeliveryRead_": "30603d64d1b5",
-  "ListResponse_WebhookEndpointRead_": "f55e9470d893",
-  "ListResponse_WebhookSubscriptionRead_": "d90d17996362",
   "ListResponse_WorkOrderAssignmentQueueRead_": "09219459d168",
   "ListResponse_WorkOrderHeaderRead_": "31c7a849dee1",
   "ListResponse_WorkqueueItemRead_": "69d754624d9b",
@@ -18854,15 +18820,15 @@
   "PaymentMethodType": "b0c210102540",
   "PaymentMethodUpdate": "43da40ecb872",
   "PaymentPrepaidServiceEffectRead": "f0120ac9ba6d",
-  "PaymentProviderCreate": "243f3ffe241e",
+  "PaymentProviderCreate": "4c387b9b5f73",
   "PaymentProviderEventFinancialEffect": "5f944c2c8bc5",
   "PaymentProviderEventIngest": "15804490e40b",
   "PaymentProviderEventRead": "d52d54caf905",
   "PaymentProviderEventStatus": "7de62fc791a8",
   "PaymentProviderOption": "d553802be4ab",
-  "PaymentProviderRead": "bbc0eba30ae5",
+  "PaymentProviderRead": "eb01197f980e",
   "PaymentProviderType": "bae72c1da52e",
-  "PaymentProviderUpdate": "dd69bfbe2b46",
+  "PaymentProviderUpdate": "fa5ae1822098",
   "PaymentRead": "a39274695cd9",
   "PaymentRefundInvoiceEffectRead": "d0878d8fb0b6",
   "PaymentRefundOrigin": "62c638d95da1",
@@ -18886,8 +18852,6 @@
   "PaymentUpdate": "b4fda92736b0",
   "PaymentVerifyRequest": "b9dd3edabfec",
   "PaymentVerifyResponse": "c0dabb760454",
-  "PaymentWebhookDeadLetterRead": "aced3fea5545",
-  "PaymentWebhookDeadLetterStatus": "9657d72283a5",
   "PermissionCreate": "3db50ccb18a5",
   "PermissionRead": "4189b8e32837",
   "PermissionUpdate": "ae950f7b4a5e",
@@ -19229,6 +19193,7 @@
   "UserCredentialUpdate": "083fa613d28f",
   "ValidationAddOnRequest": "712ae15dbfdd",
   "ValidationError": "743962c190f1",
+  "ValidationResult": "e2ce9d1ba9a8",
   "VendorAsBuiltCreate": "bcfa19ce3157",
   "VendorAsBuiltLineCreate": "e4f5e52d0c93",
   "VendorCapabilityCreate": "5bda8a17f6b0",
@@ -19253,17 +19218,6 @@
   "VlanUpdate": "138eccdb4b21",
   "VoiceExtractRequest": "d18369f8bb2f",
   "VoiceExtractResponse": "609f68eff893",
-  "WebhookDeliveryCreate": "25ee3b57ebe3",
-  "WebhookDeliveryRead": "793909b043ee",
-  "WebhookDeliveryStatus": "68462ebd5e47",
-  "WebhookDeliveryUpdate": "9dbb20ab12d2",
-  "WebhookEndpointCreate": "1b84df0796ba",
-  "WebhookEndpointRead": "518a4b68b870",
-  "WebhookEndpointUpdate": "eb25d0642f1f",
-  "WebhookEventType": "5b5c0c70de48",
-  "WebhookSubscriptionCreate": "1d9745201223",
-  "WebhookSubscriptionRead": "c13919183850",
-  "WebhookSubscriptionUpdate": "127842af96d3",
   "WireGuardConnectionLogRead": "764b756791eb",
   "WireGuardPeerConfig": "341eff1766fd",
   "WireGuardPeerCreate": "cad388466ca5",

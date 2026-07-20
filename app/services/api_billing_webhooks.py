@@ -1,28 +1,10 @@
-"""Billing API webhook orchestration.
-
-Inbound payment-provider webhooks (Paystack, Flutterwave) are money events: the
-provider has already moved funds and is telling us about it. Providers treat an
-HTTP 2xx as "delivered, do not retry"; any other status triggers their retry
-schedule. So a processing failure must NOT return 2xx, or the event is silently
-lost (we never record a payment the customer already made).
-
-Two safeguards work together here:
-
-1. **Dead-letter capture.** The raw, signature-verified payload is committed to
-   ``payment_webhook_dead_letters`` *before* ingest is attempted, in its own
-   transaction, so it survives an ingest rollback or a worker crash mid-ingest.
-   On success the insurance row is deleted; on failure it is kept for replay.
-2. **Honest status codes.** Transient/unexpected ingest errors return HTTP 5xx
-   so the provider retries (``ingest`` is idempotent via ``idempotency_key``, so
-   replays are safe). Deterministic rejections (bad data) return their 4xx and
-   are parked as ``rejected`` for a human to inspect.
-"""
+"""Billing webhook adapter around the canonical integration inbox and owner."""
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -38,21 +20,14 @@ from app.models.billing import (
     PaymentProviderEvent,
     PaymentProviderType,
     PaymentStatus,
-    PaymentWebhookDeadLetter,
-    PaymentWebhookDeadLetterStatus,
     TopupIntent,
 )
-from app.schemas.billing import (
-    PaymentProviderEventIngest,
-    PaymentWebhookDeadLetterRead,
-)
+from app.schemas.billing import PaymentProviderEventIngest
 from app.services import billing as billing_service
-from app.services.common import apply_pagination
-from app.services.flutterwave import (
-    verify_webhook_signature as verify_flutterwave_signature,
-)
-from app.services.paystack import verify_webhook_signature as verify_paystack_signature
-from app.services.response import list_response
+from app.services.integrations import inbox as integration_inbox
+from app.services.integrations import payment_capability
+from app.services.integrations.inbox import InboxError
+from app.services.integrations.installations import InstallationError
 from app.services.topup_intents import set_topup_intent_status
 
 logger = logging.getLogger(__name__)
@@ -67,73 +42,6 @@ _PROVIDER_TYPE_BY_NAME = {
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _capture_dead_letter(
-    db: Session,
-    *,
-    provider_type: str,
-    event_type: str | None,
-    external_id: str | None,
-    idempotency_key: str | None,
-    payload: dict,
-) -> PaymentWebhookDeadLetter:
-    """Durably record the inbound event before processing (own transaction).
-
-    If the provider re-delivers a still-unresolved event we reuse its row and
-    bump ``retry_count`` instead of piling up duplicates — but only when there
-    is a real idempotency key to dedupe on.
-    """
-    existing: PaymentWebhookDeadLetter | None = None
-    if idempotency_key:
-        existing = (
-            db.query(PaymentWebhookDeadLetter)
-            .filter(PaymentWebhookDeadLetter.provider_type == provider_type)
-            .filter(PaymentWebhookDeadLetter.idempotency_key == idempotency_key)
-            .first()
-        )
-    if existing is not None:
-        existing.status = PaymentWebhookDeadLetterStatus.received
-        existing.event_type = event_type
-        existing.external_id = external_id
-        existing.payload = payload
-        existing.retry_count = (existing.retry_count or 0) + 1
-        existing.last_attempt_at = _now()
-        row = existing
-    else:
-        row = PaymentWebhookDeadLetter(
-            provider_type=provider_type,
-            event_type=event_type,
-            external_id=external_id,
-            idempotency_key=idempotency_key,
-            payload=payload,
-            status=PaymentWebhookDeadLetterStatus.received,
-            last_attempt_at=_now(),
-        )
-        db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
-
-
-def _resolve_dead_letter(
-    db: Session,
-    row: PaymentWebhookDeadLetter,
-    status: PaymentWebhookDeadLetterStatus,
-    *,
-    error: str | None = None,
-) -> None:
-    """Move a captured row to a terminal/parked state (own transaction)."""
-    row.status = status
-    row.error = error
-    row.last_attempt_at = _now()
-    db.commit()
-
-
-def _delete_dead_letter(db: Session, row: PaymentWebhookDeadLetter) -> None:
-    """Drop the insurance row after a clean ingest."""
-    db.delete(row)
-    db.commit()
 
 
 def _idempotency_key(provider_type: str, data: dict, ref_keys: Sequence[str]) -> str:
@@ -175,17 +83,15 @@ def _extract_settlement(
     if provider_type == "paystack":
         if event_type != "charge.success":
             return None
-        from app.services.paystack import kobo_to_naira
-
         metadata = data.get("metadata")
         return _Settlement(
             status_hint=PaymentStatus.succeeded,
-            amount=kobo_to_naira(data.get("amount") or 0),
+            amount=payment_capability.kobo_to_naira(data.get("amount") or 0),
             currency=str(data.get("currency") or "NGN"),
             reference=str(data.get("reference") or "") or None,
             metadata=metadata if isinstance(metadata, dict) else {},
             # Paystack reports its fee (in kobo) on the charge payload.
-            fee=kobo_to_naira(data.get("fees") or 0),
+            fee=payment_capability.kobo_to_naira(data.get("fees") or 0),
         )
     if provider_type == "flutterwave":
         # Flutterwave reuses charge.completed for both outcomes; the charge
@@ -461,10 +367,19 @@ def _process_webhook(
     body: bytes,
     signature: str,
     provider_type: str,
-    verify_signature: Callable[[bytes, str, Session], bool],
     ref_keys: Sequence[str],
 ) -> JSONResponse:
-    if not verify_signature(body, signature, db):
+    try:
+        binding, signature_valid = payment_capability.verify_webhook_signature(
+            db,
+            provider_type=provider_type,
+            body=body,
+            signature=signature,
+        )
+    except (InstallationError, payment_capability.PaymentCapabilityError) as exc:
+        logger.error("%s webhook capability unavailable: %s", provider_type, exc)
+        return JSONResponse({"status": "provider not configured"}, status_code=503)
+    if not signature_valid:
         logger.warning("Invalid %s webhook signature", provider_type)
         return JSONResponse({"status": "invalid signature"}, status_code=400)
 
@@ -479,32 +394,47 @@ def _process_webhook(
     idempotency_key = _idempotency_key(provider_type, data, ref_keys)
     logger.info("%s webhook: %s", provider_type, event_type)
 
-    # 1. Durably capture BEFORE processing so nothing is lost on rollback/crash.
-    dead_letter = _capture_dead_letter(
-        db,
-        provider_type=provider_type,
-        event_type=event_type,
-        external_id=external_id,
-        idempotency_key=idempotency_key,
-        payload=payload,
-    )
+    try:
+        receipt, created = integration_inbox.receive_verified(
+            db,
+            capability_binding_id=binding.id,
+            provider_event_id=idempotency_key,
+            event_type=event_type,
+            payload=payload,
+            headers={"provider": provider_type},
+        )
+        db.commit()
+        db.refresh(receipt)
+    except InboxError as exc:
+        db.commit()  # preserve a quarantine caused by identity collision
+        logger.error("%s webhook identity rejected: %s", provider_type, exc)
+        return JSONResponse({"status": "event identity conflict"}, status_code=409)
+
+    if not created and receipt.state == "processed":
+        consequence = dict(receipt.consequence_json or {})
+        status_code = int(consequence.pop("http_status", 200))
+        return JSONResponse(consequence or {"status": "ok"}, status_code=status_code)
+    try:
+        if not integration_inbox.claim_for_processing(receipt):
+            return JSONResponse({"status": "ok"}, status_code=200)
+        db.commit()
+    except InboxError:
+        return JSONResponse({"status": "event requires replay"}, status_code=500)
 
     provider = billing_service.payment_providers.get_by_type(
         db, _PROVIDER_TYPE_BY_NAME[provider_type]
     )
     if not provider:
-        # Unusual after a verified signature, but never drop the event: park it
-        # and ask the provider to retry until configuration catches up.
         logger.warning(
-            "No %s payment provider configured; webhook parked for replay",
+            "No %s payment provider configured; webhook retained for replay",
             provider_type,
         )
-        _resolve_dead_letter(
-            db,
-            dead_letter,
-            PaymentWebhookDeadLetterStatus.failed,
-            error="No payment provider configured",
+        integration_inbox.mark_failed(
+            receipt,
+            error_code="payment_provider_not_configured",
+            error_detail="No payment provider configured",
         )
+        db.commit()
         return JSONResponse({"status": "provider not configured"}, status_code=503)
 
     # Project the verified payload through the same command builder manual
@@ -520,11 +450,8 @@ def _process_webhook(
         payload=payload,
     )
 
-    # 2. Process inside a SAVEPOINT so a failure rolls back only ingest's own
-    #    partial writes, leaving the committed dead-letter row (and the outer
-    #    transaction) intact — no full rollback that would also discard the
-    #    capture. ingest() self-commits on success, releasing the savepoint.
-    #    Honest status codes drive the provider's retry behaviour.
+    # Process inside a savepoint; the canonical inbox receipt was committed
+    # before this point and remains the single retry/dead-letter record.
     nested = db.begin_nested()
     try:
         _settle_typed_account_credit_deposit(
@@ -551,12 +478,13 @@ def _process_webhook(
             exc.status_code,
             exc.detail,
         )
-        _resolve_dead_letter(
-            db,
-            dead_letter,
-            PaymentWebhookDeadLetterStatus.rejected,
-            error=f"{exc.status_code}: {exc.detail}",
+        integration_inbox.mark_failed(
+            receipt,
+            error_code="payment_event_rejected",
+            error_detail=f"{exc.status_code}: {exc.detail}",
+            max_attempts=1,
         )
+        db.commit()
         return JSONResponse(
             {"status": "rejected", "detail": exc.detail},
             status_code=exc.status_code,
@@ -568,24 +496,24 @@ def _process_webhook(
         logger.error(
             "%s webhook processing error: %s", provider_type, exc, exc_info=True
         )
-        _resolve_dead_letter(
-            db,
-            dead_letter,
-            PaymentWebhookDeadLetterStatus.failed,
-            error=str(exc),
+        integration_inbox.mark_failed(
+            receipt,
+            error_code="payment_event_processing_failed",
+            error_detail=str(exc),
         )
+        db.commit()
         return JSONResponse({"status": "error"}, status_code=500)
 
     if _successful_settlement_is_unlinked(settlement, event):
-        _resolve_dead_letter(
-            db,
-            dead_letter,
-            PaymentWebhookDeadLetterStatus.failed,
-            error=_UNLINKED_SUCCESS_ERROR,
+        integration_inbox.mark_failed(
+            receipt,
+            error_code="payment_settlement_unlinked",
+            error_detail=_UNLINKED_SUCCESS_ERROR,
         )
+        db.commit()
         return JSONResponse({"status": "error"}, status_code=500)
 
-    # 3. Best-effort consequences after the money is durably recorded.
+    # Best-effort consequences after the money is durably recorded.
     _apply_post_settlement_bookkeeping(
         db,
         event=event,
@@ -594,8 +522,11 @@ def _process_webhook(
         ingest_payload=ingest_payload,
     )
 
-    # 4. Recorded as a PaymentProviderEvent — the insurance row is redundant.
-    _delete_dead_letter(db, dead_letter)
+    integration_inbox.mark_processed(
+        receipt,
+        consequence={"status": "ok", "http_status": 200},
+    )
+    db.commit()
     return JSONResponse({"status": "ok"}, status_code=200)
 
 
@@ -607,7 +538,6 @@ def process_paystack_webhook(
         body=body,
         signature=signature,
         provider_type="paystack",
-        verify_signature=verify_paystack_signature,
         ref_keys=("reference",),
     )
 
@@ -620,149 +550,5 @@ def process_flutterwave_webhook(
         body=body,
         signature=signature,
         provider_type="flutterwave",
-        verify_signature=verify_flutterwave_signature,
         ref_keys=("tx_ref",),
     )
-
-
-def list_payment_webhook_dead_letters(
-    db: Session,
-    *,
-    provider_type: str | None = None,
-    status: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> dict:
-    """List parked webhook events, newest first. For the ops replay surface."""
-    query = db.query(PaymentWebhookDeadLetter)
-    if provider_type:
-        query = query.filter(PaymentWebhookDeadLetter.provider_type == provider_type)
-    if status:
-        try:
-            status_enum = PaymentWebhookDeadLetterStatus(status)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail=f"Unknown status: {status}"
-            ) from exc
-        query = query.filter(PaymentWebhookDeadLetter.status == status_enum)
-    query = query.order_by(PaymentWebhookDeadLetter.received_at.desc())
-    items = apply_pagination(query, limit, offset).all()
-    return list_response(items, limit, offset)
-
-
-def replay_payment_webhook_dead_letter(
-    db: Session, dead_letter_id: str
-) -> PaymentWebhookDeadLetterRead:
-    """Reprocess a parked webhook through ingest using its stored payload.
-
-    For ops/cron use. Signature was already verified at receipt, so we go
-    straight to the canonical verified-payload projection and ingest owner.
-    ``ingest`` is idempotent and repairs legacy incomplete event rows. A
-    successful replay deletes the insurance row, matching live delivery; rows
-    remain health-gated on every failure or process interruption.
-    """
-    row = db.execute(
-        select(PaymentWebhookDeadLetter)
-        .where(PaymentWebhookDeadLetter.id == dead_letter_id)
-        .with_for_update()
-    ).scalar_one_or_none()
-    if not row:
-        raise HTTPException(status_code=404, detail="Dead-letter event not found")
-
-    row.status = PaymentWebhookDeadLetterStatus.received
-    row.error = None
-    row.retry_count = (row.retry_count or 0) + 1
-    row.last_attempt_at = _now()
-
-    provider_enum = _PROVIDER_TYPE_BY_NAME.get(row.provider_type)
-    if provider_enum is None:
-        detail = f"Unknown provider type: {row.provider_type}"
-        _resolve_dead_letter(
-            db, row, PaymentWebhookDeadLetterStatus.rejected, error=detail
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=detail,
-        )
-    provider = billing_service.payment_providers.get_by_type(db, provider_enum)
-    if not provider:
-        detail = f"No {row.provider_type} payment provider configured"
-        _resolve_dead_letter(
-            db, row, PaymentWebhookDeadLetterStatus.failed, error=detail
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=detail,
-        )
-
-    payload = row.payload or {}
-    event_type = row.event_type or payload.get("event", "unknown")
-    nested = db.begin_nested()
-    try:
-        ingest_payload, settlement, topup_intent = _prepare_provider_event_ingest(
-            db,
-            provider_id=provider.id,
-            provider_type=row.provider_type,
-            event_type=event_type,
-            external_id=row.external_id,
-            idempotency_key=row.idempotency_key,
-            payload=payload,
-        )
-        _settle_typed_account_credit_deposit(
-            db,
-            provider_type=row.provider_type,
-            external_id=row.external_id,
-            settlement=settlement,
-            topup_intent=topup_intent,
-            ingest_payload=ingest_payload,
-        )
-        event = billing_service.payment_provider_events.ingest(
-            db,
-            ingest_payload,
-            trusted_financial_effects=True,
-        )
-    except HTTPException as exc:
-        if nested.is_active:
-            nested.rollback()
-        _resolve_dead_letter(
-            db,
-            row,
-            PaymentWebhookDeadLetterStatus.rejected,
-            error=f"{exc.status_code}: {exc.detail}",
-        )
-        raise
-    except Exception as exc:
-        if nested.is_active:
-            nested.rollback()
-        _resolve_dead_letter(
-            db, row, PaymentWebhookDeadLetterStatus.failed, error=str(exc)
-        )
-        raise
-
-    if _successful_settlement_is_unlinked(settlement, event):
-        _resolve_dead_letter(
-            db,
-            row,
-            PaymentWebhookDeadLetterStatus.failed,
-            error=_UNLINKED_SUCCESS_ERROR,
-        )
-        raise RuntimeError(_UNLINKED_SUCCESS_ERROR)
-
-    _apply_post_settlement_bookkeeping(
-        db,
-        event=event,
-        settlement=settlement,
-        topup_intent=topup_intent,
-        ingest_payload=ingest_payload,
-    )
-
-    # Return an audit snapshot to the API, then remove the insurance row. The
-    # durable PaymentProviderEvent is the success record; a retained dead-letter
-    # must always mean unresolved work and must continue to block enforcement.
-    row.status = PaymentWebhookDeadLetterStatus.replayed
-    row.error = None
-    row.last_attempt_at = _now()
-    db.flush()
-    result = PaymentWebhookDeadLetterRead.model_validate(row)
-    _delete_dead_letter(db, row)
-    return result

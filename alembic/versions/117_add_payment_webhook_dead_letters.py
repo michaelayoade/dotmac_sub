@@ -17,7 +17,6 @@ from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 from alembic import op
-from app.models.billing import PaymentWebhookDeadLetterStatus
 
 revision = "117_add_payment_webhook_dead_letters"
 down_revision = "116_add_billing_accounts"
@@ -35,7 +34,10 @@ def upgrade() -> None:
         return
 
     status_enum = sa.Enum(
-        PaymentWebhookDeadLetterStatus,
+        "received",
+        "failed",
+        "rejected",
+        "replayed",
         name="paymentwebhookdeadletterstatus",
     )
     # create_type defaults to True for PG; harmless/ignored on SQLite.
@@ -55,7 +57,7 @@ def upgrade() -> None:
             "status",
             status_enum,
             nullable=False,
-            server_default=PaymentWebhookDeadLetterStatus.received.value,
+            server_default="received",
         ),
         sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("error", sa.Text(), nullable=True),

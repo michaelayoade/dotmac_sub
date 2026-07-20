@@ -33,6 +33,8 @@ from app.models.work_order import WorkOrder
 from app.services import backoffice
 from app.services.dotmac_erp import material_sync, outbox
 from app.services.field.material_requests import field_material_requests
+from app.services.integrations.backoffice_contracts import ERP_OUTBOX_CAPABILITY
+from tests.integration_platform_helpers import enable_erp_capability
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -126,13 +128,12 @@ def _auth(user: SystemUser) -> dict:
     }
 
 
-def _make_approved_request(
-    db, *, crm_work_order_id="wo-mat", enqueue=False, monkeypatch=None
-) -> FieldMaterialRequest:
+def _make_approved_request(db, *, crm_work_order_id="wo-mat") -> FieldMaterialRequest:
     """Create → submit → approve a request via the real service.
 
-    Ownership controls whether the generic back-office boundary delegates to the
-    active adapter; the provider delivery kill-switch does not block approval.
+    Enqueue behavior is determined by recorded ownership and an enabled typed
+    capability. A missing capability is recorded for reconciliation and does
+    not reverse the Sub-owned approval.
     """
     crm_person_id = f"crm-tech-{uuid4().hex[:8]}"
     user = _user(db)
@@ -248,7 +249,7 @@ def test_eligibility_requires_approved_items_and_email(db_session):
 
 
 # ---------------------------------------------------------------------------
-# Enqueue on approve — gated only by source-flow ownership
+# Enqueue on approve — gated by ownership and the typed capability
 # ---------------------------------------------------------------------------
 
 
@@ -260,7 +261,7 @@ def _outbox_rows(db, request) -> list[FieldErpSyncEvent]:
     )
 
 
-def test_approve_does_not_enqueue_before_flow_cutover(db_session):
+def test_approve_does_not_enqueue_before_ownership_cutover(db_session):
     request = _make_approved_request(db_session)
     assert _outbox_rows(db_session, request) == []
     assert not any(
@@ -269,9 +270,10 @@ def test_approve_does_not_enqueue_before_flow_cutover(db_session):
     )
 
 
-def test_approve_enqueues_when_flag_on(db_session, monkeypatch):
+def test_approve_enqueues_with_owner_and_enabled_capability(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
-    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_approved_request(db_session)
 
     rows = _outbox_rows(db_session, request)
     assert len(rows) == 1
@@ -288,6 +290,7 @@ def test_adapter_failure_does_not_reverse_sub_approval(db_session, monkeypatch):
     request.status = "submitted"
     request.approved_at = None
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
     db_session.commit()
 
     def fail_enqueue(*args, **kwargs):
@@ -305,7 +308,7 @@ def test_adapter_failure_does_not_reverse_sub_approval(db_session, monkeypatch):
     assert _outbox_rows(db_session, persisted) == []
 
 
-def test_approval_queues_intent_even_when_provider_delivery_is_disabled(db_session):
+def test_approval_survives_when_provider_capability_is_disabled(db_session):
     request = _make_approved_request(db_session)
     request.status = "submitted"
     request.approved_at = None
@@ -314,7 +317,10 @@ def test_approval_queues_intent_even_when_provider_delivery_is_disabled(db_sessi
 
     result = field_material_requests.approve(db_session, str(request.id))
     assert result["status"] == "approved"
-    assert len(_outbox_rows(db_session, request)) == 1
+    assert _outbox_rows(db_session, request) == []
+    assert (request.metadata_ or {})["manager_events"][-1]["event"] == (
+        "backoffice_delivery_pending"
+    )
 
 
 def test_reenqueue_reuses_the_same_outbox_row(db_session):
@@ -331,9 +337,10 @@ def test_reenqueue_reuses_the_same_outbox_row(db_session):
 # ---------------------------------------------------------------------------
 
 
-def test_delivery_accepted_writes_erp_fields_back(db_session, monkeypatch):
+def test_delivery_accepted_writes_erp_fields_back(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
-    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_approved_request(db_session)
     client = _FakeERPClient(
         post_outcomes=[
             {
@@ -357,9 +364,10 @@ def test_delivery_accepted_writes_erp_fields_back(db_session, monkeypatch):
     assert client.posts[0]["path"] == "/api/v1/sync/sub/material-requests"
 
 
-def test_delivery_fulfilled_maps_terminal_status(db_session, monkeypatch):
+def test_delivery_fulfilled_maps_terminal_status(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
-    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_approved_request(db_session)
     client = _FakeERPClient(
         post_outcomes=[{"request_id": "ERP-MR-2", "status": "fulfilled"}]
     )
@@ -372,9 +380,10 @@ def test_delivery_fulfilled_maps_terminal_status(db_session, monkeypatch):
     assert request.fulfilled_at is not None
 
 
-def test_delivery_rejected_records_erp_status(db_session, monkeypatch):
+def test_delivery_rejected_records_erp_status(db_session):
     _seed_ownership(db_session, sub_flows={FieldErpSyncFlow.material_request.value})
-    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    enable_erp_capability(db_session, ERP_OUTBOX_CAPABILITY)
+    request = _make_approved_request(db_session)
     client = _FakeERPClient(post_outcomes=[{"status": "rejected"}])
 
     result = outbox.deliver_pending(db_session, client=client)
@@ -392,10 +401,10 @@ def test_delivery_rejected_records_erp_status(db_session, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_delivery_refused_when_flow_owned_by_crm(db_session, monkeypatch):
+def test_delivery_refused_when_flow_owned_by_crm(db_session):
     # material_request left at the seeded default (crm) — must NOT be sent.
     _seed_ownership(db_session)
-    request = _make_approved_request(db_session, enqueue=True, monkeypatch=monkeypatch)
+    request = _make_approved_request(db_session)
     material_sync.enqueue_material_request(db_session, request)
     db_session.commit()
     client = _FakeERPClient(post_outcomes=[{"request_id": "SHOULD-NOT-HAPPEN"}])

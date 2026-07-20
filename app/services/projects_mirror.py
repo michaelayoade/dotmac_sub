@@ -22,8 +22,9 @@ from sqlalchemy.orm import Session
 from app.models.project_mirror import ProjectMirror, ProjectSyncState
 from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
-from app.services.crm_client import CRMClientError, get_crm_client
+from app.services.crm_client import CRMClientError
 from app.services.crm_portal import resolve_crm_subscriber_id
+from app.services.integrations.crm_capability import capability_client
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ def reconcile_subscriber(db: Session, subscriber_id: str) -> bool:
     if not crm_subscriber_id:
         return False
 
-    data = get_crm_client().get_portal_projects(crm_subscriber_id)
+    data = capability_client(db).get_portal_projects(crm_subscriber_id)
     sub_uuid = coerce_uuid(str(subscriber_id))
 
     for item in data.get("projects") or []:

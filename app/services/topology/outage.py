@@ -142,10 +142,11 @@ def _emit_outage_event(session: Session, incident: OutageIncident, kind: str) ->
     """Fan an incident lifecycle change into the event system.
 
     Reuses the established outbound machinery: ``emit_event`` -> WebhookHandler
-    -> WebhookDelivery rows -> ``app.tasks.webhooks.deliver_webhook`` (HMAC
-    signature, bounded exponential retries, delivery log). CRM/mobile backends
-    subscribe a WebhookEndpoint to the ``network.alert`` event type and filter
-    on ``alert_type``. Fired on create and resolve only — never per-update.
+    -> capability-bound ``IntegrationDelivery`` rows -> the integration delivery
+    worker (HMAC signature, bounded exponential retries, delivery log).
+    CRM/mobile backends subscribe an HTTP webhook installation to the
+    ``network.alert`` event type and filter on ``alert_type``. Fired on create
+    and resolve only — never per-update.
     No PII in the payload beyond counts; detail comes from the CRM outage API.
     Best-effort: an event/webhook failure must never fail a declare/resolve.
     """

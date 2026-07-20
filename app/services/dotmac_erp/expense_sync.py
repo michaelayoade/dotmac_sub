@@ -34,7 +34,11 @@ from sqlalchemy.orm import Session, selectinload
 from app.models.field_erp_sync import FieldErpSyncEvent, FieldErpSyncFlow
 from app.models.field_expense import FieldExpenseRequest
 from app.services.dotmac_erp import outbox
-from app.services.dotmac_erp.client import DotMacERPClient, build_erp_client
+from app.services.dotmac_erp.client import DotMacERPClient
+from app.services.integrations.erp_capability import (
+    ErpCapabilityClient,
+    capability_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +282,10 @@ def apply_erp_response(db: Session, event: FieldErpSyncEvent) -> None:
 
 
 def refresh_expense_claim_statuses(
-    db: Session, *, client: DotMacERPClient | None = None, limit: int = 100
+    db: Session,
+    *,
+    client: DotMacERPClient | ErpCapabilityClient | None = None,
+    limit: int = 100,
 ) -> dict:
     """Poll ERP for in-flight expense claims and refresh their mirror fields.
 
@@ -310,7 +317,7 @@ def refresh_expense_claim_statuses(
     owned_client = client
     created_client = False
     if owned_client is None:
-        owned_client = build_erp_client(db)
+        owned_client = capability_client(db)
         created_client = True
 
     processed = 0
