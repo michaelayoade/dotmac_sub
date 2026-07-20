@@ -146,6 +146,7 @@ def create_payment_channel_from_form(
     is_default: str | None,
     is_active: str | None,
     fee_rules: str | None,
+    accounting_code: str | None,
     notes: str | None,
 ):
     return billing_config_service.create_payment_channel(
@@ -157,6 +158,7 @@ def create_payment_channel_from_form(
         is_default=is_default,
         is_active=is_active,
         fee_rules=fee_rules,
+        accounting_code=accounting_code,
         notes=notes,
     )
 
@@ -172,6 +174,7 @@ def update_payment_channel_from_form(
     is_default: str | None,
     is_active: str | None,
     fee_rules: str | None,
+    accounting_code: str | None,
     notes: str | None,
 ):
     return billing_config_service.update_payment_channel(
@@ -184,6 +187,7 @@ def update_payment_channel_from_form(
         is_default=is_default,
         is_active=is_active,
         fee_rules=fee_rules,
+        accounting_code=accounting_code,
         notes=notes,
     )
 

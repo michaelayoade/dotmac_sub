@@ -263,7 +263,9 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
         if logo_src
         else f'<div class="logo-fallback">{company_name[:1].upper()}</div>'
     )
-    bank_details = invoice_bank_details_service.get_invoice_bank_details(db)
+    bank_details = invoice_bank_details_service.get_invoice_bank_details(
+        db, currency=invoice.currency
+    )
     bank_markup = ""
     if bank_details:
         bank_rows = [
@@ -558,7 +560,9 @@ def _render_invoice_text_lines(
         ]
     )
     if db is not None:
-        bank_details = invoice_bank_details_service.get_invoice_bank_details(db)
+        bank_details = invoice_bank_details_service.get_invoice_bank_details(
+            db, currency=invoice.currency
+        )
         if bank_details:
             out.extend(
                 [
@@ -847,7 +851,9 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
             fill=green_900 if label == "Total" else slate_900,
         )
 
-    bank_details = invoice_bank_details_service.get_invoice_bank_details(db)
+    bank_details = invoice_bank_details_service.get_invoice_bank_details(
+        db, currency=invoice.currency
+    )
     if bank_details:
         bank_left = margin_x
         bank_top = totals_top

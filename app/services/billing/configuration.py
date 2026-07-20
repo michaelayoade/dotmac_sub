@@ -46,7 +46,12 @@ def create_collection_account(
     account_type: str,
     currency: str,
     bank_name: str | None,
+    account_name: str | None,
+    account_number: str | None,
     account_last4: str | None,
+    sort_code: str | None,
+    accounting_code: str | None,
+    presentment_priority: int,
     notes: str | None,
     is_active: str | None,
 ):
@@ -55,7 +60,12 @@ def create_collection_account(
         account_type=CollectionAccountType(account_type),
         currency=currency.strip().upper(),
         bank_name=bank_name.strip() if bank_name else None,
+        account_name=account_name.strip() if account_name else None,
+        account_number=account_number.strip() if account_number else None,
         account_last4=account_last4.strip() if account_last4 else None,
+        sort_code=sort_code.strip() if sort_code else None,
+        accounting_code=accounting_code.strip() if accounting_code else None,
+        presentment_priority=presentment_priority,
         notes=notes.strip() if notes else None,
         is_active=_parse_bool(is_active),
     )
@@ -69,7 +79,12 @@ def update_collection_account(
     account_type: str,
     currency: str,
     bank_name: str | None,
+    account_name: str | None,
+    account_number: str | None,
     account_last4: str | None,
+    sort_code: str | None,
+    accounting_code: str | None,
+    presentment_priority: int,
     notes: str | None,
     is_active: str | None,
 ):
@@ -78,7 +93,12 @@ def update_collection_account(
         account_type=CollectionAccountType(account_type),
         currency=currency.strip().upper(),
         bank_name=bank_name.strip() if bank_name else None,
+        account_name=account_name.strip() if account_name else None,
+        account_number=account_number.strip() if account_number else None,
         account_last4=account_last4.strip() if account_last4 else None,
+        sort_code=sort_code.strip() if sort_code else None,
+        accounting_code=accounting_code.strip() if accounting_code else None,
+        presentment_priority=presentment_priority,
         notes=notes.strip() if notes else None,
         is_active=_parse_bool(is_active),
     )
@@ -94,6 +114,7 @@ def create_payment_channel(
     is_default: str | None,
     is_active: str | None,
     fee_rules: str | None,
+    accounting_code: str | None,
     notes: str | None,
 ):
     payload = PaymentChannelCreate(
@@ -106,6 +127,7 @@ def create_payment_channel(
         is_default=_parse_bool(is_default),
         is_active=_parse_bool(is_active),
         fee_rules=_parse_json(fee_rules),
+        accounting_code=accounting_code.strip() if accounting_code else None,
         notes=notes.strip() if notes else None,
     )
     return billing_service.payment_channels.create(db, payload)
@@ -121,6 +143,7 @@ def update_payment_channel(
     is_default: str | None,
     is_active: str | None,
     fee_rules: str | None,
+    accounting_code: str | None,
     notes: str | None,
 ):
     payload = PaymentChannelUpdate(
@@ -133,6 +156,7 @@ def update_payment_channel(
         is_default=_parse_bool(is_default),
         is_active=_parse_bool(is_active),
         fee_rules=_parse_json(fee_rules),
+        accounting_code=accounting_code.strip() if accounting_code else None,
         notes=notes.strip() if notes else None,
     )
     return billing_service.payment_channels.update(db, str(channel_id), payload)
