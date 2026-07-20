@@ -26,24 +26,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TICKET_SLA_POLICY_NAME = "Ticket Resolution SLA"
 
-CUSTOMER_AND_CABINET_TICKET_TYPES_24H = frozenset(
-    {
-        "customer link disconnection",
-        "multiple customer link disconnection",
-        "customer realignment",
-        "cabinet disconnection",
-        "multiple cabinet link disconnection",
-        "multiple cabinet disconnection",
-        "cabinet migration",
-    }
-)
-CORE_LINK_TICKET_TYPES_48H = frozenset(
-    {
-        "core link disconnection",
-        "multiple core link disconnection",
-    }
-)
-
 SLA_COMPLETE_STATUSES = frozenset(
     {
         TicketStatus.resolved.value,
@@ -94,14 +76,24 @@ def resolve_sla_policy(db: Session, ticket: Ticket) -> SlaPolicy | None:
     return None
 
 
-def ticket_type_sla_target_minutes(ticket_type: str | None) -> int | None:
-    """Return fixed SLA target minutes for known infrastructure ticket types."""
+def ticket_type_sla_target_minutes(
+    db: Session,
+    ticket_type: str | None,
+) -> int | None:
+    """Return the UI-configured resolution target for a ticket type."""
     normalized = " ".join(str(ticket_type or "").strip().lower().split())
-    if normalized in CUSTOMER_AND_CABINET_TICKET_TYPES_24H:
-        return 24 * 60
-    if normalized in CORE_LINK_TICKET_TYPES_48H:
-        return 48 * 60
-    return None
+    if not normalized:
+        return None
+    policy = support_ticket_settings_service.ticket_type_sla_policy(db)
+    resolution_hours = next(
+        (
+            hours
+            for configured_type, hours in policy.items()
+            if " ".join(configured_type.strip().lower().split()) == normalized
+        ),
+        0,
+    )
+    return resolution_hours * 60 if resolution_hours > 0 else None
 
 
 def priority_sla_target_minutes(db: Session, priority: str | None) -> int | None:
@@ -123,9 +115,9 @@ def resolve_ticket_sla_target_minutes(
     ticket_type: str | None,
 ) -> int | None:
     """Resolve a ticket SLA target, preferring explicit operational windows."""
-    return ticket_type_sla_target_minutes(ticket_type) or priority_sla_target_minutes(
-        db, priority
-    )
+    return ticket_type_sla_target_minutes(
+        db, ticket_type
+    ) or priority_sla_target_minutes(db, priority)
 
 
 def create_sla_clock_for_ticket(db: Session, ticket: Ticket) -> SlaClock | None:
@@ -136,7 +128,7 @@ def create_sla_clock_for_ticket(db: Session, ticket: Ticket) -> SlaClock | None:
     if str(ticket.status or "") not in SLA_APPLICABLE_STATUSES:
         return None
 
-    explicit_type_target = ticket_type_sla_target_minutes(ticket.ticket_type)
+    explicit_type_target = ticket_type_sla_target_minutes(db, ticket.ticket_type)
     target_minutes = explicit_type_target or priority_sla_target_minutes(
         db, ticket.priority
     )
@@ -277,6 +269,16 @@ def update_sla_clocks_for_status_change(
             clock.paused_at = None
             if clock.status == SlaClockStatus.paused.value:
                 clock.status = SlaClockStatus.running.value
+    if new_status in SLA_COMPLETE_STATUSES:
+        from app.models.operational_escalation import OperationalEntityType
+        from app.services import operational_escalation
+
+        operational_escalation.cancel_entity_events(
+            db,
+            entity_type=OperationalEntityType.ticket,
+            entity_id=ticket.id,
+            reason="ticket_sla_completed",
+        )
 
 
 def check_sla_breaches(db: Session, ticket_id) -> list[SlaClock]:
@@ -307,6 +309,49 @@ def check_sla_breaches(db: Session, ticket_id) -> list[SlaClock]:
                 clock_id=clock.id, status=SlaBreachStatus.open.value, breached_at=due_at
             )
         )
+        from app.models.operational_escalation import OperationalEntityType
+        from app.services import operational_escalation
+
+        policies = operational_escalation.matching_policies(
+            db,
+            entity_type=OperationalEntityType.ticket,
+            trigger="ticket.sla_breached",
+            severity=str(ticket.priority or "") or None,
+        )
+        if policies:
+            if ticket.assigned_to_person_id:
+                operational_escalation.add_watcher(
+                    db,
+                    entity_type=OperationalEntityType.ticket,
+                    entity_id=ticket.id,
+                    person_id=ticket.assigned_to_person_id,
+                    source="ticket_sla",
+                    reason="Assigned ticket owner",
+                )
+            if ticket.service_team_id:
+                operational_escalation.add_watcher(
+                    db,
+                    entity_type=OperationalEntityType.ticket,
+                    entity_id=ticket.id,
+                    service_team_id=ticket.service_team_id,
+                    source="ticket_sla",
+                    reason="Assigned ticket team",
+                )
+            operational_escalation.emit_sla_event(
+                db,
+                entity_type=OperationalEntityType.ticket,
+                entity_id=ticket.id,
+                trigger="ticket.sla_breached",
+                severity=str(ticket.priority or "") or None,
+                metadata={
+                    "title": f"Ticket SLA breached: {ticket.title}",
+                    "body": f"Ticket {ticket.id} passed its configured SLA due time.",
+                    "target_url": f"/admin/support/tickets/{ticket.id}",
+                    "category": "support",
+                },
+                triggered_at=due_at,
+                policies=policies,
+            )
         breached.append(clock)
 
     return breached
