@@ -35,6 +35,7 @@ from app.models.notification import (
 )
 from app.models.provisioning import ProvisioningVendor
 from app.models.subscriber import SubscriberStatus as AccountStatus
+from app.services.enforcement_event_policy import AccessEventPolicyError
 from app.services.events.dispatcher import EventDispatcher
 from app.services.events.handlers.enforcement import EnforcementHandler
 from app.services.events.handlers.lifecycle import LifecycleHandler
@@ -683,6 +684,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "block"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -716,6 +719,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "block"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -745,6 +750,8 @@ class TestEnforcementHandler:
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
                 return "throttle"
+            if key == "group_routing_enabled":
+                return False
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
@@ -914,7 +921,7 @@ class TestEnforcementHandler:
 
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")
     @patch("app.services.enforcement_event_policy.settings_spec")
-    def test_usage_exhausted_throttle_without_profile_is_noop(
+    def test_usage_exhausted_throttle_without_profile_fails_visibly(
         self, mock_settings, mock_apply_profile, db_session
     ):
         def settings_side_effect(db, domain, key):
@@ -934,7 +941,10 @@ class TestEnforcementHandler:
             subscription_id=sub_id,
             account_id=acc_id,
         )
-        handler.handle(db_session, event)
+        with pytest.raises(AccessEventPolicyError) as captured:
+            handler.handle(db_session, event)
+
+        assert captured.value.code == "access.event_policy.throttle_profile_required"
         mock_apply_profile.assert_not_called()
 
     def test_enforcement_handler_ignores_unrelated_events(self, db_session):

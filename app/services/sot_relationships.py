@@ -6332,9 +6332,132 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "event-driven enforcement feature policy",
                     "FUP enforcement action settings",
-                    "overdue suspension event policy",
                 ),
-                depends_on=("control.settings_spec",),
+                depends_on=(
+                    "access.fup_enforcement_sweep",
+                    "control.settings_spec",
+                ),
+                notes=(
+                    "Resolves canonical settings and typed usage-exhausted action "
+                    "evidence. Invoice-overdue events are observations only; the "
+                    "financial dunning owner decides their consequences."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="event-driven enforcement feature policy",
+                            role=OwnerRole.EVENT_POLICY,
+                            input_names=("canonical RADIUS event settings",),
+                        ),
+                        ConcernContract(
+                            name="FUP enforcement action settings",
+                            role=OwnerRole.EVENT_POLICY,
+                            input_names=(
+                                "canonical FUP event settings",
+                                "usage-exhausted action evidence",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical RADIUS event settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed radius.group_routing_enabled and "
+                                "radius.refresh_sessions_on_profile_change values"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical FUP event settings",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "typed usage.fup_action and "
+                                "usage.fup_throttle_radius_profile_id values"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="usage-exhausted action evidence",
+                            owner="access.fup_enforcement_sweep",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "versioned usage.exhausted event action emitted from the "
+                                "canonical FUP sweep decision"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller creates and closes the session; typed policy "
+                            "resolvers read canonical settings and perform no writes or "
+                            "transaction completion."
+                        ),
+                        locking=(
+                            "No row lock; each decision reflects the canonical settings "
+                            "snapshot visible to the caller transaction."
+                        ),
+                        idempotency=(
+                            "The same typed action evidence and visible settings snapshot "
+                            "produce the same policy outcome."
+                        ),
+                        retries=(
+                            "Adapters may retry transient setting reads. Invalid or "
+                            "incomplete policy evidence is terminal until corrected."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "access.event_policy.invalid_boolean_setting",
+                            "access.event_policy.invalid_requested_fup_action",
+                            "access.event_policy.invalid_configured_fup_action",
+                            "access.event_policy.throttle_profile_required",
+                            "access.event_policy.invalid_throttle_profile_id",
+                            "access.event_policy.invalid_throttle_decision",
+                        ),
+                        mapping_owner=(
+                            "event dispatcher and RADIUS projection adapters"
+                        ),
+                        fail_closed_on=(
+                            "invalid event action evidence",
+                            "invalid canonical boolean or action settings",
+                            "missing or invalid throttle RADIUS profile evidence",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "string-based enforcement helpers with duplicated setting "
+                            "defaults and silent missing-profile no-op behavior"
+                        ),
+                        new_owner="access.event_policy",
+                        verification=(
+                            "Typed policy, invalid-input, missing-profile, caller, and "
+                            "architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Enforcement event and RADIUS projection callers consume "
+                            "typed decisions only."
+                        ),
+                        fallback_retirement=(
+                            "Primitive helper returns, duplicated defaults, permissive "
+                            "invalid-action fallback, and silent throttle no-op are "
+                            "removed."
+                        ),
+                    ),
+                    steward="network access",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_enforcement_event_policy.py",
+                        "tests/test_events_enforcement_services.py",
+                        "tests/test_radius_shadow_handler_integration.py",
+                        "tests/architecture/test_enforcement_event_policy_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="access.walled_garden_policy",

@@ -2,7 +2,6 @@
 # ServiceContract. This is migration debt, not an ownership exemption. New
 # entries are forbidden and this sorted baseline must only shrink.
 access.control_resolution
-access.event_policy
 access.radius_projection
 access.radius_reject
 access.radius_state

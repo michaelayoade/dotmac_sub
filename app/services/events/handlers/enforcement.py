@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
 from app.models.subscriber import Subscriber
-from app.services import enforcement_event_policy, fup_enforcement
+from app.services import fup_enforcement
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services.enforcement import (
@@ -18,6 +18,14 @@ from app.services.enforcement import (
     disconnect_subscription_sessions,
     remove_subscription_address_list_block,
     update_subscription_sessions,
+)
+from app.services.enforcement_event_policy import (
+    FupEnforcementAction,
+    ResolveFupEventPolicy,
+    parse_fup_action_override,
+    resolve_fup_event_policy,
+    resolve_group_routing_policy,
+    resolve_session_refresh_policy,
 )
 from app.services.events.types import Event, EventType
 from app.services.fup_state import (
@@ -111,7 +119,7 @@ class EnforcementHandler:
             sub.access_state = target
             db.flush()
 
-        if not enforcement_event_policy.group_routing_enabled(db):
+        if not resolve_group_routing_policy(db).enabled:
             return
         try:
             result = set_subscription_access_state(db, str(subscription_id), state)
@@ -254,9 +262,7 @@ class EnforcementHandler:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
             return
-        refresh_enabled = (
-            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
-        )
+        refresh_enabled = resolve_session_refresh_policy(db).enabled
 
         subscription = db.get(Subscription, subscription_id)
 
@@ -371,9 +377,7 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
-        refresh_enabled = (
-            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
-        )
+        refresh_enabled = resolve_session_refresh_policy(db).enabled
         try:
             if refresh_enabled and projection_ready:
                 disconnect_account_sessions(db, str(account_id), reason="throttle")
@@ -407,9 +411,7 @@ class EnforcementHandler:
                 account_id,
                 exc,
             )
-        refresh_enabled = (
-            enforcement_event_policy.refresh_sessions_on_profile_change_enabled(db)
-        )
+        refresh_enabled = resolve_session_refresh_policy(db).enabled
         try:
             if refresh_enabled and projection_ready:
                 disconnect_account_sessions(db, str(account_id), reason="unthrottle")
@@ -430,8 +432,14 @@ class EnforcementHandler:
                 account_id,
             )
             return
-        action = enforcement_event_policy.fup_action(db, event.payload.get("action"))
-        if action == "none":
+        policy = resolve_fup_event_policy(
+            db,
+            ResolveFupEventPolicy(
+                requested_action=parse_fup_action_override(event.payload.get("action"))
+            ),
+        )
+        action = policy.action
+        if action is FupEnforcementAction.NONE:
             return
 
         # Resolve offer_id and rule_id from payload for state tracking
@@ -444,7 +452,7 @@ class EnforcementHandler:
         fup_block_downgraded = False
 
         fup_access_mode = None
-        if action == "block":
+        if action is FupEnforcementAction.BLOCK:
             from app.models.enforcement_lock import AccessRestrictionMode
             from app.models.subscriber import Subscriber
             from app.services.walled_garden_policy import (
@@ -460,7 +468,7 @@ class EnforcementHandler:
                 requested_mode=AccessRestrictionMode.captive,
             )
             fup_access_mode = decision.effective_mode
-            action = "suspend"
+            action = FupEnforcementAction.SUSPEND
             fup_block_downgraded = fup_access_mode == AccessRestrictionMode.hard_reject
             if fup_block_downgraded:
                 logger.warning(
@@ -471,7 +479,7 @@ class EnforcementHandler:
                     rule_id,
                     decision.reason,
                 )
-        if action == "suspend":
+        if action is FupEnforcementAction.SUSPEND:
             from app.models.enforcement_lock import (
                 AccessRestrictionMode,
                 EnforcementReason,
@@ -522,15 +530,7 @@ class EnforcementHandler:
                     exc,
                 )
             return
-        throttle_profile_id = enforcement_event_policy.fup_throttle_radius_profile_id(
-            db
-        )
-        if not throttle_profile_id:
-            logger.warning(
-                "FUP throttle profile not configured. "
-                "Set 'fup_throttle_radius_profile_id' in usage domain settings."
-            )
-            return
+        throttle_profile_id = policy.required_throttle_profile_id()
         # Capture the subscriber's current full-speed profile BEFORE the
         # throttle overwrites it, so the period-reset lift can restore it. The
         # offer's effective profile is the durable "should be" value.
@@ -544,12 +544,7 @@ class EnforcementHandler:
                 db, str(account_id), str(throttle_profile_id)
             )
             if updated:
-                refresh_enabled = (
-                    enforcement_event_policy.refresh_sessions_on_profile_change_enabled(
-                        db
-                    )
-                )
-                if refresh_enabled:
+                if policy.refresh_sessions:
                     disconnect_account_sessions(
                         db, str(account_id), reason="fup_throttle"
                     )

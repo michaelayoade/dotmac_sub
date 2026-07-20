@@ -26,7 +26,7 @@ adapter files. The executable registry contains 28 domains and 233 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has twelve fully contracted services and 221 indexed
+Typed manifest migration now has 27 fully contracted services and 220 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
@@ -133,6 +133,14 @@ inspection detects drift without inventing monetary provenance, while the
 billing alignment audit's zero historical adjustment-debit drift is the
 cutover verification. Service-owned HTTP errors, conditional commits and
 rollbacks, commit flags, and the ambiguous mutation facade are retired.
+
+The completed event-policy slice is `access.event_policy`. Event handlers and
+the RADIUS projection now consume typed group-routing, session-refresh, and FUP
+policy outcomes. Canonical defaults live only in `control.settings_spec`;
+invalid event action evidence, invalid setting values, and missing or malformed
+throttle-profile evidence fail with stable domain errors instead of silently
+falling back or skipping enforcement. Invoice-overdue events remain
+observations, with every consequence owned by financial dunning.
 
 The current completed access slice is `auth.system_user_assignments`. It is the
 only application writer for system-user role and direct-permission grants. Local
