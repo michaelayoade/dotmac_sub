@@ -381,6 +381,7 @@ def test_integration_settings_registered():
         if spec.domain == SettingDomain.integration
     }
     assert {
+        "backoffice_provider",
         "dotmac_erp_sync_enabled",
         "dotmac_erp_base_url",
         "dotmac_erp_token",
@@ -392,6 +393,9 @@ def test_integration_settings_registered():
 def test_integration_settings_defaults_and_secret():
     from app.models.domain_settings import SettingDomain
     from app.services import settings_spec
+
+    provider = settings_spec.get_spec(SettingDomain.integration, "backoffice_provider")
+    assert provider is not None and provider.default == "dotmac_erp"
 
     enabled = settings_spec.get_spec(
         SettingDomain.integration, "dotmac_erp_sync_enabled"

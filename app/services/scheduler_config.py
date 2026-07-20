@@ -2610,7 +2610,7 @@ def build_beat_schedule() -> dict:
         )
 
         # Expense-claim status reconciliation. Polls ERP for
-        # in-flight claims and refreshes erp_claim_status on the source row.
+        # in-flight claims and refreshes expense_claim_status on the source row.
         # Same master gate (dotmac_erp_sync_enabled, default OFF) → inert until
         # cutover; read-only against ERP, so re-running is always safe.
         dotmac_erp_expense_refresh_interval = _effective_int(
@@ -2629,7 +2629,7 @@ def build_beat_schedule() -> dict:
         )
 
         # Material-request status reconciliation. Polls ERP for
-        # in-flight ISSUE requests and refreshes erp_material_status on the source
+        # in-flight ISSUE requests and refreshes support_status on the source
         # row (flipping to fulfilled when ERP reports it). Same master gate
         # (dotmac_erp_sync_enabled, default OFF) → inert until cutover; read-only
         # against ERP, so re-running is always safe.

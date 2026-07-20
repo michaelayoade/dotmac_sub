@@ -3,7 +3,7 @@
 Second money flow to move onto sub's ``field_erp_sync_events`` outbox. Ports
 ``dotmac_crm/app/services/dotmac_erp/material_request_sync.py`` onto sub's native
 ``FieldMaterialRequest`` with its ERP mirror fields
-``erp_material_request_id`` / ``erp_material_status``). Structurally identical to
+``support_reference`` / ``support_status``). Structurally identical to
 ``expense_sync.py``.
 
 Three responsibilities live here:
@@ -44,6 +44,7 @@ from app.services.dotmac_erp.client import DotMacERPClient, build_erp_client
 logger = logging.getLogger(__name__)
 
 ENTITY_TYPE = "field_material_request"
+PROVIDER = "dotmac_erp"
 
 # ERP status pushed for an ISSUE material request (verbatim CRM parity: CRM sends
 # ``MaterialRequestStatus.issued.value``).
@@ -227,6 +228,7 @@ def _extract_material_status(response: dict | None) -> str | None:
     raw = (
         response.get("material_status")
         or response.get("erp_material_status")
+        or response.get("support_status")
         or response.get("status")
     )
     if not raw:
@@ -256,8 +258,9 @@ def apply_material_response(
     return field_material_requests.apply_backoffice_outcome(
         db,
         request,
-        erp_request_id=erp_id,
-        erp_status=material_status,
+        support_system=PROVIDER,
+        support_reference=erp_id,
+        support_status=material_status,
     )
 
 
@@ -291,7 +294,7 @@ def refresh_material_request_statuses(
 ) -> dict:
     """Poll ERP for in-flight material requests and refresh their mirror fields.
 
-    Selects synced (``erp_material_request_id`` set) requests still awaiting ERP
+    Selects synced (``support_reference`` set) requests still awaiting ERP
     fulfillment (``approved`` / ``issued``), polls
     ``get_material_request_status(request.id)`` for each, and applies the response
     via ``apply_material_response``. Ports CRM's material status refresh.
@@ -306,7 +309,8 @@ def refresh_material_request_statuses(
             )
         )
         .filter(FieldMaterialRequest.is_active.is_(True))
-        .filter(FieldMaterialRequest.erp_material_request_id.isnot(None))
+        .filter(FieldMaterialRequest.support_system == PROVIDER)
+        .filter(FieldMaterialRequest.support_reference.isnot(None))
         .filter(FieldMaterialRequest.status.in_(_IN_FLIGHT_STATUSES))
         .order_by(FieldMaterialRequest.updated_at.asc())
         .limit(limit)

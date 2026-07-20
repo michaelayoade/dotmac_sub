@@ -39,9 +39,10 @@ def serialize_expense_request(request: FieldExpenseRequest) -> dict:
         "currency": request.currency,
         "notes": request.notes,
         "rejection_reason": request.rejection_reason,
-        "erp_expense_claim_id": request.erp_expense_claim_id,
-        "erp_claim_number": request.erp_claim_number,
-        "erp_claim_status": request.erp_claim_status,
+        "expense_system": request.expense_system,
+        "expense_claim_reference": request.expense_claim_reference,
+        "expense_claim_number": request.expense_claim_number,
+        "expense_claim_status": request.expense_claim_status,
         "client_ref": request.client_ref,
         "total_amount": request.total_amount,
         "submitted_at": request.submitted_at,
@@ -173,9 +174,9 @@ class FieldExpenseRequests:
         request.status = "submitted"
         request.submitted_at = datetime.now(UTC)
         _mark_sub_authoritative(request.work_order_mirror)
+        _maybe_enqueue_backoffice(db, request)
         db.commit()
         db.refresh(request)
-        _maybe_enqueue_erp_sync(db, request)
         return serialize_expense_request(request)
 
     @staticmethod
@@ -346,46 +347,35 @@ def _mark_sub_authoritative(row: WorkOrder) -> None:
     _mark_source_authoritative(row, "expense_requests")
 
 
-def _erp_sync_enabled(db: Session) -> bool:
-    """Master ERP-sync kill-switch (integration domain, default OFF).
+def _maybe_enqueue_backoffice(db: Session, request: FieldExpenseRequest) -> None:
+    """Stage a replaceable back-office claim without blocking Sub submission."""
+    from app.services.backoffice import enqueue_expense_claim
 
-    The switch that keeps the expense-claim flow INERT until cutover: when off,
-    submit does not enqueue an ERP outbox row at all, so no claim can accumulate
-    (or, at cutover, double-post against CRM's separate id-space). Ownership of
-    the ``expense_claim`` flow (``sync_flow_ownership``, seeded ``crm``) is the
-    second, per-flow gate enforced inside outbox delivery.
-    """
-    from app.models.domain_settings import SettingDomain
-    from app.services import settings_spec
-
-    return bool(
-        settings_spec.resolve_value(
-            db, SettingDomain.integration, "dotmac_erp_sync_enabled"
-        )
-    )
-
-
-def _maybe_enqueue_erp_sync(db: Session, request: FieldExpenseRequest) -> None:
-    """Enqueue the ERP expense-claim outbox intent on submit (best-effort).
-
-    Gated by ``dotmac_erp_sync_enabled`` so the flow is inert pre-cutover. Never
-    raises into the submit path: a queueing hiccup must not fail a technician's
-    submit — the row simply is not enqueued (and no ERP write happens).
-    """
     try:
-        if not _erp_sync_enabled(db):
-            return
-        from app.services.dotmac_erp.expense_sync import enqueue_expense_claim
-
-        enqueue_expense_claim(db, request)
-        db.commit()
+        with db.begin_nested():
+            result = enqueue_expense_claim(db, request)
+        if result.requires_attention:
+            _note_backoffice_delivery_pending(request)
     except Exception:
-        db.rollback()
+        _note_backoffice_delivery_pending(request)
         logger.warning(
-            "field expense %s: ERP outbox enqueue failed (submit still succeeded)",
+            "field expense %s: back-office enqueue failed; submission retained",
             request.id,
             exc_info=True,
         )
+
+
+def _note_backoffice_delivery_pending(request: FieldExpenseRequest) -> None:
+    metadata = dict(request.metadata_ or {})
+    events = list(metadata.get("backoffice_events") or [])
+    events.append(
+        {
+            "event": "backoffice_delivery_pending",
+            "at": datetime.now(UTC).isoformat(),
+        }
+    )
+    metadata["backoffice_events"] = events[-100:]
+    request.metadata_ = metadata
 
 
 field_expense_requests = FieldExpenseRequests()

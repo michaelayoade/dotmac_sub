@@ -1,10 +1,8 @@
-"""Integration domain setting specs.
+"""Sub-local outbound integration settings.
 
-The ``integration`` domain holds outbound-integration configuration. Its first
-tenant is the DotMac ERP edge (ERP re-home): sub is an ``X-API-Key`` client of
-ERP's existing ``/sync/crm/*`` API. ``dotmac_erp_sync_enabled`` is the master
-kill-switch — default off, so the outbox worker stays inert until a flow is cut
-over to sub.
+The back-office provider selects an anti-corruption adapter. Provider-specific
+credentials and delivery controls remain scoped to that adapter; no setting
+turns the external system into a Sub domain owner.
 """
 
 from __future__ import annotations
@@ -19,6 +17,14 @@ from app.models.subscription_engine import SettingValueType
 def build_integration_specs(setting_spec: Callable[..., Any]) -> list[Any]:
     """Build integration setting specs without importing the main registry."""
     return [
+        setting_spec(
+            domain=SettingDomain.integration,
+            key="backoffice_provider",
+            env_var="BACKOFFICE_PROVIDER",
+            value_type=SettingValueType.string,
+            default="dotmac_erp",
+            label="Back-office Provider Adapter",
+        ),
         setting_spec(
             domain=SettingDomain.integration,
             key="dotmac_erp_sync_enabled",

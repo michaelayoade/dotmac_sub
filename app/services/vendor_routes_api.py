@@ -48,8 +48,8 @@ def _project_label(project: InstallationProject | None) -> str:
     native = getattr(project, "project", None)
     if native is not None and getattr(native, "name", None):
         return native.name
-    if project.erp_purchase_order_id:
-        return project.erp_purchase_order_id
+    if project.procurement_order_reference:
+        return project.procurement_order_reference
     return f"Project {str(project.id)[:8]}"
 
 

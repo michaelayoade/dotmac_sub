@@ -2318,11 +2318,12 @@ Dependency order:
 6. `operations.field_completion`: owns field-job completion eligibility, evidence
    requirements, and completion transitions.
 7. `operations.material_dependencies`: owns the material need and approval that
-   can block a Sub service work order, then idempotently projects ERP's
-   authoritative issue/refusal outcome back into that workflow. It never posts
-   stock or selects ERP inventory. After the per-flow cutover, the old local
-   issue/fulfil actions fail closed. The cross-repository contract is
-   `dotmac_erp/docs/dotmac_sub_material_support_contract.md`.
+   can block a Sub service work order, then idempotently projects the configured
+   backoffice system's authoritative issue/refusal outcome back into that
+   workflow. It never posts stock or selects backoffice inventory. Backoffice
+   unavailability never reverses a valid Sub approval. After the per-flow
+   cutover, the old local issue/fulfil actions fail closed. The integration
+   boundary is `docs/BACKOFFICE_INTEGRATION_BOUNDARY.md`.
 8. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
 9. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
@@ -2349,16 +2350,18 @@ Dependency order:
    writing route evidence from the template.
 10. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
    financial totals, submit eligibility, and the financial impact snapshot.
-   ERP owns accounts-payable settlement. Its dedicated
+   The configured payables system owns accounts-payable settlement. The current
+   Dotmac ERP adapter's dedicated
    `GET /api/v1/sync/sub/purchase-invoices/{source_invoice_id}` contract returns
    the organization-scoped supplier-invoice status and reconciled amounts.
-   `integration.vendor_purchase_invoice_erp_projection` is the only writer for
-   Sub's timestamped local observation. It validates source identity, ERP
-   identity, currency, and amount reconciliation, rechecks the link under lock,
-   and retains the last good observation on failure. The vendor read owner
+   `integration.dotmac_erp_payables_adapter` is the only current writer for
+   Sub's timestamped local observation for that provider. It validates source
+   identity, provider identity, currency, and amount reconciliation, rechecks
+   the link under lock, and retains the last good observation on failure. The
+   vendor read owner
    renders payment only from that observed state through `StateValue`; the ERP
-   creation response is preserved separately in
-   `erp_purchase_invoice_creation_status`, never proves paid or unpaid state,
+   creation response is preserved separately as the payables-document creation
+   status, never proves paid or unpaid state,
    and cannot overwrite the refreshed status during replay. Stale or unavailable
    observations remain visibly distinct.
 11. `operations.vendor_submission_confirmation` (implemented by
@@ -2637,13 +2640,27 @@ Integrations:
 2. `integration.jobs`: owns targets, jobs, and runs.
 3. `integration.sync`: owns sync orchestration.
 4. `integration.hooks`: owns hook dispatch and subscriptions.
-5. `integration.erp_material_support`: maps an approved Sub material need to the
-   neutral ERP contract, assigns the stable idempotency key, and observes/reconciles
-   ERP outcomes. It is a transport and observation owner, not an inventory or
-   service-workflow decision owner.
+5. `integration.backoffice_adapter`: is a Sub-local anti-corruption port for
+   requesting optional backoffice support from the configured provider. It is
+   not an enterprise-wide capability, service, identifier registry, or shared
+   runtime. Sub remains complete when the provider is unavailable or replaced.
+6. `integration.dotmac_erp_material_support_adapter`: maps an approved Sub
+   material need to the current Dotmac ERP contract, assigns the provider's
+   stable idempotency key, and observes/reconciles Dotmac ERP outcomes. It is a
+   transport and observation owner, not an inventory or service-workflow
+   decision owner.
+7. `integration.dotmac_erp_payables_adapter`: maps Sub purchase-invoice evidence
+   to the current Dotmac ERP contract and observes payables status. A future
+   Zoho or other backoffice adapter replaces this provider module without
+   changing Sub's domain owners or provider-neutral fields.
 
 Rule: integration routes/webhooks validate and enqueue. Connector behavior,
 sync lifecycle, and hook delivery stay inside integration services.
+Sub domain services never import a provider adapter. They do not query a
+backoffice database, hold cross-system foreign keys, or require a shared runtime
+to make Sub decisions. Each system keeps its own local identifiers (including
+tax identifiers); versioned API/event contracts carry explicit source-system
+references only where collaboration requires them.
 The effective-state projection derives connector/webhook health from runs and
 deliveries and reads OpenBao metadata without reading secret values. It does
 not own connector, subscription, delivery, or credential decisions.

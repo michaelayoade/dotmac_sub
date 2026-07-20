@@ -42,7 +42,11 @@ def _project_row(status: str, assigned_vendor_id: str | None) -> SimpleNamespace
         bidding_open_at=None,
         bidding_close_at=None,
         approved_quote_id=None,
-        erp_purchase_order_id=None,
+        procurement_system=None,
+        procurement_order_reference=None,
+        procurement_delivery_status=None,
+        procurement_delivery_error=None,
+        procurement_delivered_at=None,
         notes=None,
         created_at=None,
         updated_at=None,
@@ -85,7 +89,9 @@ def test_complete_action_only_when_in_progress_and_owned_by_viewer():
 def _install(db, status: str) -> tuple[InstallationProject, Vendor]:
     project = Project(name="Lifecycle fiber install")
     vendor = Vendor(
-        name="Native Vendor", code=f"NV-{uuid4().hex[:6]}", erp_id=str(uuid4())
+        name="Native Vendor",
+        code=f"NV-{uuid4().hex[:6]}",
+        supplier_reference=str(uuid4()),
     )
     db.add_all([project, vendor])
     db.flush()

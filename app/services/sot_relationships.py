@@ -2775,17 +2775,19 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.field.material_requests",
                 owns=(
                     "service-work-order material need and operational approval",
-                    "ERP material-outcome projection into the service workflow",
-                    "work-order material allocation after ERP-confirmed issue",
+                    "backoffice material-outcome projection into the service workflow",
+                    "work-order material allocation after confirmed external issue",
                 ),
                 depends_on=(
                     "operations.work_orders",
                     "operations.work_order_status",
                 ),
                 notes=(
-                    "ERP owns warehouse, stock, serial, and issue decisions. "
-                    "This owner records the service dependency and applies an "
-                    "idempotent ERP outcome; it never posts inventory. Local "
+                    "The configured backoffice system owns warehouse, stock, "
+                    "serial, and issue decisions. This owner records the service "
+                    "dependency and applies an idempotent observed outcome; it "
+                    "never posts inventory. Backoffice unavailability never "
+                    "reverses a valid Sub approval. Local "
                     "issue/fulfil transitions are compatibility-only and fail "
                     "closed after the material flow is cut over to Sub."
                 ),
@@ -2833,7 +2835,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=(
                     "vendor purchase-invoice lifecycle",
                     "purchase-invoice submission eligibility and financial preview",
-                    "vendor-facing ERP payment observation projection",
+                    "vendor-facing payables-status observation projection",
                 ),
                 depends_on=(
                     "operations.vendor_project_lifecycle",
@@ -3409,33 +3411,55 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 depends_on=("events.dispatcher", "integration.registry"),
             ),
             SOTService(
-                name="integration.vendor_purchase_invoice_erp_projection",
-                module="app.services.dotmac_erp.purchase_invoice_sync",
+                name="integration.backoffice_adapter",
+                module="app.services.backoffice",
                 owns=(
-                    "vendor purchase-invoice ERP origination projection",
-                    "vendor purchase-invoice ERP attachment projection",
-                    "timestamped ERP accounts-payable status observation",
+                    "Sub-local backoffice integration port",
+                    "configured provider selection",
+                    "provider-neutral delivery requests from Sub owners",
                 ),
-                depends_on=("operations.vendor_purchase_invoices",),
+                depends_on=("integration.registry",),
                 notes=(
-                    "ERP owns AP settlement. This reconciler is the only writer "
-                    "of Sub's refreshed ERP status and amount observation fields; "
-                    "the creation response remains origination evidence only."
+                    "This is an anti-corruption boundary inside Sub, not an "
+                    "enterprise-wide capability or shared runtime. The configured "
+                    "backoffice product is replaceable and has no authority over "
+                    "Sub customer, subscriber, service, workflow, or operational state."
                 ),
             ),
             SOTService(
-                name="integration.erp_material_support",
+                name="integration.dotmac_erp_payables_adapter",
+                module="app.services.dotmac_erp.purchase_invoice_sync",
+                owns=(
+                    "Dotmac ERP purchase-invoice payload mapping",
+                    "Dotmac ERP attachment delivery",
+                    "timestamped Dotmac ERP payables-status observation",
+                ),
+                depends_on=(
+                    "integration.backoffice_adapter",
+                    "operations.vendor_purchase_invoices",
+                ),
+                notes=(
+                    "Provider-specific transport and observation only. The configured "
+                    "payables system owns settlement; this adapter has no Sub domain "
+                    "authority and can be retired when another provider replaces it."
+                ),
+            ),
+            SOTService(
+                name="integration.dotmac_erp_material_support_adapter",
                 module="app.services.dotmac_erp.material_sync",
                 owns=(
-                    "Sub-to-ERP material-support payload mapping",
-                    "stable material-support idempotency key",
-                    "ERP material-outcome observation and reconciliation",
+                    "Sub-to-Dotmac-ERP material-support payload mapping",
+                    "provider-specific stable idempotency key",
+                    "Dotmac ERP material-outcome observation and reconciliation",
                 ),
-                depends_on=("operations.material_dependencies",),
+                depends_on=(
+                    "integration.backoffice_adapter",
+                    "operations.material_dependencies",
+                ),
                 notes=(
-                    "Transport and observation only. ERP decides the backoffice "
-                    "outcome; operations.material_dependencies alone projects "
-                    "that outcome into Sub service-workflow state."
+                    "Provider-specific transport and observation only. Dotmac ERP "
+                    "decides its backoffice outcome; operations.material_dependencies "
+                    "alone projects the observation into Sub service-workflow state."
                 ),
             ),
         ),
@@ -3448,7 +3472,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
         ),
         rule=(
             "Integration routes and webhooks validate and enqueue; registry, job, "
-            "sync, and hook services own connector behavior and delivery flow."
+            "sync, and hook services own connector behavior and delivery flow. "
+            "Sub domain owners depend only on the Sub-local backoffice port, never "
+            "on a provider package, database, foreign key, or shared runtime."
         ),
     ),
     DomainSOT(
@@ -3994,7 +4020,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "RADIUS access-session observation labels, semantic tones, and icon keys",
                     "support-ticket status labels, semantic tones, and icon keys",
                     "field work-order status labels, semantic tones, and icon keys",
-                    "ERP supplier-invoice status labels, semantic tones, and icon keys",
+                    "supplier-invoice status labels, semantic tones, and icon keys",
                     "status presentation fallback semantics",
                 ),
                 depends_on=(
@@ -4005,7 +4031,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "network.outage_lifecycle",
                     "support.ticket_lifecycle",
                     "operations.work_order_status",
-                    "integration.vendor_purchase_invoice_erp_projection",
+                    "integration.dotmac_erp_payables_adapter",
                 ),
                 notes=(
                     "Domain services own lifecycle or derived operational state. "

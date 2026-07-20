@@ -157,6 +157,11 @@ class Vendor(Base):
             name="ck_vendors_party_binding_evidence",
         ),
         UniqueConstraint("party_id", name="uq_vendors_party_id"),
+        UniqueConstraint(
+            "supplier_system",
+            "supplier_reference",
+            name="uq_vendors_supplier_system_reference",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -177,7 +182,8 @@ class Vendor(Base):
     service_area: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
-    erp_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    supplier_system: Mapped[str | None] = mapped_column(String(40))
+    supplier_reference: Mapped[str | None] = mapped_column(String(100))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -253,7 +259,15 @@ class InstallationProject(Base):
     )
     bidding_open_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bidding_close_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    erp_purchase_order_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    procurement_system: Mapped[str | None] = mapped_column(String(40))
+    procurement_order_reference: Mapped[str | None] = mapped_column(
+        String(100), index=True
+    )
+    procurement_delivery_status: Mapped[str | None] = mapped_column(String(40))
+    procurement_delivery_error: Mapped[str | None] = mapped_column(String(500))
+    procurement_delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     approved_quote_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         # Mutual FK with project_quotes.project_id — break the create_all cycle.
@@ -494,29 +508,30 @@ class VendorPurchaseInvoice(Base):
     attachment_stored_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("stored_files.id")
     )
-    erp_purchase_order_id: Mapped[str | None] = mapped_column(String(100), index=True)
-    erp_purchase_invoice_id: Mapped[str | None] = mapped_column(String(100), index=True)
-    erp_purchase_invoice_creation_status: Mapped[str | None] = mapped_column(String(40))
-    erp_purchase_invoice_status: Mapped[str | None] = mapped_column(String(40))
-    erp_purchase_invoice_total_amount: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 6)
+    payables_system: Mapped[str | None] = mapped_column(String(40))
+    procurement_order_reference: Mapped[str | None] = mapped_column(
+        String(100), index=True
     )
-    erp_purchase_invoice_amount_paid: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 6)
+    payables_document_reference: Mapped[str | None] = mapped_column(
+        String(100), index=True
     )
-    erp_purchase_invoice_balance_due: Mapped[Decimal | None] = mapped_column(
-        Numeric(20, 6)
-    )
-    erp_purchase_invoice_status_observed_at: Mapped[datetime | None] = mapped_column(
+    payables_document_status: Mapped[str | None] = mapped_column(String(40))
+    payment_status: Mapped[str | None] = mapped_column(String(40))
+    payment_total_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    payment_amount_paid: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    payment_balance_due: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
+    payment_observed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
-    erp_purchase_invoice_status_source_updated_at: Mapped[datetime | None] = (
-        mapped_column(DateTime(timezone=True))
+    payment_source_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
-    erp_purchase_invoice_status_error: Mapped[str | None] = mapped_column(String(500))
-    erp_sync_error: Mapped[str | None] = mapped_column(String(500))
-    erp_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    erp_attachment_synced_at: Mapped[datetime | None] = mapped_column(
+    payment_observation_error: Mapped[str | None] = mapped_column(String(500))
+    payables_submission_error: Mapped[str | None] = mapped_column(String(500))
+    payables_submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    payables_attachment_submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -653,9 +668,11 @@ class AsBuiltRoute(Base):
     variation_reason: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     work_order_ref: Mapped[str | None] = mapped_column(String(120))
-    erp_sync_status: Mapped[str | None] = mapped_column(String(40))
-    erp_reference: Mapped[str | None] = mapped_column(String(120))
-    erp_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backoffice_sync_status: Mapped[str | None] = mapped_column(String(40))
+    backoffice_reference: Mapped[str | None] = mapped_column(String(120))
+    backoffice_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(

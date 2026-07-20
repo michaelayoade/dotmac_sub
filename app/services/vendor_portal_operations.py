@@ -168,7 +168,11 @@ def _serialize_project(
         "bidding_open_at": row.bidding_open_at,
         "bidding_close_at": row.bidding_close_at,
         "approved_quote_id": row.approved_quote_id,
-        "erp_purchase_order_id": row.erp_purchase_order_id,
+        "procurement_system": row.procurement_system,
+        "procurement_order_reference": row.procurement_order_reference,
+        "procurement_delivery_status": row.procurement_delivery_status,
+        "procurement_delivery_error": row.procurement_delivery_error,
+        "procurement_delivered_at": row.procurement_delivered_at,
         "notes": row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -560,17 +564,22 @@ class VendorPortalOperations:
             quote.project.assigned_vendor_id = quote.vendor_id
             quote.project.status = InstallationProjectStatus.approved.value
             db.flush()
-            from app.models.field_erp_sync import (
-                FieldErpSyncFlow,
-                flow_owned_by_sub,
-            )
+            from app.services.backoffice import enqueue_purchase_order
 
-            if flow_owned_by_sub(db, FieldErpSyncFlow.purchase_order):
-                from app.services.dotmac_erp.purchase_order_sync import (
-                    enqueue_purchase_order,
-                )
-
-                enqueue_purchase_order(db, quote.project)
+            try:
+                with db.begin_nested():
+                    result = enqueue_purchase_order(db, quote.project)
+                if result.status == "enqueued":
+                    quote.project.procurement_delivery_status = "queued"
+                    quote.project.procurement_delivery_error = None
+                elif result.requires_attention:
+                    quote.project.procurement_delivery_status = "pending"
+                    quote.project.procurement_delivery_error = (
+                        "Configured procurement adapter did not enqueue the order"
+                    )
+            except Exception as exc:
+                quote.project.procurement_delivery_status = "pending"
+                quote.project.procurement_delivery_error = str(exc)[:500]
         else:
             quote.status = ProjectQuoteStatus.revision_requested.value
         db.commit()
