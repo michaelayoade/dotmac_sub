@@ -14,6 +14,8 @@ from app.models.subscriber import SubscriberStatus
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
 from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
+    candidate_prepaid_account_ids,
+    candidate_prepaid_funding_account_ids,
     plan_prepaid_enforcement,
 )
 from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
@@ -108,6 +110,60 @@ def test_disabled_control_reports_configured_zero_grace_without_writes(
         .count()
         == notice_count
     )
+
+
+def test_funding_cohort_excludes_postpaid_timer_repair_input(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscriber_account.status = SubscriberStatus.active
+    subscriber_account.is_active = True
+    subscriber_account.billing_enabled = True
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=1)
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    assert subscriber_account.id in candidate_prepaid_account_ids(db_session)
+    assert subscriber_account.id not in candidate_prepaid_funding_account_ids(
+        db_session
+    )
+    item = plan_prepaid_enforcement(
+        db_session,
+        now=_MONDAY_NOON,
+        account_ids=[subscriber_account.id],
+    ).items[0]
+
+    assert item.action == PrepaidEnforcementAction.clear_stale_timers
+    assert item.reason == "non_prepaid_account_has_prepaid_timers"
+    assert item.available_balance == Decimal("0.00")
+    assert item.required_balance == Decimal("0.00")
+
+
+def test_funding_cohort_excludes_service_less_prepaid_timer_repair_input(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscriber_account.status = SubscriberStatus.active
+    subscriber_account.is_active = True
+    subscriber_account.billing_enabled = True
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=1)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.canceled
+    db_session.commit()
+
+    assert subscriber_account.id in candidate_prepaid_account_ids(db_session)
+    assert subscriber_account.id not in candidate_prepaid_funding_account_ids(
+        db_session
+    )
+    item = plan_prepaid_enforcement(
+        db_session,
+        now=_MONDAY_NOON,
+        account_ids=[subscriber_account.id],
+    ).items[0]
+
+    assert item.action == PrepaidEnforcementAction.clear_stale_timers
+    assert item.reason == "account_without_collectible_service_has_prepaid_timers"
 
 
 def test_plan_reports_parent_status_drift_and_distinct_suspend_action(

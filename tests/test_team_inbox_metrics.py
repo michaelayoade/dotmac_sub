@@ -447,6 +447,7 @@ def test_inbox_escalation_report_is_visible_from_reports_hub():
         "name": "Inbox Escalations",
         "url": "/admin/reports/inbox-escalations",
         "description": "Conversations that need supervisor attention",
+        "permission": "reports:support:read",
     } in links
 
 

@@ -890,19 +890,14 @@ def list_failed_outbound_messages(
     *,
     limit: int = 100,
 ) -> list[InboxMessage]:
-    rows = (
+    return list(
         db.query(InboxMessage)
         .filter(InboxMessage.direction == "outbound")
+        .filter(InboxMessage.metadata_["delivery_status"].as_string() == "failed")
         .order_by(InboxMessage.created_at.desc())
-        .limit(limit * 5)
+        .limit(limit)
         .all()
     )
-    return [
-        row
-        for row in rows
-        if isinstance(row.metadata_, dict)
-        and row.metadata_.get("delivery_status") == "failed"
-    ][:limit]
 
 
 def retry_failed_outbound_batch(
@@ -934,6 +929,8 @@ def retry_failed_outbound_batch(
 
 
 def queue_metrics(db: Session) -> InboxQueueMetrics:
+    from app.services import team_inbox_read
+
     open_rows = (
         db.query(InboxConversation)
         .filter(InboxConversation.is_active.is_(True))
@@ -941,18 +938,6 @@ def queue_metrics(db: Session) -> InboxQueueMetrics:
         .all()
     )
     open_ids = [row.id for row in open_rows]
-    latest_messages = (
-        {
-            message.conversation_id: message
-            for message in db.query(InboxMessage)
-            .filter(InboxMessage.conversation_id.in_(open_ids))
-            .order_by(InboxMessage.created_at.asc())
-            .all()
-            if message.direction != "internal"
-        }
-        if open_ids
-        else {}
-    )
     active_assignment_ids = (
         {
             row[0]
@@ -966,13 +951,16 @@ def queue_metrics(db: Session) -> InboxQueueMetrics:
     )
     return InboxQueueMetrics(
         total_open=len(open_rows),
-        needs_response=sum(
-            1
-            for conversation in open_rows
-            if latest_messages.get(conversation.id) is not None
-            and latest_messages[conversation.id].direction == "inbound"
+        needs_response=team_inbox_read.list_conversations(
+            db, needs_response=True, limit=1
+        ).count,
+        failed_outbound=int(
+            db.query(func.count(InboxMessage.id))
+            .filter(InboxMessage.direction == "outbound")
+            .filter(InboxMessage.metadata_["delivery_status"].as_string() == "failed")
+            .scalar()
+            or 0
         ),
-        failed_outbound=len(list_failed_outbound_messages(db, limit=1000)),
         unassigned_open=sum(
             1
             for conversation in open_rows

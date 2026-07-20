@@ -2,10 +2,9 @@
 
 Deposit-is-truth prepaid customers are invoiced in advance; the read-side
 (``service_status``) already *projects* low-balance / grace / deactivation
-dates, but nothing armed the timers or acted on them. This periodic sweep is
-the enforcement writer that arms ``prepaid_low_balance_at`` /
-``prepaid_deactivation_at`` and applies the configured grace decision via the
-lifecycle state machine — then clears/restores once the account is funded again.
+dates. This periodic sweep executes the resolved enforcement plan through the
+timer-state and subscription-lifecycle owners, then requests restoration once
+the account is funded again.
 A resolved zero-day policy suspends on the first eligible sweep; a nonzero
 configured policy arms the timer and warning first.
 
@@ -44,10 +43,15 @@ from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
     PrepaidEnforcementPolicy,
     candidate_prepaid_account_ids,
+    candidate_prepaid_funding_account_ids,
     plan_prepaid_account,
     prepaid_balance_enforcement_enabled,
     prepaid_notice_suppression_reasons,
     resolve_prepaid_enforcement_policy,
+)
+from app.services.prepaid_enforcement_state import (
+    arm_prepaid_low_balance_timer,
+    mark_prepaid_deactivated,
 )
 
 logger = logging.getLogger(__name__)
@@ -188,9 +192,11 @@ def _reconcile_low(
             )
             if not queued:
                 return "notice_blocked"
-        account.prepaid_low_balance_at = now
-        db.flush()
-        just_armed = True
+        just_armed = arm_prepaid_low_balance_timer(
+            db,
+            account.id,
+            armed_at=now,
+        )
         result = "ok" if suspend_now else "warned"
         logger.info(
             "prepaid_balance_sweep armed low-balance for account %s", account.id
@@ -217,8 +223,7 @@ def _reconcile_low(
         source=_SOURCE,
     )
     if suspended:
-        account.prepaid_deactivation_at = now
-        db.flush()
+        mark_prepaid_deactivated(db, account.id, deactivated_at=now)
         _send_notice(
             db,
             account,
@@ -365,15 +370,26 @@ def run_prepaid_balance_sweep(
         "activation_blocked": 0,
         "readiness_blocked": 0,
         "billing_profile_invalid": 0,
+        "funding_quarantined": 0,
         "notice_blocked": 0,
         "state_drift": 0,
         "ok": 0,
         "errors": 0,
     }
     account_ids = candidate_prepaid_account_ids(db)
-    notice_reasons = prepaid_notice_suppression_reasons(db, account_ids)
+    from app.services.prepaid_funding_reconstruction import (
+        prepaid_funding_quarantined_account_ids,
+    )
+
+    funding_candidate_ids = candidate_prepaid_funding_account_ids(db)
+    quarantined_ids = prepaid_funding_quarantined_account_ids(
+        db, set(account_ids) & funding_candidate_ids
+    )
+    enforceable_ids = set(account_ids) - quarantined_ids
+    notice_reasons = prepaid_notice_suppression_reasons(db, enforceable_ids)
     stats["accounts_scanned"] = len(account_ids)
-    for account_id in account_ids:
+    stats["funding_quarantined"] = len(quarantined_ids)
+    for account_id in enforceable_ids:
         try:
             account = db.execute(
                 select(Subscriber)

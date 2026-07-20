@@ -35,7 +35,8 @@ def _run_with_subs(subs):
     bucket = MagicMock(used_gb=0, period_end=None)
 
     with (
-        patch("app.tasks.usage.SessionLocal", side_effect=[lock_session, session]),
+        patch("app.tasks.usage.SessionLocal", return_value=lock_session),
+        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
             "app.services.usage._resolve_or_create_quota_bucket",
@@ -80,7 +81,8 @@ def test_targeted_run_filters_to_changed_subscription_ids():
     bucket = MagicMock(used_gb=0, period_end=None)
 
     with (
-        patch("app.tasks.usage.SessionLocal", side_effect=[lock_session, session]),
+        patch("app.tasks.usage.SessionLocal", return_value=lock_session),
+        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
             "app.services.usage._resolve_or_create_quota_bucket",
@@ -113,7 +115,8 @@ def test_lifts_existing_fup_state_after_cap_reset_even_if_not_active():
     fup_state_mock.get.return_value = state
 
     with (
-        patch("app.tasks.usage.SessionLocal", side_effect=[lock_session, session]),
+        patch("app.tasks.usage.SessionLocal", return_value=lock_session),
+        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch("app.services.enforcement.lift_fup_enforcement") as mock_lift,
     ):

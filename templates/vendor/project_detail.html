@@ -1,11 +1,23 @@
 {% extends "vendor/base.html" %}
 {% block title %}{{ project.project_name or "Installation project" }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+{% endblock %}
 {% block vendor_content %}
 <a href="/vendor" class="mb-4 inline-flex text-sm font-semibold text-teal-700">← Projects</a>
 {% if message %}<div class="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{{ message }}</div>{% endif %}
 <div class="mb-6 flex flex-wrap items-start justify-between gap-4">
   <div><p class="text-sm text-slate-500">{{ project.project_code or project.id }}</p><h1 class="text-2xl font-bold">{{ project.project_name or "Installation project" }}</h1></div>
-  <span class="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold uppercase text-blue-700">{{ project.status|replace('_', ' ') }}</span>
+  <div class="flex items-center gap-3">
+    <span class="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold uppercase text-blue-700">{{ project.status|replace('_', ' ') }}</span>
+    {% if project.lifecycle_action and action_permitted(request, project.lifecycle_action) %}
+    <form method="post" action="{{ project.lifecycle_action.preview_url }}">
+      {% include "components/forms/csrf_input.html" %}
+      <button class="rounded-md bg-teal-600 px-4 py-2 text-sm font-semibold text-white">{{ project.lifecycle_action.label }}</button>
+    </form>
+    {% endif %}
+  </div>
 </div>
 <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
   <div class="space-y-6">
@@ -15,14 +27,42 @@
       <form method="post" action="/vendor/projects/{{ project.id }}/quotes" class="flex items-end gap-3"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><label class="text-sm">VAT rate<input name="vat_rate_percent" type="number" step="0.01" value="0" class="mt-1 block w-32 rounded-md border-slate-300"></label><button class="rounded-md bg-teal-600 px-4 py-2 font-semibold text-white">Start quote</button></form>
       {% else %}
       <div class="mb-4 overflow-x-auto"><table class="w-full text-left text-sm"><thead class="text-slate-500"><tr><th class="py-2">Description</th><th>Qty</th><th>Price</th><th class="text-right">Amount</th></tr></thead><tbody>{% for line in quote.line_items %}<tr class="border-t border-slate-100 dark:border-slate-800"><td class="py-3">{{ line.description }}</td><td>{{ line.quantity }}</td><td>{{ line.unit_price }}</td><td class="text-right">{{ line.amount }}</td></tr>{% endfor %}</tbody><tfoot><tr class="border-t font-bold"><td colspan="3" class="py-3">Total</td><td class="text-right">{{ quote.currency }} {{ quote.total }}</td></tr></tfoot></table></div>
-      {% if quote.status in ['draft','revision_requested'] %}
+      {% if action_permitted(request, quote.edit_action) %}
       <form method="post" action="/vendor/projects/{{ project.id }}/quotes/{{ quote.id }}/lines" class="grid gap-3 rounded-md bg-slate-50 p-4 dark:bg-slate-800 sm:grid-cols-4"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><input name="description" required placeholder="Description" class="rounded-md border-slate-300 sm:col-span-2"><input name="quantity" required type="number" min="0.001" step="0.001" placeholder="Qty" class="rounded-md border-slate-300"><input name="unit_price" required type="number" min="0" step="0.01" placeholder="Unit price" class="rounded-md border-slate-300"><button class="rounded-md border border-teal-600 px-4 py-2 font-semibold text-teal-700 sm:col-span-4">Add line</button></form>
-      <form method="post" action="/vendor/projects/{{ project.id }}/quotes/{{ quote.id }}/submit" class="mt-3 text-right"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="rounded-md bg-teal-600 px-5 py-2 font-semibold text-white">Submit quote</button></form>
+      <form method="post" action="/vendor/projects/{{ project.id }}/quotes/{{ quote.id }}/submit" class="mt-3 text-right"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="rounded-md bg-teal-600 px-5 py-2 font-semibold text-white">Review and submit quote</button></form>
+      {% elif not quote.edit_action.allowed %}
+      <p class="text-xs text-slate-500 dark:text-slate-400">{{ quote.edit_action.reason }}</p>
       {% endif %}{% endif %}
     </section>
     <section class="rounded-md border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
-      <h2 class="mb-4 text-lg font-bold">As-built route</h2>
-      <form method="post" action="/vendor/projects/{{ project.id }}/as-built" class="space-y-3"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><textarea name="geojson" required rows="5" placeholder='{"type":"LineString","coordinates":[[7.4,9.0],[7.41,9.01]]}' class="w-full rounded-md border-slate-300 font-mono text-xs"></textarea><div class="flex flex-wrap gap-3"><input name="actual_length_meters" type="number" step="0.1" min="0" placeholder="Length (m)" class="rounded-md border-slate-300"><input name="variation_reason" placeholder="Variation reason, if any" class="min-w-64 flex-1 rounded-md border-slate-300"><button class="rounded-md bg-teal-600 px-4 py-2 font-semibold text-white">Submit as-built</button></div></form>
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-lg font-bold">As-built route</h2>
+        {% if action_permitted(request, project.as_built_action) %}
+        <div class="flex items-center gap-2 text-xs">
+          <button type="button" id="ab-locate" class="rounded-md bg-teal-600 px-3 py-1.5 font-semibold text-white">Add my location</button>
+          <button type="button" id="ab-undo" class="rounded-md border border-slate-300 px-3 py-1.5 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200" disabled>Undo</button>
+          <button type="button" id="ab-clear" class="rounded-md border border-slate-300 px-3 py-1.5 font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:text-slate-200" disabled>Clear</button>
+        </div>
+        {% endif %}
+      </div>
+      {% if action_permitted(request, project.as_built_action) %}
+      <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">Tap the map to trace the route you built, or use <strong>Add my location</strong> to drop your GPS position at each point. The proposed route is shown dashed in purple for reference.</p>
+      {% else %}
+      <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">The proposed route is shown for reference. {{ project.as_built_action.reason }}</p>
+      {% endif %}
+      <div id="asbuilt-map" class="mb-3 h-80 w-full rounded-md border border-slate-200 dark:border-slate-800" role="region" aria-label="As-built route map"></div>
+      {% if action_permitted(request, project.as_built_action) %}
+      <form method="post" action="/vendor/projects/{{ project.id }}/as-built" id="ab-form" class="space-y-3">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        <input type="hidden" name="geojson" id="ab-geojson">
+        <div class="flex flex-wrap items-end gap-3">
+          <label class="text-xs text-slate-500 dark:text-slate-400">Length (m)<input name="actual_length_meters" id="ab-length" type="number" step="0.1" min="0" placeholder="auto" class="mt-1 block w-32 rounded-md border-slate-300"></label>
+          <label class="min-w-64 flex-1 text-xs text-slate-500 dark:text-slate-400">Variation reason<input name="variation_reason" placeholder="Describe any route variation" class="mt-1 block w-full rounded-md border-slate-300"></label>
+          <button type="submit" id="ab-submit" class="rounded-md bg-teal-600 px-4 py-2 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" disabled>{{ project.as_built_action.label }}</button>
+        </div>
+        <p id="ab-hint" class="text-xs text-slate-500 dark:text-slate-400" role="status" aria-live="polite">Add at least 2 points to submit.</p>
+      </form>
+      {% endif %}
     </section>
   </div>
   <aside class="rounded-md border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
@@ -31,11 +71,117 @@
     <form method="post" action="/vendor/projects/{{ project.id }}/purchase-invoices" class="space-y-3"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><input name="invoice_number" required placeholder="Vendor invoice number" class="w-full rounded-md border-slate-300"><input name="tax_rate_percent" type="number" step="0.01" value="0" class="w-full rounded-md border-slate-300"><button class="w-full rounded-md bg-teal-600 px-4 py-2 font-semibold text-white">Create invoice</button></form>
     {% else %}
     <div class="mb-4 space-y-2 text-sm">{% for line in invoice.line_items %}<div class="flex justify-between border-b border-slate-100 py-2 dark:border-slate-800"><span>{{ line.description }}</span><strong>{{ line.amount }}</strong></div>{% endfor %}<div class="flex justify-between pt-2 text-base"><strong>Total</strong><strong>{{ invoice.currency }} {{ invoice.total }}</strong></div></div>
-    {% if invoice.status in ['draft','revision_requested'] %}
+    {% if action_permitted(request, invoice.edit_action) %}
     <form method="post" action="/vendor/projects/{{ project.id }}/purchase-invoices/{{ invoice.id }}/lines" class="space-y-2"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><input name="description" required placeholder="Description" class="w-full rounded-md border-slate-300"><div class="grid grid-cols-2 gap-2"><input name="quantity" required type="number" step="0.001" min="0.001" placeholder="Qty" class="rounded-md border-slate-300"><input name="unit_price" required type="number" step="0.01" min="0" placeholder="Unit price" class="rounded-md border-slate-300"></div><button class="w-full rounded-md border border-teal-600 px-4 py-2 font-semibold text-teal-700">Add line</button></form>
     <form method="post" enctype="multipart/form-data" action="/vendor/projects/{{ project.id }}/purchase-invoices/{{ invoice.id }}/attachment" class="mt-4 flex gap-2"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><input name="attachment" type="file" required accept=".pdf,.png,.jpg,.jpeg" class="min-w-0 flex-1 text-sm"><button class="rounded-md border px-3 py-2 text-sm font-semibold">Upload</button></form>
-    <form method="post" action="/vendor/projects/{{ project.id }}/purchase-invoices/{{ invoice.id }}/submit" class="mt-4"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="w-full rounded-md bg-teal-600 px-4 py-2 font-semibold text-white">Submit invoice</button></form>
+    <form method="post" action="/vendor/projects/{{ project.id }}/purchase-invoices/{{ invoice.id }}/submit" class="mt-4"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><button class="w-full rounded-md bg-teal-600 px-4 py-2 font-semibold text-white">Review and submit invoice</button></form>
+    {% elif not invoice.edit_action.allowed %}
+    <p class="text-xs text-slate-500 dark:text-slate-400">{{ invoice.edit_action.reason }}</p>
     {% endif %}{% endif %}
   </aside>
 </div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/vendor/leaflet/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function () {
+  var routeGeojson = {{ route_geojson | tojson | safe }};
+  var canCapture = {{ action_permitted(request, project.as_built_action) | tojson }};
+  var map = L.map('asbuilt-map').setView([9.0820, 8.6753], 6);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19
+  }).addTo(map);
+
+  // Planned route as tracing context: proposed dashed purple, prior as-built green.
+  if (routeGeojson && routeGeojson.features && routeGeojson.features.length) {
+    var ctx = L.geoJSON(routeGeojson, {
+      style: function (f) {
+        var kind = f.properties && f.properties.kind;
+        return { color: kind === 'as_built' ? '#10b981' : '#7c3aed', weight: 3, opacity: 0.6, dashArray: '6 6' };
+      }
+    }).addTo(map);
+    try {
+      var b = ctx.getBounds();
+      if (b.isValid()) map.fitBounds(b, { padding: [30, 30], maxZoom: 16 });
+    } catch (e) { /* empty geometry */ }
+  }
+
+  if (!canCapture) return;
+
+  var points = [];  // [lat, lng] vertices the vendor traced
+  var line = L.polyline([], { color: '#0d9488', weight: 4 }).addTo(map);
+  var markers = L.layerGroup().addTo(map);
+  var geojsonEl = document.getElementById('ab-geojson');
+  var lengthEl = document.getElementById('ab-length');
+  var submitEl = document.getElementById('ab-submit');
+  var hintEl = document.getElementById('ab-hint');
+  var undoEl = document.getElementById('ab-undo');
+  var clearEl = document.getElementById('ab-clear');
+  var lengthEdited = false;
+  lengthEl.addEventListener('input', function () { lengthEdited = true; });
+
+  function haversine(a, b) {
+    var R = 6371000, rad = function (d) { return d * Math.PI / 180; };
+    var dLat = rad(b[0] - a[0]), dLng = rad(b[1] - a[1]);
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+      + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  function tracedLength() {
+    var t = 0;
+    for (var i = 1; i < points.length; i++) t += haversine(points[i - 1], points[i]);
+    return t;
+  }
+  function redraw() {
+    line.setLatLngs(points);
+    markers.clearLayers();
+    points.forEach(function (p, i) {
+      L.circleMarker(p, { radius: 5, color: '#fff', weight: 2, fillColor: '#0d9488', fillOpacity: 1 })
+        .bindTooltip(String(i + 1), { permanent: false }).addTo(markers);
+    });
+    var ok = points.length >= 2;
+    submitEl.disabled = !ok;
+    undoEl.disabled = points.length === 0;
+    clearEl.disabled = points.length === 0;
+    if (ok) {
+      // GeoJSON LineString is [lng, lat]; our points are [lat, lng].
+      geojsonEl.value = JSON.stringify({
+        type: 'LineString',
+        coordinates: points.map(function (p) { return [p[1], p[0]]; })
+      });
+      var m = Math.round(tracedLength() * 10) / 10;
+      if (!lengthEdited) lengthEl.value = m;
+      hintEl.textContent = points.length + ' points · ' + m + ' m traced';
+    } else {
+      geojsonEl.value = '';
+      hintEl.textContent = 'Add at least 2 points to submit.';
+    }
+  }
+  function addPoint(lat, lng) { points.push([lat, lng]); redraw(); }
+
+  map.on('click', function (e) { addPoint(e.latlng.lat, e.latlng.lng); });
+  undoEl.addEventListener('click', function () { points.pop(); redraw(); });
+  clearEl.addEventListener('click', function () {
+    points = []; lengthEdited = false; lengthEl.value = ''; redraw();
+  });
+  document.getElementById('ab-locate').addEventListener('click', function () {
+    if (!navigator.geolocation) { window.alert('Location is not available on this device.'); return; }
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        addPoint(pos.coords.latitude, pos.coords.longitude);
+        map.setView([pos.coords.latitude, pos.coords.longitude], 17);
+      },
+      function () { window.alert('Could not get your location. Check the location permission for this site.'); },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
+  document.getElementById('ab-form').addEventListener('submit', function (e) {
+    if (points.length < 2) { e.preventDefault(); window.alert('Trace at least 2 points for the as-built route.'); }
+  });
+  // Leaflet mis-sizes when its container starts hidden/undersized; recalc once laid out.
+  setTimeout(function () { map.invalidateSize(); }, 150);
+})();
+</script>
 {% endblock %}

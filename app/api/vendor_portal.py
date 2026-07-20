@@ -20,17 +20,17 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceRead,
     VendorPurchaseInvoiceUpdate,
 )
-from app.services.field.vendor_auth import (
-    require_native_vendor_context,
-    require_scoped_permission,
-)
+from app.services.field.vendor_auth import require_native_vendor_context
 from app.services.vendor_portal_operations import vendor_portal_operations
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 
 router = APIRouter(
     prefix="/vendor",
     tags=["vendor-portal"],
-    dependencies=[Depends(require_scoped_permission)],
+    # Membership authz, not RBAC: every route requires an active FieldVendorUser
+    # of an active FieldVendor linked to the native vendor domain (409 when
+    # unlinked). See tests/test_vendor_portal_auth.py for the behavior pins.
+    dependencies=[Depends(require_native_vendor_context)],
 )
 
 

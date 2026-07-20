@@ -59,10 +59,10 @@
 
     {# KPI Cards #}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
-        {{ stats_card("Total Customers", total_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>', color="slate", color2="gray", change=subscriber_growth) }}
-        {{ stats_card("New This Month", new_this_month|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>', color="emerald", color2="teal") }}
-        {{ stats_card("Active", active_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="blue", color2="indigo") }}
-        {{ stats_card("Suspended", suspended_subscribers|default(0), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
+        {{ stats_card(subscriber_kpis.total.label, (subscriber_kpis.total.value.value if subscriber_kpis.total.value.is_present else subscriber_kpis.total.value.placeholder), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>', color="slate", color2="gray", href=subscriber_kpis.total.cohort_url, tone=subscriber_kpis.total.tone, change=subscriber_growth) }}
+        {{ stats_card(subscriber_kpis.new_this_month.label, (subscriber_kpis.new_this_month.value.value if subscriber_kpis.new_this_month.value.is_present else subscriber_kpis.new_this_month.value.placeholder), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>', color="emerald", color2="teal", href=subscriber_kpis.new_this_month.cohort_url, tone=subscriber_kpis.new_this_month.tone) }}
+        {{ stats_card(subscriber_kpis.active.label, (subscriber_kpis.active.value.value if subscriber_kpis.active.value.is_present else subscriber_kpis.active.value.placeholder), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="blue", color2="indigo", href=subscriber_kpis.active.cohort_url, tone=subscriber_kpis.active.tone) }}
+        {{ stats_card(subscriber_kpis.suspended.label, (subscriber_kpis.suspended.value.value if subscriber_kpis.suspended.value.is_present else subscriber_kpis.suspended.value.placeholder), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange", href=subscriber_kpis.suspended.cohort_url, tone=subscriber_kpis.suspended.tone) }}
     </div>
 
     <div class="grid gap-4 sm:grid-cols-2 animate-fade-in-up" style="animation-delay: 75ms;">
@@ -192,7 +192,7 @@
                         </p>
                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ sub.created_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}</p>
                     </div>
-                    {{ status_badge(sub.status.value|title if sub.status else 'Active', 'active', size="sm") }}
+                    {{ status_badge(sub.derived_status.value|title if sub.derived_status else 'Active', 'active', size="sm") }}
                 </div>
                 {% endfor %}
             </div>

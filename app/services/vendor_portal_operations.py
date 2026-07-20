@@ -14,6 +14,7 @@ from app.models.vendor_routes import (
     AsBuiltLineItem,
     AsBuiltRoute,
     InstallationProject,
+    InstallationProjectLifecycleEvent,
     InstallationProjectStatus,
     ProjectQuote,
     ProjectQuoteLineItem,
@@ -30,11 +31,36 @@ from app.schemas.vendor_portal import (
     VendorRouteRevisionCreate,
 )
 from app.services.common import coerce_uuid
+from app.services.events import EventType, emit_event
+from app.services.ui_contracts import Action
 
 _EDITABLE_QUOTES = {
     ProjectQuoteStatus.draft.value,
     ProjectQuoteStatus.revision_requested.value,
 }
+
+
+class VendorProjectLifecycleError(ValueError):
+    """Transport-neutral rejection from the vendor project lifecycle owner."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _lifecycle_project(
+    db: Session, project_id: str, *, for_update: bool = False
+) -> InstallationProject:
+    query = db.query(InstallationProject).filter(
+        InstallationProject.id == coerce_uuid(project_id)
+    )
+    if for_update:
+        query = query.with_for_update(of=InstallationProject)
+    row = query.one_or_none()
+    if row is None or not row.is_active:
+        raise VendorProjectLifecycleError("not_found", "Installation project not found")
+    return row
 
 
 def _now() -> datetime:
@@ -49,23 +75,38 @@ def _geom(geojson: dict):
     return func.ST_SetSRID(func.ST_GeomFromGeoJSON(json.dumps(geojson)), 4326)
 
 
-def _project(db: Session, project_id: str) -> InstallationProject:
-    row = db.get(InstallationProject, coerce_uuid(project_id))
+def _project(
+    db: Session, project_id: str, *, for_update: bool = False
+) -> InstallationProject:
+    query = db.query(InstallationProject).filter(
+        InstallationProject.id == coerce_uuid(project_id)
+    )
+    if for_update:
+        query = query.with_for_update(of=InstallationProject)
+    row = query.one_or_none()
     if row is None or not row.is_active:
         raise HTTPException(status_code=404, detail="Installation project not found")
     return row
 
 
-def _quote(db: Session, quote_id: str, vendor_id: str | None = None) -> ProjectQuote:
-    row = (
+def _quote(
+    db: Session,
+    quote_id: str,
+    vendor_id: str | None = None,
+    *,
+    for_update: bool = False,
+) -> ProjectQuote:
+    query = (
         db.query(ProjectQuote)
         .options(
             selectinload(ProjectQuote.line_items), joinedload(ProjectQuote.project)
         )
         .filter(ProjectQuote.id == coerce_uuid(quote_id))
         .filter(ProjectQuote.is_active.is_(True))
-        .one_or_none()
     )
+    if for_update:
+        query = query.with_for_update(of=ProjectQuote)
+    row = query.one_or_none()
     if row is None or (vendor_id and str(row.vendor_id) != str(vendor_id)):
         raise HTTPException(status_code=404, detail="Project quote not found")
     return row
@@ -81,8 +122,40 @@ def _recalculate(quote: ProjectQuote) -> None:
     quote.total = _money(quote.subtotal + quote.tax_total)
 
 
-def _serialize_project(row: InstallationProject) -> dict:
+def _serialize_project(
+    row: InstallationProject, viewer_vendor_id: str | None = None
+) -> dict:
     project = row.project
+    is_mine = (
+        viewer_vendor_id is not None
+        and row.assigned_vendor_id is not None
+        and str(row.assigned_vendor_id) == str(viewer_vendor_id)
+    )
+    lifecycle_action = None
+    if is_mine and row.status == InstallationProjectStatus.approved.value:
+        lifecycle_action = Action(
+            key="start",
+            label="Start work",
+            allowed=True,
+            preview_url=f"/vendor/projects/{row.id}/start",
+            affected=1,
+            requires_confirmation=True,
+        )
+    elif is_mine and row.status == InstallationProjectStatus.in_progress.value:
+        lifecycle_action = Action(
+            key="complete",
+            label="Mark complete",
+            allowed=True,
+            preview_url=f"/vendor/projects/{row.id}/complete",
+            affected=1,
+            requires_confirmation=True,
+        )
+    as_built_action = Action(
+        key="submit_as_built",
+        label="Review and submit as-built",
+        allowed=is_mine,
+        reason=None if is_mine else "As-built submission is available after award",
+    )
     return {
         "id": row.id,
         "project_id": row.project_id,
@@ -99,15 +172,28 @@ def _serialize_project(row: InstallationProject) -> dict:
         "notes": row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
+        "lifecycle_action": lifecycle_action,
+        "as_built_action": as_built_action,
     }
 
 
 def _serialize_quote(row: ProjectQuote) -> dict:
+    editable = row.status in _EDITABLE_QUOTES
     return {
         "id": row.id,
         "project_id": row.project_id,
         "vendor_id": row.vendor_id,
         "status": row.status,
+        # Editability is projected from the same set the mutation paths enforce;
+        # the template consumes allowed/reason and never re-derives status rules.
+        "edit_action": Action(
+            key="edit",
+            label="Edit quote",
+            allowed=editable,
+            reason=None
+            if editable
+            else f"A {row.status.replace('_', ' ')} quote cannot be edited",
+        ),
         "currency": row.currency,
         "subtotal": row.subtotal,
         "vat_rate_percent": row.vat_rate_percent,
@@ -188,7 +274,7 @@ class VendorPortalOperations:
             .limit(limit)
             .all()
         )
-        return [_serialize_project(row) for row in rows]
+        return [_serialize_project(row, viewer_vendor_id=vendor_id) for row in rows]
 
     @staticmethod
     def create_quote(
@@ -231,10 +317,135 @@ class VendorPortalOperations:
         return _serialize_quote(_quote(db, quote_id, vendor_id))
 
     @staticmethod
+    def preview_quote_submission(
+        db: Session,
+        quote_id: str,
+        vendor_id: str,
+        *,
+        for_update: bool = False,
+    ) -> dict:
+        """Own the read-only impact snapshot for a quote submission."""
+        quote = _quote(db, quote_id, vendor_id, for_update=for_update)
+        project = (
+            _project(db, str(quote.project_id), for_update=True)
+            if for_update
+            else quote.project
+        )
+        if quote.status not in _EDITABLE_QUOTES:
+            raise HTTPException(status_code=409, detail="Quote is not submittable")
+        active = [item for item in quote.line_items if item.is_active]
+        if not active:
+            raise HTTPException(
+                status_code=422, detail="Quote requires at least one line"
+            )
+        subtotal = sum((_money(item.amount) for item in active), Decimal("0.00"))
+        tax_total = _money(
+            subtotal * Decimal(str(quote.vat_rate_percent or 0)) / Decimal("100")
+        )
+        total = _money(subtotal + tax_total)
+        return {
+            "submission_type": "quote",
+            "project_id": str(quote.project_id),
+            "target_id": str(quote.id),
+            "title": "Submit quote for review",
+            "summary": (
+                f"{len(active)} line item{'s' if len(active) != 1 else ''}; "
+                f"{quote.currency} {total:,.2f} total"
+            ),
+            "details": [
+                ("Line items", str(len(active))),
+                ("Subtotal", f"{quote.currency} {subtotal:,.2f}"),
+                ("Tax", f"{quote.currency} {tax_total:,.2f}"),
+                ("Total", f"{quote.currency} {total:,.2f}"),
+                ("Result", "Quote becomes read-only and enters staff review"),
+            ],
+            "state": {
+                "quote_id": str(quote.id),
+                "project_id": str(quote.project_id),
+                "project_status": project.status,
+                "project_updated_at": project.updated_at,
+                "status": quote.status,
+                "currency": quote.currency,
+                "vat_rate_percent": quote.vat_rate_percent,
+                "updated_at": quote.updated_at,
+                "lines": [
+                    {
+                        "id": str(item.id),
+                        "description": item.description,
+                        "quantity": item.quantity,
+                        "unit_price": item.unit_price,
+                        "amount": item.amount,
+                        "updated_at": item.updated_at,
+                    }
+                    for item in sorted(active, key=lambda row: str(row.id))
+                ],
+            },
+        }
+
+    @staticmethod
+    def preview_as_built_submission(
+        db: Session,
+        payload: VendorAsBuiltCreate,
+        vendor_id: str,
+        *,
+        for_update: bool = False,
+    ) -> dict:
+        """Own the read-only impact snapshot for an as-built submission."""
+        project = _project(db, str(payload.project_id), for_update=for_update)
+        if str(project.assigned_vendor_id) != str(vendor_id):
+            raise HTTPException(
+                status_code=403, detail="Project is assigned to another vendor"
+            )
+        if not payload.geojson and not payload.line_items:
+            raise HTTPException(status_code=422, detail="Provide a route or line items")
+        if payload.geojson:
+            if payload.geojson.get("type") != "LineString" or not isinstance(
+                payload.geojson.get("coordinates"), list
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="As-built route must be a GeoJSON LineString",
+                )
+            if len(payload.geojson["coordinates"]) < 2:
+                raise HTTPException(
+                    status_code=422,
+                    detail="As-built route requires at least two coordinates",
+                )
+        length_label = (
+            f"{payload.actual_length_meters:,.1f} m"
+            if payload.actual_length_meters is not None
+            else "Not supplied"
+        )
+        return {
+            "submission_type": "as_built",
+            "project_id": str(project.id),
+            "target_id": None,
+            "title": "Submit as-built route",
+            "summary": "Creates the immutable route evidence staff will review",
+            "details": [
+                ("Route type", "GeoJSON LineString" if payload.geojson else "None"),
+                ("Actual length", length_label),
+                ("Variation reason", payload.variation_reason or "None"),
+                ("Result", "A submitted as-built record is created for review"),
+            ],
+            "state": {
+                "project_id": str(project.id),
+                "project_status": project.status,
+                "project_updated_at": project.updated_at,
+                "assigned_vendor_id": str(project.assigned_vendor_id),
+                "payload": payload.model_dump(mode="json"),
+            },
+            "payload": payload.model_dump(mode="json"),
+        }
+
+    @staticmethod
     def add_quote_line(
         db: Session, quote_id: str, payload: VendorQuoteLineCreate, vendor_id: str
     ) -> dict:
-        quote = _quote(db, quote_id, vendor_id)
+        # Quote-line writers lock the same parent row as submission confirmation.
+        # This prevents an edit from slipping between the locked stale-preview
+        # recheck and the status transition.
+        quote = _quote(db, quote_id, vendor_id, for_update=True)
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not editable")
         line = ProjectQuoteLineItem(
@@ -256,7 +467,7 @@ class VendorPortalOperations:
         payload: VendorQuoteLineUpdate,
         vendor_id: str,
     ) -> dict:
-        quote = _quote(db, quote_id, vendor_id)
+        quote = _quote(db, quote_id, vendor_id, for_update=True)
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not editable")
         line = next(
@@ -280,7 +491,7 @@ class VendorPortalOperations:
     def delete_quote_line(
         db: Session, quote_id: str, line_id: str, vendor_id: str
     ) -> dict:
-        quote = _quote(db, quote_id, vendor_id)
+        quote = _quote(db, quote_id, vendor_id, for_update=True)
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not editable")
         line = next(
@@ -299,8 +510,14 @@ class VendorPortalOperations:
         return _serialize_quote(_quote(db, quote_id, vendor_id))
 
     @staticmethod
-    def submit_quote(db: Session, quote_id: str, vendor_id: str) -> dict:
-        quote = _quote(db, quote_id, vendor_id)
+    def submit_quote(
+        db: Session,
+        quote_id: str,
+        vendor_id: str,
+        *,
+        commit: bool = True,
+    ) -> dict:
+        quote = _quote(db, quote_id, vendor_id, for_update=True)
         if quote.status not in _EDITABLE_QUOTES:
             raise HTTPException(status_code=409, detail="Quote is not submittable")
         active = [item for item in quote.line_items if item.is_active]
@@ -313,7 +530,10 @@ class VendorPortalOperations:
         quote.submitted_at = _now()
         if quote.project.status == InstallationProjectStatus.open_for_bidding.value:
             quote.project.status = InstallationProjectStatus.quoted.value
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return _serialize_quote(_quote(db, quote_id, vendor_id))
 
     @staticmethod
@@ -355,6 +575,180 @@ class VendorPortalOperations:
             quote.status = ProjectQuoteStatus.revision_requested.value
         db.commit()
         return _serialize_quote(_quote(db, quote_id))
+
+    @staticmethod
+    def preview_project_lifecycle(
+        db: Session,
+        project_id: str,
+        *,
+        vendor_id: str,
+        action: str,
+        for_update: bool = False,
+    ) -> dict:
+        """Return the owner-validated impact and stale-check state."""
+
+        project = _lifecycle_project(db, project_id, for_update=for_update)
+        if project.assigned_vendor_id != coerce_uuid(vendor_id):
+            raise VendorProjectLifecycleError(
+                "not_assigned", "Project is not assigned to this vendor"
+            )
+        transitions = {
+            "start": (
+                InstallationProjectStatus.approved.value,
+                InstallationProjectStatus.in_progress.value,
+                "Start field work",
+                "Records that the assigned vendor has begun field work",
+            ),
+            "complete": (
+                InstallationProjectStatus.in_progress.value,
+                InstallationProjectStatus.completed.value,
+                "Mark field work complete",
+                "Records vendor completion for Dotmac review and verification",
+            ),
+        }
+        if action not in transitions:
+            raise VendorProjectLifecycleError(
+                "unsupported_action", "Unsupported lifecycle action"
+            )
+        expected, target, title, summary = transitions[action]
+        if project.status != expected:
+            label = "approved" if action == "start" else "in-progress"
+            verb = "started" if action == "start" else "completed"
+            raise VendorProjectLifecycleError(
+                "invalid_transition", f"Only an {label} project can be {verb}"
+            )
+        native_project = project.project
+        return {
+            "submission_type": f"project_{action}",
+            "project_id": str(project.id),
+            "target_id": str(project.id),
+            "title": title,
+            "summary": summary,
+            "details": [
+                ("Project", getattr(native_project, "name", None) or str(project.id)),
+                ("Current state", expected.replace("_", " ").title()),
+                ("Result", target.replace("_", " ").title()),
+                ("Affected", "1 installation project"),
+            ],
+            "state": {
+                "project_id": str(project.id),
+                "vendor_id": str(project.assigned_vendor_id),
+                "from_status": project.status,
+                "to_status": target,
+                "updated_at": project.updated_at,
+            },
+        }
+
+    @staticmethod
+    def transition_project(
+        db: Session,
+        project_id: str,
+        *,
+        vendor_id: str,
+        action: str,
+        actor_id: str,
+        actor_type: str,
+        commit: bool = True,
+    ) -> dict:
+        """Own one locked transition plus actor/time/event evidence."""
+
+        if not str(actor_id or "").strip() or not str(actor_type or "").strip():
+            raise VendorProjectLifecycleError(
+                "actor_required", "Lifecycle transition actor is required"
+            )
+
+        preview = VendorPortalOperations.preview_project_lifecycle(
+            db,
+            project_id,
+            vendor_id=vendor_id,
+            action=action,
+            for_update=True,
+        )
+        project = _lifecycle_project(db, project_id, for_update=True)
+        previous = str(preview["state"]["from_status"])
+        target = str(preview["state"]["to_status"])
+        event_type = (
+            EventType.vendor_project_started
+            if action == "start"
+            else EventType.vendor_project_completed
+        )
+        project.status = target
+        domain_event = emit_event(
+            db,
+            event_type,
+            {
+                "project_id": str(project.id),
+                "native_project_id": str(project.project_id),
+                "vendor_id": str(project.assigned_vendor_id),
+                "from_status": previous,
+                "to_status": target,
+                "actor_type": str(actor_type),
+                "actor_id": str(actor_id),
+            },
+            actor=str(actor_id),
+            subscriber_id=project.subscriber_id,
+            account_id=project.subscriber_id,
+        )
+        evidence = InstallationProjectLifecycleEvent(
+            event_id=domain_event.event_id,
+            project_id=project.id,
+            vendor_id=project.assigned_vendor_id,
+            event_type=domain_event.event_type.value,
+            from_status=previous,
+            to_status=target,
+            actor_type=str(actor_type),
+            actor_id=str(actor_id),
+            occurred_at=domain_event.occurred_at,
+        )
+        db.add(evidence)
+        db.flush()
+        if commit:
+            db.commit()
+        result = _serialize_project(project, viewer_vendor_id=vendor_id)
+        result["lifecycle_event_id"] = str(evidence.id)
+        result["domain_event_id"] = str(domain_event.event_id)
+        result["transitioned_at"] = domain_event.occurred_at
+        return result
+
+    @staticmethod
+    def start_project(
+        db: Session,
+        project_id: str,
+        *,
+        vendor_id: str,
+        actor_id: str,
+        actor_type: str = "vendor_user",
+        commit: bool = True,
+    ) -> dict:
+        return VendorPortalOperations.transition_project(
+            db,
+            project_id,
+            vendor_id=vendor_id,
+            action="start",
+            actor_id=actor_id,
+            actor_type=actor_type,
+            commit=commit,
+        )
+
+    @staticmethod
+    def complete_project(
+        db: Session,
+        project_id: str,
+        *,
+        vendor_id: str,
+        actor_id: str,
+        actor_type: str = "vendor_user",
+        commit: bool = True,
+    ) -> dict:
+        return VendorPortalOperations.transition_project(
+            db,
+            project_id,
+            vendor_id=vendor_id,
+            action="complete",
+            actor_id=actor_id,
+            actor_type=actor_type,
+            commit=commit,
+        )
 
     @staticmethod
     def create_route_revision(
@@ -403,9 +797,14 @@ class VendorPortalOperations:
 
     @staticmethod
     def submit_as_built(
-        db: Session, payload: VendorAsBuiltCreate, vendor_id: str, user_id: str
+        db: Session,
+        payload: VendorAsBuiltCreate,
+        vendor_id: str,
+        user_id: str,
+        *,
+        commit: bool = True,
     ) -> dict:
-        project = _project(db, str(payload.project_id))
+        project = _project(db, str(payload.project_id), for_update=True)
         if str(project.assigned_vendor_id) != str(vendor_id):
             raise HTTPException(
                 status_code=403, detail="Project is assigned to another vendor"
@@ -431,7 +830,10 @@ class VendorPortalOperations:
                 )
             )
         db.add(row)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return {
             "id": row.id,
             "project_id": row.project_id,

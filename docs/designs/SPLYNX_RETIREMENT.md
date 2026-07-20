@@ -1,11 +1,14 @@
 # Splynx retirement decision and cutover
 
-Status: approved retirement, 2026-07-17. Tier 1 (import archive) and Tier 2
-(legacy-BSS id mapping, the dashboard sync tile, and the billing-ledger
-reconciliation view) are both retired here.
+Status: corrected partial retirement, 2026-07-19. The runtime import/archive
+paths, dashboard sync context, and billing-ledger reconciliation view remain
+retired. The database cutover now removes only the three tables proven empty
+and preserves the three populated evidence tables pending a separate retention
+decision.
 
-`splynx_billing_transactions` and `Subscriber.splynx_customer_id` are
-deliberately **preserved** — see the two carve-outs below.
+`splynx_archived_tickets`, `splynx_archived_ticket_messages`,
+`splynx_id_mappings`, `splynx_billing_transactions`, and
+`Subscriber.splynx_customer_id` are deliberately **preserved**.
 
 ## Authority change
 
@@ -15,52 +18,44 @@ the migration completed, and the `app.services.migrations`,
 `app.services.splynx_customer_sync`, and `app.tasks.splynx_sync` runtimes were
 already removed.
 
-What remains is import residue: read-only archive models whose tables were
-never populated, a portal-onboarding step counter carried over from the Splynx
-portal, and a legacy-BSS id-mapping path. They have no owner, no writer, and no
-reader.
+What remains includes both empty import residue and populated historical
+evidence. The runtime models and writers stay retired, but physical database
+retention follows the live evidence rather than the removed code surface.
 
-This revision removes them.
+Revision 330 removes only the empty archived quote tables and the empty
+portal-onboarding step counter.
 
-### The import never ran here
+### Corrected production evidence
 
-Production `pg_stat_user_tables` reports `n_tup_ins = 0` for
-`splynx_billing_transactions`, `splynx_customers`, and `splynx_id_mappings`:
-not "empty now", but **never written, not once**. The Splynx import was never
-executed against this database. That is the evidence base for dropping rather
-than preserving — there is no history here to lose, and there never was.
+The original retirement decision incorrectly treated `pg_stat_user_tables`
+statistics as proof that the import had never run. Those statistics are not a
+retention authority: they can be reset and are contradicted by current row
+counts and the checked-in July 12 billing-audit evidence.
 
-(It does *not* follow that the Splynx backups themselves are gone. See the
-`splynx_billing_transactions` carve-out.)
+Read-only production aggregates on 2026-07-19 found:
+
+| Table | Rows | Decision |
+|---|---:|---|
+| `splynx_archived_ticket_messages` | 66,314 | preserve historical support evidence |
+| `splynx_archived_tickets` | 14,229 | preserve historical support evidence |
+| `splynx_id_mappings` | 240,027 | preserve migration provenance pending review |
+| `splynx_archived_quote_items` | 0 | retire |
+| `splynx_archived_quotes` | 0 | retire |
+| `portal_onboarding_states` | 0 | retire |
+
+The ticket counts also match
+`docs/audits/BILLING_ALIGNMENT_RUN_2026-07-12.md`, which already documented
+their presence. The earlier zero-row claim is withdrawn.
 
 ## Preserved evidence
 
-**None — and that is the material difference from
-[VAS_RETIREMENT](VAS_RETIREMENT.md).**
+The populated ticket archive and ID mapping tables are retained as database
+evidence, even though their runtime models remain retired. Retention does not
+restore Splynx as an authority or write path. It prevents a code-cleanup change
+from silently becoming a historical-data deletion.
 
-VAS retained eight tables because they held real, immutable financial history.
-Every Splynx table holds **zero rows** in production, verified read-only on
-2026-07-17 against `selfcare.dotmac.io` (94.72.107.76, container
-`dotmac_pg_local`):
-
-| Table group | Rows |
-|---|---|
-| `splynx_archived_{tickets,ticket_messages,quotes,quote_items}` | 0 |
-| `splynx_id_mappings` | 0 |
-| `splynx_{customers,customer_info,customer_billing,customers_values,accounting_customers}` | 0 |
-| `splynx_{invoices,invoice_items,payments,billing_transactions,mrr_statistics}` | 0 |
-| `splynx_{tickets,ticket_messages,quotes,quotes_items}` | 0 |
-| `splynx_{routers,services_internet,tariffs_internet,ipv4_networks_ip,locations}` | 0 |
-| `splynx_{monitoring,monitoring_log,statistics,traffic_counter,inventory_items,admins,partners}` | 0 |
-| `portal_onboarding_states` | 0 |
-
-There is no history to preserve, so keeping the tables preserves nothing and
-costs a permanently misleading schema: four `splynx_archived_*` tables that
-imply an archive exists. Dropping is the honest outcome.
-
-The emptiness is not assumed at deploy time. The cutover gate re-checks it
-against the live database (below), so an environment that *does* hold rows
-fails loudly instead of losing them.
+The three approved retirement targets are re-counted at deploy time. Any
+non-empty target fails loudly instead of losing data.
 
 ## The `splynx_customer_id` carve-out — do not remove
 
@@ -84,11 +79,9 @@ positively so that mistake fails a test rather than a filing.
 
 ## Cutover gate
 
-Revision `330_retire_splynx_import_archive` refuses to drop a table that holds
-rows. It counts every target table first and raises with a per-table breakdown
-if any is non-empty, listing what it found. Production is empty today; the gate
-exists for every other environment and for the possibility that the fact
-changes between this decision and the deploy.
+Revision `330_retire_splynx_import_archive` counts only the three approved
+retirement targets and raises with a per-table breakdown if any is non-empty.
+The populated ticket and mapping tables are explicitly outside the drop set.
 
 Do not bypass the gate by truncating. If a table has rows, someone imported
 data this decision did not account for — re-open the decision.
@@ -99,14 +92,10 @@ where the models (and therefore the tables) never existed.
 
 ## Fallback
 
-`downgrade()` recreates the four archive tables, `portal_onboarding_states`, and
-`splynx_id_mappings` (with its `splynxentitytype` enum) empty. That is a
-faithful rollback precisely because there is nothing to restore: the tables were
-empty when dropped. A code rollback to a release that still registers the models
-will therefore find the schema it expects.
-
-`splynx_id_mappings` owned a native PostgreSQL enum type, so `upgrade()` drops
-`splynxentitytype` with its only user and `downgrade()` recreates it.
+`downgrade()` recreates only `splynx_archived_quotes`,
+`splynx_archived_quote_items`, and `portal_onboarding_states` empty. The three
+preserved tables and the `splynxentitytype` used by `splynx_id_mappings` are
+never touched in either direction.
 
 ## Tier 2 — retired
 
@@ -124,13 +113,15 @@ by executing a full `import app.main` and inspecting SQLAlchemy's registry:
 **zero** `before_flush` listeners. The module could not run, and never did.
 
 Removed with it: `Subscriber._legacy_bss_customer_id` (the staging `ClassVar`
-its only reader used), `app/services/splynx_mapping.py`,
-`app/models/splynx_mapping.py`, and the `splynx_id_mappings` table.
+its only reader used), `app/services/splynx_mapping.py`, and
+`app/models/splynx_mapping.py`. The populated `splynx_id_mappings` table stays
+as database evidence without a runtime model or writer.
 
 The redundancy noted in the earlier assessment resolves here: `splynx_customer_id`
-(a column, 99.8% populated) and `splynx_id_mappings` (a table, never written)
-both modelled "this subscriber's id in the legacy BSS". Two mechanisms, one
-fact — the column won, and the table is now gone.
+(a column, 99.8% populated) and `splynx_id_mappings` (a populated historical
+mapping table) both modelled "this subscriber's id in the legacy BSS". The
+column remains the only live application path; the table remains retained
+evidence and is not a parallel decision system.
 
 ### `external_bss_adapter` — kept, splynx methods stripped
 
@@ -191,16 +182,20 @@ references them.
 They are not dropped here. Dropping tables the ORM never knew is a different
 risk class from retiring models, they may be the very tables the retained-backup
 workflow restores into, and it deserves its own decision rather than riding
-along with a code retirement.
+along with a code retirement. The three newly preserved tables follow the same
+evidence-retention boundary until a reviewed disposition names their owner and
+proves deletion safe.
 
 ## Enforcement
 
 `tests/architecture/test_splynx_retirement.py` keeps the removed model and
 service paths absent, keeps their imports and symbols out of `app/` and
-`scripts/`, keeps the retired tables out of the model registry, and positively
-asserts **both** carve-outs — `splynx_customer_id` and
-`splynx_billing_transactions` — so a future sweep that reaches for either fails
-a test rather than a regulatory filing or a money audit.
+`scripts/`, and keeps the retired runtime models out of the registry.
+`tests/test_splynx_retirement_migration.py` independently fixes the physical
+database boundary: the three populated evidence tables must remain outside the
+drop set, while only the three empty targets may be retired. The existing
+`splynx_customer_id` and `splynx_billing_transactions` carve-outs remain
+positively asserted.
 
 The import-linter contract "Application code must not import retired Splynx
 migration runtime" (`pyproject.toml`) forbids `app.services.migrations`,

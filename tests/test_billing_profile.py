@@ -71,6 +71,25 @@ def test_profile_falls_back_to_account_without_collectible_subscriptions(
     assert profile.account_subscription_mismatch is False
 
 
+def test_profile_fails_closed_for_legacy_missing_account_mode(
+    db_session, subscriber_account, subscription
+):
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+
+    # Current schema makes this column NOT NULL. Keep the resolver defensive
+    # for a legacy/drifted database row without weakening that DB invariant.
+    subscriber_account.billing_mode = None
+    with db_session.no_autoflush:
+        profile = resolve_billing_profile(db_session, subscriber_account)
+
+    assert profile.is_valid is False
+    assert profile.automation_safe is False
+    assert profile.effective_mode == BillingMode.prepaid
+    assert profile.invalid_reason == "account_billing_mode_missing"
+
+
 def test_batch_profiles_match_single_account_resolution(
     db_session, subscriber_account, subscription
 ):

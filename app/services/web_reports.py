@@ -5,22 +5,50 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from urllib.parse import urlencode
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import PaymentStatus
 from app.models.subscriber import AccountStatus, Subscriber, SubscriberCategory
+from app.schemas.status_presentation import StatusTone
 from app.services import billing as billing_service
 from app.services import ip_pool_utilization_snapshot as ip_pool_snapshot_service
 from app.services import network as network_service
 from app.services import subscriber as subscriber_service
 from app.services import subscriber_growth
 from app.services import usage_summary as usage_summary_service
+from app.services.ui_contracts import Kpi, StateValue
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class RecentSubscriberReportRow:
+    """Immutable presentation projection for the recent-signups panel."""
+
+    name: str
+    created_at: datetime | None
+    derived_status: AccountStatus
+
+
+def _customers_report_cohort_url(
+    *,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> str:
+    """Drill-down to the customer report narrowed to exactly the cohort a KPI
+    counts. Mirrors the ledger idiom: a status tile sets ``status`` while the
+    surrounding date filters travel with the link, so a headline and the list
+    it links to can never diverge (KPI-parity)."""
+    params = {"status": status, "date_from": date_from, "date_to": date_to}
+    query = urlencode({key: value for key, value in params.items() if value})
+    return "/admin/reports/customers" + (f"?{query}" if query else "")
 
 
 def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
@@ -203,34 +231,6 @@ def _date_range_values(
     return start, end, date_from or "", date_to or ""
 
 
-def _filter_subscribers_for_report(
-    subscribers: list[Subscriber],
-    *,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    status: str | None = None,
-) -> list[Subscriber]:
-    start, end, _, _ = _date_range_values(date_from=date_from, date_to=date_to)
-    status_filter = (status or "").strip().lower()
-    allowed_statuses = {item.value for item in AccountStatus}
-    if status_filter and status_filter not in allowed_statuses:
-        status_filter = ""
-
-    filtered: list[Subscriber] = []
-    for sub in subscribers:
-        derived_status = _derive_subscriber_status(sub)
-        sub.status = derived_status
-        if status_filter and derived_status.value != status_filter:
-            continue
-        created_at = subscriber_service.get_effective_created_at(sub)
-        if start and (created_at is None or created_at < start):
-            continue
-        if end and (created_at is None or created_at >= end):
-            continue
-        filtered.append(sub)
-    return filtered
-
-
 def _load_report_subscribers(
     db: Session,
     *,
@@ -254,6 +254,72 @@ def _load_report_subscribers(
     if status_filter in {item.value for item in AccountStatus}:
         stmt = stmt.where(Subscriber.status == AccountStatus(status_filter))
     return list(db.scalars(stmt).all())
+
+
+def _report_new_since_count(
+    db: Session,
+    *,
+    since_iso: str,
+    date_to: str | None,
+    status: str | None,
+) -> int:
+    """Count subscribers whose drill-down cohort the "New This Month" tile links
+    to: raw ``Subscriber.created_at`` within [since, date_to] under the page
+    status filter — the exact same rule ``_load_report_subscribers`` applies.
+
+    Counting on raw ``created_at`` (not the effective/source signup date) and on
+    ``since`` (not the page ``date_from``) keeps the tile value equal to the list
+    it links to, including for imported subscribers whose source signup month
+    differs from their persisted ``created_at`` (KPI-parity)."""
+    start, end, _, _ = _date_range_values(date_from=since_iso, date_to=date_to)
+    stmt = select(func.count(Subscriber.id)).where(
+        subscriber_service.visible_subscriber_clause()
+    )
+    if start is not None:
+        stmt = stmt.where(Subscriber.created_at >= start)
+    if end is not None:
+        stmt = stmt.where(Subscriber.created_at < end)
+    status_filter = (status or "").strip().lower()
+    if status_filter in {item.value for item in AccountStatus}:
+        stmt = stmt.where(Subscriber.status == AccountStatus(status_filter))
+    return int(db.scalar(stmt) or 0)
+
+
+def _report_status_cohort_counts(
+    db: Session,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> tuple[int, dict[str, int]]:
+    """Grouped per-status counts for the customer-report cohort within the date
+    window, INDEPENDENT of any page ``status`` filter.
+
+    A KPI tile is a fixed overview number: it must count exactly the rows its
+    ``cohort_url`` links to, not the page-filtered result set below it. The
+    ``status`` drill-down (``_load_report_subscribers``) filters strictly on the
+    persisted ``Subscriber.status``, so these counts use the same strict rule —
+    the ``total`` tile counts every visible row (any status, including NULL),
+    each per-status tile counts only its own persisted status. This keeps a
+    headline value equal to the list it links to (KPI-parity)."""
+    start, end, _, _ = _date_range_values(date_from=date_from, date_to=date_to)
+    stmt = select(Subscriber.status, func.count(Subscriber.id)).where(
+        subscriber_service.visible_subscriber_clause()
+    )
+    if start is not None:
+        stmt = stmt.where(Subscriber.created_at >= start)
+    if end is not None:
+        stmt = stmt.where(Subscriber.created_at < end)
+    stmt = stmt.group_by(Subscriber.status)
+
+    total = 0
+    by_status: dict[str, int] = {}
+    for status_value, count in db.execute(stmt).all():
+        count = int(count or 0)
+        total += count
+        if status_value is not None:
+            key = getattr(status_value, "value", str(status_value))
+            by_status[key] = by_status.get(key, 0) + count
+    return total, by_status
 
 
 def _customer_report_usage_window(
@@ -487,7 +553,6 @@ def get_subscribers_report_data(
     suspended_count = 0
     for sub in all_subscribers:
         derived_status = _derive_subscriber_status(sub)
-        sub.status = derived_status
         status_name = derived_status.value if derived_status else "unknown"
         status_breakdown[status_name] = status_breakdown.get(status_name, 0) + 1
         if derived_status == AccountStatus.active:
@@ -497,26 +562,82 @@ def get_subscribers_report_data(
     active_rate = (
         (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
     )
-    recent_subscribers = sorted(
-        all_subscribers,
-        key=lambda x: (
-            subscriber_service.get_effective_created_at(x)
-            or datetime.min.replace(tzinfo=UTC)
-        ),
-        reverse=True,
-    )[:10]
+    recent_subscribers = [
+        RecentSubscriberReportRow(
+            name=sub.name,
+            created_at=sub.created_at,
+            derived_status=_derive_subscriber_status(sub),
+        )
+        for sub in sorted(
+            all_subscribers,
+            key=lambda x: (
+                subscriber_service.get_effective_created_at(x)
+                or datetime.min.replace(tzinfo=UTC)
+            ),
+            reverse=True,
+        )[:10]
+    ]
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    new_this_month = len(
-        [
-            sub
-            for sub in all_subscribers
-            if (created_at := subscriber_service.get_effective_created_at(sub))
-            is not None
-            and created_at >= month_start
-        ]
+    month_start_iso = month_start.date().isoformat()
+    new_this_month = _report_new_since_count(
+        db, since_iso=month_start_iso, date_to=date_to, status=status
     )
+    # Headline tiles as KPI contracts. Each status tile overrides only the
+    # status dimension and preserves the active date window; "new this month"
+    # overrides the start-date dimension and keeps the current status filter.
+    #
+    # KPI-parity: a tile value must count exactly the rows its cohort_url links
+    # to, regardless of the page status filter. The status-narrowed
+    # ``all_subscribers`` set drives the table and page metrics below, but the
+    # overview tiles count their own cohort so "Total" never shrinks to the
+    # active-only rows and "Suspended" never reads 0 while linking to a
+    # non-empty suspended list. These grouped counts are computed independent of
+    # the page status filter.
+    cohort_total, cohort_by_status = _report_status_cohort_counts(
+        db, date_from=date_from, date_to=date_to
+    )
+    cohort_active = cohort_by_status.get(AccountStatus.active.value, 0)
+    cohort_suspended = cohort_by_status.get(AccountStatus.suspended.value, 0)
+    subscriber_kpis = {
+        "total": Kpi(
+            label="Total Customers",
+            value=StateValue.present(cohort_total),
+            cohort_url=_customers_report_cohort_url(
+                date_from=date_from, date_to=date_to
+            ),
+        ),
+        "new_this_month": Kpi(
+            label="New This Month",
+            value=StateValue.present(new_this_month),
+            cohort_url=_customers_report_cohort_url(
+                status=status, date_from=month_start_iso, date_to=date_to
+            ),
+            tone=StatusTone.positive,
+        ),
+        "active": Kpi(
+            label="Active",
+            value=StateValue.present(cohort_active),
+            cohort_url=_customers_report_cohort_url(
+                status=AccountStatus.active.value,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            tone=StatusTone.info,
+        ),
+        "suspended": Kpi(
+            label="Suspended",
+            value=StateValue.present(cohort_suspended),
+            cohort_url=_customers_report_cohort_url(
+                status=AccountStatus.suspended.value,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            tone=StatusTone.warning,
+        ),
+    }
     return {
+        "subscriber_kpis": subscriber_kpis,
         "total_subscribers": total_subscribers,
         "subscriber_growth": _subscriber_growth_percent(db),
         "new_this_month": new_this_month,
@@ -627,13 +748,86 @@ def get_churn_report_data(db: Session) -> dict:
     """
     summary = subscriber_growth.churn_summary(db)
     total_subscribers = summary["total"]
-    cancelled_count = summary["cancelled_count"]
     at_risk_count = summary["at_risk_count"]
+    # KPI-parity: the Cancellations tile drills into the strict
+    # ``status=canceled`` customer cohort, and that list (_load_report_subscribers)
+    # filters strictly on ``Subscriber.status``.
+    # churn_summary()'s ``cancelled_count`` uses the wider derived-cancelled rule
+    # (``status == canceled`` OR ``status IS NULL AND not is_active``), so it can
+    # exceed the drill-down. Count with the same strict rule the linked list
+    # uses so the headline value equals the list it links to.
+    cancelled_count = int(
+        db.scalar(
+            select(func.count(Subscriber.id)).where(
+                subscriber_service.visible_subscriber_clause(),
+                Subscriber.status == AccountStatus.canceled,
+            )
+        )
+        or 0
+    )
+    active_count = int(
+        db.scalar(
+            select(func.count(Subscriber.id)).where(
+                subscriber_service.visible_subscriber_clause(),
+                Subscriber.status == AccountStatus.active,
+            )
+        )
+        or 0
+    )
     churn_rate = (
         (cancelled_count / total_subscribers * 100) if total_subscribers > 0 else 0
     )
-    retention_rate = 100 - churn_rate
+    # Retention is the strict active share, not the complement of cancellations
+    # (which also includes suspended and other non-cancelled states).
+    retention_rate = (
+        (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
+    )
+    # Tone is owned by the report, not re-derived in the template: churn worsens
+    # as it rises, so its semantic signal flips at the same thresholds the
+    # dashboard reads. Count tiles drill into exact customer cohorts; rate tiles
+    # return to the overview showing the identical aggregate (KPI-parity).
+    churn_tone = (
+        StatusTone.negative
+        if churn_rate > 10
+        else StatusTone.warning
+        if churn_rate > 5
+        else StatusTone.positive
+    )
+    churn_kpis = {
+        "churn_rate": Kpi(
+            label="Churn Rate",
+            value=StateValue.present(f"{churn_rate:.1f}%"),
+            # A rate is an aggregate over the full population, not the
+            # cancelled numerator alone. Drill back to the overview that shows
+            # the identical aggregate rather than a mismatched entity list.
+            cohort_url="/admin/reports/churn#churn-summary",
+            tone=churn_tone,
+        ),
+        "cancelled": Kpi(
+            label="Cancellations",
+            value=StateValue.present(cancelled_count),
+            cohort_url=_customers_report_cohort_url(
+                status=AccountStatus.canceled.value
+            ),
+            tone=StatusTone.negative,
+        ),
+        "at_risk": Kpi(
+            label="At Risk",
+            value=StateValue.present(at_risk_count),
+            cohort_url=_customers_report_cohort_url(
+                status=AccountStatus.suspended.value
+            ),
+            tone=StatusTone.warning,
+        ),
+        "retention_rate": Kpi(
+            label="Retention Rate",
+            value=StateValue.present(f"{retention_rate:.1f}%"),
+            cohort_url="/admin/reports/churn#churn-summary",
+            tone=StatusTone.positive,
+        ),
+    }
     return {
+        "churn_kpis": churn_kpis,
         "churn_rate": churn_rate,
         "retention_rate": retention_rate,
         "cancelled_count": cancelled_count,
@@ -654,8 +848,6 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
         limit=5000,
         offset=0,
     )
-    for sub in all_subscribers:
-        sub.status = _derive_subscriber_status(sub)
     if days:
         cutoff = datetime.now(UTC) - timedelta(days=days)
         all_subscribers = [
@@ -666,11 +858,18 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
             and updated_at >= cutoff
         ]
     total_subscribers = len(all_subscribers)
+    derived_status_by_id = {
+        sub.id: _derive_subscriber_status(sub) for sub in all_subscribers
+    }
     cancelled_subscribers = [
-        sub for sub in all_subscribers if sub.status == AccountStatus.canceled
+        sub
+        for sub in all_subscribers
+        if derived_status_by_id[sub.id] == AccountStatus.canceled
     ]
     at_risk_subscribers = [
-        sub for sub in all_subscribers if sub.status == AccountStatus.suspended
+        sub
+        for sub in all_subscribers
+        if derived_status_by_id[sub.id] == AccountStatus.suspended
     ]
     churn_rate = (
         (len(cancelled_subscribers) / total_subscribers * 100)
@@ -701,7 +900,7 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
             [
                 str(sub.id),
                 name,
-                sub.status.value if sub.status else "",
+                derived_status_by_id[sub.id].value,
                 (
                     updated_at.isoformat()
                     if (updated_at := subscriber_service.get_effective_updated_at(sub))

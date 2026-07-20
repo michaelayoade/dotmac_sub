@@ -920,6 +920,32 @@ def test_replay_does_not_require_service_mapping_without_extensions(
     )
 
 
+def test_pre_handoff_subscription_without_source_service_fails_closed(
+    db_session, subscriber
+):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    subscription.splynx_service_id = None
+    subscription.created_at = datetime(2026, 5, 20, tzinfo=UTC)
+    subscription.start_at = datetime(2026, 5, 20, tzinfo=UTC)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    final_services = metadata.tables["audit_splynx_final_services"]
+    db_session.execute(final_services.delete())
+    db_session.commit()
+    try:
+        replay = _batch_reconstructed_positions(
+            db_session,
+            [subscriber.id],
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert (
+        "pre_handoff_service_without_source_evidence"
+        in replay.incomplete[str(subscriber.id)]
+    )
+
+
 def test_funding_export_replays_customer_position_adjustment(db_session, subscriber):
     subscription = _source_mapped_subscription(db_session, subscriber)
     metadata = _replay_tables(db_session, subscriber.id, subscription.id)
@@ -949,6 +975,32 @@ def test_funding_export_replays_customer_position_adjustment(db_session, subscri
     assert export.positions[account_id] == Decimal("550.00")
     diagnostics = export.diagnostics_payload()
     assert diagnostics["incomplete_reason_counts"] == {}
+
+
+def test_funding_export_excludes_postpaid_timer_repair_rows(db_session, subscriber):
+    subscription = _source_mapped_subscription(db_session, subscriber)
+    metadata = _replay_tables(db_session, subscriber.id, subscription.id)
+    repair_only = Subscriber(
+        first_name="Postpaid",
+        last_name="Timer Repair",
+        email="postpaid-timer-repair@example.com",
+        reseller_id=subscriber.reseller_id,
+        billing_mode=BillingMode.postpaid,
+        prepaid_low_balance_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    db_session.add(repair_only)
+    db_session.commit()
+    try:
+        export = build_prepaid_funding_snapshot(
+            db_session,
+            snapshot_at=datetime(2026, 7, 12, tzinfo=UTC),
+            source="splynx-final-plus-native-events:test",
+        )
+    finally:
+        metadata.drop_all(db_session.get_bind())
+
+    assert str(subscriber.id) in export.candidate_ids
+    assert str(repair_only.id) not in export.candidate_ids
 
 
 def test_replay_applies_customer_position_adjustment(db_session, subscriber):

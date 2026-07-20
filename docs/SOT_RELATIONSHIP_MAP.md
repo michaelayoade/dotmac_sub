@@ -22,10 +22,18 @@ The approved cross-Dotmac presentation contract is
    `operations:dispatch` covering list, create, update, and assign is a
    violation — split it into `:read`/`:write`/`:assign`). Event/timeline
    services own official history.
+   During the reports permission migration, persisted `reports:billing` and
+   `reports:network` API-key scopes are compatibility aliases for `:read` only;
+   they never authorize `:export`. Database grants are migrated to the granular
+   keys and the coarse permission rows are retired.
 4. UI page contracts own relevance, ordering, progressive disclosure,
    responsive depth, and interaction shape.
 5. Routes, templates, HTMX handlers, and mobile clients render the contract and
    submit commands; they do not derive business state, totals, or eligibility.
+6. `ui.projection_contracts` owns the transport-neutral `StateValue`, `Kpi`, and
+   `Action` shapes. Owners use them to distinguish unknown/stale/unavailable
+   values, bind every KPI to its exact cohort, and separate action tone from
+   eligibility and confirmation requirements.
 
 Rule: the UI is a projection boundary, not a new business source of truth. Web,
 API, exports, and mobile surfaces may present different depths for their task,
@@ -388,8 +396,12 @@ detailed security and delivery boundary is
    `financial.prepaid_funding_reconstruction`: one reviewed opening position at
    the final authority-cutover timestamp plus canonical native events strictly
    after that timestamp. There is no Splynx/legacy fallback or authority toggle.
-   The opening-position manifest is full-cohort, blocker-free, and Ed25519
-   sealed against an OpenBao-owned public trust reference before materialization.
+   The opening-position manifest covers the exact funding cohort and is
+   Ed25519 sealed against an OpenBao-owned public trust reference before
+   materialization. Its default is blocker-free. An explicitly approved partial
+   cutover binds verified rows and every quarantined account/reason under the
+   same signature; quarantined accounts receive neither a guessed balance nor a
+   money-based access consequence.
    A pre-cutover account without an approved opening balance fails closed; an
    account created after cutover starts at zero and accumulates native events.
    Customer statements and scalar funding previews use that reviewed position
@@ -403,7 +415,11 @@ detailed security and delivery boundary is
    derives settled value from invoice money, not a status label. The account
    balance KPI is collectible AR in one declared currency, never `min_balance`.
    Bulk callers use the same owner instead of reconstructing another balance
-   or looping the single-customer ledger reader.
+   or looping the single-customer ledger reader. Its customer billing headline
+   projection is one complete, explicit-currency cohort: total billed excludes
+   draft, void, pro-forma, inactive, and other-currency rows; outstanding and
+   overdue apply the same currency and non-pro-forma boundary. The portal route
+   and template neither sum invoices nor select a currency.
 8. `financial.access_resolution` owns financial suspension/restoration
    eligibility. For prepaid service, both directions compare the customer
    financial position with the single `financial.prepaid_threshold` in the
@@ -414,7 +430,7 @@ detailed security and delivery boundary is
    warn/suspend/restore plan consumed by both dry-run and execution. It consumes
    the funding decision from `financial.access_resolution`; it does not create
    another balance or threshold rule. Migration first materializes a named,
-   timestamped, reviewed full-cohort opening position through
+   timestamped, reviewed funding-cohort opening position through
    `financial.prepaid_funding_reconstruction` (for example, from the Splynx
    cutover position plus proven native events). Splynx exports and bank
    statements may close migration evidence, but their rows and narrations are
@@ -424,8 +440,11 @@ detailed security and delivery boundary is
    Activation does not reset an older low-balance timer. A resolved zero-day
    grace policy is actionable on the first eligible sweep; an explicit nonzero
    account or policy-set grace remains authoritative. Supplied snapshots are
-   complete-or-error for that cohort and never fill missing accounts from a
-   different balance source.
+   complete-or-error by default. A partial cutover must cryptographically
+   partition the exact funding cohort into materialized and quarantined IDs and
+   never fill either set from a different balance source. The broader repair
+   cohort may clear stale prepaid timers/locks on non-prepaid or service-less
+   accounts without creating a funding baseline.
    A reviewed never-paid decision may resolve only an exact hash-bound
    `source_service_without_paid_through_period` cohort: it preserves the source
    opening balance, makes the service due immediately, and is bound into the
@@ -459,7 +478,7 @@ detailed security and delivery boundary is
    and recurring revenue uses the MRR-countable basis. Report/web layers
    compose these reads and own presentation only.
 11. `financial.prepaid_enforcement_readiness` owns the activation prerequisite.
-   After the signed full-cohort opening position is materialized, it records one
+   After the signed funding-cohort opening position is materialized, it records one
    fresh plan from Sub's live currency-bound funding owner for the exact
    owner-selected cohort. It accepts no alternate funding input. Before the
    first sweep seals activation, any cohort, policy, live-funding decision, or
@@ -1101,6 +1120,14 @@ evidenced owner contract:
   subscription/account status.
   RADIUS and session-enforcement services project that lifecycle result; they
   do not decide whether debt, funding, a shield, or a case permits access.
+- Timer-state writer: `financial.prepaid_enforcement_state`
+  (`app.services.prepaid_enforcement_state`) exclusively arms and clears the
+  Subscriber low-balance and deactivation timestamps. The enforcement planner,
+  scheduled sweep, funded-restoration flow, and account lifecycle submit
+  prepared observations or cleanup requests; they do not assign the fields.
+  Disabled and canceled accounts clear obsolete timers in the lifecycle
+  transaction. The timer writer flushes but never commits and owns no funding,
+  grace, suspension, restoration, or eligibility decision.
 - Evidence boundary: every confirmed financial suspend, reject, throttle, or
   restore writes one `FinancialAccessConsequence` containing the exact locked
   preview fingerprint, idempotency key, separated receivable/prepaid/profile/
@@ -1133,6 +1160,12 @@ evidenced owner contract:
   affordability threshold. The archived Splynx mirror is migration evidence,
   never a runtime fallback. Reason-scoped repair follows the reason owner: an
   ``overdue`` lock is never judged by the prepaid affordability resolver.
+  Ledger projections require both `is_active` and `affects_customer_position`.
+  Those fields are deliberately orthogonal: `is_active` follows the source
+  artifact lifecycle, while `affects_customer_position` prevents structural,
+  cutover, and correction evidence from duplicating document or opening-baseline
+  value. Neither field may be inferred from or mechanically rewritten from the
+  other.
 - Transport boundary: `invoice.overdue` is observation only. Notifications,
   throttle, suspension, and rejection come from the configured dunning step.
   `payment.received` always asks the owner to reconcile and contains no local
@@ -1233,23 +1266,33 @@ network summary composition.
 7. `customer.usage_summary` owns customer usage windows, headline totals, and
    total provenance. An authoritative zero is a valid value, not a missing-data
    sentinel.
-8. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
+8. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
+   the reseller-scoped impact preview for deactivate, restore, and disable. It
+   evaluates current subscription state, active enforcement locks, duplicate-
+   login restore conflicts, account overrides, and accounts with no services,
+   then fingerprints that exact preview. The first POST renders a distinct
+   server-calculated confirmation page; the second carries the fingerprint and
+   an account-bound idempotency key. The owner reserves the key, rechecks after
+   locking, commits the lifecycle mutation and replay result once, and returns
+   the original result on retry. Lifecycle mutation is still delegated to
+   `access.subscription_lifecycle`.
+9. `subscriber.growth_reports` (`app/services/subscriber_growth.py`) owns the
    admin subscriber growth and churn report reads: monthly growth/churn series,
    month-over-month new counts, churn/at-risk summaries, status counts, and
    cumulative signups. The derived-cancelled rule (explicit `canceled`, or NULL
    status on an inactive row) lives here; report pages compose it and never
    re-derive lifecycle in Python.
-8. `customer.data_completeness`
+10. `customer.data_completeness`
    (`app/services/subscriber_data_completeness.py`) owns the purpose-specific
    requirements, derived completeness/revalidation state, capture backlog, and
    filing-readiness counts. It is read-only: it identifies the gap and never
    fills it.
-9. `customer.location_verification`
+11. `customer.location_verification`
    (`app/services/geocode_reconciler.py`) is the only writer of subscriber
    location verification-ledger facts and owns reconciliation of a captured GPS
    pin against claimed location. It writes only facts that agree; disagreement
    is flagged for a human and never auto-applied.
-10. `customer.location_capture` (`app/services/location_capture.py`) owns the
+12. `customer.location_capture` (`app/services/location_capture.py`) owns the
     default-off rollout controls, source authorization, prompt eligibility and
     snooze lifecycle, and orchestration of field-arrival, portal, and agent
     capture. Those adapters call this owner, which delegates adjudication and
@@ -1389,13 +1432,20 @@ will reject.
     declared, so no selection/bulk is declared. Each dispatch route is granularly
     gated (`operations:dispatch:read`/`:write`/`:assign`).
 
-15. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
+16. `ui.project_list_projection` (`app.services.web_projects`) declares the admin
     project list capabilities with `ui.list_contracts` — searchable name,
     status/type/priority/region filters, name/priority/created sort, pagination —
     and delegates the read to `projects_service.projects.list`
     (`operations.project_lifecycle`), which owns the canonical filtered/sorted
     query; the projection issues no query of its own. Gated by the existing
     granular `project:read`.
+
+17. `ui.referral_list_projection` (`app.services.web_referrals`) owns the admin
+    referral filter, stable sort, page/row projection, canonical URL, and KPI
+    cohort links. It depends on `ui.list_contracts`, `ui.projection_contracts`,
+    and `referrals.program`. The route redirects invalid or clamped request state
+    to the owner-provided URL; the template uses shared sortable-header,
+    pagination, page-size, and keyboard-visible row-action controls.
 
 Rule: filters and search are applied before pagination; every paginated sort has
 a unique tie-breaker. Web list state is encoded in URL query parameters so deep
@@ -1426,10 +1476,13 @@ rather than the legacy table-field registry.
    and filters. Search, filter, or page-size changes clear the selection.
 5. `app.services.web_customer_actions` resolves selected IDs or the explicit
    filtered query again at preview and execution. Mutations require the preview
-   count and exact-membership token in the confirmation request and fail with
-   HTTP 409 when the cohort has changed. Commands continue to re-check domain
-   state and return partial
-   outcomes or notification identifiers.
+   count and confirmation token in the confirmation request and fail with HTTP
+   409 when the cohort has changed. Customer activation/deactivation binds that
+   token to each selected account's observed active state and the requested
+   target; customer deletion also binds active/subscription eligibility, so a
+   newly eligible row cannot be deleted under a stale impact preview. Commands
+   continue to re-check domain state and return partial outcomes or notification
+   identifiers.
 6. `ui.invoice_bulk_action_projection` adopts the same interaction contract for
    invoice issue, send, void, mark-paid, PDF-generation, and export actions.
    `app.services.web_billing_invoice_bulk` remains the single eligibility and
@@ -1735,6 +1788,10 @@ in forms, or rotate key material directly.
    existing Inbox route to a canonical Party contact point. It validates the
    point, provider scope, target Party, and active contact relationship against
    `party.registry`, but does not let Party services mutate Inbox routing.
+   `team_inbox_read` and `team_inbox_operations.queue_metrics` also own the
+   exact open, needs-response, unassigned, muted, snoozed, and failed-outbound
+   cohorts. KPI links carry the matching server filter; resolved conversations
+   cannot leak into an open-derived drilldown.
 9. Campaign services own marketing audience, sequence, and content decisions.
    They apply `communications.eligibility` when building an audience, before
    enqueueing a send, and again through the marketing communication intent at
@@ -2337,6 +2394,44 @@ Dependency order:
    requirements, and completion transitions.
 7. `operations.project_lifecycle`: owns native project field/status mutations,
    project SLA synchronization, and lifecycle event/notification requests.
+8. `operations.vendor_project_lifecycle` (`app.services.vendor_portal_operations`)
+   is the only writer for vendor start/complete transitions on
+   `installation_projects`: `approved -> in_progress -> completed`. It locks
+   the project, rechecks the assigned vendor and current state, and atomically
+   appends `installation_project_lifecycle_events` evidence carrying the
+   authenticated actor type/id, transition time, previous/result state, vendor,
+   and durable event id. The same transaction stages the typed outbox events
+   `vendor_project.started` or `vendor_project.completed`. Cross-team consumers
+   may read that timeline or consume those events; they do not infer actor/time
+   from `updated_at` and do not write project status directly. Vendor routes,
+   confirmation handlers, templates, and future delivery integrations are thin
+   adapters around this owner. The owner raises transport-neutral
+   `VendorProjectLifecycleError` rejections; the confirmation/delivery adapter
+   alone maps them to HTTP responses. The same named owner also owns the
+   installation-project quote and as-built evidence lifecycles, including the
+   read-only impact snapshot used before submit; one implementation module is
+   therefore declared under one owner name. The vendor project-detail map reads
+   proposed and prior as-built geometry through
+   `app.services.vendor_routes_api.build_project_route_geojson`; its capture
+   controls render only from the owner's `as_built_action` projection and
+   serialize the existing `VendorAsBuiltCreate.geojson` contract rather than
+   writing route evidence from the template.
+9. `operations.vendor_purchase_invoices` owns vendor purchase-invoice state,
+   financial totals, submit eligibility, and the financial impact snapshot.
+   ERP owns accounts-payable settlement. The local
+   `erp_purchase_invoice_status` is currently only the ERP creation-response
+   snapshot; it is not a refreshed payment projection and must not be labelled
+   as "Paid" or "Awaiting payment" in Sub. Vendor payment visibility requires a
+   dedicated ERP read contract plus an idempotent Sub refresher that records
+   status and observation time before the portal may render it.
+10. `operations.vendor_submission_confirmation` (implemented by
+   `app.services.vendor_submission_proposals`) owns the short-lived signed
+   confirmation proposal, stale-preview comparison, idempotency reservation,
+   and replay result for lifecycle actions, quote, as-built, and
+   purchase-invoice submissions.
+   The proposal carries no decision authority: each domain owner locks and
+   rechecks its current facts, and the mutation plus idempotency result commit
+   once. Vendor web routes only request preview or confirmation.
 
 Rule: provisioning callers should resolve customer/network context once through
 the operations context service before running workflow steps. Step executors may

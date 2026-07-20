@@ -1,11 +1,13 @@
+import json
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from types import SimpleNamespace
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import and_, func, or_
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
 import app.services.auth_flow as auth_flow_service
@@ -22,6 +24,7 @@ from app.models.billing import (
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import EnforcementReason
+from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import (
     Reseller,
     ResellerUser,
@@ -29,6 +32,7 @@ from app.models.subscriber import (
     SubscriberStatus,
     UserType,
 )
+from app.schemas.status_presentation import StatusTone
 from app.services import catalog as catalog_service
 from app.services import customer_portal
 from app.services.account_lifecycle import (
@@ -37,6 +41,7 @@ from app.services.account_lifecycle import (
     compute_account_status,
     disable_subscription,
     get_active_locks,
+    reactivation_blocked_by_active_login,
     suspend_subscription,
     transition_subscription_status,
 )
@@ -57,6 +62,7 @@ from app.services.status_presentation import (
     payment_status_presentation,
 )
 from app.services.topology.connection_status import connection_status
+from app.services.ui_contracts import Action, Kpi, StateValue
 
 logger = logging.getLogger(__name__)
 
@@ -882,6 +888,238 @@ ACCOUNT_STATUS_FILTERS = ("overdue",) + tuple(
 )
 ACCOUNT_LIST_STATUS_OPTIONS = tuple(status.value for status in SubscriberStatus)
 RESELLER_ACCOUNT_STATUS_ACTIONS = ("deactivate", "restore", "disable")
+_RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX = "reseller_account_status"
+
+_RESELLER_RESTORABLE_STATUSES = {
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.blocked,
+    SubscriptionStatus.stopped,
+}
+_RESELLER_DEACTIVATABLE_STATUSES = {
+    SubscriptionStatus.active,
+    SubscriptionStatus.pending,
+    SubscriptionStatus.blocked,
+    SubscriptionStatus.stopped,
+}
+_RESELLER_TERMINAL_STATUSES = {
+    SubscriptionStatus.disabled,
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+    SubscriptionStatus.hidden,
+    SubscriptionStatus.archived,
+}
+
+
+def preview_customer_account_status_actions(
+    db: Session,
+    account: Subscriber,
+    subscriptions: list[Subscription] | None = None,
+) -> dict[str, dict]:
+    """Own reseller account-action eligibility and impact fingerprints.
+
+    The command path and page both call this projection. Active locks and
+    duplicate-login restore conflicts are source facts, so template status
+    strings can never overstate what an action will change.
+    """
+    subscriptions = (
+        subscriptions
+        if subscriptions is not None
+        else list(
+            db.query(Subscription)
+            .filter(Subscription.subscriber_id == account.id)
+            .order_by(Subscription.id.asc())
+            .all()
+        )
+    )
+    lock_snapshots: dict[str, list[dict[str, str]]] = {}
+    for subscription in subscriptions:
+        lock_snapshots[str(subscription.id)] = [
+            {"id": str(lock.id), "reason": lock.reason.value}
+            for lock in sorted(
+                get_active_locks(db, subscription_id=str(subscription.id)),
+                key=lambda row: str(row.id),
+            )
+        ]
+
+    def _affected(action: str) -> list[Subscription]:
+        if action == "deactivate":
+            return [
+                subscription
+                for subscription in subscriptions
+                if subscription.status in _RESELLER_DEACTIVATABLE_STATUSES
+                and not lock_snapshots[str(subscription.id)]
+            ]
+        if action == "restore":
+            return [
+                subscription
+                for subscription in subscriptions
+                if subscription.status in _RESELLER_RESTORABLE_STATUSES
+                and not reactivation_blocked_by_active_login(db, subscription)
+            ]
+        return [
+            subscription
+            for subscription in subscriptions
+            if subscription.status not in _RESELLER_TERMINAL_STATUSES
+        ]
+
+    account_targets = {
+        "deactivate": SubscriberStatus.blocked,
+        "restore": SubscriberStatus.active,
+        "disable": SubscriberStatus.disabled,
+    }
+    previews: dict[str, dict] = {}
+    for action in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        affected = _affected(action)
+        account_affected = False
+        if subscriptions:
+            account_affected = (
+                action == "restore" and account.lifecycle_override_status is not None
+            )
+        else:
+            account_affected = account.status != account_targets[action]
+        snapshot = {
+            "action": action,
+            "account_id": str(account.id),
+            "account_status": account.status.value if account.status else None,
+            "account_override": (
+                account.lifecycle_override_status.value
+                if account.lifecycle_override_status
+                else None
+            ),
+            "account_affected": account_affected,
+            "subscriptions": [
+                {
+                    "id": str(subscription.id),
+                    "status": subscription.status.value,
+                    "locks": lock_snapshots[str(subscription.id)],
+                }
+                for subscription in sorted(subscriptions, key=lambda row: str(row.id))
+            ],
+            "affected_ids": sorted(str(subscription.id) for subscription in affected),
+        }
+        previews[action] = {
+            "allowed": bool(affected or account_affected),
+            "affected": len(affected),
+            "account_affected": account_affected,
+            "fingerprint": sha256(
+                json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        }
+    return previews
+
+
+# Display labels/tones/blocked-reasons for the three account status actions. The
+# raw preview dict above stays the command-path contract (it carries the
+# fingerprint the confirm flow re-checks); this maps its eligibility into the
+# shared Action contract so the template renders allowed/reason from the owner
+# instead of re-deriving a button state from the account status string.
+_ACCOUNT_STATUS_ACTION_LABELS = {
+    "restore": "Restore account",
+    "deactivate": "Deactivate account",
+    "disable": "Disable account",
+}
+_ACCOUNT_STATUS_ACTION_TONES = {
+    "restore": StatusTone.positive,
+    "deactivate": StatusTone.warning,
+    "disable": StatusTone.negative,
+}
+_ACCOUNT_STATUS_BLOCKED_REASONS = {
+    "restore": "No deactivated services are eligible to restore.",
+    "deactivate": "No active services are eligible to deactivate.",
+    "disable": "No services are eligible to disable.",
+}
+
+
+def account_status_action_contracts(
+    previews: dict[str, dict],
+) -> dict[str, Action]:
+    """Project ``preview_customer_account_status_actions`` eligibility into Action.
+
+    Reseller portal pages are session-scoped, so cohort/preview URLs carry no
+    reseller id; the confirm step stays a CSRF POST, so no ``preview_url`` is set
+    here and the fingerprint keeps flowing through the raw preview dict.
+    """
+    contracts: dict[str, Action] = {}
+    for action in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        preview = previews.get(action) or {}
+        allowed = bool(preview.get("allowed"))
+        contracts[action] = Action(
+            key=action,
+            label=_ACCOUNT_STATUS_ACTION_LABELS[action],
+            allowed=allowed,
+            reason=None if allowed else _ACCOUNT_STATUS_BLOCKED_REASONS[action],
+            affected=int(preview.get("affected", 0) or 0),
+            tone=_ACCOUNT_STATUS_ACTION_TONES[action],
+        )
+    return contracts
+
+
+def preview_customer_account_status_confirmation(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    action: str,
+    *,
+    expected_preview_fingerprint: str,
+) -> dict | None:
+    """Return the server-owned second-step confirmation for one status action."""
+    normalized_action = (action or "").strip().lower()
+    if normalized_action not in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        raise ValueError("Unsupported account status action")
+    account = _get_customer_account(db, reseller_id, account_id)
+    if account is None:
+        return None
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == account.id)
+        .order_by(Subscription.id.asc())
+        .all()
+    )
+    preview = preview_customer_account_status_actions(db, account, subscriptions)[
+        normalized_action
+    ]
+    if not secrets.compare_digest(
+        preview["fingerprint"], (expected_preview_fingerprint or "").strip()
+    ):
+        raise ValueError(
+            "Account status changed after preview; review the current impact and try again"
+        )
+    if not preview["allowed"]:
+        raise ValueError("This account status action would not change the account")
+
+    labels = {
+        "deactivate": "Deactivate account",
+        "restore": "Restore account",
+        "disable": "Disable account",
+    }
+    consequences = {
+        "deactivate": (
+            "Eligible services will be suspended through the canonical access "
+            "lifecycle. Services with active enforcement locks remain unchanged."
+        ),
+        "restore": (
+            "Eligible services will be restored only where billing, enforcement, "
+            "and duplicate-login policy allow it."
+        ),
+        "disable": (
+            "Eligible services will be disabled and the account may leave the "
+            "default reseller account list."
+        ),
+    }
+    total_services = len(subscriptions)
+    return {
+        "account_id": str(account.id),
+        "account_name": _subscriber_label(account),
+        "account_number": account.account_number,
+        "action": normalized_action,
+        "title": labels[normalized_action],
+        "consequence": consequences[normalized_action],
+        "affected": int(preview["affected"]),
+        "unaffected": max(0, total_services - int(preview["affected"])),
+        "account_affected": bool(preview["account_affected"]),
+        "preview_fingerprint": preview["fingerprint"],
+        "idempotency_key": secrets.token_urlsafe(24),
+    }
 
 
 def _apply_account_search(query, search: str | None):
@@ -1216,31 +1454,20 @@ def get_dashboard_summary(
 ) -> dict:
     accounts = list_accounts(db, reseller_id, limit, offset)
 
-    total_accounts = (
-        _customer_accounts_query(db, reseller_id)
-        .with_entities(func.count(Subscriber.id))
-        .scalar()
-        or 0
+    # KPI-parity: the Accounts tile links to /reseller/accounts, whose default
+    # list (and this dashboard's Recent Accounts list) excludes 'disabled'
+    # (deactivated-but-not-canceled) accounts. Count that exact cohort via
+    # count_accounts so the headline number can never exceed the list it links
+    # to. _customer_accounts_query would over-count by including disabled rows.
+    total_accounts = count_accounts(db, reseller_id)
+    from app.services import billing as billing_service
+
+    billing_account = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+    invoice_summary = billing_service.billing_accounts.invoice_summary(
+        db, str(billing_account.id)
     )
-    open_statuses = {
-        InvoiceStatus.issued,
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.overdue,
-    }
-    balance_row = (
-        db.query(
-            func.coalesce(func.sum(Invoice.balance_due), 0).label("open_balance"),
-            func.count(Invoice.id).label("open_invoices"),
-        )
-        .join(Subscriber, Invoice.account_id == Subscriber.id)
-        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
-        .filter(_customer_account_join_filter())
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.status.in_(open_statuses))
-        .first()
-    )
-    open_balance = balance_row.open_balance if balance_row else 0
-    open_invoices = balance_row.open_invoices if balance_row else 0
+    open_balance = invoice_summary.total_outstanding
+    open_invoices = invoice_summary.open_invoice_count
 
     # Alert data: overdue invoices, new accounts this week, suspended accounts
     overdue_count = (
@@ -1289,7 +1516,8 @@ def get_dashboard_summary(
                 "level": "danger",
                 "icon": "pause",
                 "message": f"{suspended_count} account{'s' if suspended_count != 1 else ''} suspended",
-                "action_url": "/reseller/accounts",
+                # Drill into the exact cohort that produced the count.
+                "action_url": f"/reseller/accounts?status_filter={SubscriberStatus.suspended.value}",
             }
         )
     if new_this_week > 0:
@@ -1310,6 +1538,36 @@ def get_dashboard_summary(
             "open_invoices": open_invoices,
         },
         "alerts": alerts,
+    }
+
+
+def dashboard_kpis(summary: dict) -> dict[str, Kpi]:
+    """Project the dashboard ``totals`` into the shared Kpi contract.
+
+    ``get_dashboard_summary`` stays the JSON-API shape the bearer route returns;
+    this wraps its already-computed totals so the web dashboard renders headline
+    numbers that each drill into the exact cohort that produced them (open
+    tickets stay a bare StateValue in the route — the CRM count has no
+    reseller-scoped cohort list to link to)."""
+    totals = summary.get("totals", {})
+    return {
+        "accounts": Kpi(
+            label="Accounts",
+            value=StateValue.present(totals.get("accounts", 0)),
+            cohort_url="/reseller/accounts",
+        ),
+        "open_balance": Kpi(
+            label="Open Balance",
+            value=StateValue.present(totals.get("open_balance", 0)),
+            cohort_url="/reseller/billing#total-outstanding",
+            tone=StatusTone.warning,
+        ),
+        "open_invoices": Kpi(
+            label="Open Invoices",
+            value=StateValue.present(totals.get("open_invoices", 0)),
+            cohort_url="/reseller/billing#open-invoices",
+            tone=StatusTone.info,
+        ),
     }
 
 
@@ -1366,6 +1624,8 @@ def get_account_detail(
         .scalar()
     ) or 0
 
+    status_actions = preview_customer_account_status_actions(db, account, subscriptions)
+
     return {
         "id": str(account.id),
         "account_number": account.account_number,
@@ -1382,7 +1642,143 @@ def get_account_detail(
         "created_at": account.created_at,
         "subscriptions": sub_list,
         "open_balance": open_balance,
+        "status_actions": status_actions,
     }
+
+
+def _reserve_customer_account_status_action(
+    db: Session,
+    *,
+    account: Subscriber,
+    action: str,
+    idempotency_key: str,
+) -> IdempotencyKey:
+    scope = f"{_RESELLER_ACCOUNT_STATUS_SCOPE_PREFIX}:{action}"
+    key = (idempotency_key or "").strip()
+    if not key or len(key) > 120:
+        raise ValueError("Account status confirmation is invalid")
+    existing = (
+        db.query(IdempotencyKey)
+        .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
+        .with_for_update()
+        .one_or_none()
+    )
+    if existing is not None:
+        if existing.account_id != account.id:
+            raise ValueError("Account status confirmation belongs to another account")
+        if existing.ref_id:
+            return existing
+        raise ValueError("This account status confirmation is already running")
+
+    reservation = IdempotencyKey(
+        scope=scope,
+        key=key,
+        account_id=account.id,
+    )
+    db.add(reservation)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        replay = (
+            db.query(IdempotencyKey)
+            .filter(IdempotencyKey.scope == scope, IdempotencyKey.key == key)
+            .one_or_none()
+        )
+        if replay is not None and replay.account_id != account.id:
+            raise ValueError(
+                "Account status confirmation belongs to another account"
+            ) from None
+        if replay is not None and replay.ref_id:
+            return replay
+        raise ValueError(
+            "This account status confirmation is already running"
+        ) from None
+    return reservation
+
+
+def _replayed_customer_account_status_result(
+    account: Subscriber,
+    result_ref: str,
+) -> dict:
+    parts = result_ref.split("|")
+    if len(parts) == 4 and parts[0] == str(account.id):
+        try:
+            changed = int(parts[2])
+            skipped = int(parts[3])
+        except ValueError:
+            pass
+        else:
+            return {
+                "account_id": parts[0],
+                "status": parts[1] or None,
+                "changed": changed,
+                "skipped": skipped,
+                "replayed": True,
+            }
+    # Compatibility fallback for a reservation written by an older deployment.
+    return {
+        "account_id": str(account.id),
+        "status": account.status.value if account.status else None,
+        "changed": 0,
+        "skipped": 0,
+        "replayed": True,
+    }
+
+
+def confirm_customer_account_status_action(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+    action: str,
+    *,
+    actor_id: str | None,
+    expected_preview_fingerprint: str,
+    idempotency_key: str,
+) -> dict | None:
+    """Execute one confirmed reseller status action at most once."""
+    normalized_action = (action or "").strip().lower()
+    if normalized_action not in RESELLER_ACCOUNT_STATUS_ACTIONS:
+        raise ValueError("Unsupported account status action")
+    account = _get_customer_account(db, reseller_id, account_id)
+    if account is None:
+        return None
+    reservation = _reserve_customer_account_status_action(
+        db,
+        account=account,
+        action=normalized_action,
+        idempotency_key=idempotency_key,
+    )
+    if reservation.ref_id:
+        db.refresh(account)
+        return _replayed_customer_account_status_result(account, reservation.ref_id)
+    try:
+        result = update_customer_account_status(
+            db,
+            reseller_id,
+            account_id,
+            normalized_action,
+            actor_id=actor_id,
+            expected_preview_fingerprint=expected_preview_fingerprint,
+            commit=False,
+        )
+        if result is None:
+            db.rollback()
+            return None
+        reservation.ref_id = "|".join(
+            (
+                str(account.id),
+                str(result.get("status") or ""),
+                str(result.get("changed") or 0),
+                str(result.get("skipped") or 0),
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    result["replayed"] = False
+    return result
 
 
 def update_customer_account_status(
@@ -1392,6 +1788,8 @@ def update_customer_account_status(
     action: str,
     *,
     actor_id: str | None = None,
+    expected_preview_fingerprint: str | None = None,
+    commit: bool = True,
 ) -> dict | None:
     """Deactivate, restore, or disable a reseller-owned customer account."""
     normalized_action = (action or "").strip().lower()
@@ -1401,6 +1799,12 @@ def update_customer_account_status(
     account = _get_customer_account(db, reseller_id, account_id)
     if not account:
         return None
+    account = (
+        _customer_accounts_query(db, reseller_id)
+        .filter(Subscriber.id == account.id)
+        .with_for_update()
+        .one()
+    )
 
     subscriptions = (
         db.query(Subscription)
@@ -1408,6 +1812,18 @@ def update_customer_account_status(
         .with_for_update()
         .all()
     )
+    preview = preview_customer_account_status_actions(db, account, subscriptions)[
+        normalized_action
+    ]
+    if expected_preview_fingerprint is not None:
+        if not secrets.compare_digest(
+            preview["fingerprint"], expected_preview_fingerprint.strip()
+        ):
+            raise ValueError(
+                "Account status changed after preview; review the current impact and try again"
+            )
+    if not preview["allowed"]:
+        raise ValueError("This account status action would not change the account")
     source = f"reseller:{reseller_id}"
     if actor_id:
         source = f"{source}:user:{actor_id}"
@@ -1416,12 +1832,7 @@ def update_customer_account_status(
     skipped = 0
     if normalized_action == "deactivate":
         for subscription in subscriptions:
-            if subscription.status in {
-                SubscriptionStatus.active,
-                SubscriptionStatus.pending,
-                SubscriptionStatus.blocked,
-                SubscriptionStatus.stopped,
-            }:
+            if subscription.status in _RESELLER_DEACTIVATABLE_STATUSES:
                 if get_active_locks(db, subscription_id=str(subscription.id)):
                     skipped += 1
                     continue
@@ -1456,13 +1867,8 @@ def update_customer_account_status(
             reason="Restored from reseller portal.",
             source=source,
         )
-        restorable_statuses = {
-            SubscriptionStatus.suspended,
-            SubscriptionStatus.blocked,
-            SubscriptionStatus.stopped,
-        }
         for subscription in subscriptions:
-            if subscription.status not in restorable_statuses:
+            if subscription.status not in _RESELLER_RESTORABLE_STATUSES:
                 skipped += 1
                 continue
             if transition_subscription_status(
@@ -1478,15 +1884,8 @@ def update_customer_account_status(
         db.flush()
         compute_account_status(db, str(account.id))
     else:
-        terminal_statuses = {
-            SubscriptionStatus.disabled,
-            SubscriptionStatus.canceled,
-            SubscriptionStatus.expired,
-            SubscriptionStatus.hidden,
-            SubscriptionStatus.archived,
-        }
         for subscription in subscriptions:
-            if subscription.status in terminal_statuses:
+            if subscription.status in _RESELLER_TERMINAL_STATUSES:
                 skipped += 1
                 continue
             if disable_subscription(
@@ -1516,8 +1915,11 @@ def update_customer_account_status(
         changed = 1
         db.flush()
 
-    db.commit()
-    db.refresh(account)
+    if commit:
+        db.commit()
+        db.refresh(account)
+    else:
+        db.flush()
     return {
         "account_id": str(account.id),
         "status": account.status.value if account.status else None,
@@ -1526,12 +1928,41 @@ def update_customer_account_status(
     }
 
 
+ACCOUNT_INVOICE_SORT_COLUMNS = {
+    "issued_at": Invoice.issued_at,
+    "created_at": Invoice.created_at,
+    "due_at": Invoice.due_at,
+    "total": Invoice.total,
+    "status": Invoice.status,
+}
+
+
+def count_account_invoices(
+    db: Session,
+    reseller_id: str,
+    account_id: str,
+) -> int | None:
+    """Count a reseller account's active invoices, or None if not owned."""
+    account = _get_customer_account(db, reseller_id, account_id)
+    if not account:
+        return None
+    return (
+        db.query(func.count(Invoice.id))
+        .filter(Invoice.account_id == account.id)
+        .filter(Invoice.is_active.is_(True))
+        .scalar()
+        or 0
+    )
+
+
 def list_account_invoices(
     db: Session,
     reseller_id: str,
     account_id: str,
     limit: int = 25,
     offset: int = 0,
+    order_by: str = "created_at",
+    order_dir: str = "desc",
 ) -> list[dict] | None:
     """List invoices for a reseller's subscriber account.
 
@@ -1541,11 +1972,18 @@ def list_account_invoices(
     if not account:
         return None
 
+    sort_column = ACCOUNT_INVOICE_SORT_COLUMNS.get(order_by, Invoice.created_at)
+    ordered = (
+        sort_column.asc().nullslast()
+        if order_dir == "asc"
+        else sort_column.desc().nullslast()
+    )
     invoices = (
         db.query(Invoice)
         .filter(Invoice.account_id == account.id)
         .filter(Invoice.is_active.is_(True))
-        .order_by(Invoice.created_at.desc())
+        # Unique tie-breaker keeps ordering deterministic across pages.
+        .order_by(ordered, Invoice.id.asc())
         .limit(limit)
         .offset(offset)
         .all()
@@ -1561,10 +1999,10 @@ def list_account_invoices(
                 "status_presentation": invoice_status_presentation(
                     inv.status
                 ).model_dump(mode="json"),
-                "total_amount": getattr(inv, "total", 0),
+                "total": getattr(inv, "total", 0),
                 "balance_due": inv.balance_due or 0,
                 "issued_at": getattr(inv, "issued_at", None),
-                "due_date": getattr(inv, "due_at", None),
+                "due_at": getattr(inv, "due_at", None),
                 "created_at": inv.created_at,
             }
         )
@@ -1666,36 +2104,13 @@ def get_revenue_summary(
     from app.services import billing as billing_service
 
     reseller_uuid = coerce_uuid(reseller_id)
-    currency = billing_service.billing_accounts.get_for_reseller(
-        db, reseller_id
-    ).currency
-
-    # Total revenue (all paid invoices)
-    total_paid = (
-        db.query(func.coalesce(func.sum(Invoice.total), 0))
-        .join(Subscriber, Invoice.account_id == Subscriber.id)
-        .filter(Subscriber.reseller_id == reseller_uuid)
-        .filter(_customer_account_join_filter())
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.status == InvoiceStatus.paid)
-        .scalar()
-    ) or 0
-
-    # Outstanding balance
-    open_statuses = {
-        InvoiceStatus.issued,
-        InvoiceStatus.partially_paid,
-        InvoiceStatus.overdue,
-    }
-    total_outstanding = (
-        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
-        .join(Subscriber, Invoice.account_id == Subscriber.id)
-        .filter(Subscriber.reseller_id == reseller_uuid)
-        .filter(_customer_account_join_filter())
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.status.in_(open_statuses))
-        .scalar()
-    ) or 0
+    billing_account = billing_service.billing_accounts.get_for_reseller(db, reseller_id)
+    currency = billing_account.currency
+    invoice_summary = billing_service.billing_accounts.invoice_summary(
+        db, str(billing_account.id)
+    )
+    total_paid = invoice_summary.paid_invoice_total
+    total_outstanding = invoice_summary.total_outstanding
 
     # Monthly breakdown (last 12 months)
     monthly_rows = (
@@ -1730,12 +2145,12 @@ def get_revenue_summary(
             }
         )
 
-    # Account count
-    account_count = (
-        _customer_accounts_query(db, reseller_id)
-        .with_entities(func.count(Subscriber.id))
-        .scalar()
-    ) or 0
+    # Account count — KPI-parity: the Account Count tile links to
+    # /reseller/accounts, whose default list excludes 'disabled' accounts. Count
+    # that same cohort (consistent with dashboard_kpis) so the tile value equals
+    # its drill-down. _customer_accounts_query would include disabled rows and
+    # overstate the count relative to the linked list.
+    account_count = count_accounts(db, reseller_id)
 
     return {
         "total_paid": total_paid,
@@ -1743,6 +2158,33 @@ def get_revenue_summary(
         "currency": currency,
         "account_count": account_count,
         "monthly": monthly,
+    }
+
+
+def revenue_kpis(summary: dict) -> dict[str, Kpi]:
+    """Project the revenue report headline figures into the shared Kpi contract.
+
+    These are customer BILLING totals (invoice money paid to / owed to Dotmac),
+    not reseller commission — commission ownership is undecided and untouched
+    here. ``get_revenue_summary`` keeps its JSON-API shape for the bearer route."""
+    return {
+        "total_paid": Kpi(
+            label="Customer billing (paid)",
+            value=StateValue.present(summary.get("total_paid", 0)),
+            cohort_url="/reseller/billing#customer-paid",
+            tone=StatusTone.positive,
+        ),
+        "total_outstanding": Kpi(
+            label="Outstanding Balance",
+            value=StateValue.present(summary.get("total_outstanding", 0)),
+            cohort_url="/reseller/billing#total-outstanding",
+            tone=StatusTone.warning,
+        ),
+        "account_count": Kpi(
+            label="Account Count",
+            value=StateValue.present(summary.get("account_count", 0)),
+            cohort_url="/reseller/accounts",
+        ),
     }
 
 

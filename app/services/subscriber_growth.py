@@ -215,9 +215,6 @@ def recent_cancellations(db: Session, *, limit: int = 10) -> list[Subscriber]:
             .order_by(Subscriber.created_at.desc())
         ).all()
     )
-    for sub in cancelled:
-        if sub.status is None:
-            sub.status = AccountStatus.canceled
     cancelled.sort(
         key=lambda x: (
             subscriber_service.get_effective_updated_at(x)

@@ -42,31 +42,34 @@
     {% endcall %}
 
     {# ── Summary Stats ── #}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div id="churn-summary" class="grid scroll-mt-6 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {{ stats_card(
-            "Churn Rate",
-            ("%.1f" | format(churn_rate | default(0))) ~ "%",
+            churn_kpis.churn_rate.label,
+            (churn_kpis.churn_rate.value.value if churn_kpis.churn_rate.value.is_present else churn_kpis.churn_rate.value.placeholder),
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6"/></svg>',
-            color="rose" if (churn_rate | default(0)) > 10 else ("amber" if (churn_rate | default(0)) > 5 else "emerald"),
-            color2="red" if (churn_rate | default(0)) > 10 else ("orange" if (churn_rate | default(0)) > 5 else "green")
+            href=churn_kpis.churn_rate.cohort_url,
+            tone=churn_kpis.churn_rate.tone
         ) }}
         {{ stats_card(
-            "Cancellations",
-            cancelled_count | default(0),
+            churn_kpis.cancelled.label,
+            (churn_kpis.cancelled.value.value if churn_kpis.cancelled.value.is_present else churn_kpis.cancelled.value.placeholder),
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>',
-            color="rose", color2="red"
+            href=churn_kpis.cancelled.cohort_url,
+            tone=churn_kpis.cancelled.tone
         ) }}
         {{ stats_card(
-            "At Risk",
-            at_risk_count | default(0),
+            churn_kpis.at_risk.label,
+            (churn_kpis.at_risk.value.value if churn_kpis.at_risk.value.is_present else churn_kpis.at_risk.value.placeholder),
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
-            color="amber", color2="orange"
+            href=churn_kpis.at_risk.cohort_url,
+            tone=churn_kpis.at_risk.tone
         ) }}
         {{ stats_card(
-            "Retention Rate",
-            ("%.1f" | format(retention_rate | default(0))) ~ "%",
+            churn_kpis.retention_rate.label,
+            (churn_kpis.retention_rate.value.value if churn_kpis.retention_rate.value.is_present else churn_kpis.retention_rate.value.placeholder),
             icon='<svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="teal", color2="cyan"
+            href=churn_kpis.retention_rate.cohort_url,
+            tone=churn_kpis.retention_rate.tone
         ) }}
     </div>
 

@@ -13,7 +13,7 @@
     </a>
     <a href="/reseller/reports/revenue" class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
       <svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-      Revenue summary
+      Customer billing summary
     </a>
   </div>
 </div>
@@ -32,10 +32,18 @@
   </div>
   {% endif %}
 
-  <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-    <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+    <div id="customer-paid" class="scroll-mt-24 rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
+      <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Customer billing paid</p>
+      <p class="mt-2 text-3xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">{{ billing_account.currency }} {{ "{:,.2f}".format(paid_invoice_total) }}</p>
+    </div>
+    <div id="total-outstanding" class="scroll-mt-24 rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
       <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total outstanding</p>
       <p class="mt-2 text-3xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ billing_account.currency }} {{ "{:,.2f}".format(total_outstanding) }}</p>
+    </div>
+    <div id="open-invoices" class="scroll-mt-24 rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
+      <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Open invoices</p>
+      <p class="mt-2 text-3xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ open_invoice_count }}</p>
     </div>
     <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
       <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Unallocated credit</p>
@@ -43,7 +51,7 @@
     </div>
     <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-5 shadow-premium dark:border-slate-700/60 dark:bg-slate-800/80">
       <p class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscribers with balance</p>
-      <p class="mt-2 text-3xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ subscribers | length }}</p>
+      <p class="mt-2 text-3xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ subscribers_total }}</p>
     </div>
   </div>
 

@@ -16,15 +16,19 @@ from app.models.billing import (
     InvoiceLine,
     InvoiceStatus,
 )
-from app.models.catalog import BillingMode, SubscriptionStatus
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.notification import Notification
 from app.models.prepaid_enforcement import PrepaidEnforcementReadiness
-from app.models.subscriber import SubscriberStatus
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.account_lifecycle import suspend_subscription
 from app.services.collections.prepaid_balance_sweep import run_prepaid_balance_sweep
-from tests.prepaid_funding_helpers import materialize_test_prepaid_opening_balance
+from tests.prepaid_funding_helpers import (
+    TEST_PREPAID_POSITION_AT,
+    materialize_test_prepaid_opening_balance,
+    materialize_test_prepaid_opening_balances,
+)
 
 # A fixed weekday noon (UTC) so the default 08:00 blocking_time window is open
 # and weekend skips don't fire unless a test asks for them. 2026-07-06 = Monday.
@@ -195,6 +199,86 @@ def test_prepaid_account_with_postpaid_subscription_is_reviewed_as_mismatch(
     assert result["billing_profile_invalid"] == 1
     db_session.refresh(subscription)
     assert subscription.status == SubscriptionStatus.active
+
+
+def test_sweep_never_processes_quarantined_account_for_money_action(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    from app.services.collections import prepaid_balance_sweep as sweep_module
+
+    position_at = TEST_PREPAID_POSITION_AT
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscriber_account.status = SubscriberStatus.active
+    subscriber_account.is_active = True
+    subscriber_account.billing_enabled = True
+    subscriber_account.min_balance = Decimal("100.00")
+    subscriber_account.created_at = position_at - timedelta(days=1)
+    subscriber_account.prepaid_low_balance_at = _MONDAY_NOON - timedelta(days=30)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+
+    verified_account = Subscriber(
+        first_name="Verified",
+        last_name="Funding",
+        email="verified-prepaid-funding@example.com",
+        billing_mode=BillingMode.prepaid,
+        status=SubscriberStatus.active,
+        is_active=True,
+        billing_enabled=True,
+        min_balance=Decimal("100.00"),
+        reseller_id=subscriber_account.reseller_id,
+        created_at=position_at - timedelta(days=1),
+    )
+    db_session.add(verified_account)
+    db_session.flush()
+    verified_subscription = Subscription(
+        subscriber_id=verified_account.id,
+        offer_id=subscription.offer_id,
+        billing_mode=BillingMode.prepaid,
+        status=SubscriptionStatus.active,
+        created_at=position_at - timedelta(days=1),
+    )
+    db_session.add(verified_subscription)
+    db_session.commit()
+    materialize_test_prepaid_opening_balances(
+        db_session,
+        {verified_account.id: Decimal("500.00")},
+        position_at=position_at,
+        quarantined={
+            subscriber_account.id: "plan_decision_not_replayed",
+        },
+    )
+    _enable_control(db_session)
+
+    processed_ids = set()
+    original_process_account = sweep_module._process_account
+
+    def _track_processed_account(db, account, now, cfg, **kwargs):  # noqa: ANN001
+        processed_ids.add(account.id)
+        return original_process_account(db, account, now, cfg, **kwargs)
+
+    monkeypatch.setattr(
+        sweep_module,
+        "_process_account",
+        _track_processed_account,
+    )
+
+    result = run_prepaid_balance_sweep(db_session, now=_MONDAY_NOON)
+
+    assert result["accounts_scanned"] == 2
+    assert result["funding_quarantined"] == 1
+    assert processed_ids == {verified_account.id}
+    db_session.refresh(subscriber_account)
+    db_session.refresh(subscription)
+    observed_low_at = subscriber_account.prepaid_low_balance_at
+    assert observed_low_at is not None
+    if observed_low_at.tzinfo is None:
+        observed_low_at = observed_low_at.replace(tzinfo=UTC)
+    assert observed_low_at == _MONDAY_NOON - timedelta(days=30)
+    assert subscriber_account.prepaid_deactivation_at is None
+    assert subscription.status == SubscriptionStatus.active
+    assert _prepaid_locks(db_session, subscription) == []
+    assert _notices(db_session, subscriber_account) == []
 
 
 def test_enabled_control_without_activation_time_blocks_adverse_actions(

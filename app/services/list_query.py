@@ -231,6 +231,45 @@ class ListQuery:
         return f"{base_url}?{urlencode(self.params(page=page, sort_by=sort_by, sort_dir=sort_dir, filters=filters, per_page=per_page))}"
 
 
+def request_needs_canonicalization(
+    list_query: ListQuery,
+    *,
+    search: str | None = None,
+    filters: Mapping[str, object | None] | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    page: int = 1,
+    per_page: int | None = None,
+) -> bool:
+    """Return whether raw request state differs from the owner's projection.
+
+    List owners use this after stale values and out-of-range pages have been
+    normalized. Routes can then redirect to one stable, deep-linkable URL
+    instead of rendering rows for one page while exposing another page in the
+    query contract.
+    """
+
+    if page != list_query.page:
+        return True
+    if per_page is not None and per_page != list_query.per_page:
+        return True
+    if sort_by is not None and sort_by != list_query.sort_by:
+        return True
+    if sort_dir is not None and sort_dir != list_query.sort_dir:
+        return True
+    if search is not None:
+        normalized_search = str(search).strip() or None
+        if normalized_search != list_query.search:
+            return True
+    for key, raw_value in (filters or {}).items():
+        if raw_value is None:
+            continue
+        normalized = str(raw_value).strip() or None
+        if normalized != list_query.filter_value(key):
+            return True
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class PageMeta:
     """Canonical page metadata derived after filtering and before projection."""

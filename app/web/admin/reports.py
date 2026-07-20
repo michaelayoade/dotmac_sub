@@ -40,41 +40,49 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Revenue",
                 "url": "/admin/reports/revenue",
                 "description": "Revenue metrics and recent payments",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Customer Report",
                 "url": "/admin/reports/customers",
                 "description": "Customer totals, status filters, and matching exports",
+                "permission": "customer:read",
             },
             {
                 "name": "Churn",
                 "url": "/admin/reports/churn",
                 "description": "Retention, churn reasons, and cancellations",
+                "permission": "customer:read",
             },
             {
                 "name": "Network Usage",
                 "url": "/admin/reports/network",
                 "description": "Network utilization and infrastructure stats",
+                "permission": "reports:network:read",
             },
             {
                 "name": "Technician",
                 "url": "/admin/reports/technician",
                 "description": "Technician performance and jobs",
+                "permission": "reports:support:read",
             },
             {
                 "name": "Ticket SLA",
                 "url": "/admin/reports/ticket-sla",
                 "description": "Support ticket SLA breaches and operational cleanup",
+                "permission": "reports:support:read",
             },
             {
                 "name": "Inbox Performance",
                 "url": "/admin/reports/inbox-performance",
                 "description": "Team response SLA, queue load, and agent assignments",
+                "permission": "reports:support:read",
             },
             {
                 "name": "Inbox Escalations",
                 "url": "/admin/reports/inbox-escalations",
                 "description": "Conversations that need supervisor attention",
+                "permission": "reports:support:read",
             },
         ],
     },
@@ -88,41 +96,49 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Usage by Plan",
                 "url": "/admin/reports/usage-by-plan",
                 "description": "Subscriber distribution across plans",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Revenue per Plan",
                 "url": "/admin/reports/revenue-per-plan",
                 "description": "Revenue split by plan",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Invoice Report",
                 "url": "/admin/reports/invoices",
                 "description": "Invoice listing and tax details",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Statements",
                 "url": "/admin/reports/statements",
                 "description": "Customer financial summaries",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Tax Report",
                 "url": "/admin/reports/tax",
                 "description": "Net output tax and WHT receivables by currency",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "MRR Net Change",
                 "url": "/admin/reports/mrr",
                 "description": "Monthly recurring revenue movement",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "New Services",
                 "url": "/admin/reports/new-services",
                 "description": "Recently activated subscriptions",
+                "permission": "customer:read",
             },
             {
                 "name": "Upcoming Charges",
                 "url": "/admin/reports/upcoming-charges",
                 "description": "Subscriptions with upcoming billing",
+                "permission": "reports:billing:read",
             },
         ],
     },
@@ -136,21 +152,25 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "Subscriber Growth (Trend)",
                 "url": "/admin/reports/subscriber-growth",
                 "description": "Time-series subscriber growth trend",
+                "permission": "customer:read",
             },
             {
                 "name": "Custom Pricing & Discounts",
                 "url": "/admin/reports/custom-pricing",
                 "description": "Custom pricing overrides",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Revenue by Category",
                 "url": "/admin/reports/revenue-categories",
                 "description": "Revenue segmented by category",
+                "permission": "reports:billing:read",
             },
             {
                 "name": "Bandwidth & Usage",
                 "url": "/admin/reports/bandwidth",
                 "description": "Network usage analytics and top consumers",
+                "permission": "reports:network:read",
             },
         ],
     },
@@ -164,16 +184,19 @@ REPORT_HUB_SECTIONS: list[dict] = [
                 "name": "NCC Subscriber Data (Quarterly)",
                 "url": "/admin/reports/ncc-subscribers",
                 "description": "Active subscriptions by type, connection, speed, State & region",
+                "permission": "customer:read",
             },
             {
                 "name": "NCC Complaints (Quarterly)",
                 "url": "/admin/reports/ncc-complaints",
                 "description": "Complaint records, categories, SLA and the filing workbook",
+                "permission": "provisioning:read",
             },
             {
                 "name": "NCC Regulatory Pack",
                 "url": "/admin/reports/ncc-pack",
                 "description": "All three NCC returns assembled into one filing view",
+                "permission": "provisioning:read",
             },
         ],
     },
@@ -223,8 +246,9 @@ def _parse_date_end(value: str | None) -> datetime | None:
     dependencies=[
         Depends(
             require_any_permission(
-                "reports:billing",
-                "reports:network",
+                "reports:billing:read",
+                "reports:network:read",
+                "reports:support:read",
                 "customer:read",
                 "provisioning:read",
             )
@@ -248,7 +272,7 @@ def reports_hub(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -275,7 +299,8 @@ def reports_revenue(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/revenue/export", dependencies=[Depends(require_permission("reports:billing"))]
+    "/revenue/export",
+    dependencies=[Depends(require_permission("reports:billing:export"))],
 )
 def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_revenue_export_csv(db=db, days=days)
@@ -318,6 +343,7 @@ def reports_subscribers(
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "subscriber_kpis": report_data["subscriber_kpis"],
         "total_subscribers": report_data["total_subscribers"],
         "subscriber_growth": report_data["subscriber_growth"],
         "new_this_month": report_data["new_this_month"],
@@ -380,6 +406,7 @@ def reports_churn(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "churn_kpis": report_data["churn_kpis"],
         "churn_rate": report_data["churn_rate"],
         "retention_rate": report_data["retention_rate"],
         "cancelled_count": report_data["cancelled_count"],
@@ -407,7 +434,7 @@ def reports_churn_export(days: int | None = None, db: Session = Depends(get_db))
 @router.get(
     "/network",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:network"))],
+    dependencies=[Depends(require_permission("reports:network:read"))],
 )
 def reports_network(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -437,7 +464,8 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/network/export", dependencies=[Depends(require_permission("reports:network"))]
+    "/network/export",
+    dependencies=[Depends(require_permission("reports:network:export"))],
 )
 def reports_network_export(hours: int | None = None, db: Session = Depends(get_db)):
     report_data = web_reports_service.get_network_report_data(db=db, hours=hours)
@@ -452,7 +480,7 @@ def reports_network_export(hours: int | None = None, db: Session = Depends(get_d
 @router.get(
     "/technician",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_technician(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -479,7 +507,7 @@ def reports_technician(request: Request, db: Session = Depends(get_db)):
 
 @router.get(
     "/technician/export",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_technician_export(days: int | None = None, db: Session = Depends(get_db)):
     content = web_reports_service.build_technician_export_csv(db=db, days=days)
@@ -495,7 +523,7 @@ def reports_technician_export(days: int | None = None, db: Session = Depends(get
 @router.get(
     "/ticket-sla",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_ticket_sla(
     request: Request,
@@ -677,7 +705,7 @@ def _inbox_escalation_return_url(
 @router.get(
     "/inbox-performance",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_inbox_performance(
     request: Request,
@@ -719,7 +747,7 @@ def reports_inbox_performance(
 
 @router.get(
     "/inbox-performance/export",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_inbox_performance_export(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
@@ -759,7 +787,7 @@ def reports_inbox_performance_export(
 @router.get(
     "/inbox-escalations",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_inbox_escalations(
     request: Request,
@@ -979,7 +1007,7 @@ def reports_inbox_escalation_reply(
 
 @router.get(
     "/inbox-escalations/export",
-    dependencies=[Depends(require_permission("provisioning:read"))],
+    dependencies=[Depends(require_permission("reports:support:read"))],
 )
 def reports_inbox_escalations_export(
     response_sla_seconds: int = Query(default=900, ge=60, le=86400),
@@ -1053,7 +1081,7 @@ def reports_subscriber_growth(
 @router.get(
     "/usage-by-plan",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_usage_by_plan_data(db)
@@ -1071,7 +1099,7 @@ def reports_usage_by_plan(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/upcoming-charges",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_upcoming_charges_data(db)
@@ -1089,7 +1117,7 @@ def reports_upcoming_charges(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue-per-plan",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue_per_plan(
     request: Request,
@@ -1114,7 +1142,7 @@ def reports_revenue_per_plan(
 @router.get(
     "/invoices",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_invoices(
     request: Request,
@@ -1140,7 +1168,7 @@ def reports_invoices(
 @router.get(
     "/statements",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_statements(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_statements_data(db)
@@ -1154,7 +1182,7 @@ def reports_statements(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/tax",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_tax(
     request: Request,
@@ -1181,7 +1209,7 @@ def reports_tax(
 @router.get(
     "/mrr",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_mrr(
     request: Request,
@@ -1235,7 +1263,7 @@ def reports_new_services(
 @router.get(
     "/custom-pricing",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_custom_pricing_data(db)
@@ -1253,7 +1281,7 @@ def reports_custom_pricing(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/revenue-categories",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:billing"))],
+    dependencies=[Depends(require_permission("reports:billing:read"))],
 )
 def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
     data = web_reports_ext_service.get_revenue_categories_data(db)
@@ -1271,7 +1299,7 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
 @router.get(
     "/bandwidth",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("reports:network"))],
+    dependencies=[Depends(require_permission("reports:network:read"))],
 )
 def reports_bandwidth(
     request: Request,
@@ -1300,7 +1328,8 @@ def reports_bandwidth(
 
 
 @router.get(
-    "/bandwidth/export", dependencies=[Depends(require_permission("reports:network"))]
+    "/bandwidth/export",
+    dependencies=[Depends(require_permission("reports:network:export"))],
 )
 def reports_bandwidth_export(
     days: int | None = None,

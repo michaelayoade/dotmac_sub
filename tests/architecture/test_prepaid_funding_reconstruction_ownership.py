@@ -1,8 +1,14 @@
 """Guard the final prepaid funding authority boundary."""
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+_PREPAID_TIMER_FIELDS = {
+    "prepaid_low_balance_at",
+    "prepaid_deactivation_at",
+}
+_PREPAID_TIMER_OWNER = "app/services/prepaid_enforcement_state.py"
 
 
 def _read(relative: str) -> str:
@@ -13,6 +19,41 @@ def _read_migration(suffix: str) -> str:
     matches = list((ROOT / "alembic" / "versions").glob(f"*_{suffix}.py"))
     assert len(matches) == 1, matches
     return matches[0].read_text(encoding="utf-8")
+
+
+def _attribute_targets(target: ast.expr) -> set[str]:
+    if isinstance(target, ast.Attribute) and target.attr in _PREPAID_TIMER_FIELDS:
+        return {target.attr}
+    if isinstance(target, (ast.List, ast.Tuple)):
+        return set().union(*(_attribute_targets(item) for item in target.elts))
+    return set()
+
+
+def test_prepaid_timer_fields_have_one_canonical_writer() -> None:
+    writers = {field: set() for field in _PREPAID_TIMER_FIELDS}
+    for path in (ROOT / "app").rglob("*.py"):
+        relative = path.relative_to(ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            targets: set[str] = set()
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    targets.update(_attribute_targets(target))
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                targets.update(_attribute_targets(node.target))
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "setattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in _PREPAID_TIMER_FIELDS
+            ):
+                targets.add(str(node.args[1].value))
+            for field in targets:
+                writers[field].add(relative)
+
+    assert writers == {field: {_PREPAID_TIMER_OWNER} for field in _PREPAID_TIMER_FIELDS}
 
 
 def test_reconstruction_models_have_one_writer_owner() -> None:
@@ -105,7 +146,11 @@ def test_materializer_owner_requires_a_config_trusted_clean_replay_seal() -> Non
     assert "resolve_prepaid_thresholds" not in exporter
     assert "verify_prepaid_funding_manifest" in owner
     assert "reconstruction_existing_attestation_mismatch" in owner
-    assert 'blocker_manifest.get("blockers") != []' in owner
+    assert "quarantined_account_ids" in owner
+    assert "both materialized and quarantined" in owner
+    assert "row_ids | quarantined" in owner
+    assert "expected_candidate_hash = candidate_cohort_sha256" in owner
+    assert "--allow-quarantined-subset" in exporter
     assert "apply_prepaid_funding_reconstruction" in materializer
     assert "Ed25519PublicKey" in attestation
     assert "is_openbao_ref" in attestation

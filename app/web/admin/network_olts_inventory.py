@@ -181,6 +181,7 @@ def pon_interfaces_list(
     search: str | None = None,
     status: str | None = None,
     olt_id: str | None = None,
+    aliased: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     context = _base_context(request, db, active_page="pon-interfaces")
@@ -190,6 +191,7 @@ def pon_interfaces_list(
             search=search,
             status=status,
             olt_id=olt_id,
+            aliased=aliased,
         )
     )
     return templates.TemplateResponse(

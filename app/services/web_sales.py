@@ -25,8 +25,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
-from sqlalchemy import case, func, or_
+from sqlalchemy import String, case, cast, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.sales import (
@@ -53,6 +54,12 @@ from app.schemas.sales import (
 from app.services import sales as sales_service
 from app.services import sales_orders as sales_orders_service
 from app.services.common import coerce_uuid
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    PageMeta,
+    request_needs_canonicalization,
+)
 from app.services.sales.selfserve import compute_feasibility
 from app.services.sales_orders import _resolve_project_for_sales_order
 
@@ -88,6 +95,61 @@ def lead_status_values() -> list[str]:
     return [status.value for status in LeadStatus]
 
 
+# The leads list's declared query capabilities. Sortable keys mirror the
+# leads.list order_by whitelist (created_at/updated_at); filters and search are
+# the ones the underlying manager supports.
+LEAD_LIST_DEFINITION = ListDefinition(
+    key="leads",
+    fields=(
+        ListFieldDefinition("title", "Lead", searchable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("lead_source", "Source", filterable=True),
+        ListFieldDefinition("pipeline_id", "Pipeline", filterable=True),
+        ListFieldDefinition("stage_id", "Stage", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+        ListFieldDefinition("updated_at", "Updated", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+
+# The quotes list's declared capabilities (quotes.list order_by whitelist is
+# created_at/updated_at; filters are status and lead).
+QUOTE_LIST_DEFINITION = ListDefinition(
+    key="quotes",
+    fields=(
+        ListFieldDefinition("number", "Quote", searchable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("lead_id", "Lead", filterable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+        ListFieldDefinition("updated_at", "Updated", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+
+# The sales-orders list is sorted directly on the SalesOrder query, so any of
+# these columns is sortable; filters are status/payment/source.
+SALES_ORDER_LIST_DEFINITION = ListDefinition(
+    key="sales_orders",
+    fields=(
+        ListFieldDefinition("order_number", "Order", searchable=True, sortable=True),
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("payment_status", "Payment", filterable=True),
+        ListFieldDefinition("source_type", "Source", filterable=True),
+        ListFieldDefinition("total", "Total", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="created_at",
+    default_sort_dir="desc",
+)
+_SALES_ORDER_SORT_COLUMNS = {
+    "created_at": SalesOrder.created_at,
+    "order_number": SalesOrder.order_number,
+    "total": SalesOrder.total,
+}
+
+
 def quote_status_values() -> list[str]:
     return [status.value for status in QuoteStatus]
 
@@ -105,6 +167,18 @@ def _clean_choice(value: str | None, allowed: list[str]) -> str | None:
     (stale/hand-edited query params must not 400 a list page)."""
     candidate = (value or "").strip()
     return candidate if candidate in allowed else None
+
+
+def _clean_uuid(value: str | None) -> str | None:
+    """Canonicalize a UUID filter, clearing malformed stale bookmarks."""
+
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    try:
+        return str(UUID(candidate))
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 def subscriber_label(subscriber: Subscriber | None) -> str:
@@ -248,14 +322,57 @@ def build_leads_list_context(
     stage_id: str | None,
     lead_source: str | None,
     search: str | None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
+    requested_status = status
+    requested_pipeline_id = pipeline_id
+    requested_stage_id = stage_id
+    requested_lead_source = lead_source
     status = _clean_choice(status, lead_status_values())
+    pipeline_id = _clean_uuid(pipeline_id)
+    stage_id = _clean_uuid(stage_id)
     lead_source_options = list(sales_service.LEAD_SOURCE_OPTIONS)
     lead_source = _clean_choice(lead_source, lead_source_options)
 
-    offset = (page - 1) * per_page
+    # Stale sort/page-size params degrade to the default view rather than 500.
+    safe_sort = (
+        sort_by
+        if sort_by in LEAD_LIST_DEFINITION.sortable_keys
+        else LEAD_LIST_DEFINITION.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in LEAD_LIST_DEFINITION.per_page_options
+        else LEAD_LIST_DEFINITION.default_per_page
+    )
+    requested_query = LEAD_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "status": status,
+            "pipeline_id": pipeline_id,
+            "stage_id": stage_id,
+            "lead_source": lead_source,
+        },
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+
+    total = _count_leads(
+        db,
+        status=status,
+        pipeline_id=pipeline_id or None,
+        stage_id=stage_id or None,
+        lead_source=lead_source,
+        search=requested_query.search,
+    )
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     leads = sales_service.leads.list(
         db,
         pipeline_id=pipeline_id or None,
@@ -263,20 +380,12 @@ def build_leads_list_context(
         owner_agent_id=None,
         status=status,
         is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=per_page,
-        offset=offset,
+        order_by=list_query.sort_by,
+        order_dir=list_query.sort_dir,
+        limit=list_query.per_page,
+        offset=(page_meta.page - 1) * list_query.per_page,
         lead_source=lead_source,
-        search=search or None,
-    )
-    total = _count_leads(
-        db,
-        status=status,
-        pipeline_id=pipeline_id or None,
-        stage_id=stage_id or None,
-        lead_source=lead_source,
-        search=search or None,
+        search=list_query.search,
     )
 
     options = _sales_options(db)
@@ -284,15 +393,31 @@ def build_leads_list_context(
 
     return {
         "leads": leads,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": _total_pages(total, per_page),
+        "list_query": list_query,
+        "canonicalization_needed": request_needs_canonicalization(
+            list_query,
+            search=search,
+            filters={
+                "status": requested_status,
+                "pipeline_id": requested_pipeline_id,
+                "stage_id": requested_stage_id,
+                "lead_source": requested_lead_source,
+            },
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        ),
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": page_meta.total_items,
+        "total_pages": page_meta.total_pages,
         "status": status or "",
         "pipeline_id": pipeline_id or "",
         "stage_id": stage_id or "",
         "lead_source": lead_source or "",
-        "search": search or "",
+        "search": list_query.search or "",
         "lead_statuses": lead_status_values(),
         "lead_sources": lead_source_options,
         "pipelines": options["pipelines"],
@@ -560,6 +685,7 @@ def _count_quotes(
                 Subscriber.first_name.ilike(like),
                 Subscriber.last_name.ilike(like),
                 Subscriber.email.ilike(like),
+                cast(Quote.id, String).ilike(like),
             )
         )
     return int(query.scalar() or 0)
@@ -940,24 +1066,49 @@ def build_quotes_list_context(
     status: str | None,
     lead_id: str | None,
     search: str | None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
+    requested_status = status
+    requested_lead_id = lead_id
     status = _clean_choice(status, quote_status_values())
-    offset = (page - 1) * per_page
+    lead_id = _clean_uuid(lead_id)
+    safe_sort = (
+        sort_by
+        if sort_by in QUOTE_LIST_DEFINITION.sortable_keys
+        else QUOTE_LIST_DEFINITION.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in QUOTE_LIST_DEFINITION.per_page_options
+        else QUOTE_LIST_DEFINITION.default_per_page
+    )
+    requested_query = QUOTE_LIST_DEFINITION.build_query(
+        search=search,
+        filters={"status": status, "lead_id": lead_id},
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
+    total = _count_quotes(
+        db, status=status, lead_id=lead_id, search=requested_query.search
+    )
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
     quotes = sales_service.quotes.list(
         db,
         lead_id=lead_id or None,
         status=status,
         is_active=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=per_page,
-        offset=offset,
-        search=search or None,
-    )
-    total = _count_quotes(
-        db, status=status, lead_id=lead_id or None, search=search or None
+        order_by=list_query.sort_by,
+        order_dir=list_query.sort_dir,
+        limit=list_query.per_page,
+        offset=(page_meta.page - 1) * list_query.per_page,
+        search=list_query.search,
     )
 
     leads = sales_service.leads.list(
@@ -976,13 +1127,24 @@ def build_quotes_list_context(
 
     return {
         "quotes": quotes,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": _total_pages(total, per_page),
+        "list_query": list_query,
+        "canonicalization_needed": request_needs_canonicalization(
+            list_query,
+            search=search,
+            filters={"status": requested_status, "lead_id": requested_lead_id},
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        ),
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
+        "total": page_meta.total_items,
+        "total_pages": page_meta.total_pages,
         "status": status or "",
         "lead_id": lead_id or "",
-        "search": search or "",
+        "search": list_query.search or "",
         "quote_statuses": quote_status_values(),
         "leads": leads,
         "lead_map": {str(item.id): item for item in leads},
@@ -1080,28 +1242,48 @@ def build_sales_orders_list_context(
     payment_status: str | None,
     source_type: str | None,
     search: str | None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
+    requested_status = status
+    requested_payment_status = payment_status
+    requested_source_type = source_type
     status = _clean_choice(status, sales_order_status_values())
     payment_status = _clean_choice(payment_status, sales_order_payment_status_values())
     if source_type not in {"quote", "manual"}:
         source_type = None
 
+    safe_sort = (
+        sort_by
+        if sort_by in SALES_ORDER_LIST_DEFINITION.sortable_keys
+        else SALES_ORDER_LIST_DEFINITION.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in SALES_ORDER_LIST_DEFINITION.per_page_options
+        else SALES_ORDER_LIST_DEFINITION.default_per_page
+    )
+    requested_query = SALES_ORDER_LIST_DEFINITION.build_query(
+        search=search,
+        filters={
+            "status": status,
+            "payment_status": payment_status,
+            "source_type": source_type,
+        },
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
     filters = {
         "status": status,
         "payment_status": payment_status,
         "source_type": source_type,
-        "search": search or None,
+        "search": requested_query.search,
     }
-    offset = (page - 1) * per_page
-    orders = (
-        _sales_orders_query(db, **filters)
-        .order_by(SalesOrder.created_at.desc())
-        .limit(per_page)
-        .offset(offset)
-        .all()
-    )
 
     totals = (
         _sales_orders_query(db, **filters)
@@ -1147,6 +1329,18 @@ def build_sales_orders_list_context(
         .one()
     )
     total = int(totals.total or 0)
+    page_meta = PageMeta.from_query(requested_query, total)
+    list_query = requested_query.with_page(page_meta.page)
+    sort_column = _SALES_ORDER_SORT_COLUMNS[list_query.sort_by]
+    ordered = sort_column.desc() if list_query.sort_dir == "desc" else sort_column.asc()
+    orders = (
+        _sales_orders_query(db, **filters)
+        # Unique tie-breaker keeps ordering deterministic across pages.
+        .order_by(ordered, SalesOrder.id.asc())
+        .limit(list_query.per_page)
+        .offset((page_meta.page - 1) * list_query.per_page)
+        .all()
+    )
     paid = int(totals.paid or 0)
     stats = {
         "total": total,
@@ -1166,14 +1360,29 @@ def build_sales_orders_list_context(
     return {
         "orders": orders,
         "stats": stats,
-        "page": page,
-        "per_page": per_page,
+        "list_query": list_query,
+        "canonicalization_needed": request_needs_canonicalization(
+            list_query,
+            search=search,
+            filters={
+                "status": requested_status,
+                "payment_status": requested_payment_status,
+                "source_type": requested_source_type,
+            },
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            page=page,
+            per_page=per_page,
+        ),
+        "page_meta": page_meta,
+        "page": page_meta.page,
+        "per_page": page_meta.per_page,
         "total": total,
-        "total_pages": _total_pages(total, per_page),
+        "total_pages": page_meta.total_pages,
         "status": status or "",
         "payment_status": payment_status or "",
         "source_type": source_type or "",
-        "search": search or "",
+        "search": list_query.search or "",
         "statuses": sales_order_status_values(),
         "payment_statuses": sales_order_payment_status_values(),
         "subscriber_map": subscriber_map,

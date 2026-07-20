@@ -66,23 +66,30 @@ def leads_list(
     stage_id: str | None = Query(default=None),
     lead_source: str | None = Query(default=None),
     search: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=25, ge=10, le=100),
+    sort_by: str | None = Query(default=None, alias="sort"),
+    sort_dir: str | None = Query(default=None, alias="dir"),
+    page: int = Query(default=1),
+    per_page: int = Query(default=25),
     db: Session = Depends(get_db),
 ):
-    context = _ctx(request, db, "sales-leads")
-    context.update(
-        web_sales_service.build_leads_list_context(
-            db,
-            status=status,
-            pipeline_id=pipeline_id,
-            stage_id=stage_id,
-            lead_source=lead_source,
-            search=search,
-            page=page,
-            per_page=per_page,
-        )
+    state = web_sales_service.build_leads_list_context(
+        db,
+        status=status,
+        pipeline_id=pipeline_id,
+        stage_id=stage_id,
+        lead_source=lead_source,
+        search=search,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
     )
+    if state["canonicalization_needed"]:
+        return RedirectResponse(
+            url=state["list_query"].url("/admin/sales/leads"), status_code=307
+        )
+    context = _ctx(request, db, "sales-leads")
+    context.update(state)
     return templates.TemplateResponse("admin/sales/leads/index.html", context)
 
 
@@ -354,21 +361,28 @@ def quotes_list(
     status: str | None = Query(default=None),
     lead_id: str | None = Query(default=None),
     search: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=25, ge=10, le=100),
+    sort_by: str | None = Query(default=None, alias="sort"),
+    sort_dir: str | None = Query(default=None, alias="dir"),
+    page: int = Query(default=1),
+    per_page: int = Query(default=25),
     db: Session = Depends(get_db),
 ):
-    context = _ctx(request, db, "sales-quotes")
-    context.update(
-        web_sales_service.build_quotes_list_context(
-            db,
-            status=status,
-            lead_id=lead_id,
-            search=search,
-            page=page,
-            per_page=per_page,
-        )
+    state = web_sales_service.build_quotes_list_context(
+        db,
+        status=status,
+        lead_id=lead_id,
+        search=search,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
     )
+    if state["canonicalization_needed"]:
+        return RedirectResponse(
+            url=state["list_query"].url("/admin/sales/quotes"), status_code=307
+        )
+    context = _ctx(request, db, "sales-quotes")
+    context.update(state)
     return templates.TemplateResponse("admin/sales/quotes/index.html", context)
 
 
@@ -609,22 +623,30 @@ def sales_orders_list(
     payment_status: str | None = Query(default=None),
     source_type: str | None = Query(default=None),
     search: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=25, ge=10, le=100),
+    sort_by: str | None = Query(default=None, alias="sort"),
+    sort_dir: str | None = Query(default=None, alias="dir"),
+    page: int = Query(default=1),
+    per_page: int = Query(default=25),
     db: Session = Depends(get_db),
 ):
-    context = _ctx(request, db, "sales-orders")
-    context.update(
-        web_sales_service.build_sales_orders_list_context(
-            db,
-            status=status,
-            payment_status=payment_status,
-            source_type=source_type,
-            search=search,
-            page=page,
-            per_page=per_page,
-        )
+    state = web_sales_service.build_sales_orders_list_context(
+        db,
+        status=status,
+        payment_status=payment_status,
+        source_type=source_type,
+        search=search,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
     )
+    if state["canonicalization_needed"]:
+        return RedirectResponse(
+            url=state["list_query"].url("/admin/sales/sales-orders"),
+            status_code=307,
+        )
+    context = _ctx(request, db, "sales-orders")
+    context.update(state)
     return templates.TemplateResponse("admin/sales/sales_orders/index.html", context)
 
 

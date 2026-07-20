@@ -14,8 +14,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import exists, func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from app.models.catalog import BillingMode, Subscription, SubscriptionBundle
 from app.models.domain_settings import SettingDomain
@@ -24,6 +24,8 @@ from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import control_registry, enforcement_window, settings_spec
 from app.services.access_resolution import (
     PrepaidFundingDecision,
+    prepaid_enforcement_filters,
+    resolve_prepaid_enforcement_currency,
     resolve_prepaid_funding,
 )
 from app.services.billing_communication_policy import (
@@ -258,6 +260,34 @@ def candidate_prepaid_account_ids(db: Session) -> set[Any]:
     return ids
 
 
+def candidate_prepaid_funding_account_ids(db: Session) -> set[Any]:
+    """Return only accounts that may consume prepaid funding authority.
+
+    ``candidate_prepaid_account_ids`` is intentionally broader because it also
+    carries stale timer and lock repair inputs. Those rows must remain visible
+    to the sweep, but a postpaid or service-less account must never receive a
+    prepaid opening balance merely to clear stale enforcement state.
+    """
+    other_subscription = aliased(Subscription)
+    other_collectible_mode = exists().where(
+        other_subscription.subscriber_id == Subscriber.id,
+        other_subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES),
+        other_subscription.billing_mode != BillingMode.prepaid,
+    )
+    return {
+        row[0]
+        for row in (
+            db.query(Subscriber.id)
+            .join(Subscription, Subscription.subscriber_id == Subscriber.id)
+            .filter(*prepaid_enforcement_filters(Subscription, Subscriber))
+            .filter(Subscriber.billing_mode == BillingMode.prepaid)
+            .filter(~other_collectible_mode)
+            .distinct()
+            .all()
+        )
+    }
+
+
 def prepaid_notice_suppression_reasons(
     db: Session, account_ids: set[Any] | list[Any]
 ) -> dict[Any, str]:
@@ -392,7 +422,27 @@ def plan_prepaid_account(
         )
 
     profile = resolve_billing_profile(db, account)
-    funding = funding or resolve_prepaid_funding(db, account, now=now)
+    funding_required = (
+        account.status != SubscriberStatus.canceled
+        and account.is_active
+        and account.billing_enabled
+        and profile.automation_safe
+        and profile.effective_mode == BillingMode.prepaid
+        and profile.has_collectible_subscriptions
+    )
+    if funding is None:
+        if funding_required:
+            funding = resolve_prepaid_funding(db, account, now=now)
+        else:
+            # Repair-only rows never consume funding authority. A neutral
+            # decision preserves the report shape and fails funded if a future
+            # branch accidentally reaches a money comparison.
+            funding = PrepaidFundingDecision(
+                account_id=str(account.id),
+                available_balance=Decimal("0.00"),
+                required_balance=Decimal("0.00"),
+                currency=resolve_prepaid_enforcement_currency(db),
+            )
     balance = funding.available_balance
     threshold = funding.required_balance
     derived_status = derive_account_status(db, str(account.id))
@@ -437,6 +487,16 @@ def plan_prepaid_account(
     elif not account.billing_enabled:
         action = PrepaidEnforcementAction.not_applicable
         reason = "account_billing_disabled"
+    elif not profile.has_collectible_subscriptions:
+        if active_prepaid_lock_count > 0:
+            action = PrepaidEnforcementAction.state_drift
+            reason = "prepaid_lock_without_collectible_service"
+        elif has_timers:
+            action = PrepaidEnforcementAction.clear_stale_timers
+            reason = "account_without_collectible_service_has_prepaid_timers"
+        else:
+            action = PrepaidEnforcementAction.not_applicable
+            reason = "account_without_collectible_service"
     elif not profile.automation_safe and profile.has_collectible_subscriptions:
         action = PrepaidEnforcementAction.billing_profile_invalid
         reason = profile.invalid_reason or "billing_profile_not_automation_safe"
@@ -546,6 +606,16 @@ def plan_prepaid_enforcement(
         else list(candidate_prepaid_account_ids(db))
     )
     ids = sorted({coerce_uuid(str(value)) for value in raw_ids}, key=str)
+    from app.services.prepaid_funding_reconstruction import (
+        prepaid_funding_quarantined_account_ids,
+    )
+
+    funding_candidate_ids = candidate_prepaid_funding_account_ids(db)
+    quarantined_ids = prepaid_funding_quarantined_account_ids(
+        db,
+        [account_id for account_id in ids if account_id in funding_candidate_ids],
+    )
+    ids = [account_id for account_id in ids if account_id not in quarantined_ids]
     if limit is not None:
         ids = ids[: max(0, limit)]
     accounts = list(
@@ -582,6 +652,7 @@ def plan_prepaid_enforcement(
     funding_by_account = {
         account.id: resolve_prepaid_funding(db, account, now=generated_at)
         for account in accounts
+        if account.id in funding_candidate_ids
     }
     lock_counts = _prepaid_lock_counts(db, resolved_ids)
     dedicated_accounts = _dedicated_bundle_account_ids(db, resolved_ids)
@@ -596,7 +667,7 @@ def plan_prepaid_enforcement(
             now=generated_at,
             policy=policy,
             subscriptions=subscriptions_by_account.get(account.id, []),
-            funding=funding_by_account[account.id],
+            funding=funding_by_account.get(account.id),
             active_prepaid_lock_count=lock_counts.get(account.id, 0),
             dedicated_bundle=account.id in dedicated_accounts,
             shield_reason=shield_reasons.get(account.id),

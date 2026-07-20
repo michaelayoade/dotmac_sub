@@ -108,10 +108,12 @@ def reseller_service_request_create(
 @router.get("/accounts", response_class=HTMLResponse)
 def reseller_accounts(
     request: Request,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(20, ge=5, le=100),
+    page: int = Query(1),
+    per_page: int = Query(20),
     search: str = Query(""),
     status_filter: str = Query(""),
+    sort_by: str | None = Query(None, alias="sort"),
+    sort_dir: str | None = Query(None, alias="dir"),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_accounts(
@@ -121,6 +123,8 @@ def reseller_accounts(
         per_page,
         search=search or None,
         status_filter=status_filter or None,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
     )
 
 
@@ -137,12 +141,14 @@ def reseller_account_detail(
 def reseller_account_invoices(
     request: Request,
     account_id: str,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(25, ge=5, le=100),
+    page: int = Query(1),
+    per_page: int = Query(25),
+    sort_by: str | None = Query(None, alias="sort"),
+    sort_dir: str | None = Query(None, alias="dir"),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_account_invoices(
-        request, db, account_id, page, per_page
+        request, db, account_id, page, per_page, sort_by=sort_by, sort_dir=sort_dir
     )
 
 
@@ -151,10 +157,30 @@ def reseller_account_status_update(
     request: Request,
     account_id: str,
     action: str = Form(...),
+    preview_fingerprint: str = Form(...),
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_account_status_update(
-        request, db, account_id, action
+        request, db, account_id, action, preview_fingerprint
+    )
+
+
+@router.post("/accounts/{account_id}/status/confirm", response_class=HTMLResponse)
+def reseller_account_status_confirm(
+    request: Request,
+    account_id: str,
+    action: str = Form(...),
+    preview_fingerprint: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    return web_reseller_routes_service.reseller_account_status_confirm(
+        request,
+        db,
+        account_id,
+        action,
+        preview_fingerprint,
+        idempotency_key,
     )
 
 

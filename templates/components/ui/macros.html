@@ -420,7 +420,7 @@
    ============================================ #}
 {% macro row_actions() %}
 <td class="px-6 py-4 whitespace-nowrap text-right">
-    <div class="flex items-center justify-end gap-1 opacity-100 sm:opacity-0 transition-opacity sm:group-hover:opacity-100">
+    <div class="flex items-center justify-end gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
         {{ caller() }}
     </div>
 </td>
@@ -433,8 +433,9 @@
    ============================================ #}
 {% macro row_action(href="#", icon="", title="", color="slate", hx_attrs={}) %}
 <a href="{{ href }}"
-   class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-{{ color }}-100 hover:text-{{ color }}-600 dark:hover:bg-{{ color }}-900/30 dark:hover:text-{{ color }}-400"
+   class="inline-flex items-center justify-center rounded-lg p-2 text-slate-400 transition-all hover:bg-{{ color }}-100 hover:text-{{ color }}-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:hover:bg-{{ color }}-900/30 dark:hover:text-{{ color }}-400 dark:focus-visible:ring-offset-slate-900"
    title="{{ title }}"
+   aria-label="{{ title }}"
    {% for key, val in hx_attrs.items() %}{{ key }}="{{ val }}"{% endfor %}>
     {{ icon|safe }}
 </a>

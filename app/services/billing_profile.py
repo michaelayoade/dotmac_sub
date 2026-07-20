@@ -108,6 +108,9 @@ def _profile_from_modes(
             account_subscription_mismatch=(
                 account_mode is not None and account_mode != effective
             ),
+            invalid_reason=(
+                "account_billing_mode_missing" if account_mode is None else None
+            ),
         )
 
     return BillingProfile(

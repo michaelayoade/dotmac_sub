@@ -1,5 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/list_macros.html" import list_pagination, sort_header %}
 {% block title %}Sales Orders - Admin{% endblock %}
 
 {% set so_status_variants = {
@@ -49,6 +50,10 @@
 
     <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form method="get" action="/admin/sales/sales-orders" class="space-y-3">
+            <input type="hidden" name="sort" value="{{ list_query.sort_by }}">
+            <input type="hidden" name="dir" value="{{ list_query.sort_dir }}">
+            <input type="hidden" name="page" value="1">
+            <input type="hidden" name="per_page" value="{{ list_query.per_page }}">
             <div class="grid gap-2 lg:grid-cols-12">
                 <div class="lg:col-span-4">
                     <label class="sr-only" for="so-search">Search</label>
@@ -91,14 +96,14 @@
         <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
             <thead class="bg-slate-50 dark:bg-slate-900">
                 <tr>
-                    <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Order</th>
+                    {{ sort_header(list_query, '/admin/sales/sales-orders', 'order_number', 'Order', entity='orders', th_class='px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400') }}
                     <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber</th>
                     <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status</th>
                     <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Payment</th>
-                    <th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total</th>
+                    {{ sort_header(list_query, '/admin/sales/sales-orders', 'total', 'Total', entity='orders', th_class='px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400') }}
                     <th class="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Balance Due</th>
                     <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Source</th>
-                    <th class="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Created</th>
+                    {{ sort_header(list_query, '/admin/sales/sales-orders', 'created_at', 'Created', entity='orders', th_class='px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400') }}
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
@@ -140,15 +145,6 @@
         </table>
     </div>
 
-    {% set filter_params = '&status=' ~ status ~ '&payment_status=' ~ payment_status ~ '&source_type=' ~ source_type ~ '&search=' ~ (search|urlencode) %}
-    <div class="flex items-center justify-between gap-3">
-        <p class="text-xs text-slate-500 dark:text-slate-400">Page {{ page }} of {{ total_pages }} · {{ total }} order{{ '' if total == 1 else 's' }}</p>
-        <div class="flex items-center gap-2">
-            <a href="/admin/sales/sales-orders?page={{ page - 1 if page > 1 else 1 }}&per_page={{ per_page }}{{ filter_params }}"
-               class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if page <= 1 %}pointer-events-none opacity-50{% endif %}">Previous</a>
-            <a href="/admin/sales/sales-orders?page={{ page + 1 }}&per_page={{ per_page }}{{ filter_params }}"
-               class="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 {% if page >= total_pages %}pointer-events-none opacity-50{% endif %}">Next</a>
-        </div>
-    </div>
+    {{ list_pagination(list_query, page_meta, '/admin/sales/sales-orders', entity='orders') }}
 </div>
 {% endblock %}

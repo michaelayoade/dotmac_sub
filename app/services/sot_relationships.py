@@ -282,10 +282,31 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "distinct invoice-receivable and prepaid-funding summaries",
                     "customer-visible financial position",
                     "bounded cohort financial projections",
+                    "currency-typed complete billing headline projection",
                 ),
                 depends_on=(
                     "financial.ledger",
                     "financial.prepaid_funding_reconstruction",
+                ),
+            ),
+            SOTService(
+                name="customer.reseller_status_actions",
+                module="app.services.reseller_portal",
+                owns=(
+                    "reseller-scoped account-action impact preview",
+                    "lock-aware account-action eligibility",
+                    "account-action stale-preview fingerprint",
+                    "account-bound idempotent status confirmation",
+                ),
+                depends_on=(
+                    "customer.identity_scope",
+                    "access.subscription_lifecycle",
+                ),
+                notes=(
+                    "The reseller adapter renders a distinct confirmation step "
+                    "bound to this preview and an account-scoped idempotency key. "
+                    "Subscription and account lifecycle mutation remains owned by "
+                    "access.subscription_lifecycle."
                 ),
             ),
             SOTService(
@@ -939,6 +960,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_enforcement_state",
+                module="app.services.prepaid_enforcement_state",
+                owns=(
+                    "prepaid low-balance timer state",
+                    "prepaid deactivation timer state",
+                    "funded and terminal prepaid timer cleanup",
+                ),
+                notes=(
+                    "Writes prepared timer observations and cleanup requests in "
+                    "the caller transaction. It owns no eligibility, threshold, "
+                    "grace, suspension, restoration, or commit decision."
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_enforcement_readiness",
                 module="app.services.prepaid_enforcement_readiness",
                 owns=(
@@ -1059,6 +1094,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.ledger",
                     "financial.payment_arrangements",
                     "financial.billing_health",
+                    "financial.prepaid_enforcement_state",
                     "access.subscription_lifecycle",
                     "access.walled_garden_policy",
                 ),
@@ -1125,6 +1161,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "financial.dunning",
                     "financial.access_resolution",
                     "financial.prepaid_enforcement",
+                    "financial.prepaid_enforcement_state",
                     "financial.prepaid_enforcement_readiness",
                 ),
             ),
@@ -2814,6 +2851,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "inbound channel ingestion",
                     "admin inbox mutation transactions",
                     "InboxContactLink canonical contact-point routing projection",
+                    "exact open, response, assignment, mute, and snooze queue cohorts",
+                    "failed outbound queue count and worklist",
                 ),
                 depends_on=(
                     "party.registry",
@@ -3210,12 +3249,61 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "projects.native_read until the CRM mirror cutover is complete."
                 ),
             ),
+            SOTService(
+                name="operations.vendor_project_lifecycle",
+                module="app.services.vendor_portal_operations",
+                owns=(
+                    "vendor start/complete installation-project transitions",
+                    "durable vendor lifecycle actor/time/event evidence",
+                    "typed vendor project lifecycle outbox events",
+                    "vendor installation-project quote lifecycle",
+                    "quote submission eligibility and impact snapshot",
+                    "as-built evidence lifecycle and impact snapshot",
+                ),
+                depends_on=("events.dispatcher", "operations.project_lifecycle"),
+                notes=(
+                    "This is the sole writer for approved -> in_progress -> "
+                    "completed vendor work transitions and owns the related quote "
+                    "and as-built workflow in the same implementation module. It "
+                    "raises transport-neutral domain errors; adapters translate "
+                    "them for HTTP delivery."
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_purchase_invoices",
+                module="app.services.vendor_purchase_invoices",
+                owns=(
+                    "vendor purchase-invoice lifecycle",
+                    "purchase-invoice submission eligibility and financial preview",
+                ),
+                depends_on=("operations.vendor_project_lifecycle",),
+            ),
+            SOTService(
+                name="operations.vendor_submission_confirmation",
+                module="app.services.vendor_submission_proposals",
+                owns=(
+                    "short-lived signed vendor submission proposal",
+                    "vendor submission stale-preview verification",
+                    "vendor submission idempotency and replay result",
+                ),
+                depends_on=(
+                    "operations.vendor_project_lifecycle",
+                    "operations.vendor_purchase_invoices",
+                ),
+                notes=(
+                    "Web adapters only request a preview or confirm its signed "
+                    "proposal. Domain owners recheck under lock and commit the "
+                    "mutation with its idempotency result."
+                ),
+            ),
         ),
         entrypoints=(
             "app.services.events.handlers.provisioning",
             "app.tasks.ont_provisioning",
             "app.web.admin.provisioning",
             "app.web.admin.projects",
+            "app.web.vendor_portal",
+            "app.api.vendor_portal",
             "app.api.projects",
             "app.api.field.*",
             "app.services.web_projects",
@@ -4845,7 +4933,10 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "subscription access-status transitions",
                     "subscriber access-status projection",
                 ),
-                depends_on=("events.dispatcher",),
+                depends_on=(
+                    "events.dispatcher",
+                    "financial.prepaid_enforcement_state",
+                ),
             ),
             SOTService(
                 name="access.control_resolution",
@@ -4936,6 +5027,62 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.enforcement",
                 owns=("access-state CoA/disconnect execution",),
                 depends_on=("access.radius_state", "sessions.radius_resolution"),
+            ),
+            SOTService(
+                name="access.fup_rule_engine",
+                module="app.services.fup",
+                owns=(
+                    "FUP policy and rule definitions (CRUD)",
+                    "FUP rule evaluation and simulation",
+                ),
+                depends_on=("access.fup_usage_windows",),
+                notes=(
+                    "Pure decision engine shared by the enforcement sweep and "
+                    "the what-if simulator; it writes no enforcement state."
+                ),
+            ),
+            SOTService(
+                name="access.fup_runtime_state",
+                module="app.services.fup_state",
+                owns=("FUP per-subscription runtime state rows",),
+                depends_on=(),
+                notes=(
+                    "State store only: get/apply/clear/list. Decisions live in "
+                    "the rule engine and the enforcement sweep."
+                ),
+            ),
+            SOTService(
+                name="access.fup_usage_windows",
+                module="app.services.fup_usage",
+                owns=(
+                    "FUP consumption window bounds",
+                    "windowed FUP usage aggregation",
+                ),
+                depends_on=(),
+                notes=(
+                    "Single source of truth for FUP consumption windows and "
+                    "windowed usage reads; read-only over usage facts."
+                ),
+            ),
+            SOTService(
+                name="access.fup_enforcement_sweep",
+                module="app.services.fup_enforcement",
+                owns=(
+                    "FUP sweep enforce/warn/reset decisions",
+                    "FUP enforcement transition and cooldown hysteresis",
+                    "FUP repeat-upsell nudge policy",
+                    "FUP customer notification fan-out",
+                ),
+                depends_on=(
+                    "access.session_enforcement",
+                    "control.settings_spec",
+                    "events.dispatcher",
+                ),
+                notes=(
+                    "Celery tasks keep only the advisory-lock plumbing, task "
+                    "names, and queue chaining; the sweep owns every "
+                    "enforce/warn/reset/repeat-upsell decision."
+                ),
             ),
         ),
         entrypoints=(
@@ -5159,6 +5306,27 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "is disclosure, never enforcement. Pilot consumer: the "
                     "customer plan-change editor (PLAN_CHANGE_FORM in "
                     "customer_portal_flow_changes)."
+                ),
+            ),
+            SOTService(
+                name="ui.referral_list_projection",
+                module="app.services.web_referrals",
+                owns=(
+                    "admin referral filter and stable sort semantics",
+                    "admin referral row and page projection",
+                    "admin referral KPI values and exact cohort links",
+                    "admin referral list canonical URL",
+                ),
+                depends_on=(
+                    "ui.list_contracts",
+                    "ui.projection_contracts",
+                    "referrals.program",
+                ),
+                notes=(
+                    "The route redirects stale or clamped request state to the "
+                    "owner-provided canonical URL. Templates render ListQuery, "
+                    "PageMeta, and Kpi contracts without deriving totals, cohort "
+                    "links, sort rules, or pagination strings."
                 ),
             ),
             SOTService(
@@ -5622,6 +5790,21 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
     DomainSOT(
         domain="ui_semantic_presentation",
         services=(
+            SOTService(
+                name="ui.projection_contracts",
+                module="app.services.ui_contracts",
+                owns=(
+                    "UI value availability and freshness contract",
+                    "UI KPI exact-cohort contract",
+                    "UI action eligibility and confirmation contract",
+                ),
+                depends_on=("ui.status_presentation",),
+                notes=(
+                    "Transport-neutral StateValue, Kpi, and Action shapes. Domain "
+                    "read and command owners supply the facts and decisions; "
+                    "templates and clients render them without deriving meaning."
+                ),
+            ),
             SOTService(
                 name="ui.status_presentation",
                 module="app.services.status_presentation",

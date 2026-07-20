@@ -23,9 +23,44 @@ from app.services import (
     team_inbox_read,
 )
 from app.services.auth_dependencies import require_permission
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    PageMeta,
+    request_needs_canonicalization,
+)
 
 router = APIRouter(prefix="/inbox", tags=["web-admin-inbox"])
 templates = Jinja2Templates(directory="templates")
+
+# The inbox queue's declared capabilities. The default sort is "priority", which
+# list_conversations maps to the urgency composite (priority, then recency), so
+# the default view is unchanged; last_message_at / created_at are single-column
+# sorts. All filters are declared so list_query.url round-trips them on a
+# sort/page click.
+INBOX_LIST_DEFINITION = ListDefinition(
+    key="team_inbox",
+    fields=(
+        ListFieldDefinition("status", "Status", filterable=True),
+        ListFieldDefinition("channel_type", "Channel", filterable=True),
+        ListFieldDefinition("service_team_id", "Team", filterable=True),
+        ListFieldDefinition("assigned_person_id", "Assignee", filterable=True),
+        ListFieldDefinition("contact_resolution_status", "Contact", filterable=True),
+        ListFieldDefinition("needs_response", "Needs response", filterable=True),
+        ListFieldDefinition("muted", "Muted", filterable=True),
+        ListFieldDefinition("snoozed", "Snoozed", filterable=True),
+        ListFieldDefinition("open_only", "Open only", filterable=True),
+        ListFieldDefinition("unassigned", "Unassigned", filterable=True),
+        ListFieldDefinition("priority_at_most", "Max priority", filterable=True),
+        ListFieldDefinition("priority", "Priority", sortable=True),
+        ListFieldDefinition("last_message_at", "Last activity", sortable=True),
+        ListFieldDefinition("created_at", "Created", sortable=True),
+    ),
+    default_sort="priority",
+    default_sort_dir="asc",
+    per_page_options=(10, 25, 50, 100),
+    default_per_page=25,
+)
 
 
 def _ctx(request: Request, db: Session) -> dict:
@@ -38,6 +73,16 @@ def _ctx(request: Request, db: Session) -> dict:
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+def _clean_uuid(value: str | None) -> str | None:
+    candidate = (value or "").strip()
+    if not candidate:
+        return None
+    try:
+        return str(UUID(candidate))
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 
 @router.get(
@@ -54,13 +99,60 @@ def team_inbox_queue(
     assigned_person_id: str | None = Query(default=None),
     needs_response: bool = Query(default=False),
     contact_resolution_status: str | None = Query(default=None),
-    priority_at_most: int | None = Query(default=None, ge=0, le=999),
+    priority_at_most: int | None = Query(default=None),
     muted: bool | None = Query(default=None),
     snoozed: bool | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    per_page: int = Query(default=25, ge=10, le=100),
+    open_only: bool = Query(default=False),
+    unassigned: bool = Query(default=False),
+    sort_by: str | None = Query(default=None, alias="sort"),
+    sort_dir: str | None = Query(default=None, alias="dir"),
+    page: int = Query(default=1),
+    per_page: int = Query(default=25),
     db: Session = Depends(get_db),
 ):
+    # FastAPI resolves Query defaults before normal route execution, but focused
+    # route tests and internal adapters can call this function directly. In that
+    # case omitted values are still ``Query`` objects; normalize them at the
+    # adapter boundary so they cannot look truthy or trigger a false redirect.
+    search = search if isinstance(search, str) else None
+    status = status if isinstance(status, str) else None
+    channel_type = channel_type if isinstance(channel_type, str) else None
+    service_team_id = service_team_id if isinstance(service_team_id, str) else None
+    assigned_person_id = (
+        assigned_person_id if isinstance(assigned_person_id, str) else None
+    )
+    needs_response = needs_response if isinstance(needs_response, bool) else False
+    contact_resolution_status = (
+        contact_resolution_status
+        if isinstance(contact_resolution_status, str)
+        else None
+    )
+    priority_at_most = (
+        priority_at_most
+        if isinstance(priority_at_most, int) and not isinstance(priority_at_most, bool)
+        else None
+    )
+    muted = muted if isinstance(muted, bool) else None
+    snoozed = snoozed if isinstance(snoozed, bool) else None
+    open_only = open_only if isinstance(open_only, bool) else False
+    unassigned = unassigned if isinstance(unassigned, bool) else False
+    sort_by = sort_by if isinstance(sort_by, str) else None
+    sort_dir = sort_dir if isinstance(sort_dir, str) else None
+    page = page if isinstance(page, int) and not isinstance(page, bool) else 1
+    per_page = (
+        per_page if isinstance(per_page, int) and not isinstance(per_page, bool) else 25
+    )
+    requested_status = status
+    requested_channel_type = channel_type
+    requested_service_team_id = service_team_id
+    requested_assigned_person_id = assigned_person_id
+    requested_priority_at_most = priority_at_most
+    status_values = {item.value for item in InboxConversationStatus}
+    channel_values = {item.value for item in InboxChannelType}
+    status = status if status in status_values else None
+    channel_type = channel_type if channel_type in channel_values else None
+    service_team_id = _clean_uuid(service_team_id)
+    assigned_person_id = _clean_uuid(assigned_person_id)
     clean_contact_resolution_status = (
         contact_resolution_status.strip()
         if isinstance(contact_resolution_status, str)
@@ -68,14 +160,53 @@ def team_inbox_queue(
         else None
     )
     clean_priority_at_most = (
-        priority_at_most if isinstance(priority_at_most, int) else None
+        priority_at_most
+        if isinstance(priority_at_most, int) and 0 <= priority_at_most <= 999
+        else None
     )
     clean_muted = muted if isinstance(muted, bool) else None
     clean_snoozed = snoozed if isinstance(snoozed, bool) else None
-    offset = (page - 1) * per_page
+    clean_open_only = open_only if isinstance(open_only, bool) else False
+    clean_unassigned = unassigned if isinstance(unassigned, bool) else False
+    definition = INBOX_LIST_DEFINITION
+    safe_sort = (
+        sort_by if sort_by in definition.sortable_keys else definition.default_sort
+    )
+    safe_dir = sort_dir if sort_dir in ("asc", "desc") else None
+    safe_per_page = (
+        per_page
+        if per_page in definition.per_page_options
+        else definition.default_per_page
+    )
+    requested_query = definition.build_query(
+        search=search,
+        filters={
+            "status": status,
+            "channel_type": channel_type,
+            "service_team_id": service_team_id,
+            "assigned_person_id": assigned_person_id,
+            "contact_resolution_status": clean_contact_resolution_status,
+            "needs_response": "true" if needs_response else None,
+            "muted": ("true" if clean_muted else "false")
+            if clean_muted is not None
+            else None,
+            "snoozed": ("true" if clean_snoozed else "false")
+            if clean_snoozed is not None
+            else None,
+            "open_only": "true" if clean_open_only else None,
+            "unassigned": "true" if clean_unassigned else None,
+            "priority_at_most": str(clean_priority_at_most)
+            if clean_priority_at_most is not None
+            else None,
+        },
+        sort_by=safe_sort,
+        sort_dir=safe_dir,
+        page=max(1, page),
+        per_page=safe_per_page,
+    )
     result = team_inbox_read.list_conversations(
         db,
-        search=search,
+        search=requested_query.search,
         status=status,
         channel_type=channel_type,
         service_team_id=service_team_id,
@@ -85,20 +216,73 @@ def team_inbox_queue(
         priority_at_most=clean_priority_at_most,
         muted=clean_muted,
         snoozed=clean_snoozed,
-        limit=per_page,
-        offset=offset,
+        open_only=clean_open_only,
+        unassigned=clean_unassigned,
+        order_by=requested_query.sort_by,
+        order_dir=requested_query.sort_dir,
+        limit=requested_query.per_page,
+        offset=requested_query.offset,
     )
+    page_meta = PageMeta.from_query(requested_query, result.count)
+    list_query = requested_query.with_page(page_meta.page)
+    if list_query.page != requested_query.page:
+        result = team_inbox_read.list_conversations(
+            db,
+            search=list_query.search,
+            status=status,
+            channel_type=channel_type,
+            service_team_id=service_team_id,
+            assigned_person_id=assigned_person_id,
+            needs_response=needs_response,
+            contact_resolution_status=clean_contact_resolution_status,
+            priority_at_most=clean_priority_at_most,
+            muted=clean_muted,
+            snoozed=clean_snoozed,
+            open_only=clean_open_only,
+            unassigned=clean_unassigned,
+            order_by=list_query.sort_by,
+            order_dir=list_query.sort_dir,
+            limit=list_query.per_page,
+            offset=list_query.offset,
+        )
+    raw_filters = {
+        "status": requested_status,
+        "channel_type": requested_channel_type,
+        "service_team_id": requested_service_team_id,
+        "assigned_person_id": requested_assigned_person_id,
+        "contact_resolution_status": contact_resolution_status,
+        "needs_response": "true" if needs_response else None,
+        "muted": ("true" if muted else "false") if muted is not None else None,
+        "snoozed": ("true" if snoozed else "false") if snoozed is not None else None,
+        "open_only": "true" if open_only else None,
+        "unassigned": "true" if unassigned else None,
+        "priority_at_most": str(requested_priority_at_most)
+        if requested_priority_at_most is not None
+        else None,
+    }
+    if request_needs_canonicalization(
+        list_query,
+        search=search,
+        filters=raw_filters,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        page=page,
+        per_page=per_page,
+    ):
+        return RedirectResponse(url=list_query.url("/admin/inbox"), status_code=307)
     context = _ctx(request, db)
     context.update(
         {
             "rows": result.items,
             "queue_metrics": team_inbox_operations.queue_metrics(db),
             "count": result.count,
-            "page": page,
-            "per_page": per_page,
-            "has_previous": page > 1,
-            "has_next": offset + len(result.items) < result.count,
-            "search": search or "",
+            "list_query": list_query,
+            "page_meta": page_meta,
+            "page": page_meta.page,
+            "per_page": page_meta.per_page,
+            "has_previous": page_meta.has_previous,
+            "has_next": page_meta.has_next,
+            "search": list_query.search or "",
             "status": status or "",
             "channel_type": channel_type or "",
             "service_team_id": service_team_id or "",
@@ -108,6 +292,8 @@ def team_inbox_queue(
             "priority_at_most": clean_priority_at_most,
             "muted": clean_muted,
             "snoozed": clean_snoozed,
+            "open_only": clean_open_only,
+            "unassigned": clean_unassigned,
             "service_team_options": team_inbox_metrics.active_service_team_options(db),
             "status_options": [item.value for item in InboxConversationStatus],
             "channel_options": [item.value for item in InboxChannelType],
@@ -516,9 +702,13 @@ def team_inbox_saved_filter_create(
     priority_at_most: int | None = Form(default=None),
     muted: bool | None = Form(default=None),
     snoozed: bool | None = Form(default=None),
+    open_only: bool = Form(default=False),
+    unassigned: bool = Form(default=False),
     is_shared: bool = Form(default=False),
     db: Session = Depends(get_db),
 ):
+    clean_open_only = open_only if isinstance(open_only, bool) else False
+    clean_unassigned = unassigned if isinstance(unassigned, bool) else False
     try:
         team_inbox_commands.save_filter(
             db,
@@ -533,6 +723,8 @@ def team_inbox_saved_filter_create(
                 "priority_at_most": priority_at_most,
                 "muted": muted,
                 "snoozed": snoozed,
+                "open_only": clean_open_only,
+                "unassigned": clean_unassigned,
             },
             actor_person_id=_actor_id_from_request(request),
             is_shared=is_shared,

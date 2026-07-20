@@ -25,6 +25,7 @@ from app.schemas.vendor_purchase_invoice import (
 )
 from app.services.common import apply_pagination, coerce_uuid
 from app.services.file_storage import FileValidationError, file_uploads
+from app.services.ui_contracts import Action
 
 _MONEY = Decimal("0.01")
 _EDITABLE = {
@@ -52,13 +53,17 @@ def _query(db: Session):
     )
 
 
-def _get(db: Session, invoice_id: str) -> VendorPurchaseInvoice:
-    invoice = (
+def _get(
+    db: Session, invoice_id: str, *, for_update: bool = False
+) -> VendorPurchaseInvoice:
+    query = (
         _query(db)
         .filter(VendorPurchaseInvoice.id == coerce_uuid(invoice_id))
         .filter(VendorPurchaseInvoice.is_active.is_(True))
-        .one_or_none()
     )
+    if for_update:
+        query = query.with_for_update(of=VendorPurchaseInvoice)
+    invoice = query.one_or_none()
     if invoice is None:
         raise HTTPException(status_code=404, detail="Purchase invoice not found")
     return invoice
@@ -130,12 +135,23 @@ def _recalculate(invoice: VendorPurchaseInvoice) -> None:
 
 def serialize(invoice: VendorPurchaseInvoice) -> dict:
     attachment = invoice.attachment
+    editable = invoice.status in _EDITABLE
     return {
         "id": invoice.id,
         "project_id": invoice.project_id,
         "vendor_id": invoice.vendor_id,
         "invoice_number": invoice.invoice_number,
         "status": invoice.status,
+        # Editability is projected from the same set the mutation paths enforce;
+        # the template consumes allowed/reason and never re-derives status rules.
+        "edit_action": Action(
+            key="edit",
+            label="Edit invoice",
+            allowed=editable,
+            reason=None
+            if editable
+            else f"A {invoice.status.replace('_', ' ')} invoice cannot be edited",
+        ),
         "currency": invoice.currency,
         "tax_rate_percent": invoice.tax_rate_percent,
         "subtotal": invoice.subtotal,
@@ -208,6 +224,108 @@ class VendorPurchaseInvoices:
         return serialize(invoice)
 
     @staticmethod
+    def preview_submission(
+        db: Session,
+        invoice_id: str,
+        *,
+        vendor_id: str,
+        for_update: bool = False,
+    ) -> dict:
+        """Own the read-only impact snapshot for a purchase-invoice submit."""
+        invoice = _get(db, invoice_id, for_update=for_update)
+        _assert_vendor(invoice, vendor_id)
+        _assert_editable(invoice)
+        if not (invoice.invoice_number or "").strip():
+            raise HTTPException(status_code=422, detail="Invoice number is required")
+        submitted_quote_query = (
+            db.query(ProjectQuote)
+            .filter(ProjectQuote.project_id == invoice.project_id)
+            .filter(ProjectQuote.vendor_id == invoice.vendor_id)
+            .filter(ProjectQuote.is_active.is_(True))
+            .filter(
+                ProjectQuote.status.in_(
+                    (
+                        ProjectQuoteStatus.submitted.value,
+                        ProjectQuoteStatus.under_review.value,
+                        ProjectQuoteStatus.approved.value,
+                    )
+                )
+            )
+            .order_by(ProjectQuote.id.asc())
+        )
+        if for_update:
+            submitted_quote_query = submitted_quote_query.with_for_update(
+                of=ProjectQuote
+            )
+        submitted_quotes = submitted_quote_query.all()
+        if not submitted_quotes:
+            raise HTTPException(
+                status_code=409,
+                detail="A submitted vendor quote is required before invoicing",
+            )
+        active = [item for item in invoice.line_items if item.is_active]
+        if not active:
+            raise HTTPException(
+                status_code=422, detail="At least one active invoice line is required"
+            )
+        subtotal = sum((_money(item.amount) for item in active), Decimal("0.00"))
+        tax_total = _money(
+            subtotal * Decimal(str(invoice.tax_rate_percent or "0")) / Decimal("100")
+        )
+        total = _money(subtotal + tax_total)
+        return {
+            "submission_type": "purchase_invoice",
+            "project_id": str(invoice.project_id),
+            "target_id": str(invoice.id),
+            "title": "Submit purchase invoice for review",
+            "summary": (
+                f"{invoice.currency} {total:,.2f} from {len(active)} line "
+                f"item{'s' if len(active) != 1 else ''}"
+            ),
+            "details": [
+                ("Invoice number", invoice.invoice_number),
+                ("Line items", str(len(active))),
+                ("Subtotal", f"{invoice.currency} {subtotal:,.2f}"),
+                ("Tax", f"{invoice.currency} {tax_total:,.2f}"),
+                ("Total", f"{invoice.currency} {total:,.2f}"),
+                ("Result", "Invoice becomes read-only and enters staff review"),
+            ],
+            "state": {
+                "invoice_id": str(invoice.id),
+                "project_id": str(invoice.project_id),
+                "status": invoice.status,
+                "invoice_number": invoice.invoice_number,
+                "currency": invoice.currency,
+                "tax_rate_percent": invoice.tax_rate_percent,
+                "attachment_stored_file_id": (
+                    str(invoice.attachment_stored_file_id)
+                    if invoice.attachment_stored_file_id
+                    else None
+                ),
+                "updated_at": invoice.updated_at,
+                "eligible_quotes": [
+                    {
+                        "id": str(quote.id),
+                        "status": quote.status,
+                        "updated_at": quote.updated_at,
+                    }
+                    for quote in submitted_quotes
+                ],
+                "lines": [
+                    {
+                        "id": str(item.id),
+                        "description": item.description,
+                        "quantity": item.quantity,
+                        "unit_price": item.unit_price,
+                        "amount": item.amount,
+                        "updated_at": item.updated_at,
+                    }
+                    for item in sorted(active, key=lambda row: str(row.id))
+                ],
+            },
+        }
+
+    @staticmethod
     def create(
         db: Session,
         payload: VendorPurchaseInvoiceCreate,
@@ -256,7 +374,10 @@ class VendorPurchaseInvoices:
         *,
         vendor_id: str,
     ) -> dict:
-        invoice = _get(db, invoice_id)
+        # Editable invoice writers lock the same parent row as submission
+        # confirmation so a concurrent edit cannot evade the stale-preview
+        # comparison.
+        invoice = _get(db, invoice_id, for_update=True)
         _assert_vendor(invoice, vendor_id)
         _assert_editable(invoice)
         data = payload.model_dump(exclude_unset=True)
@@ -285,7 +406,7 @@ class VendorPurchaseInvoices:
         *,
         vendor_id: str,
     ) -> dict:
-        invoice = _get(db, invoice_id)
+        invoice = _get(db, invoice_id, for_update=True)
         _assert_vendor(invoice, vendor_id)
         _assert_editable(invoice)
         line = VendorPurchaseInvoiceLineItem(
@@ -312,7 +433,7 @@ class VendorPurchaseInvoices:
         *,
         vendor_id: str,
     ) -> dict:
-        invoice = _get(db, invoice_id)
+        invoice = _get(db, invoice_id, for_update=True)
         _assert_vendor(invoice, vendor_id)
         _assert_editable(invoice)
         line = next(
@@ -336,7 +457,7 @@ class VendorPurchaseInvoices:
     def delete_line(
         db: Session, invoice_id: str, line_id: str, *, vendor_id: str
     ) -> dict:
-        invoice = _get(db, invoice_id)
+        invoice = _get(db, invoice_id, for_update=True)
         _assert_vendor(invoice, vendor_id)
         _assert_editable(invoice)
         line = next(
@@ -364,7 +485,7 @@ class VendorPurchaseInvoices:
         content_type: str | None,
         content: bytes,
     ) -> dict:
-        invoice = _get(db, invoice_id)
+        invoice = _get(db, invoice_id, for_update=True)
         _assert_vendor(invoice, vendor_id)
         _assert_editable(invoice)
         if not content:
@@ -391,8 +512,14 @@ class VendorPurchaseInvoices:
         return VendorPurchaseInvoices.get(db, invoice_id, vendor_id=vendor_id)
 
     @staticmethod
-    def submit(db: Session, invoice_id: str, *, vendor_id: str) -> dict:
-        invoice = _get(db, invoice_id)
+    def submit(
+        db: Session,
+        invoice_id: str,
+        *,
+        vendor_id: str,
+        commit: bool = True,
+    ) -> dict:
+        invoice = _get(db, invoice_id, for_update=True)
         _assert_vendor(invoice, vendor_id)
         _assert_editable(invoice)
         if not (invoice.invoice_number or "").strip():
@@ -410,7 +537,10 @@ class VendorPurchaseInvoices:
         invoice.status = VendorPurchaseInvoiceStatus.submitted.value
         invoice.submitted_at = datetime.now(UTC)
         invoice.review_notes = None
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         return VendorPurchaseInvoices.get(db, invoice_id, vendor_id=vendor_id)
 
     @staticmethod

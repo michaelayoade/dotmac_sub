@@ -19,35 +19,6 @@ def _subscriber(email: str, status: SubscriberStatus, created_at: datetime):
     )
 
 
-def test_customer_report_filter_uses_created_range_and_current_status():
-    customers = [
-        _subscriber(
-            "active@example.test",
-            SubscriberStatus.active,
-            datetime(2026, 1, 20, tzinfo=UTC),
-        ),
-        _subscriber(
-            "blocked@example.test",
-            SubscriberStatus.blocked,
-            datetime(2026, 2, 10, tzinfo=UTC),
-        ),
-        _subscriber(
-            "old@example.test",
-            SubscriberStatus.active,
-            datetime(2025, 12, 31, tzinfo=UTC),
-        ),
-    ]
-
-    filtered = web_reports._filter_subscribers_for_report(
-        customers,
-        date_from="2026-01-01",
-        date_to="2026-03-31",
-        status="active",
-    )
-
-    assert [customer.email for customer in filtered] == ["active@example.test"]
-
-
 def test_customer_report_is_visible_from_reports_hub():
     route_source = Path("app/web/admin/reports.py").read_text(encoding="utf-8")
     page_template = Path("templates/admin/reports/subscribers.html").read_text(
@@ -109,3 +80,22 @@ def test_customer_report_includes_usage_for_filtered_period(
     assert "period_usage_gb,period_avg_mbps,period_active_services" in csv_content
     assert "Usage Customer" in csv_content
     assert ",5.0,1" in csv_content
+
+
+def test_recent_signups_use_a_view_model_without_mutating_subscriber(
+    db_session, subscriber
+):
+    subscriber.status = SubscriberStatus.active
+    subscriber.is_active = True
+    subscriber.user_type = UserType.customer
+    subscriber.created_at = datetime(2026, 1, 10, tzinfo=UTC)
+    db_session.commit()
+
+    data = web_reports.get_subscribers_report_data(db_session)
+
+    recent = next(
+        row for row in data["recent_subscribers"] if row.name == subscriber.name
+    )
+    assert recent.derived_status == SubscriberStatus.active
+    assert subscriber.status == SubscriberStatus.active
+    assert not hasattr(subscriber, "derived_status")

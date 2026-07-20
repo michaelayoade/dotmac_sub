@@ -71,9 +71,18 @@ def integrations_overview(request: Request, db: Session = Depends(get_db)):
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def syncs_list(request: Request, db: Session = Depends(get_db)):
+def syncs_list(
+    request: Request,
+    direction: str | None = None,
+    active: str | None = None,
+    db: Session = Depends(get_db),
+):
     """Generic sync profiles across external systems."""
-    state = web_integration_syncs_service.build_syncs_index_data(db)
+    state = web_integration_syncs_service.build_syncs_index_data(
+        db,
+        direction=direction,
+        active=active in ("1", "true", "on", "yes"),
+    )
     context = _base_context(request, db, active_page="syncs")
     context.update(
         {

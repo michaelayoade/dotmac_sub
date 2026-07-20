@@ -29,11 +29,14 @@ from app.services.common import coerce_uuid
 from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
     PrepaidEnforcementPlan,
-    candidate_prepaid_account_ids,
+    candidate_prepaid_funding_account_ids,
     plan_prepaid_enforcement,
     resolve_prepaid_enforcement_policy,
 )
-from app.services.prepaid_funding_reconstruction import authority_cutover_batch
+from app.services.prepaid_funding_reconstruction import (
+    authority_cutover_batch,
+    prepaid_funding_quarantined_account_ids,
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,7 @@ class PrepaidReadinessComparison:
     source: str
     observed_at: datetime
     currency: str
+    quarantined_account_count: int
     blockers: tuple[str, ...]
 
     @property
@@ -151,6 +155,12 @@ def _reconstruction_evidence(
             }
             for row in rows
         ]
+    quarantined_ids = sorted(
+        str(value)
+        for value in prepaid_funding_quarantined_account_ids(
+            db, account_ids, currency=currency
+        )
+    )
     source = f"financial.prepaid_funding_reconstruction:{cutover.manifest_sha256}"
     return (
         _hash(
@@ -168,6 +178,7 @@ def _reconstruction_evidence(
                     "currency": cutover.currency,
                 },
                 "candidate_account_ids": sorted(account_ids),
+                "quarantined_account_ids": quarantined_ids,
                 "active_baselines": active_baselines,
             }
         ),
@@ -220,8 +231,17 @@ def evaluate_prepaid_enforcement_readiness(
     intended_activation_at = _as_utc(activation_at)
     configured_currency = resolve_prepaid_enforcement_currency(db)
     account_ids = sorted(
-        (str(value) for value in candidate_prepaid_account_ids(db)), key=str
+        (str(value) for value in candidate_prepaid_funding_account_ids(db)), key=str
     )
+    quarantined_ids = {
+        str(value)
+        for value in prepaid_funding_quarantined_account_ids(
+            db, account_ids, currency=configured_currency
+        )
+    }
+    enforceable_ids = [
+        account_id for account_id in account_ids if account_id not in quarantined_ids
+    ]
     blockers: list[str] = []
     if authority_cutover_batch(db) is None:
         return PrepaidReadinessComparison(
@@ -233,8 +253,11 @@ def evaluate_prepaid_enforcement_readiness(
             source="",
             observed_at=observed_at,
             currency=configured_currency,
+            quarantined_account_count=len(account_ids),
             blockers=("prepaid_funding_authority_cutover_missing",),
         )
+    if not enforceable_ids:
+        blockers.append("prepaid_funding_enforceable_cohort_empty")
     if intended_activation_at < observed_at:
         blockers.append("activation_precedes_readiness_observation")
     if intended_activation_at - observed_at > _max_readiness_age(db):
@@ -243,7 +266,7 @@ def evaluate_prepaid_enforcement_readiness(
     local_plan = plan_prepaid_enforcement(
         db,
         now=observed_at,
-        account_ids=account_ids,
+        account_ids=enforceable_ids,
         activation_at=intended_activation_at,
     )
     reconstruction_hash, source = _reconstruction_evidence(
@@ -273,6 +296,7 @@ def evaluate_prepaid_enforcement_readiness(
         source=source,
         observed_at=observed_at,
         currency=configured_currency,
+        quarantined_account_count=len(quarantined_ids),
         blockers=tuple(blockers),
     )
 
@@ -285,7 +309,7 @@ def record_prepaid_enforcement_readiness(
     verified_by: str,
     now: datetime | None = None,
 ) -> PrepaidEnforcementReadiness:
-    """Persist a successful full-cohort live-owner review as cutover evidence."""
+    """Persist a successful live-owner review of the enforceable cohort."""
     evidence = evidence_ref.strip()
     actor = verified_by.strip()
     if not evidence:
@@ -318,7 +342,7 @@ def record_prepaid_enforcement_readiness(
         configuration_hash=comparison.configuration_hash,
         funding_decisions_hash=comparison.funding_decisions_hash,
         reconstruction_evidence_sha256=(comparison.reconstruction_evidence_sha256),
-        blocker_count=0,
+        blocker_count=comparison.quarantined_account_count,
         verified_by=actor,
         is_active=True,
     )
@@ -345,9 +369,6 @@ def prepaid_enforcement_readiness_block_reason(
     record = active_prepaid_enforcement_readiness(db)
     if record is None:
         return "prepaid_funding_readiness_missing"
-    if record.blocker_count:
-        return "prepaid_funding_readiness_has_blockers"
-
     policy = resolve_prepaid_enforcement_policy(db)
     if policy.activation_error:
         return policy.activation_error
@@ -368,10 +389,21 @@ def prepaid_enforcement_readiness_block_reason(
     ):
         return "prepaid_funding_readiness_expired"
     account_ids = sorted(
-        (str(value) for value in candidate_prepaid_account_ids(db)), key=str
+        (str(value) for value in candidate_prepaid_funding_account_ids(db)), key=str
     )
     if _candidate_hash(account_ids) != record.candidate_account_ids_hash:
         return "prepaid_funding_readiness_cohort_changed"
+    quarantined_ids = {
+        str(value)
+        for value in prepaid_funding_quarantined_account_ids(
+            db, account_ids, currency=record.currency
+        )
+    }
+    if len(quarantined_ids) != record.blocker_count:
+        return "prepaid_funding_readiness_quarantine_changed"
+    enforceable_ids = [
+        account_id for account_id in account_ids if account_id not in quarantined_ids
+    ]
     try:
         reconstruction_hash, source = _reconstruction_evidence(
             db,
@@ -388,7 +420,7 @@ def prepaid_enforcement_readiness_block_reason(
     current_plan = plan_prepaid_enforcement(
         db,
         now=effective_now,
-        account_ids=account_ids,
+        account_ids=enforceable_ids,
         activation_at=policy.activation_at,
     )
     if _configuration_hash(db, current_plan) != record.configuration_hash:

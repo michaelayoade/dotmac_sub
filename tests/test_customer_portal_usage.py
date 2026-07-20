@@ -206,6 +206,9 @@ class TestCustomerPortalUsagePage:
         daily_records.assert_called_once()
         assert len(page["usage_records"]) == 2
         assert [record.amount for record in page["usage_records"]] == [1.25, 2.5]
+        # Period total is summed over the full record set (7.5), never the
+        # paginated page (which would be 1.25 + 2.5 = 3.75).
+        assert page["period_total_gb"] == 7.5
         assert len(page["chart_records"]) == 3
         assert [record["label"] for record in page["chart_records"]] == [
             "May 01",

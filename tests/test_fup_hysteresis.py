@@ -41,7 +41,8 @@ def _run(prior_action_status):
     emitted = []
 
     with (
-        patch("app.tasks.usage.SessionLocal", side_effect=[lock_session, session]),
+        patch("app.tasks.usage.SessionLocal", return_value=lock_session),
+        patch("app.services.fup_enforcement.SessionLocal", return_value=session),
         patch("app.services.fup_state.fup_state", fup_state_mock),
         patch(
             "app.services.usage._resolve_or_create_quota_bucket",
@@ -58,7 +59,10 @@ def _run(prior_action_status):
                 "throttle-profile" if key == "fup_throttle_radius_profile_id" else None
             ),
         ),
-        patch("app.tasks.usage._maybe_queue_repeat_upsell", lambda *a, **k: None),
+        patch(
+            "app.services.fup_enforcement._maybe_queue_repeat_upsell",
+            lambda *a, **k: None,
+        ),
     ):
         from app.tasks.usage import evaluate_fup_rules
 
