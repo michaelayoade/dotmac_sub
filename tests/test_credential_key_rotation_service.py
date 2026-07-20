@@ -9,7 +9,6 @@ from cryptography.fernet import Fernet
 from app.models.billing import BankAccount, PaymentMethod
 from app.models.catalog import AccessCredential, NasDevice
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
-from app.models.integration_hook import IntegrationHook
 from app.models.network import (
     OLTDevice,
     OntProfileWanService,
@@ -20,7 +19,6 @@ from app.models.router_management import JumpHost, Router
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.models.tr069 import Tr069AcsServer
-from app.models.webhook import WebhookEndpoint
 from app.services.credential_crypto import (
     _coerce_encryption_key,
     decrypt_credential_with_key,
@@ -108,11 +106,6 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
         account_id=subscriber.id,
         token="plain:bank-token",
     )
-    webhook = WebhookEndpoint(
-        name="Main",
-        url="https://example.com/hook",
-        secret=encrypt_credential_with_key("hook-secret", old_key),
-    )
     acs = Tr069AcsServer(
         name="ACS",
         base_url="https://acs.example.com",
@@ -137,18 +130,11 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
         connection_type="pppoe",
         pppoe_static_password="plain:wan-pass",
     )
-    hook = IntegrationHook(
-        title="Hook",
-        auth_config={
-            "token": encrypt_credential_with_key("api-token", old_key),
-            "username": "plain-user",
-        },
-    )
     setting = DomainSetting(
         domain=SettingDomain.comms,
-        key="whatsapp_api_key",
+        key="meta_app_secret",
         value_type=SettingValueType.string,
-        value_text=encrypt_credential_with_key("wa-key", old_key),
+        value_text=encrypt_credential_with_key("meta-secret", old_key),
         is_secret=True,
         is_active=True,
     )
@@ -196,12 +182,10 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
             opaque_credential,
             payment_method,
             bank_account,
-            webhook,
             acs,
             olt,
             ont,
             wan,
-            hook,
             setting,
             ordinary_setting,
             referenced_setting,
@@ -254,12 +238,6 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
         )
         == "bank-token"
     )
-    assert (
-        decrypt_credential_with_key(
-            db_session.get(WebhookEndpoint, webhook.id).secret, new_key
-        )
-        == "hook-secret"
-    )
     refreshed_acs = db_session.get(Tr069AcsServer, acs.id)
     assert (
         decrypt_credential_with_key(refreshed_acs.cwmp_password, new_key) == "cwmp-pass"
@@ -294,13 +272,7 @@ def test_rotate_credential_encryption_material_updates_known_storage_targets(
         decrypt_credential_with_key(
             db_session.get(DomainSetting, setting.id).value_text, new_key
         )
-        == "wa-key"
-    )
-    assert (
-        decrypt_credential_with_key(
-            db_session.get(IntegrationHook, hook.id).auth_config["token"], new_key
-        )
-        == "api-token"
+        == "meta-secret"
     )
     assert (
         decrypt_credential_with_key(
@@ -382,21 +354,6 @@ def test_rotate_credential_encryption_material_raises_on_length_overflow(
         )
 
 
-def test_rotate_credential_encryption_material_skips_non_dict_hook_config(db_session):
-    old_key = Fernet.generate_key().decode("ascii")
-    new_key = Fernet.generate_key().decode("ascii")
-    hook = IntegrationHook(title="Bad Hook", auth_config="opaque-token")
-    db_session.add(hook)
-    db_session.commit()
-
-    result = rotate_credential_encryption_material(
-        db_session, old_key=old_key, new_key=new_key
-    )
-
-    assert result.updated_records == 0
-    assert db_session.get(IntegrationHook, hook.id).auth_config == "opaque-token"
-
-
 def test_rotate_credential_encryption_material_raises_on_corrupted_ciphertext(
     db_session,
 ):
@@ -434,26 +391,6 @@ def test_rotate_credential_encryption_material_raises_on_corrupted_domain_settin
 
     with pytest.raises(
         ValueError, match=r"Failed to rotate DomainSetting comms\.bad_secret"
-    ):
-        rotate_credential_encryption_material(
-            db_session, old_key=old_key, new_key=new_key
-        )
-
-
-def test_rotate_credential_encryption_material_raises_on_corrupted_hook_secret(
-    db_session,
-):
-    old_key = Fernet.generate_key().decode("ascii")
-    new_key = Fernet.generate_key().decode("ascii")
-    hook = IntegrationHook(
-        title="Corrupt Hook",
-        auth_config={"token": "enc:not-a-valid-token"},
-    )
-    db_session.add(hook)
-    db_session.commit()
-
-    with pytest.raises(
-        ValueError, match=r"Failed to rotate IntegrationHook auth_config\.token"
     ):
         rotate_credential_encryption_material(
             db_session, old_key=old_key, new_key=new_key

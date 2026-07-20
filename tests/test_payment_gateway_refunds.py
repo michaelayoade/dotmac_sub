@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.services import flutterwave, paystack
+from app.services.integrations import payment_capability
 from app.services.payment_gateway_adapter import (
     PaymentGatewayRefundState,
     payment_gateway_adapter,
@@ -13,15 +13,16 @@ def test_paystack_refund_submission_carries_durable_request_key(
 ):
     captured = {}
 
-    def refund(_db, reference, amount, *, request_key):
+    def refund(_db, *, provider_type, transaction_id, amount, request_key):
         captured.update(
-            reference=reference,
+            provider_type=provider_type,
+            transaction_id=transaction_id,
             amount=amount,
             request_key=request_key,
         )
         return {"id": 71, "status": "pending", "amount": 12500}
 
-    monkeypatch.setattr(paystack, "refund_transaction", refund)
+    monkeypatch.setattr(payment_capability, "refund_transaction", refund)
 
     result = payment_gateway_adapter.refund(
         db_session,
@@ -33,7 +34,8 @@ def test_paystack_refund_submission_carries_durable_request_key(
     )
 
     assert captured == {
-        "reference": "funding-ref",
+        "provider_type": "paystack",
+        "transaction_id": "funding-ref",
         "amount": Decimal("125.00"),
         "request_key": "durable-request-id",
     }
@@ -47,9 +49,9 @@ def test_paystack_ambiguous_refund_is_found_by_durable_request_key(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        paystack,
+        payment_capability,
         "list_refunds",
-        lambda _db, *, transaction_id: [
+        lambda _db, *, provider_type, transaction_id: [
             {
                 "id": 10,
                 "status": "processed",
@@ -83,9 +85,9 @@ def test_flutterwave_completed_refund_remains_pending_until_final_status(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        flutterwave,
+        payment_capability,
         "fetch_refund",
-        lambda _db, refund_id: {
+        lambda _db, *, provider_type, refund_id: {
             "id": refund_id,
             "status": "completed",
             "amount_refunded": 125,
@@ -110,9 +112,9 @@ def test_flutterwave_embedded_failed_disbursement_is_terminal(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        flutterwave,
+        payment_capability,
         "fetch_refund",
-        lambda _db, refund_id: {
+        lambda _db, *, provider_type, refund_id: {
             "id": refund_id,
             "status": "completed",
             "amount_refunded": 125,

@@ -13,18 +13,25 @@ from app.models.billing import (
     Payment,
     PaymentProviderEvent,
     PaymentProviderEventStatus,
-    PaymentProviderType,
 )
 from app.models.subscription_engine import SettingValueType
 from app.schemas.billing import PaymentProviderCreate, PaymentProviderUpdate
 from app.schemas.settings import DomainSettingUpdate
 from app.services import billing as billing_service
 from app.services import domain_settings as domain_settings_service
+from app.services.integrations import installations
+from app.services.integrations.connectors.payment_gateway import (
+    PAYMENT_INTENT_CAPABILITY,
+)
+from app.services.integrations.runtime_execution import (
+    RuntimeExecutionError,
+    build_execution_context,
+    validate_connection,
+)
 from app.services.payment_routing import (
     SUPPORTED_PROVIDER_TYPES,
     get_routing_policy,
     parse_supported_provider_type,
-    provider_credentials,
     provider_health,
     supported_provider_type_values,
 )
@@ -114,7 +121,6 @@ def run_provider_test(
     db: Session, *, provider_type_value: str, mode: str = "test"
 ) -> dict[str, Any]:
     provider_type = parse_supported_provider_type(provider_type_value)
-    credentials = provider_credentials(db, provider_type)
     provider = billing_service.payment_providers.get_by_type(db, provider_type)
     errors: list[str] = []
     warnings: list[str] = []
@@ -126,29 +132,23 @@ def run_provider_test(
     elif not provider.is_active:
         errors.append("Provider is inactive")
 
-    secret_key = credentials.get("secret_key", "")
-    public_key = credentials.get("public_key", "")
-    if not secret_key:
-        errors.append("Secret key is missing")
-    if not public_key:
-        errors.append("Public key is missing")
-
-    if provider_type == PaymentProviderType.paystack:
-        expected_secret_prefix = "sk_test_" if normalized_mode == "test" else "sk_live_"
-        expected_public_prefix = "pk_test_" if normalized_mode == "test" else "pk_live_"
-        if secret_key and not secret_key.startswith(expected_secret_prefix):
-            warnings.append(f"Secret key prefix does not match {normalized_mode} mode")
-        if public_key and not public_key.startswith(expected_public_prefix):
-            warnings.append(f"Public key prefix does not match {normalized_mode} mode")
-    else:
-        secret_hash = credentials.get("secret_hash", "")
-        if not secret_hash:
-            errors.append("Webhook secret hash is missing")
-        marker = "TEST" if normalized_mode == "test" else "LIVE"
-        if secret_key and marker not in secret_key.upper():
-            warnings.append(f"Secret key does not look like a {normalized_mode} key")
-        if public_key and marker not in public_key.upper():
-            warnings.append(f"Public key does not look like a {normalized_mode} key")
+    try:
+        binding = installations.require_enabled_capability_binding(
+            db,
+            connector_key=provider_type.value,
+            capability_id=PAYMENT_INTENT_CAPABILITY,
+        )
+        installation_mode = binding.installation.environment
+        if normalized_mode == "live" and installation_mode != "production":
+            warnings.append("The enabled installation is not production")
+        if normalized_mode == "test" and installation_mode == "production":
+            warnings.append("The enabled installation is production")
+        validation = validate_connection(
+            build_execution_context(db, capability_binding_id=binding.id)
+        )
+        errors.extend(validation.error_codes)
+    except (installations.InstallationError, RuntimeExecutionError) as exc:
+        errors.append(str(exc))
 
     ok = not errors
     message = (
@@ -320,14 +320,12 @@ def create_provider_from_form(
     *,
     name: str,
     provider_type: str,
-    webhook_secret_ref: str | None,
     notes: str | None,
     is_active: str | None,
 ):
     payload = PaymentProviderCreate(
         name=name.strip(),
         provider_type=parse_supported_provider_type(provider_type),
-        webhook_secret_ref=webhook_secret_ref.strip() if webhook_secret_ref else None,
         notes=notes.strip() if notes else None,
         is_active=is_active is not None,
     )
@@ -340,14 +338,12 @@ def update_provider_from_form(
     provider_id: UUID,
     name: str,
     provider_type: str,
-    webhook_secret_ref: str | None,
     notes: str | None,
     is_active: str | None,
 ):
     payload = PaymentProviderUpdate(
         name=name.strip(),
         provider_type=parse_supported_provider_type(provider_type),
-        webhook_secret_ref=webhook_secret_ref.strip() if webhook_secret_ref else None,
         notes=notes.strip() if notes else None,
         is_active=is_active is not None,
     )

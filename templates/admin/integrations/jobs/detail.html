@@ -12,6 +12,10 @@
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
             </a>
             <div>
+                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Capability</dt>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ job.capability_binding.capability_id if job.capability_binding else 'Unbound historical job' }}</dd>
+            </div>
+            <div>
                 <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ job.name }}</h1>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Integration Job</p>
             </div>

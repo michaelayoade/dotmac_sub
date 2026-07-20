@@ -1,32 +1,16 @@
-"""Outage lifecycle -> outbound webhook fan-out (create + resolve only).
-
-Reuses the established event->webhook machinery (emit_event ->
-WebhookHandler -> WebhookDelivery -> deliver_webhook). These tests cover the
-outage-specific seams: deliveries are created on declare/resolve with the
-right payload, nothing fires when no endpoint subscribes, and the payload
-signs/verifies with the same HMAC the delivery task sends. Transport-level
-retry bounds/backoff are covered by test_webhook_tasks.py.
-"""
+"""Outage lifecycle -> capability-bound outbound event fan-out."""
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
-
+from app.models.integration_platform import IntegrationDelivery
 from app.models.network_monitoring import NetworkDevice
-from app.models.webhook import (
-    WebhookDelivery,
-    WebhookEndpoint,
-    WebhookEventType,
-    WebhookSubscription,
-)
+from app.services.integrations import delivery, installations
+from app.services.integrations.runtime import ValidationResult
 from app.services.topology.outage import (
     AUTO_DETECT_ACTOR,
     declare_outage,
     resolve_outage,
 )
-from app.tasks.webhooks import _compute_signature
 
 
 def _node(db, name="Agg-1"):
@@ -37,24 +21,42 @@ def _node(db, name="Agg-1"):
 
 
 def _subscribe(db, url="https://crm.example/hooks/outage"):
-    endpoint = WebhookEndpoint(name="CRM", url=url, secret=None, is_active=True)
-    db.add(endpoint)
-    db.flush()
-    db.add(
-        WebhookSubscription(
-            endpoint_id=endpoint.id,
-            event_type=WebhookEventType.network_alert,
-            is_active=True,
-        )
+    endpoint = installations.create_draft(
+        db,
+        connector_key="webhook.http",
+        name="CRM outage events",
+        environment="test",
     )
-    db.flush()
+    installations.create_config_revision(
+        db,
+        installation_id=endpoint.id,
+        config={"url": url, "method": "POST", "max_attempts": 3},
+        secret_refs={},
+    )
+    binding = installations.bind_capability(
+        db,
+        installation_id=endpoint.id,
+        capability_id="events.deliver.v1",
+        policy={"approved_egress_hosts": ["crm.example"]},
+    )
+    installations.validate_static(db, installation_id=endpoint.id)
+    installations.enable_after_connection_validation(
+        db,
+        installation_id=endpoint.id,
+        connection_result=ValidationResult(valid=True),
+    )
+    delivery.create_event_subscription(
+        db,
+        capability_binding_id=binding.id,
+        event_type="network.alert",
+    )
     return endpoint
 
 
 def _deliveries(db):
     return (
-        db.query(WebhookDelivery)
-        .filter(WebhookDelivery.event_type == WebhookEventType.network_alert)
+        db.query(IntegrationDelivery)
+        .filter(IntegrationDelivery.event_type == "network.alert")
         .all()
     )
 
@@ -66,7 +68,7 @@ def test_declare_creates_delivery_with_outage_payload(db_session):
 
     deliveries = _deliveries(db_session)
     assert len(deliveries) == 1
-    payload = deliveries[0].payload["payload"]
+    payload = deliveries[0].payload_json["payload"]
     assert payload["alert_type"] == "outage.created"
     assert payload["incident_id"] == str(incident.id)
     assert payload["detection_source"] == "manual"
@@ -85,19 +87,21 @@ def test_resolve_creates_second_delivery_only_on_transition(db_session):
 
     deliveries = _deliveries(db_session)
     assert len(deliveries) == 2
-    kinds = {d.payload["payload"]["alert_type"] for d in deliveries}
+    kinds = {d.payload_json["payload"]["alert_type"] for d in deliveries}
     assert kinds == {"outage.created", "outage.resolved"}
     resolved = next(
-        d for d in deliveries if d.payload["payload"]["alert_type"] == "outage.resolved"
+        d
+        for d in deliveries
+        if d.payload_json["payload"]["alert_type"] == "outage.resolved"
     )
-    assert resolved.payload["payload"]["resolved_at"] is not None
+    assert resolved.payload_json["payload"]["resolved_at"] is not None
 
 
 def test_auto_detected_incident_marked_in_payload(db_session):
     _subscribe(db_session)
     node = _node(db_session)
     declare_outage(db_session, node=node, declared_by=AUTO_DETECT_ACTOR)
-    payload = _deliveries(db_session)[0].payload["payload"]
+    payload = _deliveries(db_session)[0].payload_json["payload"]
     assert payload["detection_source"] == "auto"
 
 
@@ -109,19 +113,3 @@ def test_no_subscription_means_no_delivery_and_no_error(db_session):
     resolve_outage(db_session, incident.id)
     assert _deliveries(db_session) == []
     assert incident.status == "resolved"
-
-
-def test_payload_signature_round_trips(db_session):
-    """The serialized delivery payload verifies against the same HMAC-SHA256
-    the delivery task puts in X-Webhook-Signature-256."""
-    _subscribe(db_session)
-    declare_outage(db_session, node=_node(db_session))
-    delivery = _deliveries(db_session)[0]
-
-    payload_json = json.dumps(delivery.payload or {})
-    secret = "s3cret"  # noqa: S105 - test-only literal
-    signature = _compute_signature(payload_json, secret)
-    expected = hmac.new(
-        secret.encode(), payload_json.encode(), hashlib.sha256
-    ).hexdigest()
-    assert hmac.compare_digest(signature, expected)

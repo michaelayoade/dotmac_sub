@@ -833,7 +833,7 @@ def test_billing_health_gate_blocks_prepaid_suspension(
         "billing_enforcement_health",
         lambda _db: guards.EnforcementHealth(
             ok=False,
-            reasons=["payment_webhook_dead_letters"],
+            reasons=["payment_inbox_failures"],
             details={"dead_letters": 1},
         ),
     )

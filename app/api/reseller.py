@@ -570,11 +570,12 @@ def my_reseller_account_tickets(
 
     from app.services import crm_portal
     from app.services.crm_client import CRMClientError
+    from app.services.integrations.crm_capability import capability_client
 
     try:
         crm_sub_id = crm_portal.resolve_crm_subscriber_id(db, account_id)
         tickets = (
-            crm_portal.get_crm_client().list_tickets(subscriber_id=crm_sub_id)
+            capability_client(db).list_tickets(subscriber_id=crm_sub_id)
             if crm_sub_id
             else []
         )

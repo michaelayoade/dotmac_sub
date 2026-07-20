@@ -10,26 +10,27 @@ import threading
 from contextlib import contextmanager
 from unittest.mock import patch
 
+import pytest
 from fastapi import FastAPI, HTTPException
 
 from app.api.crm_webhooks import receive_crm_customer, receive_crm_event, router
-from app.config import settings
 from app.db import get_db
 from app.models.audit import AuditEvent
 from app.models.subscriber import Subscriber
+from tests.integration_platform_helpers import enable_crm_inbound
 
 SECRET = "test-webhook-secret"
 
 
 @contextmanager
 def _with_secret(value: str):
-    """Temporarily set the frozen settings' webhook secret."""
-    original = settings.crm_webhook_secret
-    object.__setattr__(settings, "crm_webhook_secret", value)
-    try:
-        yield
-    finally:
-        object.__setattr__(settings, "crm_webhook_secret", original)
+    """Compatibility-free test scope; the secret lives in the installation."""
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _crm_inbound_installation(db_session, monkeypatch):
+    enable_crm_inbound(db_session, monkeypatch, signing_secret=SECRET)
 
 
 class _FakeRequest:
@@ -39,6 +40,9 @@ class _FakeRequest:
 
     async def body(self) -> bytes:
         return self._raw
+
+    async def json(self):
+        return json.loads(self._raw)
 
 
 class _RouteResponse:
@@ -162,7 +166,7 @@ def test_ticket_event_noop_when_pull_disabled(monkeypatch, db_session):
     assert resp.status_code == 200
     assert resp.json() == {
         "status": "ignored",
-        "reason": "ticket_pull_disabled",
+        "reason": "ticket_observation_disabled",
         "event": "ticket.created",
     }
     enqueue.assert_not_called()
@@ -180,7 +184,7 @@ def test_ticket_event_noop_when_pull_setting_missing(monkeypatch, db_session):
     ):
         resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 200
-    assert resp.json()["reason"] == "ticket_pull_disabled"
+    assert resp.json()["reason"] == "ticket_observation_disabled"
     enqueue.assert_not_called()
 
 
@@ -205,49 +209,64 @@ def test_ticket_branch_gated_by_canonical_control(monkeypatch, db_session):
     control_registry.update_canonical_feature_controls(
         db_session, payload={"crm.ticket_pull": False}
     )
+    body = {"ticket_id": "abc-456"}
+    raw = json.dumps(body).encode()
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
         resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 200
-    assert resp.json()["reason"] == "ticket_pull_disabled"
+    assert resp.json()["reason"] == "ticket_observation_disabled"
     enqueue.assert_not_called()
 
 
-def test_bad_signature_rejected():
+def test_bad_signature_rejected(db_session):
     body = {"ticket_id": "abc-123"}
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        resp = _post(body, "ticket.created", "sha256=deadbeef")
+        resp = _post(body, "ticket.created", "sha256=deadbeef", db_session)
     assert resp.status_code == 401
     enqueue.assert_not_called()
 
 
-def test_missing_signature_rejected():
+def test_missing_signature_rejected(db_session):
     with _with_secret(SECRET):
-        resp = _post({"ticket_id": "x"}, "ticket.created", None)
+        resp = _post({"ticket_id": "x"}, "ticket.created", None, db_session)
     assert resp.status_code == 401
 
 
-def test_unconfigured_secret_fails_closed():
+def test_disabled_inbound_capability_fails_closed(db_session):
+    from app.services.integrations import installations
+
+    binding = installations.require_enabled_capability_binding(
+        db_session,
+        connector_key="dotmac.crm",
+        capability_id="crm.events.receive.v1",
+    )
+    installations.retire_installation(
+        db_session,
+        installation_id=binding.installation_id,
+        reason="test_disabled",
+    )
+    db_session.commit()
     body = {"ticket_id": "x"}
     raw = json.dumps(body).encode()
     with _with_secret(""):
-        resp = _post(body, "ticket.created", _sign(raw))
+        resp = _post(body, "ticket.created", _sign(raw), db_session)
     assert resp.status_code == 503
 
 
-def test_unknown_event_acknowledged_without_enqueue():
+def test_unknown_event_acknowledged_without_enqueue(db_session):
     body = {"ticket_id": "x"}
     raw = json.dumps(body).encode()
     with (
         _with_secret(SECRET),
         patch("app.services.queue_adapter.enqueue_task") as enqueue,
     ):
-        resp = _post(body, "invoice.paid", _sign(raw))
+        resp = _post(body, "invoice.paid", _sign(raw), db_session)
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
     enqueue.assert_not_called()
@@ -469,5 +488,5 @@ def test_ticket_webhook_replay_is_deduped(monkeypatch, db_session):
         first = _post(body, "ticket.created", _sign(raw), db_session)
         replay = _post(body, "ticket.created", _sign(raw), db_session)
     assert first.status_code == 200
-    assert replay.status_code == 200 and replay.json().get("reason") == "duplicate"
+    assert replay.status_code == 200 and replay.json()["status"] == "queued"
     assert enqueue.call_count == 1

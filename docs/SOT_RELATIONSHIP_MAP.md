@@ -470,12 +470,13 @@ detailed security and delivery boundary is
     suspension/restoration permission.
 18. Scheduled billing, collections, and payment-reconciliation services own DB
    sessions, transaction outcomes, and operational logging for Celery runners.
-19. `financial.payment_webhooks` owns signature-verified provider-payload
-   projection and inbound dead-letter lifecycle. Replay rebuilds the same
-   settlement command as live delivery; `financial.payment_provider_events`
-   owns idempotent event processing, delegates the monetary write to the
-   payment owner, and must resume an incomplete event rather than treating
-   receipt identity as proof that money was posted.
+19. `integration.inbox` owns signature-verified payment receipt identity,
+   failure state, and replay authorization. `financial.payment_webhooks`
+   projects a claimed receipt into the billing consequence;
+   `financial.payment_provider_events` owns idempotent event processing,
+   delegates the monetary write to the payment owner, and must resume an
+   incomplete event rather than treating receipt identity as proof that money
+   was posted.
 20. Referral rewards are account credits owned by `financial.credit_notes`;
    neither CRM nor referral services post a parallel wallet balance. Automated
    referral issuance uses the same owner-generated preview, locked confirmation,
@@ -2674,20 +2675,66 @@ project configured intent without a parallel catalog-to-network adapter.
 
 Integrations:
 
-1. `integration.registry`: owns connectors and capabilities.
-2. `integration.jobs`: owns targets, jobs, and runs.
-3. `integration.sync`: owns sync orchestration.
-4. `integration.hooks`: owns hook dispatch and subscriptions.
-5. `integration.erp_material_support`: maps an approved Sub material need to the
-   neutral ERP contract, assigns the stable idempotency key, and observes/reconciles
-   ERP outcomes. It is a transport and observation owner, not an inventory or
-   service-workflow decision owner.
+The implemented contract is `docs/designs/INTEGRATION_PLATFORM_SOT.md`. The
+live owners are:
 
-Rule: integration routes/webhooks validate and enqueue. Connector behavior,
-sync lifecycle, and hook delivery stay inside integration services.
-The effective-state projection derives connector/webhook health from runs and
-deliveries and reads OpenBao metadata without reading secret values. It does
-not own connector, subscription, delivery, or credential decisions.
+1. `integration.registry`: owns deterministic deployed manifests, manifest
+   validation, and current connector capability metadata.
+2. `integration.installations`: solely owns version-pinned installation
+   lifecycle, immutable config revisions, secret references, and capability
+   bindings for platform-managed connectors.
+3. `integration.runtime`: solely owns runner selection, version-pinned
+   operation envelopes, deadlines, and bounded secret materialization. Runners
+   have no Sub database session and cannot decide a domain consequence.
+4. `integration.delivery`: solely owns outbound HTTP event subscription,
+   delivery identity, retry, dead-letter, and replay evidence.
+5. `integration.inbox`: solely owns verified CRM, WhatsApp, and payment provider
+   receipt identity, deduplication, and consequence-attempt evidence. Provider
+   routes verify before receipt; domain owners decide every consequence.
+6. `integration.jobs`: owns targets, capability-bound jobs, pinned runs, and
+   their operator lifecycle. Active jobs cannot use string adapter/action
+   transport selection.
+7. `integration.sync`: owns sync orchestration and checkpoints. CRM observation
+   jobs execute only through their enabled `dotmac.crm` capability binding.
+8. `integration.erp_material_support`: maps an approved Sub material need to
+   the neutral ERP contract, assigns the stable idempotency key, and observes or
+   reconciles ERP outcomes through `dotmac.erp`. It remains a transport and
+   observation owner; `operations.material_dependencies` alone projects the
+   outcome into Sub service-workflow state.
+9. `events.store` remains the domain-event fact owner,
+   `scheduler.registry` remains cadence owner, and `secrets.reference_store`
+   remains secret resolution owner.
+
+The control plane separates deployed connector definitions, configured
+installations, capability grants, runtime execution, inbox, delivery, and
+sync/checkpoint responsibilities. Connector definitions are deployed and
+approved artifacts; the admin UI does not install arbitrary executable code.
+
+Authority cutover is complete for the platform-managed first-party paths:
+
+| Concern | Retired owner/path | Live owner/path | Cutover state |
+| --- | --- | --- | --- |
+| Connector catalogue | File discovery and static catalogue projections | Manifest-based `integration.registry` | Complete; runtime registration requires a valid manifest |
+| Installation configuration | Provider environment settings and provider-specific credential columns | `integration.installations` with immutable config revisions and secret references | Complete for CRM, ERP, WhatsApp, payments, and outbound HTTP webhooks |
+| Sync dispatch | String adapter/action selection | Capability-bound `integration.sync` through `integration.runtime` | Complete; active jobs require a binding |
+| CRM | Direct client construction and CRM-specific webhook delivery rows | `dotmac.crm` typed capabilities and `integration.inbox` | Complete; Sub remains authoritative for operational and support consequences |
+| Outbound webhooks and hooks | `events.webhook_deliveries`, endpoint tables, and `integration.hooks` | `integration.delivery` consuming `events.store` | Complete; duplicate models, routes, tasks, and CLI hooks are removed |
+| WhatsApp messaging | Settings-backed provider transport | Direct Meta typed messaging capabilities plus `integration.inbox` | Complete; no Twilio or fallback transport |
+| ERP | Direct ERP transport clients | `dotmac.erp` typed capabilities | Complete; ERP remains observation/transport only |
+| Payments | Direct Paystack/Flutterwave services and payment-specific webhook dead letters | Typed payment capabilities plus `integration.inbox` | Complete; billing owners alone decide financial state |
+
+Migration `380_integration_platform_cutover` removes the retired tables,
+columns, settings, and enums and has no downgrade path. Disabling or correcting
+the current binding is the recovery mechanism; retired transports are not a
+fallback.
+
+Rule: integration routes and webhooks validate and enqueue. Connectors translate
+bounded, typed contracts; they never write Sub domain tables or decide payment,
+subscriber, access, ticket, work-order, network-intent, communications, or
+official-timeline state. Domain owners produce outbound projections and decide
+inbound consequences. The effective-state projection derives health from run,
+delivery, backlog, authentication, and circuit facts and reads OpenBao metadata
+without reading secret values; installed or enabled never implies healthy.
 
 ## VPN / Remote Access
 

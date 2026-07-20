@@ -67,8 +67,8 @@ SETTINGS_CATEGORIES: list[dict] = [
             },
             {
                 "name": "Webhooks",
-                "url": "/admin/system/webhooks",
-                "description": "Event delivery endpoints",
+                "url": "/admin/integrations/webhooks",
+                "description": "Capability-bound event delivery endpoints",
             },
             {
                 "name": "System Information",

@@ -23,7 +23,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-import httpx
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -31,7 +30,7 @@ from app.db import SessionLocal
 from app.models.billing import Payment, PaymentProviderEvent, PaymentStatus, TopupIntent
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.services.common import round_money
-from app.services.paystack import PAYSTACK_API_BASE, _get_secret_key, kobo_to_naira
+from app.services.integrations import payment_capability
 
 DEFAULT_FROM_DATE = "2026-06-15"
 DEFAULT_TO_DATE = "2026-06-18"
@@ -65,7 +64,7 @@ def _transaction_from_payload(payload: dict[str, Any]) -> GatewayTransaction:
         reference=str(payload.get("reference") or ""),
         external_id=str(payload.get("id") or ""),
         status=str(payload.get("status") or ""),
-        amount=kobo_to_naira(int(payload.get("amount") or 0)),
+        amount=payment_capability.kobo_to_naira(int(payload.get("amount") or 0)),
         currency=str(payload.get("currency") or "NGN"),
         paid_at=str(payload.get("paid_at") or ""),
         created_at=str(payload.get("created_at") or ""),
@@ -83,38 +82,23 @@ def _list_paystack_transactions(
     status: str | None,
     per_page: int,
 ) -> list[GatewayTransaction]:
-    secret_key = _get_secret_key(db)
-    if not secret_key:
-        raise RuntimeError("Paystack secret key is not configured")
-
     transactions: list[GatewayTransaction] = []
     page = 1
-    with httpx.Client(
-        base_url=PAYSTACK_API_BASE,
-        headers={"Authorization": f"Bearer {secret_key}"},
-        timeout=30.0,
-    ) as client:
-        while True:
-            params: dict[str, str | int] = {
-                "from": from_date,
-                "to": to_date,
-                "page": page,
-                "perPage": per_page,
-            }
-            if status:
-                params["status"] = status
-            response = client.get("/transaction", params=params)
-            response.raise_for_status()
-            body = response.json()
-            if not body.get("status"):
-                raise RuntimeError(body.get("message") or "Paystack list failed")
-            rows = body.get("data") or []
-            transactions.extend(_transaction_from_payload(row) for row in rows)
-            meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
-            page_count = int(meta.get("pageCount") or page)
-            if page >= page_count or not rows:
-                break
-            page += 1
+    while True:
+        rows, meta = payment_capability.list_transactions_page(
+            db,
+            provider_type="paystack",
+            from_date=from_date,
+            to_date=to_date,
+            status=status,
+            page=page,
+            per_page=per_page,
+        )
+        transactions.extend(_transaction_from_payload(row) for row in rows)
+        page_count = int(meta.get("pageCount") or page)
+        if page >= page_count or not rows:
+            break
+        page += 1
     return transactions
 
 

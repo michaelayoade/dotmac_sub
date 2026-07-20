@@ -170,13 +170,17 @@ def _send_to_target(
     channel = delivery.channel
     title, body = _delivery_title_body(delivery)
     if channel == OperationalNotificationChannel.whatsapp:
-        from app.services.integrations.connectors import whatsapp as whatsapp_connector
+        from app.services.integrations import whatsapp_capability as whatsapp_connector
 
         result = whatsapp_connector.send_text_message(
             db,
             recipient=target.address,
             body=body,
             dry_run=False,
+            correlation_id=(
+                f"operational-escalation:{delivery.id}:attempt:"
+                f"{int((delivery.metadata_ or {}).get('retry_count') or 0)}"
+            ),
         )
         return {
             "ok": bool(result.get("ok")),

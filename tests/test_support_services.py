@@ -292,7 +292,7 @@ def test_ticket_resolved_and_closed_set_timestamps(db_session, subscriber):
     assert closed.closed_at is not None
 
 
-def test_crm_origin_ticket_writes_are_locked_until_cutover(db_session, subscriber):
+def test_crm_provenance_does_not_create_a_second_write_owner(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
@@ -300,31 +300,24 @@ def test_crm_origin_ticket_writes_are_locked_until_cutover(db_session, subscribe
     db_session.add(ticket)
     db_session.commit()
 
-    assert support_service.is_crm_origin_ticket(ticket) is True
-    assert support_service.crm_ticket_user_writes_locked(ticket) is True
-
-    with pytest.raises(HTTPException) as update_exc:
-        support_service.tickets.update(
-            db_session,
-            str(ticket.id),
-            TicketUpdate(status="closed"),
-            actor_id=str(subscriber.id),
-        )
-    assert update_exc.value.status_code == 409
-    assert "still owned by CRM" in str(update_exc.value.detail)
-
-    with pytest.raises(HTTPException) as comment_exc:
-        support_service.tickets.create_comment(
-            db_session,
-            str(ticket.id),
-            TicketCommentCreate(
-                body="Should stay in CRM",
-                is_internal=False,
-                author_person_id=subscriber.id,
-            ),
-            actor_id=str(subscriber.id),
-        )
-    assert comment_exc.value.status_code == 409
+    updated = support_service.tickets.update(
+        db_session,
+        str(ticket.id),
+        TicketUpdate(status="closed"),
+        actor_id=str(subscriber.id),
+    )
+    assert updated.status == "closed"
+    comment = support_service.tickets.create_comment(
+        db_session,
+        str(ticket.id),
+        TicketCommentCreate(
+            body="Handled by Sub",
+            is_internal=False,
+            author_person_id=subscriber.id,
+        ),
+        actor_id=str(subscriber.id),
+    )
+    assert comment.body == "Handled by Sub"
 
 
 def test_resolution_confirmation_request_mints_token(db_session, subscriber):
@@ -495,7 +488,7 @@ def test_auto_confirm_pending_closes_after_grace_window(db_session, subscriber):
     assert updated.status == TicketStatus.closed.value
 
 
-def test_auto_confirm_pending_skips_crm_origin_ticket(db_session, subscriber):
+def test_auto_confirm_pending_ignores_crm_provenance(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
@@ -510,12 +503,12 @@ def test_auto_confirm_pending_skips_crm_origin_ticket(db_session, subscriber):
 
     count = support_service.tickets.auto_confirm_pending(db_session)
 
-    assert count == 0
+    assert count == 1
     db_session.refresh(ticket)
     db_session.refresh(token_row)
-    assert ticket.status == TicketStatus.pending_confirmation.value
-    assert token_row.is_active is True
-    assert token_row.responded_at is None
+    assert ticket.status == TicketStatus.closed.value
+    assert token_row.is_active is False
+    assert token_row.responded_at is not None
 
 
 def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
@@ -537,7 +530,7 @@ def test_resolution_confirmation_rejects_closed_ticket(db_session, subscriber):
     assert exc.value.status_code == 409
 
 
-def test_resolution_confirmation_respects_crm_origin_write_lock(db_session, subscriber):
+def test_resolution_confirmation_accepts_crm_provenance(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
@@ -545,20 +538,14 @@ def test_resolution_confirmation_respects_crm_origin_write_lock(db_session, subs
     token_row = support_service.ticket_access_tokens.mint(db_session, ticket)
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        support_service.tickets.confirm_resolution(db_session, token_row)
-
-    assert exc.value.status_code == 409
-    assert "still owned by CRM" in str(exc.value.detail)
+    confirmed = support_service.tickets.confirm_resolution(db_session, token_row)
+    assert confirmed.status == TicketStatus.closed.value
 
 
-def test_native_ticket_writes_remain_enabled_before_crm_cutover(db_session, subscriber):
+def test_native_ticket_writes_remain_enabled(db_session, subscriber):
     ticket = support_service.tickets.create(
         db_session, _ticket_payload(subscriber.id), actor_id=str(subscriber.id)
     )
-
-    assert support_service.is_crm_origin_ticket(ticket) is False
-    assert support_service.crm_ticket_user_writes_locked(ticket) is False
 
     updated = support_service.tickets.update(
         db_session,

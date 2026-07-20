@@ -23,7 +23,7 @@ def test_find_plaintext_secret_settings_skips_refs_and_encrypted_values(db_sessi
         ),
         DomainSetting(
             domain=SettingDomain.comms,
-            key="whatsapp_api_secret",
+            key="meta_app_secret",
             value_type=SettingValueType.string,
             value_text="enc:encrypted-value",
             is_secret=True,
@@ -39,7 +39,7 @@ def test_find_plaintext_secret_settings_skips_refs_and_encrypted_values(db_sessi
     noncanonical = cleanup_service.find_noncanonical_secret_settings(db_session)
     assert [f"{row.domain.value}.{row.key}" for row in noncanonical] == [
         "auth.jwt_secret",
-        "comms.whatsapp_api_secret",
+        "comms.meta_app_secret",
     ]
 
 
@@ -105,7 +105,7 @@ def test_migrate_encrypted_secret_setting_decrypts_before_openbao_write(
 ):
     row = DomainSetting(
         domain=SettingDomain.comms,
-        key="whatsapp_api_secret",
+        key="meta_app_secret",
         value_type=SettingValueType.string,
         value_text="enc:ciphertext",
         is_secret=True,
@@ -132,8 +132,8 @@ def test_migrate_encrypted_secret_setting_decrypts_before_openbao_write(
 
     db_session.refresh(row)
     assert result.migrated == 1
-    assert writes == [("settings/comms", {"whatsapp_api_secret": "clear-secret"})]
-    assert row.value_text == "bao://secret/settings/comms#whatsapp_api_secret"
+    assert writes == [("settings/comms", {"meta_app_secret": "clear-secret"})]
+    assert row.value_text == "bao://secret/settings/comms#meta_app_secret"
 
 
 def test_migrate_plaintext_secret_settings_reports_openbao_unavailable(

@@ -1,12 +1,4 @@
-"""S4: inbound CRM webhook delivery dedup (idempotency).
-
-A byte-identical redelivery of a signed webhook must not re-run its side effect
-(a duplicate chat push, a re-fired lifecycle push, or a delta re-apply that
-reverts a newer status). Covered here for the side-effecting handlers and,
-since P-3, the project/work-order/quote mirror handlers that apply a delta +
-fire a customer push (the ticket handler re-pulls authoritative state, so it
-stays idempotent without a claim).
-"""
+"""CRM inbound identity, replay, and consequence guarantees."""
 
 from __future__ import annotations
 
@@ -16,31 +8,27 @@ import hmac
 import json
 import threading
 import uuid
-from contextlib import contextmanager
 from unittest.mock import patch
 
-from app.api.crm_webhooks import (
-    _delivery_uuid,
-    receive_crm_chat_event,
-    receive_crm_referral_event,
-    receive_crm_work_order_event,
-)
-from app.config import settings
-from app.models.crm_webhook_delivery import CrmWebhookDelivery
+import pytest
+
+from app.api.crm_webhooks import receive_crm_chat_event, receive_crm_work_order_event
+from app.models.integration_platform import IntegrationInbox
 from app.models.subscriber import Subscriber
 from app.models.work_order import WorkOrder
+from app.services.integrations.inbox import InboxError
+from tests.integration_platform_helpers import enable_crm_inbound
 
 SECRET = "test-webhook-secret"
 
 
-@contextmanager
-def _with_secret(value: str):
-    original = settings.crm_webhook_secret
-    object.__setattr__(settings, "crm_webhook_secret", value)
-    try:
-        yield
-    finally:
-        object.__setattr__(settings, "crm_webhook_secret", original)
+@pytest.fixture(autouse=True)
+def _crm_inbound_installation(db_session, monkeypatch):
+    return enable_crm_inbound(
+        db_session,
+        monkeypatch,
+        signing_secret=SECRET,
+    )
 
 
 class _FakeRequest:
@@ -51,192 +39,148 @@ class _FakeRequest:
     async def body(self) -> bytes:
         return self._raw
 
-
-def _sign(body: bytes, secret: str = SECRET) -> str:
-    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    async def json(self):
+        return json.loads(self._raw)
 
 
 def _run(coro):
     box: dict[str, object] = {}
 
-    def _runner() -> None:
+    def runner() -> None:
         loop = asyncio.new_event_loop()
         try:
             box["result"] = loop.run_until_complete(coro)
+        except BaseException as exc:  # noqa: BLE001
+            box["error"] = exc
         finally:
             loop.close()
 
-    thread = threading.Thread(target=_runner)
+    thread = threading.Thread(target=runner)
     thread.start()
     thread.join()
+    if "error" in box:
+        raise box["error"]  # type: ignore[misc]
     return box["result"]
 
 
-def _headers(
-    raw: bytes, event: str, *, delivery_id: str | None = None
-) -> dict[str, str]:
-    h = {
+def _request(body: dict, event: str, *, delivery_id: str | None = None):
+    raw = json.dumps(body).encode()
+    signature = "sha256=" + hmac.new(SECRET.encode(), raw, hashlib.sha256).hexdigest()
+    headers = {
         "X-Webhook-Event": event,
+        "X-Webhook-Signature-256": signature,
         "Content-Type": "application/json",
-        "X-Webhook-Signature-256": _sign(raw),
     }
-    if delivery_id is not None:
-        h["X-Webhook-Delivery-Id"] = delivery_id
-    return h
+    if delivery_id:
+        headers["X-Webhook-Delivery-Id"] = delivery_id
+    return _FakeRequest(raw, headers)
 
 
-def _linked_subscriber(db_session, crm_id: uuid.UUID) -> Subscriber:
-    sub = Subscriber(
-        first_name="Ref",
-        last_name="Errer",
-        email=f"r-{uuid.uuid4().hex[:8]}@example.com",
-        crm_subscriber_id=crm_id,
+def _linked_subscriber(db_session) -> Subscriber:
+    subscriber = Subscriber(
+        first_name="CRM",
+        last_name="Inbound",
+        email=f"crm-inbox-{uuid.uuid4().hex[:8]}@example.com",
     )
-    db_session.add(sub)
+    db_session.add(subscriber)
     db_session.commit()
-    return sub
+    return subscriber
 
 
-# ── retired referral webhook ─────────────────────────────────────────────
-
-
-def _post_referral(db_session, body: dict, event="referral.captured"):
-    raw = json.dumps(body).encode()
-    return _run(
-        receive_crm_referral_event(_FakeRequest(raw, _headers(raw, event)), db_session)
-    )
-
-
-def test_referral_redelivery_is_absorbed_without_claim_or_mirror(db_session):
-    crm_id = uuid.uuid4()
-    _linked_subscriber(db_session, crm_id)
-    body = {
-        "crm_subscriber_id": str(crm_id),
-        "referral_id": "r-1",
-        "referred_name": "Ada",
-    }
-
-    with _with_secret(SECRET):
-        first = _post_referral(db_session, body)
-        second = _post_referral(db_session, body)
-
-    assert first["status"] == "ignored"
-    assert first["reason"] == "crm_referral_path_retired"
-    assert second == first
-    assert db_session.query(CrmWebhookDelivery).count() == 0
-
-
-def test_distinct_referral_events_are_both_absorbed_without_claims(db_session):
-    crm_id = uuid.uuid4()
-    _linked_subscriber(db_session, crm_id)
-
-    with _with_secret(SECRET):
-        first = _post_referral(
-            db_session, {"crm_subscriber_id": str(crm_id), "referral_id": "r-1"}
-        )
-        second = _post_referral(
-            db_session, {"crm_subscriber_id": str(crm_id), "referral_id": "r-2"}
-        )
-
-    assert first["reason"] == "crm_referral_path_retired"
-    assert second["reason"] == "crm_referral_path_retired"
-    assert db_session.query(CrmWebhookDelivery).count() == 0
-
-
-# ── chat push dedup ───────────────────────────────────────────────────────
-
-
-def _post_chat(db_session, body: dict):
-    raw = json.dumps(body).encode()
-    req = _FakeRequest(raw, _headers(raw, "message.outbound"))
-    return _run(receive_crm_chat_event(req, db_session))
-
-
-def test_chat_redelivery_does_not_double_push(db_session):
+def test_chat_redelivery_returns_stored_consequence_without_double_push(db_session):
+    delivery_id = str(uuid.uuid4())
     body = {
         "subscriber_id": str(uuid.uuid4()),
         "preview": "hi",
         "conversation_id": "c1",
     }
-    with _with_secret(SECRET), patch("app.services.push.send_push") as send_push:
-        first = _post_chat(db_session, body)
-        second = _post_chat(db_session, body)
-
-    assert first["status"] == "ok"
-    assert second["status"] == "ignored" and second["reason"] == "duplicate"
-    assert send_push.call_count == 1  # the replay did not wake the device again
-
-
-# ── delivery id derivation ────────────────────────────────────────────────
-
-
-def test_delivery_uuid_prefers_header_over_signature():
-    did = str(uuid.uuid4())
-    req = _FakeRequest(
-        b"{}", {"X-Webhook-Delivery-Id": did, "X-Webhook-Signature-256": "sha256=abc"}
-    )
-    assert _delivery_uuid(req) == uuid.UUID(did)
-
-
-def test_delivery_uuid_falls_back_to_signature_deterministically():
-    req_a = _FakeRequest(b"{}", {"X-Webhook-Signature-256": "sha256=abc"})
-    req_b = _FakeRequest(b"{}", {"X-Webhook-Signature-256": "sha256=abc"})
-    req_c = _FakeRequest(b"{}", {"X-Webhook-Signature-256": "sha256=xyz"})
-    assert _delivery_uuid(req_a) == _delivery_uuid(req_b)
-    assert _delivery_uuid(req_a) != _delivery_uuid(req_c)
-
-
-# ── work-order mirror dedup (P-3) ─────────────────────────────────────────
-
-
-def _post_work_order(db_session, body: dict, event="work_order.created"):
-    raw = json.dumps(body).encode()
-    return _run(
-        receive_crm_work_order_event(
-            _FakeRequest(raw, _headers(raw, event)), db_session
+    with patch("app.services.push.send_push") as send_push:
+        first = _run(
+            receive_crm_chat_event(
+                _request(body, "message.outbound", delivery_id=delivery_id),
+                db_session,
+            )
         )
+        replay = _run(
+            receive_crm_chat_event(
+                _request(body, "message.outbound", delivery_id=delivery_id),
+                db_session,
+            )
+        )
+
+    assert first == replay == {"status": "ok", "event": "message.outbound"}
+    assert send_push.call_count == 1
+    assert db_session.query(IntegrationInbox).count() == 1
+
+
+def test_work_order_redelivery_applies_once(db_session):
+    from app.services import control_registry
+
+    control_registry.update_canonical_feature_controls(
+        db_session, payload={"crm.work_order_pull": True}
     )
-
-
-def test_work_order_redelivery_is_deduped(db_session):
-    crm_id = uuid.uuid4()
-    _linked_subscriber(db_session, crm_id)
+    subscriber = _linked_subscriber(db_session)
     body = {
-        "crm_subscriber_id": str(crm_id),
-        "id": "wo-1",
+        "subscriber_id": str(subscriber.id),
+        "work_order_id": "wo-inbox-1",
         "status": "scheduled",
-        "title": "Install",
     }
+    request_id = str(uuid.uuid4())
 
-    with _with_secret(SECRET):
-        first = _post_work_order(db_session, body)
-        second = _post_work_order(db_session, body)
-
-    assert first["status"] == "ok"
-    assert second["status"] == "ignored" and second["reason"] == "duplicate"
-    # The mirror upsert ran exactly once; the redelivery never re-applied.
-    assert db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").count() == 1
-    assert db_session.query(CrmWebhookDelivery).count() == 1
-
-
-def test_distinct_work_order_events_both_process(db_session):
-    crm_id = uuid.uuid4()
-    _linked_subscriber(db_session, crm_id)
-
-    with _with_secret(SECRET):
-        _post_work_order(
-            db_session,
-            {"crm_subscriber_id": str(crm_id), "id": "wo-1", "status": "scheduled"},
+    first = _run(
+        receive_crm_work_order_event(
+            _request(body, "work_order.created", delivery_id=request_id), db_session
         )
-        # Different body -> different signature -> different delivery id: a real
-        # later transition still applies (dedup only catches byte-identical
-        # redeliveries, not distinct events).
-        _post_work_order(
-            db_session,
-            {"crm_subscriber_id": str(crm_id), "id": "wo-1", "status": "in_progress"},
-            event="work_order.updated",
+    )
+    replay = _run(
+        receive_crm_work_order_event(
+            _request(body, "work_order.created", delivery_id=request_id), db_session
         )
+    )
 
-    row = db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-1").one()
-    assert row.status == "in_progress"
-    assert db_session.query(CrmWebhookDelivery).count() == 2
+    assert first == replay
+    assert (
+        db_session.query(WorkOrder).filter_by(crm_work_order_id="wo-inbox-1").count()
+        == 1
+    )
+    assert db_session.query(IntegrationInbox).count() == 1
+
+
+def test_distinct_provider_events_are_distinct_receipts(db_session):
+    first = _request(
+        {"subscriber_id": str(uuid.uuid4()), "work_order_id": "missing-1"},
+        "work_order.created",
+        delivery_id=str(uuid.uuid4()),
+    )
+    second = _request(
+        {"subscriber_id": str(uuid.uuid4()), "work_order_id": "missing-2"},
+        "work_order.created",
+        delivery_id=str(uuid.uuid4()),
+    )
+    _run(receive_crm_work_order_event(first, db_session))
+    _run(receive_crm_work_order_event(second, db_session))
+    assert db_session.query(IntegrationInbox).count() == 2
+
+
+def test_provider_identity_collision_quarantines_installation(
+    db_session,
+    _crm_inbound_installation,
+):
+    delivery_id = str(uuid.uuid4())
+    first = _request(
+        {"subscriber_id": str(uuid.uuid4()), "preview": "first"},
+        "message.outbound",
+        delivery_id=delivery_id,
+    )
+    second = _request(
+        {"subscriber_id": str(uuid.uuid4()), "preview": "changed"},
+        "message.outbound",
+        delivery_id=delivery_id,
+    )
+    with patch("app.services.push.send_push"):
+        _run(receive_crm_chat_event(first, db_session))
+        with pytest.raises(InboxError, match="identity collision"):
+            _run(receive_crm_chat_event(second, db_session))
+
+    db_session.refresh(_crm_inbound_installation.installation)
+    assert _crm_inbound_installation.installation.state == "quarantined"
