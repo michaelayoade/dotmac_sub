@@ -433,11 +433,11 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("financial.access_resolution") == (
         "financial.billing_profile",
+        "financial.prepaid_currency",
         "financial.prepaid_threshold",
         "customer.financial_position",
         "access.subscription_lifecycle",
         "access.walled_garden_policy",
-        "control.settings_spec",
     )
     assert sot_relationships.dependencies_for("customer.financial_position") == (
         "financial.ledger",

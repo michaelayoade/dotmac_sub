@@ -1262,13 +1262,282 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
             ),
             SOTService(
+                name="financial.prepaid_currency",
+                module="app.services.prepaid_currency",
+                owns=("prepaid enforcement currency policy",),
+                depends_on=("control.settings_spec",),
+                notes=(
+                    "Normalizes and validates the sole currency used to compare prepaid "
+                    "funding, thresholds, and access consequences."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="prepaid enforcement currency policy",
+                            role=OwnerRole.POLICY,
+                            input_names=(
+                                "prepaid enforcement currency setting",
+                                "prepaid currency protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="prepaid enforcement currency setting",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed billing.prepaid_enforcement_currency value",
+                        ),
+                        AuthorityInput(
+                            name="prepaid currency protocol",
+                            owner="financial.prepaid_currency",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "uppercase three-letter ASCII currency-code invariant"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller owns the session; resolution reads one canonical "
+                            "setting and performs no writes or transaction completion."
+                        ),
+                        locking="No row lock; the decision uses the visible setting value.",
+                        idempotency=(
+                            "The same explicit value or visible canonical setting produces "
+                            "the same normalized currency or stable failure."
+                        ),
+                        retries=(
+                            "Transient setting reads may be retried. Invalid currency "
+                            "evidence is terminal until corrected."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=("financial.prepaid_currency.invalid_currency",),
+                        mapping_owner=(
+                            "billing, funding, enforcement, reporting, and task adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing prepaid enforcement currency",
+                            "non-ASCII or non-three-letter currency evidence",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "financial.access_resolution local currency normalizer plus "
+                            "caller-local strip/uppercase handling"
+                        ),
+                        new_owner="financial.prepaid_currency",
+                        verification=(
+                            "Normalization, invalid-setting, funding-decision, threshold, "
+                            "caller-import, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Access, threshold, funding-position, enforcement-plan, and "
+                            "readiness callers import the dedicated currency owner."
+                        ),
+                        fallback_retirement=(
+                            "The access-resolution implementation, re-export, dynamic error "
+                            "code, and funding caller-local normalization are removed."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_access_resolution.py",
+                        "tests/test_prepaid_threshold_resolver.py",
+                        "tests/architecture/test_prepaid_threshold_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
                 name="financial.prepaid_threshold",
                 module="app.services.prepaid_threshold",
                 owns=(
                     "prepaid enforcement threshold",
                     "unfunded prepaid renewal requirement",
                 ),
-                depends_on=("financial.billing_profile",),
+                depends_on=(
+                    "access.subscription_lifecycle",
+                    "control.settings_spec",
+                    "customer.accounts",
+                    "financial.invoices",
+                    "financial.prepaid_currency",
+                    "financial.prepaid_service_renewals",
+                    "service_intent.catalog_policy",
+                ),
+                notes=(
+                    "Returns typed minimum and unfunded-renewal provenance. Missing "
+                    "accounts, invalid minimums, absent prices, and cross-currency "
+                    "evidence fail closed."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="prepaid enforcement threshold",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical account minimum balance",
+                                "prepaid default minimum setting",
+                                "canonical prepaid currency",
+                                "prepaid threshold protocol",
+                            ),
+                        ),
+                        ConcernContract(
+                            name="unfunded prepaid renewal requirement",
+                            role=OwnerRole.RESOLVER,
+                            input_names=(
+                                "canonical collectible prepaid subscriptions",
+                                "canonical paid entitlement coverage",
+                                "bounded legacy paid invoice coverage",
+                                "canonical recurring catalog prices",
+                                "canonical prepaid currency",
+                                "prepaid threshold protocol",
+                            ),
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical account minimum balance",
+                            owner="customer.accounts",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source="Subscriber min_balance override for the exact account",
+                        ),
+                        AuthorityInput(
+                            name="prepaid default minimum setting",
+                            owner="control.settings_spec",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source="typed billing.prepaid_default_min_balance value",
+                        ),
+                        AuthorityInput(
+                            name="canonical collectible prepaid subscriptions",
+                            owner="access.subscription_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "prepaid Subscription identity, lifecycle status, offer, "
+                                "unit-price, and discount evidence"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical paid entitlement coverage",
+                            owner="financial.prepaid_service_renewals",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active ServiceEntitlement interval for the exact account "
+                                "and subscription"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="bounded legacy paid invoice coverage",
+                            owner="financial.invoices",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "active paid invoice line and billing interval used only "
+                                "when no entitlement covers the subscription"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical recurring catalog prices",
+                            owner="service_intent.catalog_policy",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "newest active recurring OfferVersionPrice or OfferPrice"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="canonical prepaid currency",
+                            owner="financial.prepaid_currency",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="validated prepaid enforcement currency code",
+                        ),
+                        AuthorityInput(
+                            name="prepaid threshold protocol",
+                            owner="financial.prepaid_threshold",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "collectible status set, coverage precedence, newest-price "
+                                "ordering, discount semantics, and max(minimum, renewal) rule"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.READ_ONLY,
+                        boundary=(
+                            "Caller creates and closes the session; the batched resolver "
+                            "reads canonical account, service, coverage, price, and setting "
+                            "evidence without writes or transaction completion."
+                        ),
+                        locking=(
+                            "No row lock for projections. State-changing enforcement "
+                            "re-resolves the threshold inside its canonical command flow."
+                        ),
+                        idempotency=(
+                            "The same account cohort, as-of time, currency, and visible "
+                            "evidence produce identical typed threshold decisions."
+                        ),
+                        retries=(
+                            "Transient reads may be retried. Missing, invalid, unpriced, or "
+                            "cross-currency evidence remains a deterministic failure."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "financial.prepaid_threshold.account_not_found",
+                            "financial.prepaid_threshold.currency_mismatch",
+                            "financial.prepaid_threshold.invalid_minimum_balance",
+                            "financial.prepaid_threshold.missing_subscription_price",
+                        ),
+                        mapping_owner=(
+                            "access, enforcement, status, audit, and reporting adapters"
+                        ),
+                        fail_closed_on=(
+                            "missing requested account",
+                            "negative, non-finite, or malformed minimum balance",
+                            "unfunded collectible subscription without a price",
+                            "price and enforcement currency mismatch",
+                            "missing or invalid canonical prepaid currency",
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "service_status scalar coverage/price implementation, primitive "
+                            "threshold-only outcomes, ValueError currency mismatch, and "
+                            "silent missing-price fallback"
+                        ),
+                        new_owner="financial.prepaid_threshold",
+                        verification=(
+                            "Scalar/batch parity, query budget, price precedence, paid "
+                            "coverage, provenance, failure, caller, and architecture tests."
+                        ),
+                        cutover_gate=(
+                            "Access consumes the typed threshold decision; service status "
+                            "and the audit use thin scalar/batch projections of that owner."
+                        ),
+                        fallback_retirement=(
+                            "The duplicate service-status derivation, untyped Any price "
+                            "selection, generic ValueError, and missing-price continue path "
+                            "are removed."
+                        ),
+                    ),
+                    steward="billing operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/audits/BILLING_SOT_AUDIT_2026-07-12.md",
+                        "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
+                    ),
+                    test_refs=(
+                        "tests/test_prepaid_threshold_resolver.py",
+                        "tests/test_access_resolution.py",
+                        "tests/architecture/test_prepaid_threshold_boundary.py",
+                    ),
+                ),
             ),
             SOTService(
                 name="financial.grace_policy",
@@ -1549,11 +1818,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 ),
                 depends_on=(
                     "financial.billing_profile",
+                    "financial.prepaid_currency",
                     "financial.prepaid_threshold",
                     "customer.financial_position",
                     "access.subscription_lifecycle",
                     "access.walled_garden_policy",
-                    "control.settings_spec",
                 ),
                 notes=(
                     "One read-only policy owner resolves customer-impact, billing, "
@@ -1658,9 +1927,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         AuthorityInput(
                             name="prepaid enforcement currency setting",
-                            owner="control.settings_spec",
-                            kind=AuthorityKind.CONTROL_INPUT,
-                            source="typed billing.prepaid_enforcement_currency value",
+                            owner="financial.prepaid_currency",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source="validated prepaid enforcement currency code",
                         ),
                     ),
                     transaction=TransactionContract(
@@ -1684,7 +1953,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                     ),
                     errors=ErrorContract(
-                        domain_codes=("financial.access_resolution.invalid_currency",),
+                        domain_codes=(),
                         mapping_owner=(
                             "billing, lifecycle, RADIUS, reporting, and task adapters"
                         ),
@@ -1712,8 +1981,9 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                         ),
                         fallback_retirement=(
                             "The duplicate registry service, re-export facade, untyped "
-                            "account identifier, ValueError, and second decision "
-                            "implementation are removed."
+                            "account identifier, and second decision implementation are "
+                            "removed. Currency failures are delegated to the dedicated "
+                            "prepaid-currency policy owner."
                         ),
                     ),
                     steward="billing and network access",

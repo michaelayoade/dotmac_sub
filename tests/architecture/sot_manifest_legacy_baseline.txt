@@ -73,7 +73,6 @@ financial.prepaid_enforcement_readiness
 financial.prepaid_funding_reconstruction
 financial.prepaid_plan_change
 financial.prepaid_service_renewals
-financial.prepaid_threshold
 financial.provider_payment_settlements
 financial.tax_accounting
 financial.tax_configuration

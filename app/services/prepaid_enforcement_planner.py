@@ -25,7 +25,6 @@ from app.services import control_registry, enforcement_window, settings_spec
 from app.services.access_resolution import (
     PrepaidFundingDecision,
     prepaid_enforcement_filters,
-    resolve_prepaid_enforcement_currency,
     resolve_prepaid_funding,
 )
 from app.services.billing_communication_policy import (
@@ -41,6 +40,7 @@ from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
 from app.services.collections._core import _bulk_dunning_shield_reasons
 from app.services.collections.grace_policy import resolve_grace_decision
 from app.services.common import coerce_uuid
+from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
 
 PREPAID_BALANCE_ENFORCEMENT_CONTROL = "collections.prepaid_balance_enforcement"
 

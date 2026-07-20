@@ -17,13 +17,14 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.domain_settings import SettingDomain
 from app.models.enforcement_lock import AccessRestrictionMode
 from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services import settings_spec
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.billing_statuses import BILLABLE_SUBSCRIBER_STATUSES
-from app.services.domain_errors import DomainError
+from app.services.prepaid_currency import (
+    normalize_prepaid_currency,
+    resolve_prepaid_enforcement_currency,
+)
 from app.services.radius_access_state import derive_access_state
 from app.services.subscriber_access_policy import RADIUS_BLOCKING_SUBSCRIBER_STATUSES
 
@@ -34,10 +35,6 @@ RADIUS_PERMISSIVE_SUBSCRIBER_STATUSES = frozenset(
         SubscriberStatus.delinquent,
     }
 )
-
-
-class AccessResolutionError(DomainError):
-    """Stable failures at the financial access-resolution boundary."""
 
 
 class SubscriberAccessInput(Protocol):
@@ -72,13 +69,6 @@ class SubscriptionAccessInput(Protocol):
 
     @property
     def billing_mode(self) -> BillingMode | None: ...
-
-
-def _error(suffix: str, message: str) -> AccessResolutionError:
-    return AccessResolutionError(
-        code=f"financial.access_resolution.{suffix}",
-        message=message,
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,32 +165,15 @@ class PrepaidFundingDecision:
     currency: str
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "currency", _currency(self.currency))
+        object.__setattr__(
+            self,
+            "currency",
+            normalize_prepaid_currency(self.currency),
+        )
 
     @property
     def funded(self) -> bool:
         return self.available_balance >= self.required_balance
-
-
-def _currency(value: object) -> str:
-    currency = str(value).strip().upper() if isinstance(value, str) else ""
-    if len(currency) != 3 or not currency.isascii() or not currency.isalpha():
-        raise _error(
-            "invalid_currency",
-            "The prepaid enforcement currency must be a three-letter code.",
-        )
-    return currency
-
-
-def resolve_prepaid_enforcement_currency(db: Session) -> str:
-    """Return the canonical currency unit for prepaid access decisions."""
-    return _currency(
-        settings_spec.resolve_value(
-            db,
-            SettingDomain.billing,
-            "prepaid_enforcement_currency",
-        )
-    )
 
 
 def resolve_prepaid_available_balance(
@@ -215,7 +188,7 @@ def resolve_prepaid_available_balance(
     resolved_currency = (
         resolve_prepaid_enforcement_currency(db)
         if currency is None
-        else _currency(currency)
+        else normalize_prepaid_currency(currency)
     )
     return prepaid_available_balance(
         db,
@@ -231,9 +204,15 @@ def resolve_prepaid_funding(
     now: datetime | None = None,
 ) -> PrepaidFundingDecision:
     """Compare canonical available balance with the canonical prepaid threshold."""
-    from app.services.prepaid_threshold import resolve_prepaid_threshold
+    from app.services.prepaid_threshold import resolve_prepaid_threshold_decision
 
     currency = resolve_prepaid_enforcement_currency(db)
+    threshold = resolve_prepaid_threshold_decision(
+        db,
+        account,
+        now=now,
+        currency=currency,
+    )
     return PrepaidFundingDecision(
         account_id=str(account.id),
         available_balance=resolve_prepaid_available_balance(
@@ -241,12 +220,7 @@ def resolve_prepaid_funding(
             account.id,
             currency=currency,
         ),
-        required_balance=resolve_prepaid_threshold(
-            db,
-            account,
-            now=now,
-            currency=currency,
-        ),
+        required_balance=threshold.threshold,
         currency=currency,
     )
 
@@ -466,7 +440,6 @@ def _radius_mode(state: AccessState | None) -> str:
 
 
 __all__ = [
-    "AccessResolutionError",
     "CustomerAccessDecision",
     "CustomerBillingAccessState",
     "PrepaidFundingDecision",
@@ -475,6 +448,5 @@ __all__ = [
     "prepaid_enforcement_filters",
     "resolve_customer_access",
     "resolve_prepaid_available_balance",
-    "resolve_prepaid_enforcement_currency",
     "resolve_prepaid_funding",
 ]

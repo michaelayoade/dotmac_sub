@@ -47,15 +47,16 @@ def test_legacy_customer_service_module_no_longer_implements_access_policy() -> 
         assert symbol not in source
 
 
-def test_owner_exposes_typed_outcomes_and_domain_errors_only() -> None:
+def test_owner_exposes_typed_outcomes_and_delegates_currency_policy() -> None:
     source = _source(OWNER)
 
     assert "class SubscriptionAccessInput(Protocol)" in source
     assert "class SubscriberAccessInput(Protocol)" in source
     assert "class CustomerBillingAccessState:" in source
     assert "class PrepaidFundingDecision:" in source
-    assert "class AccessResolutionError(DomainError)" in source
-    assert "financial.access_resolution.invalid_currency" not in source
+    assert "from app.services.prepaid_currency import (" in source
+    assert "def resolve_prepaid_enforcement_currency" not in source
+    assert "class AccessResolutionError" not in source
     assert "HTTPException" not in source
     assert "raise ValueError" not in source
     assert ".commit(" not in source

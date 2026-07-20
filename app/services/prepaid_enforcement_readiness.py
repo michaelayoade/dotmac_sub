@@ -24,8 +24,8 @@ from app.models.prepaid_funding import (
     PrepaidFundingReconstructionBatch,
 )
 from app.services import settings_spec
-from app.services.access_resolution import resolve_prepaid_enforcement_currency
 from app.services.common import coerce_uuid
+from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
 from app.services.prepaid_enforcement_planner import (
     PrepaidEnforcementAction,
     PrepaidEnforcementPlan,

@@ -26,7 +26,7 @@ adapter files. The executable registry contains 28 domains and 233 service
 entries. Its one exact duplicate concern claim has been split into distinct
 observation-evidence and customer-resolution concerns.
 
-Typed manifest migration now has 30 fully contracted services and 216 indexed
+Typed manifest migration now has 32 fully contracted services and 215 indexed
 legacy services in a shrink-only baseline. New registry services cannot
 be added without role-qualified concerns, authoritative inputs, transaction and
 error semantics, migration state, stewardship, checked-in evidence, and any
@@ -163,6 +163,16 @@ reporting consume the same resolver or transition policy. Cleanup revalidates
 the live profile immediately before applying an account-mode alignment, while
 grace policy fails closed instead of selecting a caller-local fallback when the
 profile is missing, mixed, or contradictory.
+
+The completed prepaid funding-input slice separates
+`financial.prepaid_currency` from `financial.access_resolution`, removing the
+hidden threshold-to-access-resolution callback cycle. Access, funding position,
+threshold, enforcement planning, and readiness now consume one normalized,
+fail-closed currency policy. `financial.prepaid_threshold` returns typed minimum
+and unfunded-renewal provenance from the batched owner. The duplicate
+service-status derivation is removed, and missing accounts, invalid minimums,
+unpriced collectible subscriptions, and cross-currency prices are stable domain
+failures instead of guessed or silently ignored inputs.
 
 The current completed access slice is `auth.system_user_assignments`. It is the
 only application writer for system-user role and direct-permission grants. Local

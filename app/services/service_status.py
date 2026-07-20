@@ -38,11 +38,9 @@ from app.services.access_resolution import (
     resolve_customer_access,
     resolve_prepaid_funding,
 )
-from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.collections import has_overdue_balance
 from app.services.collections.grace_policy import resolve_grace_decision
 from app.services.common import coerce_uuid
-from app.services.service_entitlements import current_prepaid_entitlement_end
 from app.services.status_presentation import subscription_status_presentation
 from app.services.walled_garden_policy import resolve_subscription_restriction
 
@@ -71,67 +69,6 @@ _UNAVAILABLE_STATUS_VALUES = frozenset(
     {status.value for status in _UNAVAILABLE_STATUSES}
     | {SubscriptionStatus.stopped.value}
 )
-
-
-def _paid_prepaid_coverage_end(
-    db: Session, subscription: Subscription, now: datetime
-) -> datetime | None:
-    from app.models.billing import InvoiceLine
-
-    entitlement_end = current_prepaid_entitlement_end(
-        db,
-        subscription_id=subscription.id,
-        account_id=subscription.subscriber_id,
-        now=now,
-    )
-    if entitlement_end is not None:
-        return entitlement_end
-
-    # Legacy fallback while cutover-era invoices are reconciled into explicit
-    # entitlement rows.
-    return (
-        db.query(Invoice.billing_period_end)
-        .join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id)
-        .filter(InvoiceLine.subscription_id == subscription.id)
-        .filter(InvoiceLine.is_active.is_(True))
-        .filter(Invoice.is_active.is_(True))
-        .filter(Invoice.status == InvoiceStatus.paid)
-        .filter(Invoice.billing_period_start.isnot(None))
-        .filter(Invoice.billing_period_start <= now)
-        .filter(Invoice.billing_period_end.isnot(None))
-        .filter(Invoice.billing_period_end > now)
-        .order_by(Invoice.billing_period_end.desc())
-        .limit(1)
-        .scalar()
-    )
-
-
-def _unfunded_prepaid_renewal_requirement(
-    db: Session, account: Subscriber, now: datetime
-) -> Decimal:
-    """Amount needed to fund prepaid services that lack current paid coverage."""
-    from app.services import billing_automation
-
-    required = Decimal("0.00")
-    subscriptions = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == account.id)
-        .filter(Subscription.billing_mode == BillingMode.prepaid)
-        .filter(Subscription.status.in_(COLLECTIBLE_SERVICE_STATUSES))
-        .all()
-    )
-    for subscription in subscriptions:
-        if _paid_prepaid_coverage_end(db, subscription, now):
-            continue
-        amount, _currency, _cycle = billing_automation._resolve_price(db, subscription)
-        if amount is None:
-            amount = subscription.unit_price
-        if amount is None:
-            continue
-        effective = billing_automation._effective_unit_price(subscription, amount, now)
-        if effective > Decimal("0.00"):
-            required += effective
-    return required
 
 
 def _prepaid_threshold(

@@ -9,7 +9,7 @@ import pytest
 
 from app.models.catalog import AccessState, BillingMode, SubscriptionStatus
 from app.models.subscriber import SubscriberStatus
-from app.services import access_resolution
+from app.services import access_resolution, prepaid_currency
 from app.services.access_resolution import resolve_customer_access
 
 
@@ -116,15 +116,15 @@ def test_access_resolution_accepts_canonical_captive_mode():
 
 def test_invalid_prepaid_currency_raises_stable_domain_error(monkeypatch):
     monkeypatch.setattr(
-        access_resolution.settings_spec,
+        prepaid_currency.settings_spec,
         "resolve_value",
         lambda *_args: "not-a-currency",
     )
 
-    with pytest.raises(access_resolution.AccessResolutionError) as captured:
-        access_resolution.resolve_prepaid_enforcement_currency(MagicMock())
+    with pytest.raises(prepaid_currency.PrepaidCurrencyError) as captured:
+        prepaid_currency.resolve_prepaid_enforcement_currency(MagicMock())
 
-    assert captured.value.code == "financial.access_resolution.invalid_currency"
+    assert captured.value.code == "financial.prepaid_currency.invalid_currency"
 
 
 def test_prepaid_funding_decision_normalizes_currency():
