@@ -57,11 +57,10 @@ def test_legacy_branch_merge_is_ancestor_of_current_head() -> None:
         "migration_372_vendor_purchase_invoice_payment_projection",
     )
     assert current.down_revision == reports_retire.revision
-
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == [current.revision]
+    assert script.get_heads() == ["377_integration_platform_cutover"]
     legacy = script.get_revision("153_ip_assignments_subscription_owner")
     assert legacy is not None
     assert "368_merge_legacy_ip_assignments_branch" in {

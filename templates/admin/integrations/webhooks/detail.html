@@ -26,12 +26,6 @@
                     Send test
                 </button>
             </form>
-            <form method="post" action="/admin/integrations/webhooks/{{ endpoint.id }}/rotate-secret" onsubmit="return confirm('Rotate this webhook signing secret? Existing consumers must be updated.');">
-                {% include "components/forms/csrf_input.html" %}
-                <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-                    Rotate secret
-                </button>
-            </form>
             {% if endpoint.is_active %}
             <form method="post" action="/admin/integrations/webhooks/{{ endpoint.id }}/disable" onsubmit="return confirm('Disable this webhook endpoint?');">
                 {% include "components/forms/csrf_input.html" %}
@@ -43,7 +37,7 @@
             <form method="post" action="/admin/integrations/webhooks/{{ endpoint.id }}/enable">
                 {% include "components/forms/csrf_input.html" %}
                 <button type="submit" class="inline-flex items-center justify-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">
-                    Enable
+                    Validate &amp; enable
                 </button>
             </form>
             {% endif %}
@@ -59,10 +53,6 @@
     {% if request.query_params.get('saved') %}
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
         Webhook updated.
-    </div>
-    {% elif request.query_params.get('secret') == 'rotated' %}
-    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
-        Signing secret rotated.
     </div>
     {% elif request.query_params.get('test') == 'queued' %}
     <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
@@ -94,7 +84,7 @@
             </div>
             <div>
                 <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Secret</dt>
-                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Configured' if endpoint.secret else 'Not configured' }}</dd>
+                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Reference configured' if endpoint.secret else 'Not configured' }}</dd>
             </div>
             <div>
                 <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Delivery Timeout</dt>
@@ -103,10 +93,6 @@
             <div>
                 <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Max Retries</dt>
                 <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ endpoint.max_retries if endpoint.max_retries is not none else 10 }}</dd>
-            </div>
-            <div>
-                <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Retry Backoff</dt>
-                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ endpoint.retry_backoff_seconds ~ ' sec base' if endpoint.retry_backoff_seconds else 'Legacy schedule' }}</dd>
             </div>
         </dl>
     </div>
@@ -118,8 +104,8 @@
             {% set latest_delivery = delivery_summary.latest_delivery if delivery_summary else none %}
             {% if latest_delivery %}
             <div class="mt-3 space-y-1">
-                <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ latest_delivery.status.value|title if latest_delivery.status else 'Pending' }}</p>
-                <p class="text-sm text-slate-500 dark:text-slate-400">{{ latest_delivery.event_type.value if latest_delivery.event_type else 'custom' }}</p>
+                <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ latest_delivery.state|title }}</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400">{{ latest_delivery.event_type or 'custom' }}</p>
                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ latest_delivery.created_at | app_datetime('%b %d %H:%M', '-') }}</p>
             </div>
             {% else %}
@@ -132,7 +118,7 @@
             {% if latest_failure %}
             <div class="mt-3 space-y-1">
                 <p class="text-sm font-semibold text-red-700 dark:text-red-300">{{ latest_failure.response_status or 'No response' }}</p>
-                <p class="line-clamp-2 text-sm text-slate-500 dark:text-slate-400">{{ latest_failure.error or 'Delivery failed' }}</p>
+                <p class="line-clamp-2 text-sm text-slate-500 dark:text-slate-400">{{ latest_failure.error_detail or latest_failure.error_code or 'Delivery failed' }}</p>
                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ latest_failure.last_attempt_at | app_datetime('%b %d %H:%M') if latest_failure.last_attempt_at else latest_failure.created_at | app_datetime('%b %d %H:%M', '-') }}</p>
             </div>
             {% else %}
@@ -168,7 +154,7 @@
             <div class="flex flex-wrap gap-2">
                 {% for sub in subscriptions %}
                 <span class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-sm font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                    {{ sub.event_type.value if sub.event_type else 'custom' }}
+                    {{ sub.event_type or 'custom' }}
                 </span>
                 {% endfor %}
             </div>
@@ -196,13 +182,13 @@
                 </thead>
                 <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                     {% for delivery in deliveries %}
-                    {% set status_val = delivery.status.value if delivery.status else 'pending' %}
+                    {% set status_val = delivery.state or 'pending' %}
                     <tr>
-                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ delivery.event_type.value if delivery.event_type else '-' }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">{{ delivery.event_type or '-' }}</td>
                         <td class="px-6 py-4">
                             {% if status_val == 'delivered' %}
                             <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Delivered</span>
-                            {% elif status_val == 'failed' %}
+                            {% elif status_val in ['dead_letter', 'reconciliation_required'] %}
                             <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">Failed</span>
                             {% else %}
                             <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Pending</span>

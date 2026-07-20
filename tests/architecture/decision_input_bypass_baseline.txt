@@ -18,7 +18,6 @@ env 1 app/services/credential_rotation_schedule.py
 env 1 app/services/crm_client.py
 env 1 app/services/email.py
 env 11 app/services/file_upload.py
-env 3 app/services/flutterwave.py
 env 2 app/services/genieacs_client.py
 env 8 app/services/infrastructure_health.py
 env 1 app/services/ip_consistency_audit.py
@@ -59,7 +58,6 @@ env 4 app/services/worker_control.py
 env 1 app/services/workqueue/scoring_config.py
 env 3 app/syslog/listener.py
 env 3 app/tasks/bandwidth.py
-env 3 app/tasks/crm_native_sync.py
 env 2 app/tasks/tr069.py
 env 1 app/websocket/manager.py
 setting 9 app/main.py

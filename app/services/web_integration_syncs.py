@@ -9,8 +9,6 @@ from urllib.parse import urlencode
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.config import settings
-from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
 from app.models.integration import (
     IntegrationJob,
     IntegrationJobType,
@@ -18,12 +16,13 @@ from app.models.integration import (
     IntegrationRun,
     IntegrationRunStatus,
     IntegrationScheduleType,
-    IntegrationTarget,
-    IntegrationTargetType,
 )
 from app.models.support import Ticket, TicketComment
 from app.schemas.status_presentation import StatusTone
 from app.services.common import coerce_uuid
+from app.services.integrations.connectors.dotmac_crm import (
+    CRM_TICKET_OBSERVATION_CAPABILITY,
+)
 from app.services.ui_contracts import Action, Kpi, StateValue
 from app.services.web_integrations import _parse_json
 
@@ -35,81 +34,6 @@ _STALE_INTERVAL_MULTIPLE = 2
 
 def _enum_value(value: Any) -> str:
     return value.value if hasattr(value, "value") else str(value or "")
-
-
-def ensure_default_crm_ticket_sync(db: Session) -> IntegrationJob:
-    connector = (
-        db.query(ConnectorConfig)
-        .filter(ConnectorConfig.name == "DotMac CRM")
-        .one_or_none()
-    )
-    if connector is None:
-        connector = ConnectorConfig(
-            name="DotMac CRM",
-            connector_type=ConnectorType.http,
-            base_url=settings.crm_base_url,
-            auth_type=ConnectorAuthType.api_key,
-            auth_config={
-                "service_token": settings.crm_service_token,
-            },
-            timeout_sec=45,
-            metadata_={"sync_adapter": "crm"},
-            notes="Default CRM connector used by generic sync profiles.",
-            is_active=True,
-        )
-        db.add(connector)
-        db.flush()
-
-    target = (
-        db.query(IntegrationTarget)
-        .filter(IntegrationTarget.name == "DotMac CRM")
-        .one_or_none()
-    )
-    if target is None:
-        target = IntegrationTarget(
-            name="DotMac CRM",
-            target_type=IntegrationTargetType.crm,
-            connector_config_id=connector.id,
-            notes="CRM target for generic ticket sync flows.",
-            is_active=True,
-        )
-        db.add(target)
-        db.flush()
-    elif target.connector_config_id is None:
-        target.connector_config_id = connector.id
-
-    job = (
-        db.query(IntegrationJob)
-        .filter(IntegrationJob.adapter_key == "crm")
-        .filter(IntegrationJob.action == "pull_tickets")
-        .one_or_none()
-    )
-    if job is None:
-        job = IntegrationJob(
-            target_id=target.id,
-            name="Pull CRM Tickets",
-            job_type=IntegrationJobType.sync,
-            schedule_type=IntegrationScheduleType.manual,
-            interval_minutes=None,
-            adapter_key="crm",
-            action="pull_tickets",
-            entity_type="ticket",
-            direction="pull",
-            trigger_mode="manual",
-            mapping_config={
-                "primary": "crm_subscriber legacy external_id",
-                "fallback": "single structured customer ID pair in title/description",
-                "ambiguous": "skip",
-            },
-            filter_config={"page_size": 200, "max_pages": 50, "sync_comments": True},
-            conflict_policy="remote_wins",
-            notes="Pulls CRM tickets into local support tickets using safe subscriber mapping.",
-            is_active=True,
-        )
-        db.add(job)
-    db.commit()
-    db.refresh(job)
-    return job
 
 
 def _job_runs(db: Session, job_ids: list) -> dict[str, list[IntegrationRun]]:
@@ -227,7 +151,6 @@ def build_syncs_index_data(
     direction: str | None = None,
     active: bool | None = None,
 ) -> dict[str, Any]:
-    ensure_default_crm_ticket_sync(db)
     sync_jobs = (
         db.query(IntegrationJob)
         .filter(IntegrationJob.job_type == IntegrationJobType.sync)
@@ -347,7 +270,10 @@ def update_sync_profile(
     job.schedule_type = IntegrationScheduleType(schedule_type)
     job.interval_minutes = interval_value
     job.trigger_mode = (trigger_mode or "").strip() or None
-    if job.adapter_key == "crm" and job.action == "pull_tickets":
+    if (
+        job.capability_binding is not None
+        and job.capability_binding.capability_id == CRM_TICKET_OBSERVATION_CAPABILITY
+    ):
         job.filter_config = {
             "page_size": int(page_size or 200),
             "max_pages": int(max_pages or 50),

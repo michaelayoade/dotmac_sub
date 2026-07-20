@@ -145,7 +145,6 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.qualification", "router", "api", "perm:provisioning"),
     ("app.api.settings", "router", "api", "perm:system:settings"),
     ("app.api.branding", "router", "api", "perm:system:settings"),
-    ("app.api.webhooks", "router", "api", "admin"),
     ("app.api.connectors", "router", "api", "admin"),
     ("app.api.integrations", "router", "api", "admin"),
     ("app.api.scheduler", "router", "api", "user"),

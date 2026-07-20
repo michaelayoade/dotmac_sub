@@ -50,7 +50,14 @@ def test_reports_permission_migrations_form_the_single_head_chain():
 
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_heads() == [current.revision]
+    script = ScriptDirectory.from_config(config)
+    assert script.get_heads() == ["377_integration_platform_cutover"]
+    assert retire.revision in {
+        item.revision
+        for item in script.iterate_revisions(
+            "377_integration_platform_cutover", retire.revision, inclusive=True
+        )
+    }
 
 
 def test_upgrade_and_rollback_preserve_role_and_direct_grants(monkeypatch):

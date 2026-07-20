@@ -970,10 +970,12 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 module="app.services.api_billing_webhooks",
                 owns=(
                     "verified payment webhook projection",
-                    "inbound payment dead-letter lifecycle",
-                    "payment dead-letter replay",
+                    "billing consequence submission from verified receipts",
                 ),
-                depends_on=("financial.payment_provider_events",),
+                depends_on=(
+                    "integration.inbox",
+                    "financial.payment_provider_events",
+                ),
             ),
             SOTService(
                 name="financial.payment_reconciliation",
@@ -2446,21 +2448,15 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                 owns=("event persistence", "handler attempt tracking"),
                 depends_on=("events.dispatcher",),
             ),
-            SOTService(
-                name="events.webhook_deliveries",
-                module="app.services.webhook_deliveries",
-                owns=("webhook delivery rows", "webhook queueing"),
-                depends_on=("events.dispatcher",),
-            ),
         ),
         entrypoints=(
             "app.services.events.handlers.*",
-            "app.tasks.webhooks",
+            "app.tasks.integration_delivery",
             "app.web.admin.integrations",
         ),
         rule=(
-            "Handlers orchestrate; persistence, retry, and delivery bookkeeping "
-            "live in event/webhook services."
+            "Handlers orchestrate; event persistence stays in events.store and "
+            "external delivery is requested from integration.delivery."
         ),
     ),
     DomainSOT(
@@ -3388,25 +3384,107 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             SOTService(
                 name="integration.registry",
                 module="app.services.integrations.registry",
-                owns=("integration connector registry", "connector capabilities"),
+                owns=(
+                    "deployed integration connector catalogue",
+                    "current connector capability metadata",
+                ),
+                notes=(
+                    "The live manifest, installation, capability, and isolation "
+                    "contract is docs/designs/INTEGRATION_PLATFORM_SOT.md. "
+                    "Definitions are deployed code artifacts and the manifest "
+                    "registry is the executable connector contract."
+                ),
+            ),
+            SOTService(
+                name="integration.installations",
+                module="app.services.integrations.installations",
+                owns=(
+                    "version-pinned integration installation lifecycle",
+                    "immutable integration configuration revisions",
+                    "integration capability grants and bindings",
+                ),
+                depends_on=("integration.registry", "secrets.reference_store"),
+                notes=(
+                    "This is the sole owner of integration_installations, "
+                    "integration_config_revisions, and integration_capability_"
+                    "bindings. CRM, ERP, WhatsApp, payment, and webhook callers "
+                    "resolve configuration only through versioned bindings."
+                ),
+            ),
+            SOTService(
+                name="integration.runtime",
+                module="app.services.integrations.runtime_execution",
+                owns=(
+                    "version-pinned connector runner selection",
+                    "connector operation envelope construction",
+                    "bounded secret materialization for connector execution",
+                ),
+                depends_on=(
+                    "integration.registry",
+                    "integration.installations",
+                    "secrets.reference_store",
+                ),
+                notes=(
+                    "Runtime code selects an explicitly registered runner and "
+                    "passes it a pinned envelope. Runners receive no Sub "
+                    "database session and return observations or receipts; "
+                    "domain owners decide every consequence."
+                ),
+            ),
+            SOTService(
+                name="integration.delivery",
+                module="app.services.integrations.delivery",
+                owns=(
+                    "integration event subscription projection",
+                    "deduplicated integration delivery lifecycle",
+                    "outbound capability delivery evidence",
+                ),
+                depends_on=(
+                    "events.store",
+                    "integration.installations",
+                    "integration.runtime",
+                ),
+                notes=(
+                    "Every outbound endpoint is an installation-bound typed "
+                    "capability. Delivery identity, retry, replay, and terminal "
+                    "failure state have one canonical writer."
+                ),
+            ),
+            SOTService(
+                name="integration.inbox",
+                module="app.services.integrations.inbox",
+                owns=(
+                    "verified provider event receipt identity",
+                    "integration inbox deduplication lifecycle",
+                    "inbound consequence processing evidence",
+                ),
+                depends_on=("integration.installations", "integration.runtime"),
+                notes=(
+                    "Provider-specific routes verify signatures before writing "
+                    "a receipt. The inbox records facts and processing state; "
+                    "the Team Inbox, financial, and other domain owners alone "
+                    "decide and persist consequences."
+                ),
             ),
             SOTService(
                 name="integration.jobs",
                 module="app.services.integration",
                 owns=("integration targets", "integration jobs", "integration runs"),
                 depends_on=("integration.registry",),
+                notes=(
+                    "Jobs bind directly to versioned connector capabilities; "
+                    "adapter/action transport selection is not a runtime input."
+                ),
             ),
             SOTService(
                 name="integration.sync",
                 module="app.services.integration_sync",
                 owns=("integration sync orchestration", "sync run lifecycle"),
-                depends_on=("integration.jobs",),
-            ),
-            SOTService(
-                name="integration.hooks",
-                module="app.services.integration_hooks",
-                owns=("integration hook dispatch", "hook subscriptions"),
-                depends_on=("events.dispatcher", "integration.registry"),
+                depends_on=("integration.jobs", "integration.runtime"),
+                notes=(
+                    "CRM observation jobs resolve their version-pinned bindings "
+                    "and execute only through the registered CRM runner."
+                ),
             ),
             SOTService(
                 name="integration.vendor_purchase_invoice_erp_projection",
@@ -3444,11 +3522,11 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             "app.api.*_webhooks",
             "app.tasks.integrations",
             "app.tasks.dotmac_erp_outbox",
-            "app.services.events.handlers.integration_hook",
+            "app.tasks.integration_delivery",
         ),
         rule=(
-            "Integration routes and webhooks validate and enqueue; registry, job, "
-            "sync, and hook services own connector behavior and delivery flow."
+            "Integration routes and webhooks validate and enqueue through typed "
+            "capabilities; connectors never become business-state writers."
         ),
     ),
     DomainSOT(
