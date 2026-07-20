@@ -48,7 +48,7 @@ in the CRM provenance column `WorkOrder.crm_ticket_id`.
 New owner/path: `support.ticket_work_order_handoff` decides explicit issuance;
 `WorkOrder.origin_ticket_id` is the only native link.
 
-Migration `381_ticket_work_order_handoff` backfills only work orders that carry
+Migration `382_ticket_work_order_handoff` backfills only work orders that carry
 both sides of the retired automation evidence, clears the overloaded CRM value,
 and removes the duplicate ticket/work-order metadata keys. The migration is
 irreversible because a downgrade would restore parallel authority and a
