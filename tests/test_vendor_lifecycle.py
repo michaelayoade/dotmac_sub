@@ -23,10 +23,11 @@ from app.models.vendor_routes import (
     Vendor,
 )
 from app.services.ui_contracts import Action
-from app.services.vendor_portal_operations import (
+from app.services.vendor_portal_operations import _serialize_project
+from app.services.vendor_project_lifecycle import (
+    StageVendorProjectTransition,
     VendorProjectLifecycleError,
-    _serialize_project,
-    vendor_portal_operations,
+    stage_project_transition,
 )
 
 
@@ -99,16 +100,25 @@ def _install(db, status: str) -> tuple[InstallationProject, Vendor]:
 
 def test_start_project_moves_approved_to_in_progress(db_session):
     install, vendor = _install(db_session, InstallationProjectStatus.approved.value)
-    result = vendor_portal_operations.start_project(
+    result = stage_project_transition(
         db_session,
-        str(install.id),
-        vendor_id=str(vendor.id),
-        actor_id="vendor-user-1",
+        StageVendorProjectTransition(
+            project_id=str(install.id),
+            vendor_id=str(vendor.id),
+            action="start",
+            actor_id="vendor-user-1",
+            actor_type="vendor_user",
+        ),
     )
     assert result["status"] == InstallationProjectStatus.in_progress.value
-    assert result["lifecycle_action"].key == "complete"
     db_session.refresh(install)
     assert install.status == InstallationProjectStatus.in_progress.value
+    assert (
+        _serialize_project(install, viewer_vendor_id=str(vendor.id))[
+            "lifecycle_action"
+        ].key
+        == "complete"
+    )
     evidence = db_session.query(InstallationProjectLifecycleEvent).one()
     outbox = db_session.query(EventStore).one()
     assert evidence.event_id == outbox.event_id
@@ -122,14 +132,22 @@ def test_start_project_moves_approved_to_in_progress(db_session):
 
 def test_complete_project_moves_in_progress_to_completed(db_session):
     install, vendor = _install(db_session, InstallationProjectStatus.in_progress.value)
-    result = vendor_portal_operations.complete_project(
+    result = stage_project_transition(
         db_session,
-        str(install.id),
-        vendor_id=str(vendor.id),
-        actor_id="vendor-user-2",
+        StageVendorProjectTransition(
+            project_id=str(install.id),
+            vendor_id=str(vendor.id),
+            action="complete",
+            actor_id="vendor-user-2",
+            actor_type="vendor_user",
+        ),
     )
     assert result["status"] == InstallationProjectStatus.completed.value
-    assert result["lifecycle_action"] is None
+    db_session.refresh(install)
+    assert (
+        _serialize_project(install, viewer_vendor_id=str(vendor.id))["lifecycle_action"]
+        is None
+    )
     evidence = db_session.query(InstallationProjectLifecycleEvent).one()
     assert evidence.event_type == "vendor_project.completed"
     assert evidence.actor_id == "vendor-user-2"
@@ -138,46 +156,62 @@ def test_complete_project_moves_in_progress_to_completed(db_session):
 def test_start_rejects_a_vendor_who_does_not_own_the_project(db_session):
     install, _vendor = _install(db_session, InstallationProjectStatus.approved.value)
     with pytest.raises(VendorProjectLifecycleError) as exc:
-        vendor_portal_operations.start_project(
+        stage_project_transition(
             db_session,
-            str(install.id),
-            vendor_id=str(uuid4()),
-            actor_id="vendor-user-1",
+            StageVendorProjectTransition(
+                project_id=str(install.id),
+                vendor_id=str(uuid4()),
+                action="start",
+                actor_id="vendor-user-1",
+                actor_type="vendor_user",
+            ),
         )
-    assert exc.value.code == "not_assigned"
+    assert exc.value.code.endswith(".not_assigned")
 
 
 def test_start_rejects_a_project_that_is_not_approved(db_session):
     install, vendor = _install(db_session, InstallationProjectStatus.quoted.value)
     with pytest.raises(VendorProjectLifecycleError) as exc:
-        vendor_portal_operations.start_project(
+        stage_project_transition(
             db_session,
-            str(install.id),
-            vendor_id=str(vendor.id),
-            actor_id="vendor-user-1",
+            StageVendorProjectTransition(
+                project_id=str(install.id),
+                vendor_id=str(vendor.id),
+                action="start",
+                actor_id="vendor-user-1",
+                actor_type="vendor_user",
+            ),
         )
-    assert exc.value.code == "invalid_transition"
+    assert exc.value.code.endswith(".invalid_transition")
 
 
 def test_complete_rejects_a_project_that_is_not_in_progress(db_session):
     install, vendor = _install(db_session, InstallationProjectStatus.approved.value)
     with pytest.raises(VendorProjectLifecycleError) as exc:
-        vendor_portal_operations.complete_project(
+        stage_project_transition(
             db_session,
-            str(install.id),
-            vendor_id=str(vendor.id),
-            actor_id="vendor-user-1",
+            StageVendorProjectTransition(
+                project_id=str(install.id),
+                vendor_id=str(vendor.id),
+                action="complete",
+                actor_id="vendor-user-1",
+                actor_type="vendor_user",
+            ),
         )
-    assert exc.value.code == "invalid_transition"
+    assert exc.value.code.endswith(".invalid_transition")
 
 
 def test_lifecycle_evidence_is_append_only(db_session):
     install, vendor = _install(db_session, InstallationProjectStatus.approved.value)
-    vendor_portal_operations.start_project(
+    stage_project_transition(
         db_session,
-        str(install.id),
-        vendor_id=str(vendor.id),
-        actor_id="vendor-user-1",
+        StageVendorProjectTransition(
+            project_id=str(install.id),
+            vendor_id=str(vendor.id),
+            action="start",
+            actor_id="vendor-user-1",
+            actor_type="vendor_user",
+        ),
     )
     evidence = db_session.query(InstallationProjectLifecycleEvent).one()
     evidence.actor_id = "rewritten"
@@ -198,8 +232,7 @@ def test_lifecycle_routes_and_template_are_thin_action_adapters():
     sot = (root / "docs/SOT_RELATIONSHIP_MAP.md").read_text(encoding="utf-8")
 
     assert "issue_project_lifecycle" in routes
-    assert "vendor_portal_operations.start_project(" not in routes
-    assert "vendor_portal_operations.complete_project(" not in routes
+    assert "stage_project_transition(" not in routes
     assert "project.lifecycle_action.preview_url" in template
     assert "action_permitted(request, project.lifecycle_action)" in template
     assert 'onsubmit="return confirm(' not in template
@@ -210,3 +243,4 @@ def test_lifecycle_routes_and_template_are_thin_action_adapters():
     assert "vendor_project.completed" in sot
     registry = (root / "app/services/sot_relationships.py").read_text(encoding="utf-8")
     assert 'name="operations.vendor_project_lifecycle"' in registry
+    assert 'module="app.services.vendor_project_lifecycle"' in registry

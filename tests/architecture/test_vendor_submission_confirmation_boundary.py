@@ -82,7 +82,8 @@ def test_confirmation_locks_then_rechecks_replay_before_staleness() -> None:
     assert operation.index("IdempotencyKey(scope=scope, key=key)") > operation.index(
         "hmac.compare_digest("
     )
-    assert operation.count("commit=False") == 4
+    assert operation.count("commit=False") == 3
+    assert "stage_project_transition(" in operation
 
 
 def test_web_route_is_a_typed_error_mapping_adapter() -> None:

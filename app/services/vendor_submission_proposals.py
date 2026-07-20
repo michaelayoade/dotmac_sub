@@ -28,9 +28,13 @@ from app.services.owner_commands import (
     OwnerCommandDefinition,
     execute_owner_command,
 )
-from app.services.vendor_portal_operations import (
+from app.services.vendor_portal_operations import vendor_portal_operations
+from app.services.vendor_project_lifecycle import (
+    PreviewVendorProjectLifecycle,
+    StageVendorProjectTransition,
     VendorProjectLifecycleError,
-    vendor_portal_operations,
+    preview_project_lifecycle,
+    stage_project_transition,
 )
 from app.services.vendor_purchase_invoices import vendor_purchase_invoices
 
@@ -70,8 +74,9 @@ def _error(
 
 
 def _lifecycle_error(exc: VendorProjectLifecycleError) -> VendorSubmissionError:
+    suffix = exc.code.rsplit(".", 1)[-1]
     return _error(
-        f"lifecycle_{exc.code}",
+        f"lifecycle_{suffix}",
         exc.message,
         lifecycle_code=exc.code,
     )
@@ -213,8 +218,13 @@ def issue_project_lifecycle(
     user_id: str,
 ) -> VendorSubmissionProposal:
     try:
-        preview = vendor_portal_operations.preview_project_lifecycle(
-            db, project_id, vendor_id=vendor_id, action=action
+        preview = preview_project_lifecycle(
+            db,
+            PreviewVendorProjectLifecycle(
+                project_id=project_id,
+                vendor_id=vendor_id,
+                action=action,
+            ),
         )
     except VendorProjectLifecycleError as exc:
         raise _lifecycle_error(exc) from exc
@@ -330,11 +340,13 @@ def confirm_submission(
         else:
             action = "start" if submission_type == "project_start" else "complete"
             try:
-                preview = vendor_portal_operations.preview_project_lifecycle(
+                preview = preview_project_lifecycle(
                     session,
-                    target_id,
-                    vendor_id=command.vendor_id,
-                    action=action,
+                    PreviewVendorProjectLifecycle(
+                        project_id=target_id,
+                        vendor_id=command.vendor_id,
+                        action=action,
+                    ),
                     for_update=True,
                 )
             except VendorProjectLifecycleError as exc:
@@ -394,14 +406,15 @@ def confirm_submission(
         else:
             action = "start" if submission_type == "project_start" else "complete"
             try:
-                result = vendor_portal_operations.transition_project(
+                result = stage_project_transition(
                     session,
-                    target_id,
-                    vendor_id=command.vendor_id,
-                    action=action,
-                    actor_id=command.user_id,
-                    actor_type="vendor_user",
-                    commit=False,
+                    StageVendorProjectTransition(
+                        project_id=target_id,
+                        vendor_id=command.vendor_id,
+                        action=action,
+                        actor_id=command.user_id,
+                        actor_type="vendor_user",
+                    ),
                 )
             except VendorProjectLifecycleError as exc:
                 raise _lifecycle_error(exc) from exc

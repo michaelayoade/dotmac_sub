@@ -3389,22 +3389,184 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
             ),
             SOTService(
                 name="operations.vendor_project_lifecycle",
-                module="app.services.vendor_portal_operations",
+                module="app.services.vendor_project_lifecycle",
                 owns=(
                     "vendor start/complete installation-project transitions",
                     "durable vendor lifecycle actor/time/event evidence",
                     "typed vendor project lifecycle outbox events",
+                ),
+                depends_on=(
+                    "auth.permission_gate",
+                    "events.dispatcher",
+                    "operations.project_lifecycle",
+                ),
+                notes=(
+                    "This participant is the sole writer for approved -> "
+                    "in_progress -> completed vendor work transitions. Only the "
+                    "signed vendor-submission coordinator may call its nested writer."
+                ),
+                contract=ServiceContract(
+                    concerns=(
+                        ConcernContract(
+                            name="vendor start/complete installation-project transitions",
+                            role=OwnerRole.COMMAND_WRITER,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "authenticated assigned-vendor transition evidence",
+                                "vendor lifecycle transition protocol",
+                            ),
+                            canonical_writer="operations.vendor_project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="durable vendor lifecycle actor/time/event evidence",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "authenticated assigned-vendor transition evidence",
+                            ),
+                            canonical_writer="operations.vendor_project_lifecycle",
+                        ),
+                        ConcernContract(
+                            name="typed vendor project lifecycle outbox events",
+                            role=OwnerRole.AUTHORITATIVE_RECORD,
+                            input_names=(
+                                "canonical installation-project lifecycle state",
+                                "authenticated assigned-vendor transition evidence",
+                            ),
+                            canonical_writer="operations.vendor_project_lifecycle",
+                        ),
+                    ),
+                    authoritative_inputs=(
+                        AuthorityInput(
+                            name="canonical installation-project lifecycle state",
+                            owner="operations.project_lifecycle",
+                            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                            source=(
+                                "locked active InstallationProject status, assigned "
+                                "vendor, native project, and subscriber references"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="authenticated assigned-vendor transition evidence",
+                            owner="auth.permission_gate",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "vendor id, actor id and type carried by the verified "
+                                "vendor-submission command"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor lifecycle transition protocol",
+                            owner="operations.vendor_project_lifecycle",
+                            kind=AuthorityKind.CONTROL_INPUT,
+                            source=(
+                                "approved-to-in-progress start and "
+                                "in-progress-to-completed completion transitions"
+                            ),
+                        ),
+                    ),
+                    transaction=TransactionContract(
+                        mode=TransactionMode.PARTICIPANT,
+                        boundary=(
+                            "The vendor-submission coordinator owns the root transaction. "
+                            "This participant stages project state, immutable lifecycle "
+                            "evidence, and the outbox event, then flushes only."
+                        ),
+                        locking=(
+                            "The active InstallationProject row is selected FOR UPDATE "
+                            "before transition eligibility is re-evaluated."
+                        ),
+                        idempotency=(
+                            "Only the exact expected source status may transition; signed "
+                            "submission replay is owned by the calling coordinator."
+                        ),
+                        retries=(
+                            "The coordinator retries the complete confirmation transaction; "
+                            "this participant never retries or commits independently."
+                        ),
+                    ),
+                    errors=ErrorContract(
+                        domain_codes=(
+                            "operations.vendor_project_lifecycle.not_found",
+                            "operations.vendor_project_lifecycle.not_assigned",
+                            "operations.vendor_project_lifecycle.unsupported_action",
+                            "operations.vendor_project_lifecycle.actor_required",
+                            "operations.vendor_project_lifecycle.invalid_transition",
+                        ),
+                        mapping_owner="operations.vendor_submission_confirmation",
+                        fail_closed_on=(
+                            "missing or inactive project",
+                            "vendor assignment mismatch",
+                            "missing actor evidence",
+                            "unsupported or invalid status transition",
+                        ),
+                    ),
+                    events=EventContract(
+                        event_types=(
+                            "vendor_project.started",
+                            "vendor_project.completed",
+                        ),
+                        schema_version=1,
+                        delivery_owner="events.dispatcher",
+                        compatibility=(
+                            "Version 1 is additive and carries project, native project, "
+                            "vendor, source and target status, and actor evidence."
+                        ),
+                        replay=(
+                            "InstallationProject and its append-only lifecycle evidence "
+                            "rebuild the transition outcome and outbox projection."
+                        ),
+                    ),
+                    migration=MigrationContract(
+                        state=AuthorityMigrationState.COMPLETE,
+                        old_owner=(
+                            "app.services.vendor_portal_operations lifecycle helpers "
+                            "with optional service-owned commits"
+                        ),
+                        new_owner="operations.vendor_project_lifecycle",
+                        verification=(
+                            "Transition, assignment, actor, immutable evidence, event, "
+                            "participant, and caller-boundary tests."
+                        ),
+                        cutover_gate=(
+                            "Signed vendor confirmation is the only application caller "
+                            "and commits transition and confirmation evidence together."
+                        ),
+                        fallback_retirement=(
+                            "Direct start/complete wrappers, optional commit flags, and "
+                            "lifecycle writes in the workspace service are removed."
+                        ),
+                    ),
+                    steward="vendor operations",
+                    design_refs=(
+                        "docs/SOT_RELATIONSHIP_MAP.md",
+                        "docs/adr/0002-owner-command-transaction-boundary.md",
+                    ),
+                    test_refs=(
+                        "tests/test_vendor_lifecycle.py",
+                        "tests/test_vendor_submission_proposals.py",
+                        "tests/architecture/test_vendor_project_lifecycle_boundary.py",
+                    ),
+                ),
+            ),
+            SOTService(
+                name="operations.vendor_project_workspace",
+                module="app.services.vendor_portal_operations",
+                owns=(
+                    "vendor project workspace read and action projections",
                     "vendor installation-project quote lifecycle",
                     "quote submission eligibility and impact snapshot",
+                    "proposed vendor route-revision lifecycle",
                     "as-built evidence lifecycle and impact snapshot",
                 ),
-                depends_on=("events.dispatcher", "operations.project_lifecycle"),
+                depends_on=(
+                    "operations.project_lifecycle",
+                    "operations.vendor_project_lifecycle",
+                ),
                 notes=(
-                    "This is the sole writer for approved -> in_progress -> "
-                    "completed vendor work transitions and owns the related quote "
-                    "and as-built workflow in the same implementation module. It "
-                    "raises transport-neutral domain errors; adapters translate "
-                    "them for HTTP delivery."
+                    "This workspace owns quote, route-revision, and as-built state. "
+                    "Installation-project lifecycle state and evidence were extracted "
+                    "to their dedicated participant owner."
                 ),
             ),
             SOTService(
@@ -3429,6 +3591,7 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                     "auth.token_signing",
                     "events.dispatcher",
                     "operations.vendor_project_lifecycle",
+                    "operations.vendor_project_workspace",
                     "operations.vendor_purchase_invoices",
                 ),
                 notes=(
@@ -3443,7 +3606,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.POLICY,
                             input_names=(
                                 "authenticated vendor principal context",
-                                "vendor project submission preview",
+                                "vendor project workspace submission preview",
+                                "vendor project lifecycle submission preview",
                                 "vendor purchase-invoice submission preview",
                                 "capability signing envelope",
                                 "vendor confirmation protocol invariants",
@@ -3454,7 +3618,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.POLICY,
                             input_names=(
                                 "authenticated vendor principal context",
-                                "vendor project submission preview",
+                                "vendor project workspace submission preview",
+                                "vendor project lifecycle submission preview",
                                 "vendor purchase-invoice submission preview",
                                 "capability signing envelope",
                             ),
@@ -3464,7 +3629,8 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             role=OwnerRole.APPLICATION_COORDINATOR,
                             input_names=(
                                 "authenticated vendor principal context",
-                                "vendor project submission preview",
+                                "vendor project workspace submission preview",
+                                "vendor project lifecycle submission preview",
                                 "vendor purchase-invoice submission preview",
                                 "capability signing envelope",
                                 "canonical vendor submission replay record",
@@ -3482,12 +3648,20 @@ DOMAIN_SOT_RELATIONSHIPS: tuple[DomainSOT, ...] = (
                             ),
                         ),
                         AuthorityInput(
-                            name="vendor project submission preview",
+                            name="vendor project workspace submission preview",
+                            owner="operations.vendor_project_workspace",
+                            kind=AuthorityKind.DERIVED_PROJECTION,
+                            source=(
+                                "locked quote or as-built impact and state fingerprint"
+                            ),
+                        ),
+                        AuthorityInput(
+                            name="vendor project lifecycle submission preview",
                             owner="operations.vendor_project_lifecycle",
                             kind=AuthorityKind.DERIVED_PROJECTION,
                             source=(
-                                "locked quote, as-built, or project-lifecycle impact "
-                                "and state fingerprint"
+                                "locked installation-project lifecycle impact and state "
+                                "fingerprint"
                             ),
                         ),
                         AuthorityInput(
