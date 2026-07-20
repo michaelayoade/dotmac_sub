@@ -499,6 +499,20 @@ def _startup_preflight() -> None:
     _assert_required_schema()
 
 
+def _prewarm_admin_dashboard() -> None:
+    if os.getenv("DASHBOARD_PREWARM_ENABLED", "false").lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+    from app.services import web_admin_dashboard
+
+    if not web_admin_dashboard.prewarm_dashboard_global_cache():
+        raise RuntimeError("dashboard cache prewarm failed")
+
+
 async def _run_deferred_startup() -> None:
     """Run slow, idempotent, non-fatal startup work in worker threads so it
     never blocks the event loop (single-worker safe) or delays serving.
@@ -507,6 +521,7 @@ async def _run_deferred_startup() -> None:
     inline kept the app dead to health checks for minutes after every restart.
     The seeds are idempotent (upsert/skip-if-exists), so deferring is safe."""
     for fn, step in (
+        (_prewarm_admin_dashboard, "dashboard_prewarm"),
         (_seed_startup_settings, "seed"),
         (_warn_on_scheduler_registry_drift, "scheduler_drift"),
     ):

@@ -1,6 +1,54 @@
 from app.services import infrastructure_health
 
 
+def test_skipped_health_checks_parses_known_names(monkeypatch):
+    monkeypatch.setenv(
+        "INFRASTRUCTURE_HEALTH_SKIP_CHECKS",
+        "genieacs, celery, radius-db, unknown",
+    )
+
+    assert infrastructure_health._skipped_health_checks() == {
+        "genieacs",
+        "celery",
+        "radius_db",
+    }
+
+
+def test_check_all_services_marks_skipped_probe_not_configured(monkeypatch):
+    monkeypatch.setenv("INFRASTRUCTURE_HEALTH_SKIP_CHECKS", "genieacs")
+    called: list[str] = []
+
+    def fake(name):
+        def check(_db):
+            called.append(name)
+            return infrastructure_health.ServiceStatus(name=name, status="up")
+
+        return check
+
+    for key in (
+        "postgres",
+        "redis",
+        "victoriametrics",
+        "radius_db",
+        "minio",
+        "celery",
+        "nominatim",
+    ):
+        monkeypatch.setattr(infrastructure_health, f"_check_{key}", fake(key))
+
+    def forbidden(_db):
+        raise AssertionError("skipped GenieACS probe was called")
+
+    monkeypatch.setattr(infrastructure_health, "_check_genieacs", forbidden)
+
+    services = infrastructure_health.check_all_services(object())
+
+    genieacs = next(service for service in services if service.name == "GenieACS")
+    assert genieacs.status == "not_configured"
+    assert genieacs.details["reason"] == "disabled_by_configuration"
+    assert "genieacs" not in called
+
+
 def test_expected_celery_queues_uses_default_when_unset(monkeypatch):
     monkeypatch.delenv("CELERY_EXPECTED_QUEUES", raising=False)
 

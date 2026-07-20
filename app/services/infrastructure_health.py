@@ -44,6 +44,42 @@ _DEFAULT_CELERY_QUEUE_RESTART_TARGETS = {
     "billing": "celery-worker-billing",
 }
 
+_HEALTH_CHECK_KEYS = frozenset(
+    {
+        "postgres",
+        "redis",
+        "victoriametrics",
+        "genieacs",
+        "radius_db",
+        "minio",
+        "celery",
+        "nominatim",
+    }
+)
+
+
+def _skipped_health_checks() -> set[str]:
+    """Return explicitly disabled infrastructure probes.
+
+    Non-production environments often omit integrations intentionally. Waiting
+    for those network timeouts makes the dashboard look unhealthy and slow even
+    though the configured staging dependencies are fine. Production keeps the
+    current behaviour because the default is an empty set.
+    """
+    raw = os.getenv("INFRASTRUCTURE_HEALTH_SKIP_CHECKS", "")
+    requested = {
+        item.strip().lower().replace("-", "_")
+        for item in raw.split(",")
+        if item.strip()
+    }
+    unknown = requested - _HEALTH_CHECK_KEYS
+    if unknown:
+        logger.warning(
+            "Ignoring unknown infrastructure health checks: %s",
+            ", ".join(sorted(unknown)),
+        )
+    return requested & _HEALTH_CHECK_KEYS
+
 
 @dataclass
 class ServiceStatus:
@@ -111,17 +147,30 @@ def check_all_services(db: Session) -> list[ServiceStatus]:
     Each check is independent — a failure in one does not affect others.
     """
     checks = [
-        _check_postgres,
-        _check_redis,
-        _check_victoriametrics,
-        _check_genieacs,
-        _check_radius_db,
-        _check_minio,
-        _check_celery,
-        _check_nominatim,
+        ("postgres", "PostgreSQL", _check_postgres),
+        ("redis", "Redis", _check_redis),
+        ("victoriametrics", "VictoriaMetrics", _check_victoriametrics),
+        ("genieacs", "GenieACS", _check_genieacs),
+        ("radius_db", "RADIUS DB", _check_radius_db),
+        ("minio", "MinIO", _check_minio),
+        ("celery", "Celery", _check_celery),
+        ("nominatim", "Nominatim", _check_nominatim),
     ]
+    skipped = _skipped_health_checks()
     results: list[ServiceStatus] = []
-    for check_fn in checks:
+    for key, display_name, check_fn in checks:
+        if key in skipped:
+            results.append(
+                ServiceStatus(
+                    name=display_name,
+                    status="not_configured",
+                    details={
+                        "reason": "disabled_by_configuration",
+                        "check": key,
+                    },
+                )
+            )
+            continue
         try:
             result = check_fn(db)
             results.append(result)
